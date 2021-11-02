@@ -43,12 +43,7 @@ if (SNPE_ENABLE)
 endif()
 
 if (TFLITE_ENABLE)
-  target_link_libraries(${GST_MLE_LIBRARY} PRIVATE tensorflow-lite)
-endif()
-
-if (DELEGATE_SUPPORT)
-  target_link_libraries(${GST_MLE_LIBRARY} PRIVATE gpu_delegate)
-  target_link_libraries(${GST_MLE_LIBRARY} PRIVATE xnnpack_delegate)
+  target_link_libraries(${GST_MLE_LIBRARY} PRIVATE ${TFLITE_LIBRARIES})
 endif()
 
 
