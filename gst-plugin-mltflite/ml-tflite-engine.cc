@@ -71,7 +71,7 @@
 #include <tensorflow/lite/interpreter.h>
 #include <tensorflow/lite/kernels/register.h>
 #include <tensorflow/lite/delegates/nnapi/nnapi_delegate.h>
-#include <tensorflow/lite/experimental/delegates/hexagon/hexagon_delegate.h>
+#include <tensorflow/lite/delegates/hexagon/hexagon_delegate.h>
 #include <tensorflow/lite/delegates/gpu/delegate.h>
 
 #define GST_ML_RETURN_VAL_IF_FAIL(expression, value, ...) \
