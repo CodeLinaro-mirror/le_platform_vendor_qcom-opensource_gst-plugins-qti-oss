@@ -1292,7 +1292,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   status = c2component_queue (dec->comp, &inBuf);
   gst_buffer_unmap (buf, &mapinfo);
   if (!status) {
-    GST_ERROR_OBJECT(dec, "failed to queue input frame to Codec2");
+    GST_ERROR_OBJECT (dec, "failed to queue input frame to Codec2");
     ret = GST_FLOW_ERROR;
     goto out;
   }
