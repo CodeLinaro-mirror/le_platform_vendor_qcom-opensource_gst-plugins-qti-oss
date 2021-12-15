@@ -48,13 +48,13 @@ GST_DEBUG_CATEGORY (gst_videoblend_debug);
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
                                                                    GST_PAD_SRC,
                                                                    GST_PAD_ALWAYS,
-                                                                   GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA } " ))
+                                                                   GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA, ARGB } " ))
                                                                   );
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink_%u",
                                                                     GST_PAD_SINK,
                                                                     GST_PAD_REQUEST,
-                                                                    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA } " ))
+                                                                    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA, ARGB } " ))
                                                                    );
 
 static void gst_videoblend_child_proxy_init (gpointer g_iface, gpointer iface_data);
@@ -128,6 +128,14 @@ gst_videoblend_init_gbm_buffers (GstVideoBlend * blend)
             {
                 bpad->c2d_buffer.gbm_format = GBM_FORMAT_NV12;
                 GST_DEBUG_OBJECT (blend, "%p NV12 input", bpad);
+                break;
+            }
+        case GST_VIDEO_FORMAT_ARGB:
+            {
+                //This is a workaround to use GBM_FORMAT_ABGR8888 instead of GBM_FORMAT_BGRA8888,
+                //since GBM_FORMAT_BGRA8888 isn't supported in libgbm on LV 2.0 GEN3.
+                bpad->c2d_buffer.gbm_format = GBM_FORMAT_ABGR8888;
+                GST_DEBUG_OBJECT (blend, "%p ARGB input", bpad);
                 break;
             }
         case GST_VIDEO_FORMAT_RGBA:
@@ -716,6 +724,7 @@ gst_videoblend_do_buffer_copy (GstVideoBlend * blend, GstVideoBlendPad * pad)
             }
             break;
         }
+    case GST_VIDEO_FORMAT_ARGB:
     case GST_VIDEO_FORMAT_RGBA:
         {
             stride = ALIGN(4 * width, ALIGN128);
@@ -810,6 +819,12 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                         GST_DEBUG_OBJECT (blend, "NV12 target");
                         break;
                     }
+                case GST_VIDEO_FORMAT_ARGB:
+                    {
+                        target_format = ARGB8888;
+                        GST_DEBUG_OBJECT (blend, "ARGB target");
+                        break;
+                    }
                 case GST_VIDEO_FORMAT_RGBA:
                     {
                         target_format = RGBA8888;
@@ -830,6 +845,12 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                     {
                         source_format = NV12_128m;
                         GST_DEBUG_OBJECT (blend, "NV12 source");
+                        break;
+                    }
+                case GST_VIDEO_FORMAT_ARGB:
+                    {
+                        source_format = ARGB8888;
+                        GST_DEBUG_OBJECT (blend, "ARGB source");
                         break;
                     }
                 case GST_VIDEO_FORMAT_RGBA:
