@@ -115,6 +115,7 @@ std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param, void* const comp_i
 std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -137,6 +138,7 @@ static configFunctionForVendorParamsMap sConfigFunctionForVendorParamsMap = {
     { CONFIG_FUNCTION_KEY_SLICE_MODE, setSliceMode },
     { CONFIG_FUNCTION_KEY_BLUR_MODE, setBlurMode },
     { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
+    { CONFIG_FUNCTION_KEY_ROIREGION, setRoiRegion },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -485,6 +487,33 @@ std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf
     LOG_WARNING("setBlurResolution output not implemented");
 
     return nullptr;
+}
+
+std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> roi = nullptr;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value timestamp, type, payload, payloadext;
+
+    timestamp.set((int64_t)config->roiRegion.timestampUs);
+    type.set((android::AString)config->roiRegion.type);
+    payload.set((android::AString)config->roiRegion.rectPayload);
+    payloadext.set((android::AString)config->roiRegion.rectPayloadExt);
+
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.timestamp", timestamp);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.type", type);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.rect-payload", payload);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.rect-payload-ext", payloadext);
+
+    roi = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(roi);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

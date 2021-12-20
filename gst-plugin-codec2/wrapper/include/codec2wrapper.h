@@ -93,6 +93,7 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_SLICE_MODE "slice_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
+#define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
 
 #define C2_TICKS_PER_SECOND 1000000
 
@@ -325,6 +326,13 @@ typedef struct {
     union {
         BLUR_MODE mode;
     } blur;
+
+    struct {
+        int64_t timestampUs;
+        char type[128];
+        char rectPayload[128];
+        char rectPayloadExt[128];
+    } roiRegion;
 
     struct {
         IR_MODE_TYPE type;
