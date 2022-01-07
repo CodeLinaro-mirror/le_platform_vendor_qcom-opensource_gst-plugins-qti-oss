@@ -77,8 +77,6 @@ enum
 };
 
 /* GstVideoDecoder base class method */
-static gboolean gst_qticodec2vdec_start (GstVideoDecoder * decoder);
-static gboolean gst_qticodec2vdec_stop (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state);
 static GstFlowReturn gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
@@ -238,7 +236,7 @@ make_low_latency_param (gboolean low_latency_mode)
 }
 
 static gchar *
-gst_to_c2_streamformat (GstVideoDecoder * decoder, GstStructure * s,
+get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
     gboolean low_latency)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
@@ -321,7 +319,7 @@ gst_qticodec2vdec_create_component (GstVideoDecoder * decoder)
 
   if (dec->comp_store) {
     ret =
-        c2componentStore_createComponent (dec->comp_store, dec->streamformat,
+        c2componentStore_createComponent (dec->comp_store, dec->comp_name,
         &dec->comp);
     if (ret == TRUE) {
       dec->comp_intf = c2component_intf (dec->comp);
@@ -496,28 +494,6 @@ error_setup_output:
   return GST_FLOW_ERROR;
 }
 
-/* Called when the element starts processing. Opening external resources. */
-static gboolean
-gst_qticodec2vdec_start (GstVideoDecoder * decoder)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-
-  GST_DEBUG_OBJECT (dec, "start");
-
-  return TRUE;
-}
-
-/* Called when the element stops processing. Close external resources. */
-static gboolean
-gst_qticodec2vdec_stop (GstVideoDecoder * decoder)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-
-  GST_DEBUG_OBJECT (dec, "stop");
-
-  return TRUE;
-}
-
 /* Dispatch any pending remaining data at EOS. Class can refuse to decode new data after. */
 static GstFlowReturn
 gst_qticodec2vdec_finish (GstVideoDecoder * decoder)
@@ -579,7 +555,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   gint height = 0;
   GstVideoInterlaceMode interlace_mode = GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
   INTERLACE_MODE_TYPE c2interlace_mode = INTERLACE_MODE_PROGRESSIVE;
-  gchar *streamformat;
+  gchar *comp_name;
   GPtrArray *config = NULL;
   ConfigParams resolution;
   ConfigParams interlace;
@@ -589,10 +565,11 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   GST_DEBUG_OBJECT (dec, "set_format");
 
   structure = gst_caps_get_structure (state->caps, 0);
-  streamformat =
-      gst_to_c2_streamformat (decoder, structure, dec->low_latency_mode);
-  if (!streamformat) {
-    goto error_format;
+  comp_name = get_c2_comp_name (decoder, structure, dec->low_latency_mode);
+  if (!comp_name) {
+    GST_ERROR_OBJECT (dec, "Failed to get relevant component name, caps:%"
+        GST_PTR_FORMAT, state->caps);
+    return FALSE;
   }
 
   retval = gst_structure_get_int (structure, "width", &width);
@@ -625,7 +602,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   dec->width = width;
   dec->height = height;
   dec->interlace_mode = interlace_mode;
-  dec->streamformat = streamformat;
+  dec->comp_name = comp_name;
 
   if (dec->input_state) {
     gst_video_codec_state_unref (dec->input_state);
@@ -670,12 +647,6 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
 
   g_ptr_array_free (config, FALSE);
 
-  /* Start decoder */
-  if (!c2component_start (dec->comp)) {
-    GST_ERROR_OBJECT (dec, "Failed to start component");
-    goto error_set_format;
-  }
-
   ret = c2component_createBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
   if (ret == FALSE) {
     GST_ERROR_OBJECT (dec, "Failed to create graphic pool");
@@ -689,17 +660,17 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     return FALSE;
   }
 
+  /* Start decoder */
+  if (!c2component_start (dec->comp)) {
+    GST_ERROR_OBJECT (dec, "Failed to start component");
+    goto error_set_format;
+  }
+
 done:
   dec->input_setup = TRUE;
   return TRUE;
 
   /* Errors */
-error_format:
-  {
-    GST_ERROR_OBJECT (dec, "Unsupported format in caps: %" GST_PTR_FORMAT,
-        state->caps);
-    return FALSE;
-  }
 error_res:
   {
     GST_ERROR_OBJECT (dec, "Unable to get width/height value");
@@ -863,9 +834,6 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
   guint size, min, max;
   gboolean update = FALSE;
   gboolean use_peer_pool = FALSE;
-  guint method, flag;
-  GstVideoFormat input_format, output_format;
-  gint input_width, input_height, output_width, output_height;
   GHashTable *buffer_table = NULL;
   GstBufferPool *out_port_pool = NULL;
 
@@ -1153,7 +1121,6 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
     goto out;
   }
 
-  guint output_size = decode_buf->size;
   outbuf = gst_qticodec2vdec_wrap_output_buffer (decoder, decode_buf);
   if (outbuf) {
     gst_buffer_set_flags (outbuf, GST_BUFFER_FLAG_SYNC_AFTER);
@@ -1406,9 +1373,9 @@ gst_qticodec2vdec_finalize (GObject * object)
   g_mutex_clear (&dec->pending_lock);
   g_cond_clear (&dec->pending_cond);
 
-  if (dec->streamformat) {
-    g_free (dec->streamformat);
-    dec->streamformat = NULL;
+  if (dec->comp_name) {
+    g_free (dec->comp_name);
+    dec->comp_name = NULL;
   }
 
   if (dec->out_port_pool) {
@@ -1494,8 +1461,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
-  video_decoder_class->start = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_start);
-  video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_stop);
   video_decoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_set_format);
   video_decoder_class->handle_frame =

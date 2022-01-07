@@ -90,7 +90,6 @@ enum
 };
 
 /* GstVideoEncoder base class method */
-static gboolean gst_qticodec2venc_start (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_stop (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GstVideoCodecState * state);
@@ -364,7 +363,7 @@ make_intraRefresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
 }
 
 static gchar *
-gst_to_c2_streamformat (GstStructure * structure)
+get_c2_comp_name (GstStructure * structure)
 {
   gchar *ret = NULL;
 
@@ -612,7 +611,7 @@ gst_qticodec2venc_create_component (GstVideoEncoder * encoder)
   if (enc->comp_store) {
 
     ret =
-        c2componentStore_createComponent (enc->comp_store, enc->streamformat,
+        c2componentStore_createComponent (enc->comp_store, enc->comp_name,
         &enc->comp);
     if (ret == FALSE) {
       GST_DEBUG_OBJECT (enc, "Failed to create component");
@@ -670,7 +669,7 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
   outcaps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
   if (outcaps) {
     GstStructure *structure;
-    gchar *streamformat;
+    gchar *comp_name;
 
     if (gst_caps_is_empty (outcaps)) {
       gst_caps_unref (outcaps);
@@ -702,15 +701,15 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
 
     GST_INFO_OBJECT (enc, "Fixed output caps: %" GST_PTR_FORMAT, outcaps);
 
-    streamformat = gst_to_c2_streamformat (structure);
-    if (!streamformat) {
+    comp_name = get_c2_comp_name (structure);
+    if (!comp_name) {
       GST_ERROR_OBJECT (enc, "Unsupported format in caps: %" GST_PTR_FORMAT,
           outcaps);
       gst_caps_unref (outcaps);
       return GST_FLOW_ERROR;
     }
 
-    enc->streamformat = streamformat;
+    enc->comp_name = comp_name;
     enc->output_state =
         gst_video_encoder_set_output_state (encoder, outcaps, state);
     enc->output_setup = TRUE;
@@ -722,17 +721,6 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
   }
 
   return ret;
-}
-
-/* Called when the element starts processing. Opening external resources. */
-static gboolean
-gst_qticodec2venc_start (GstVideoEncoder * encoder)
-{
-  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-
-  GST_DEBUG_OBJECT (enc, "start");
-
-  return TRUE;
 }
 
 /* Called when the element stops processing. Close external resources. */
@@ -1578,10 +1566,10 @@ gst_qticodec2venc_finalize (GObject * object)
   g_mutex_clear (&enc->pending_lock);
   g_cond_clear (&enc->pending_cond);
 
-  g_free (enc->streamformat);
+  g_free (enc->comp_name);
 
-  if (enc->streamformat) {
-    enc->streamformat = NULL;
+  if (enc->comp_name) {
+    enc->comp_name = NULL;
   }
 
   gst_qticodec2venc_destroy_component (GST_VIDEO_ENCODER (enc));
@@ -1739,7 +1727,6 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
           GST_PARAM_MUTABLE_READY));
 
 
-  video_encoder_class->start = GST_DEBUG_FUNCPTR (gst_qticodec2venc_start);
   video_encoder_class->stop = GST_DEBUG_FUNCPTR (gst_qticodec2venc_stop);
   video_encoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2venc_set_format);

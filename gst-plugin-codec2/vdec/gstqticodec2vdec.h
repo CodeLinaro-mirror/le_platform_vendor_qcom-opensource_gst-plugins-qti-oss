@@ -79,6 +79,7 @@ struct _Gstqticodec2vdec
   void *comp_store;
   void *comp;
   void *comp_intf;
+  gchar *comp_name;
 
   guint64 queued_frame[MAX_QUEUED_FRAME];
   gboolean downstream_supports_gbm;
@@ -92,7 +93,6 @@ struct _Gstqticodec2vdec
 
   gint width;
   gint height;
-  gchar *streamformat;
   guint64 frame_index;
   GstVideoInterlaceMode interlace_mode;
   GstVideoFormat outPixelfmt;
