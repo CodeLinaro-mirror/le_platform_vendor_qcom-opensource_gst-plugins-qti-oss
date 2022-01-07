@@ -59,6 +59,7 @@ G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_TYPE_CODEC2_ENC_FULL_RANGE (gst_qticodec2venc_full_range_get_type())
 #define GST_TYPE_CODEC2_ENC_INTRA_REFRESH_MODE (gst_qticodec2venc_intra_refresh_mode_get_type ())
 #define GST_TYPE_CODEC2_ENC_SLICE_MODE (gst_qticodec2venc_slice_mode_get_type ())
+#define GST_TYPE_CODEC2_ENC_BLUR_MODE (gst_qticodec2venc_blur_mode_get_type ())
 #define parent_class gst_qticodec2venc_parent_class
 #define NANO_TO_MILLI(x)  ((x) / 1000)
 #define EOS_WAITING_TIMEOUT 5
@@ -87,6 +88,9 @@ enum
   PROP_TARGET_BITRATE,
   PROP_SLICE_MODE,
   PROP_SLICE_SIZE,
+  PROP_BLUR_MODE,
+  PROP_BLUR_WIDTH,
+  PROP_BLUR_HEIGHT,
 };
 
 /* GstVideoEncoder base class method */
@@ -362,6 +366,35 @@ make_intraRefresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
   return param;
 }
 
+static ConfigParams
+make_blur_mode_param (BLUR_MODE mode, gboolean isInput)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_BLUR_MODE;
+  param.isInput = isInput;
+  param.blur.mode = mode;
+
+  return param;
+}
+
+static ConfigParams
+make_blur_resolution_param (guint32 width, guint32 height, gboolean isInput)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_BLUR_RESOLUTION;
+  param.isInput = isInput;
+  param.resolution.width = width;
+  param.resolution.height = height;
+
+  return param;
+}
+
 static gchar *
 get_c2_comp_name (GstStructure * structure)
 {
@@ -436,6 +469,26 @@ gst_qticodec2venc_slice_mode_get_type (void)
     };
 
     qtype = g_enum_register_static ("GstCodec2VencSliceMode", values);
+  }
+  return qtype;
+}
+
+static GType
+gst_qticodec2venc_blur_mode_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {BLUR_AUTO, "Disable External Blur but Enable Internal Blur. If set "
+          "before start, blur is disabled throughout the session.", "auto"},
+      {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
+            "Blur is applied when valid resolution is set.", "manual"},
+      {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstCodec2VencBlurMode", values);
   }
   return qtype;
 }
@@ -823,6 +876,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   ConfigParams intra_refresh;
   ConfigParams bitrate;
   ConfigParams slice_mode;
+  ConfigParams blur_info;
 
   GST_DEBUG_OBJECT (enc, "set_format");
 
@@ -946,6 +1000,15 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
         enc->intra_refresh_mbs);
     g_ptr_array_add (config, &intra_refresh);
   }
+
+  if ((enc->blur_mode == BLUR_MANUAL) &&
+      (enc->blur_width != 0) && (enc->blur_height != 0)) {
+    blur_info =
+        make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
+  } else {
+    blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+  }
+  g_ptr_array_add (config, &blur_info);
 
   /* Create component */
   if (!gst_qticodec2venc_create_component (encoder)) {
@@ -1454,6 +1517,15 @@ gst_qticodec2venc_set_property (GObject * object, guint prop_id,
     case PROP_ROTATION:
       enc->rotation = g_value_get_uint (value);
       break;
+    case PROP_BLUR_MODE:
+      enc->blur_mode = g_value_get_enum (value);
+      break;
+    case PROP_BLUR_WIDTH:
+      enc->blur_width = g_value_get_uint (value);
+      break;
+    case PROP_BLUR_HEIGHT:
+      enc->blur_height = g_value_get_uint (value);
+      break;
     case PROP_RATE_CONTROL:
       enc->rcMode = g_value_get_enum (value);
       break;
@@ -1517,6 +1589,15 @@ gst_qticodec2venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_ROTATION:
       g_value_set_uint (value, enc->rotation);
+      break;
+    case PROP_BLUR_MODE:
+      g_value_set_enum (value, enc->blur_mode);
+      break;
+    case PROP_BLUR_WIDTH:
+      g_value_set_uint (value, enc->blur_width);
+      break;
+    case PROP_BLUR_HEIGHT:
+      g_value_set_uint (value, enc->blur_height);
       break;
     case PROP_RATE_CONTROL:
       g_value_set_enum (value, enc->rcMode);
@@ -1645,6 +1726,28 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_uint ("rotation", "Rotation",
           "Specify the angle of clockwise rotation. [0|90|180|270]",
           0, 270, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_MODE,
+      g_param_spec_enum ("blur-mode", "Blur Mode",
+          "Specify the blur mode",
+          GST_TYPE_CODEC2_ENC_BLUR_MODE,
+          BLUR_DISABLE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_WIDTH,
+      g_param_spec_uint ("blur-width", "Blur Width",
+          "Specify the blur filter width.",
+          0, UINT_MAX, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_HEIGHT,
+      g_param_spec_uint ("blur-height", "Blur Height",
+          "Specify the blur filter height.",
+          0, UINT_MAX, 0,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -1781,6 +1884,9 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->downscale_width = 0;
   enc->downscale_height = 0;
   enc->target_bitrate = 0;
+  enc->blur_mode = BLUR_DISABLE;
+  enc->blur_width = 0;
+  enc->blur_height = 0;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 

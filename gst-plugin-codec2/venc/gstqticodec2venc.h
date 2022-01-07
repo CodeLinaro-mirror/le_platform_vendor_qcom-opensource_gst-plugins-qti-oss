@@ -99,6 +99,9 @@ struct _Gstqticodec2venc
   guint32 slice_size;
   GMutex pending_lock;
   GCond pending_cond;
+  BLUR_MODE blur_mode;
+  guint32 blur_width;
+  guint32 blur_height;
 };
 
 /*
