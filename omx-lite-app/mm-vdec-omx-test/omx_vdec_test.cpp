@@ -1384,11 +1384,11 @@ static bool setup_omx_output_buffers(void)
     return false;
   }
 
-  DEBUG_PRINT("nBufferCountMin=%d", portFmt.nBufferCountMin);
-  DEBUG_PRINT("nBufferSize=%d", portFmt.nBufferSize);
-  DEBUG_PRINT("nFrameHeight=%d", portFmt.format.video.nFrameHeight);
-  DEBUG_PRINT("nFrameWidth=%d", portFmt.format.video.nFrameWidth);
-  DEBUG_PRINT("xFramerate=%d", portFmt.format.video.xFramerate);
+  printf("Output port nBufferCountMin=%d\n", portFmt.nBufferCountMin);
+  printf("Output port nBufferSize=%d\n", portFmt.nBufferSize);
+  printf("Output port nFrameHeight=%d\n", portFmt.format.video.nFrameHeight);
+  printf("Output port nFrameWidth=%d\n", portFmt.format.video.nFrameWidth);
+  printf("Output port xFramerate=%d\n", portFmt.format.video.xFramerate);
 
   const char *str = "OMX_AllocateBuffer";
   /* Allocate or use buffer on decoder's o/p port */
@@ -1629,6 +1629,7 @@ int Play_Decoder(bool secure)
   }
 
   input_buf_cnt = portFmt.nBufferCountActual;
+  printf("Input port buf cnt %d, sz %d\n", input_buf_cnt, (int)portFmt.nBufferSize);
   DEBUG_PRINT("Transition to Idle State succesful...");
 
   // Allocate buffer on decoder's i/p port
