@@ -1355,7 +1355,8 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstMemory *mem;
   GstMapInfo mapinfo = { 0, };
   gboolean mem_mapped = FALSE;
-  gboolean ret = FALSE;
+  gboolean status = FALSE;
+  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (enc, "encode");
   if (!frame) {
@@ -1405,14 +1406,16 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
       frame->system_frame_number;
 
   /* Queue buffer to Codec2 */
-  ret = c2component_queue (enc->comp, &inBuf);
+  status = c2component_queue (enc->comp, &inBuf);
   /* unmap the gstbuffer if it's mapped */
   if (mem_mapped) {
     gst_buffer_unmap (buf, &mapinfo);
   }
 
-  if (!ret) {
-    goto error_setup_input;
+  if (!status) {
+    GST_ERROR_OBJECT(enc, "failed to queue input frame to Codec2");
+    ret = GST_FLOW_ERROR;
+    goto out;
   }
 
   g_mutex_lock (&(enc->pending_lock));
@@ -1426,13 +1429,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     gst_buffer_ref (frame->input_buffer);
   }
 
-  GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
+out:
+  GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
-  return GST_FLOW_OK;
-
-error_setup_input:
-  GST_ERROR_OBJECT (enc, "failed to setup input");
-  return GST_FLOW_ERROR;
+  return ret;
 }
 
 static void
