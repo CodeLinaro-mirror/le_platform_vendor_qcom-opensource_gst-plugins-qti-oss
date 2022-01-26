@@ -712,6 +712,12 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
     enc->comp_name = comp_name;
     enc->output_state =
         gst_video_encoder_set_output_state (encoder, outcaps, state);
+    if (!enc->output_state) {
+      GST_ERROR_OBJECT (enc, "set output state error");
+      gst_caps_unref (outcaps);
+      g_free(comp_name);
+      return GST_FLOW_ERROR;
+    }
     enc->output_setup = TRUE;
 
     if ((enc->rotation == 90) || (enc->rotation == 270)) {
@@ -1352,45 +1358,47 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   gboolean ret = FALSE;
 
   GST_DEBUG_OBJECT (enc, "encode");
+  if (!frame) {
+    GST_WARNING_OBJECT (enc, "frame is NULL, ret GST_FLOW_EOS");
+    return GST_FLOW_EOS;
+  }
 
   memset (&inBuf, 0, sizeof (BufferDescriptor));
-  inBuf.flag = 0;
 
   GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
-  if (frame) {
-    buf = frame->input_buffer;
-    mem = gst_buffer_get_memory (buf, 0);
 
-    if (gst_is_dmabuf_memory (mem)) {
-      inBuf.fd = gst_dmabuf_memory_get_fd (mem);
-      inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
-      inBuf.data = NULL;
-      inBuf.c2_buffer =
-          gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
-          qticodec2_c2buf_qdata_quark ());
-      GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2_buffer,
-          inBuf.fd);
-    } else {
-      gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
-      mem_mapped = TRUE;
-      inBuf.fd = -1;
-      inBuf.data = mapinfo.data;
-      inBuf.size = mapinfo.size;
-    }
+  buf = frame->input_buffer;
+  mem = gst_buffer_get_memory (buf, 0);
 
-    inBuf.timestamp = NANO_TO_MILLI (frame->pts);
-    inBuf.index = frame->system_frame_number;
-    inBuf.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
-    inBuf.width = enc->width;
-    inBuf.height = enc->height;
-    inBuf.format = enc->input_format;
-
-    gst_memory_unref (mem);
-
-    GST_DEBUG_OBJECT (enc,
-        "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld",
-        inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index);
+  if (gst_is_dmabuf_memory (mem)) {
+    inBuf.fd = gst_dmabuf_memory_get_fd (mem);
+    inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
+    inBuf.data = NULL;
+    inBuf.c2_buffer =
+        gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
+        qticodec2_c2buf_qdata_quark ());
+    GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2_buffer,
+        inBuf.fd);
+  } else {
+    gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
+    mem_mapped = TRUE;
+    inBuf.fd = -1;
+    inBuf.data = mapinfo.data;
+    inBuf.size = mapinfo.size;
   }
+
+  inBuf.timestamp = NANO_TO_MILLI (frame->pts);
+  inBuf.index = frame->system_frame_number;
+  inBuf.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
+  inBuf.width = enc->width;
+  inBuf.height = enc->height;
+  inBuf.format = enc->input_format;
+
+  gst_memory_unref (mem);
+
+  GST_DEBUG_OBJECT (enc,
+      "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld",
+      inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index);
 
   /* Keep track of queued frame */
   enc->queued_frame[(enc->frame_index) % MAX_QUEUED_FRAME] =
