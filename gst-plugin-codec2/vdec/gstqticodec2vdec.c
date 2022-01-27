@@ -949,7 +949,7 @@ static GstBuffer *
 gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
     BufferDescriptor * decode_buf)
 {
-  GstBuffer *out_buf;
+  GstBuffer *out_buf = NULL;
   GstVideoCodecState *state;
   GstVideoInfo *vinfo;
   GstStructure *structure = NULL;
