@@ -434,8 +434,9 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
     // Extract the prediction data.
     prediction = g_list_nth_data (predictions, idx);
 
+    // Break immediately if sorted prediction confidence is below the threshold.
     if (prediction->confidence < detection->threshold)
-      continue;
+      break;
 
     // Concat the prediction data to the output string.
     string = g_strdup_printf ("%s: %.1f%%", prediction->label,
