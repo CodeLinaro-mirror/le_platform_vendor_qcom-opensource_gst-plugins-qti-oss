@@ -123,6 +123,7 @@ private:
 
     uint32_t mNumPendingWorks;
     std::mutex mLock;
+    std::mutex mLockOut;
     std::condition_variable mCondition;
 };
 

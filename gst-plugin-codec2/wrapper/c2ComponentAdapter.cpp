@@ -608,7 +608,10 @@ void C2ComponentAdapter::handleWorkDone(
                 this, bufferIdx, worklet->output.ordinal.timestamp.peeku(), outputFrameFlag);
 
             // ref count ++
-            mOutPendingBuffer[bufferIdx] = buffer;
+            {
+                std::unique_lock<std::mutex> lck(mLockOut);
+                mOutPendingBuffer[bufferIdx] = buffer;
+            }
 
             mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
             std::unique_lock<std::mutex> ul(mLock);
@@ -680,13 +683,16 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
     c2_status_t result = C2_BAD_VALUE;
     std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
 
-    it = mOutPendingBuffer.find(bufferIdx);
-    if (it != mOutPendingBuffer.end()) {
-        mOutPendingBuffer.erase(it);
-        result = C2_OK;
+    {
+        std::unique_lock<std::mutex> lck(mLockOut);
+        it = mOutPendingBuffer.find(bufferIdx);
+        if (it != mOutPendingBuffer.end()) {
+            mOutPendingBuffer.erase(it);
+            result = C2_OK;
 
-    } else {
-        LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+        } else {
+            LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+        }
     }
 
     return result;
