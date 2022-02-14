@@ -116,6 +116,7 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -139,6 +140,7 @@ static configFunctionForVendorParamsMap sConfigFunctionForVendorParamsMap = {
     { CONFIG_FUNCTION_KEY_BLUR_MODE, setBlurMode },
     { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
     { CONFIG_FUNCTION_KEY_ROIREGION, setRoiRegion },
+    { CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE, setBitrateSavingMode },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -513,6 +515,30 @@ std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf)
     roi = intf_wrapper->updateParamFromConfig(kvpairs);
 
     return std::move(roi);
+}
+
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+    if (config->isInput) {
+        LOG_WARNING("setVideoBitrateSavingMode input not implemented");
+
+    } else {
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> bitrateSavingMode;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        item.set((int32_t)config->bitrate_saving_mode.saving_mode);
+        kvpairs.emplace("vendor.qti-ext-enc-content-adaptive-mode.value", item);
+
+        bitrateSavingMode = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(bitrateSavingMode);
+    }
+    return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

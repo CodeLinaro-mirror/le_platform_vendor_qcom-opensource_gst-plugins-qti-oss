@@ -94,7 +94,7 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
 #define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
-
+#define CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE "bitrate_saving_mode"
 #define C2_TICKS_PER_SECOND 1000000
 
 typedef struct comp_cb {
@@ -266,6 +266,13 @@ typedef enum {
     IR_RANDOM,
 } IR_MODE_TYPE;
 
+typedef enum {
+    BITRATE_SAVING_MODE_DISABLE_ALL = 0,
+    BITRATE_SAVING_MODE_ENABLE_8BIT,
+    BITRATE_SAVING_MODE_ENABLE_10BIT,
+    BITRATE_SAVING_MODE_ENABLE_ALL,
+} BITRATE_SAVING_MODE;
+
 typedef struct {
     guint8* data;
     gint32 fd;
@@ -351,6 +358,10 @@ typedef struct {
             MATRIX matrix;
             FULL_RANGE full_range;
         } colorAspects;
+
+        struct {
+            BITRATE_SAVING_MODE saving_mode;
+        } bitrate_saving_mode;
     };
 } ConfigParams;
 
