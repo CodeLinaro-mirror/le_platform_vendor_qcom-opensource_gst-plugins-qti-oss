@@ -27,43 +27,40 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef __C2COMPONENTSTOREADAPTER_H__
-#define __C2COMPONENTSTOREADAPTER_H__
+#ifndef __WRAPPER_UTILS_H__
+#define __WRAPPER_UTILS_H__
 
-#include <C2Component.h>
+#include "types.h"
+#include "gbm_priv.h"
+#include "codec2wrapper.h"
+#include <gst/video/video.h>
+#include <C2Config.h>
 
 namespace QTI {
 
-struct QC2ComponentStoreFactory {
-    virtual ~QC2ComponentStoreFactory() = default;
-    virtual std::shared_ptr<C2ComponentStore> getInstance() = 0;
-};
+uint32_t toC2InterlaceType(INTERLACE_MODE_TYPE interlace_type);
 
-// symbol name for getting the factory (library = libqcodec2_core.so)
-static constexpr const char* kFn_QC2ComponentStoreFactoryGetter = "QC2ComponentStoreFactoryGetter";
+C2BlockPool::local_id_t toC2BufferPoolType(BUFFER_POOL_TYPE pool_type);
 
-using QC2ComponentStoreFactoryGetter_t
-    = QC2ComponentStoreFactory* (*)(int majorVersion, int minorVersion);
+c2_blocking_t toC2BlocingType(BLOCK_MODE_TYPE block_type);
 
-class C2ComponentStoreAdapter {
+C2Component::drain_mode_t toC2DrainMode(DRAIN_MODE_TYPE mode);
 
-public:
-    C2ComponentStoreAdapter(std::shared_ptr<C2ComponentStore> store,
-        QC2ComponentStoreFactory* factory, void* dl_handle);
-    ~C2ComponentStoreAdapter();
+C2Component::flush_mode_t toC2FlushMode(FLUSH_MODE_TYPE mode);
 
-    c2_status_t createComponent(C2String name, void** const component);
-    c2_status_t createInterface(C2String name, void** const interface);
-    C2String getName();
-    std::vector<std::shared_ptr<const C2Component::Traits> > listComponents();
-    bool isComponentSupported(char* name);
+uint32_t toC2RateControlMode(RC_MODE_TYPE mode);
 
-private:
-    std::shared_ptr<C2ComponentStore> mStore;
-    QC2ComponentStoreFactory* mFactory;
-    void* mDlHandle;
-};
+FLAG_TYPE toWrapperFlag(C2FrameData::flags_t flag);
+
+C2FrameData::flags_t toC2Flag(FLAG_TYPE flag);
+
+uint32_t toC2PixelFormat(PIXEL_FORMAT_TYPE pixel);
+guint32 gst_to_c2_gbmformat(GstVideoFormat format);
+C2Color::primaries_t toC2Primaries(COLOR_PRIMARIES pixel);
+C2Color::transfer_t toC2TransferChar(TRANSFER_CHAR transfer_char);
+C2Color::matrix_t toC2Matrix(MATRIX matrix);
+C2Color::range_t toC2FullRange(FULL_RANGE full_range);
 
 } // namespace QTI
 
-#endif /* __C2COMPONENTSTOREADAPTER_H__ */
+#endif /* __WRAPPER_UTILS_H__ */

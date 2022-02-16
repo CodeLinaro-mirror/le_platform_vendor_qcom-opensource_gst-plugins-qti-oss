@@ -39,88 +39,49 @@
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2_debug);
 #define GST_CAT_DEFAULT gst_qticodec2_debug
 
-G_DEFINE_TYPE (GstQticodec2Allocator, gst_qticodec2_allocator,
-    GST_TYPE_FD_ALLOCATOR);
-
-static void
-gst_qticodec2_allocator_init (GstQticodec2Allocator * allocator)
-{
-  GstAllocator *alloc = GST_ALLOCATOR_CAST (allocator);
-  alloc->mem_type = "QtiCodec2Allocator";
-}
-
-GstAllocator *
-gst_qticodec2_allocator_new (gpointer comp, BUFFER_POOL_TYPE pool_type, GstCaps * caps)
-{
-  GstQticodec2Allocator *c2_allocator;
-
-  c2_allocator = g_object_new (GST_TYPE_QTICODEC2_ALLOCATOR, NULL);
-
-  c2_allocator->comp = comp;
-  c2_allocator->pool_type = pool_type;
-
-  c2_allocator->info = g_slice_new (GstVideoInfo);
-
-  if (!gst_video_info_from_caps (c2_allocator->info, caps)) {
-    GST_ERROR_OBJECT (c2_allocator, "failed to get video info");
-  }
-
-  return c2_allocator;
-}
-
-static void
-gst_qticodec2_allocator_dispose (GObject * obj)
-{
-  GstQticodec2Allocator *c2_allocator = GST_QTICODEC2_ALLOCATOR_CAST (obj);
-
-  G_OBJECT_CLASS (gst_qticodec2_allocator_parent_class)->dispose (obj);
-}
+#define POOL_MIN_BUFFER_COUNT 6
 
 static GstMemory *
-gst_qticodec2_allocator_alloc (GstAllocator * alloc, gsize size,
-    GstAllocationParams * params)
+_gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
 {
-  GstQticodec2Allocator *c2_allocator;
+  GstQticodec2BufferPool *self_pool = GST_QTICODEC2_BUFFER_POOL_CAST (pool);
+  GstAllocator *alloc = self_pool->allocator;
   GstMemory *mem = NULL;
   GstVideoInfo *info = NULL;
   GstVideoFormat format;
-  guint32 width;
-  guint32 height;
   BufferDescriptor buffer;
-  BUFFER_POOL_TYPE poolType;
 
-  c2_allocator = GST_QTICODEC2_ALLOCATOR_CAST (alloc);
-  info = c2_allocator->info;
-
-  format = GST_VIDEO_FORMAT_INFO_FORMAT(info->finfo);
-  width = info->width;
-  height = info->height;
+  memset (&buffer, 0, sizeof (BufferDescriptor));
+  info = self_pool->info;
+  format = GST_VIDEO_FORMAT_INFO_FORMAT (info->finfo);
+  buffer.width = info->width;
+  buffer.height = info->height;
+  buffer.format = format;
 
   /* Note: size is not used here for graphic buffer */
-  GST_DEBUG_OBJECT (c2_allocator, "Allocating buffer size: %lu, format: %s, width: %d, height: %d",
-      size, gst_video_format_to_string (format), width, height);
+  GST_DEBUG_OBJECT (pool,
+      "Allocating buffer size: %lu, format: %s, width: %d, height: %d",
+      info->size, gst_video_format_to_string (format), info->width,
+      info->height);
 
   /*TODO: add support for Linear buffer */
   if (format == GST_VIDEO_FORMAT_NV12 || format == GST_VIDEO_FORMAT_NV12_UBWC) {
-      poolType = BUFFER_POOL_BASIC_GRAPHIC;
+    buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
 
-      if(!c2component_alloc (c2_allocator->comp, &buffer, poolType)) {
-        GST_ERROR_OBJECT (c2_allocator, "Failed to allocate graphic buffer");
-      } else {
-        GST_DEBUG_OBJECT (c2_allocator, "Allocated buffer fd: %d, size: %d",
-            buffer.fd, buffer.capacity);
+    if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
+      GST_ERROR_OBJECT (pool, "Failed to allocate graphic buffer");
+    } else {
+      GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d",
+          buffer.fd, buffer.capacity);
 
-        /* use GstFdAllocator to allocate GBM based fd memory */
-        mem = gst_fd_allocator_alloc (alloc, buffer.fd, buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
-      }
+      /* use GstFdAllocator to allocate GBM based fd memory */
+      mem =
+          gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
+          buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
+    }
   }
 
   return mem;
-}
-
-static void
-gst_qticodec2_allocator_class_init (GstQticodec2AllocatorClass * klass)
-{
 }
 
 #define gst_qticodec2_buffer_pool_parent_class parent_class
@@ -131,7 +92,8 @@ static const char **
 gst_qticodec2_buffer_pool_get_options (GstBufferPool * pool)
 {
   static const gchar *options[] = { GST_BUFFER_POOL_OPTION_VIDEO_META,
-    GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT, NULL};
+    GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT, NULL
+  };
 
   return options;
 }
@@ -143,14 +105,16 @@ gst_qticodec2_buffer_pool_set_config (GstBufferPool * pool,
   GstCaps *caps;
   guint32 size, min, max;
   GstQticodec2BufferPool *self_pool = GST_QTICODEC2_BUFFER_POOL_CAST (pool);
-  GstQticodec2Allocator *c2_allocator = GST_QTICODEC2_ALLOCATOR_CAST(self_pool->c2_allocator);
-  GstVideoInfo *info = c2_allocator->info;
+  GstVideoInfo *info = self_pool->info;
 
-  if (config) {
-    if (!gst_buffer_pool_config_get_params (config, &caps, &size, &min, &max)) {
-      GST_WARNING_OBJECT (pool, "invalid config");
-      return FALSE;
-    }
+  if (NULL == config) {
+    GST_ERROR_OBJECT (pool, "null config");
+    return FALSE;
+  }
+
+  if (!gst_buffer_pool_config_get_params (config, &caps, &size, &min, &max)) {
+    GST_ERROR_OBJECT (pool, "invalid config");
+    return FALSE;
   }
 
   if (NULL == caps) {
@@ -167,9 +131,6 @@ gst_qticodec2_buffer_pool_set_config (GstBufferPool * pool,
         gst_video_format_to_string (info->finfo->format));
   }
 
-  if (size)
-    c2_allocator->alloc_size = size;
-
   return GST_BUFFER_POOL_CLASS (parent_class)->set_config (pool, config);
 }
 
@@ -177,7 +138,7 @@ static void
 gst_qticodec2_buffer_pool_init (GstQticodec2BufferPool * pool)
 {
   GST_DEBUG_CATEGORY_INIT (gst_qticodec2_debug,
-      "qticodec2", 0, "QTI GST codec2.0");
+      "qticodec2pool", 0, "QTI GST codec2.0");
 
   GST_DEBUG_OBJECT (pool, "QTI Codec2 pool init");
 }
@@ -186,20 +147,14 @@ static GstFlowReturn
 gst_qticodec2_buffer_pool_alloc (GstBufferPool * pool,
     GstBuffer ** buffer, GstBufferPoolAcquireParams * params)
 {
-  GstQticodec2BufferPool *self_pool;
-  GstQticodec2Allocator *allocator;
-  GstVideoInfo *info;
   GstBuffer *buf;
   GstMemory *mem;
-  gsize size;
 
   GST_DEBUG_OBJECT (pool, "alloc buffer");
 
-  self_pool = GST_QTICODEC2_BUFFER_POOL_CAST (pool);
-  allocator = GST_QTICODEC2_ALLOCATOR_CAST (self_pool->c2_allocator);
-  size = allocator->alloc_size;
-
-  mem = gst_qticodec2_allocator_alloc (allocator, size, NULL);
+  mem = _gst_qticodec2_alloc_dmabuf (pool);
+  if (!mem)
+    goto no_buf;
 
   /* create a gst buffer */
   buf = gst_buffer_new ();
@@ -229,10 +184,15 @@ gst_qticodec2_buffer_pool_finalize (GObject * obj)
   GstQticodec2BufferPool *pool = GST_QTICODEC2_BUFFER_POOL_CAST (obj);
 
   GST_DEBUG_OBJECT (pool, "finalize buffer pool");
-
-  if (pool->c2_allocator) {
-    gst_object_unref (pool->c2_allocator);
-    pool->c2_allocator = NULL;
+  if (pool) {
+    if (pool->allocator) {
+      gst_object_unref (pool->allocator);
+      pool->allocator = NULL;
+    }
+    if (pool->info) {
+      g_slice_free (GstVideoInfo, pool->info);
+      pool->info = NULL;
+    }
   }
 
   G_OBJECT_CLASS (gst_qticodec2_buffer_pool_parent_class)->finalize (obj);
@@ -257,35 +217,49 @@ gst_qticodec2_buffer_pool_new (gpointer comp, BUFFER_POOL_TYPE pool_type,
 {
   GstQticodec2BufferPool *pool;
   GstStructure *config;
-  GstVideoInfo info;
+  GstVideoInfo *info;
   GstAllocationParams params = { 0, 0, 0, 0, };
 
   pool = (GstQticodec2BufferPool *)
       g_object_new (GST_TYPE_QTICODEC2_BUFFER_POOL, NULL);
 
-  GST_INFO_OBJECT (pool, "gst_qticodec2_buffer_pool_new, type: %d, num_buffers: %d",
-      pool_type, num_buffers);
+  info = g_slice_new (GstVideoInfo);
+  if (!info) {
+    GST_ERROR_OBJECT (pool, "failed to create a video info");
+    return NULL;
+  }
 
-  if (!gst_video_info_from_caps (&info, caps)) {
+  GST_INFO_OBJECT (pool,
+      "gst_qticodec2_buffer_pool_new, type: %d, num_buffers: %d", pool_type,
+      num_buffers);
+
+  if (!gst_video_info_from_caps (info, caps)) {
     GST_ERROR_OBJECT (pool, "failed to get video info");
     return NULL;
   }
 
   /* create allocator for pool */
-  pool->c2_allocator = gst_qticodec2_allocator_new (comp, pool_type, caps);
+  pool->allocator = gst_dmabuf_allocator_new ();
+  if (!pool->allocator) {
+    g_slice_free (GstVideoInfo, info);
+    GST_ERROR_OBJECT (pool, "failed to create dmabuf allocator");
+    return NULL;
+  }
+
+  pool->c2_comp = comp;
+  pool->info = info;
 
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
 
   /* set pool params and options */
-  gst_buffer_pool_config_set_params (config, caps, info.size, 0, num_buffers);
+  gst_buffer_pool_config_set_params (config, caps, info->size,
+      POOL_MIN_BUFFER_COUNT, num_buffers);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+  gst_buffer_pool_config_add_option (config,
+      GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
 
-  /* set allocator */
-  gst_buffer_pool_config_set_allocator (config,
-      pool->c2_allocator, &params);
-
-  if (!gst_qticodec2_buffer_pool_set_config (pool, config)) {
+  if (!gst_qticodec2_buffer_pool_set_config (GST_BUFFER_POOL_CAST (pool),
+          config)) {
     GST_ERROR_OBJECT (pool, "failed to set config to pool");
     return NULL;
   }

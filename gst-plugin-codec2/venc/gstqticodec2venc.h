@@ -35,16 +35,17 @@
 #include <gst/video/gstvideoencoder.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
+#include "gstqticodec2bufferpool.h"
+
+#include "codec2wrapper.h"
 
 G_BEGIN_DECLS
-
 #define GST_TYPE_QTICODEC2VENC          (gst_qticodec2venc_get_type())
 #define GST_QTICODEC2VENC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VENC,Gstqticodec2venc))
 #define GST_QTICODEC2VENC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VENC,Gstqticodec2vencClass))
 #define GST_IS_QTICODEC2VENC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VENC))
 #define GST_IS_QTICODEC2VENC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VENC))
-
-typedef struct _Gstqticodec2venc      Gstqticodec2venc;
+typedef struct _Gstqticodec2venc Gstqticodec2venc;
 typedef struct _Gstqticodec2vencClass Gstqticodec2vencClass;
 
 /* Maximum number of input frame queued */
@@ -52,7 +53,7 @@ typedef struct _Gstqticodec2vencClass Gstqticodec2vencClass;
 
 struct _Gstqticodec2venc
 {
-  GstVideoDecoder parent;
+  GstVideoEncoder parent;
 
   /* Public properties */
   gboolean silent;
@@ -60,6 +61,7 @@ struct _Gstqticodec2venc
   void *comp_store;
   void *comp;
   void *comp_intf;
+  gchar *comp_name;
 
   guint64 queued_frame[MAX_QUEUED_FRAME];
 
@@ -74,16 +76,32 @@ struct _Gstqticodec2venc
   gint width;
   gint height;
   GstVideoFormat input_format;
-  gchar* streamformat;
   guint64 frame_index;
   guint64 num_input_queued;
   guint64 num_output_done;
 
   GstVideoInterlaceMode interlace_mode;
   GstVideoFormat outPixelfmt;
-
+  RC_MODE_TYPE rcMode;
+  MIRROR_TYPE mirror;
+  guint32 rotation;
+  guint32 downscale_width;
+  guint32 downscale_height;
+  gboolean color_space_conversion;
+  COLOR_PRIMARIES primaries;
+  TRANSFER_CHAR transfer_char;
+  MATRIX matrix;
+  FULL_RANGE full_range;
+  IR_MODE_TYPE intra_refresh_mode;
+  guint32 intra_refresh_mbs;
+  guint32 target_bitrate;
+  SLICE_MODE slice_mode;
+  guint32 slice_size;
   GMutex pending_lock;
-  GCond  pending_cond;
+  GCond pending_cond;
+  BLUR_MODE blur_mode;
+  guint32 blur_width;
+  guint32 blur_height;
 };
 
 /*
@@ -97,5 +115,4 @@ struct _Gstqticodec2vencClass
 GType gst_qticodec2venc_get_type (void);
 
 G_END_DECLS
-
 #endif /* __GST_QTICODEC2VENC_H__ */

@@ -37,31 +37,34 @@
 #include <gst/allocators/allocators.h>
 
 G_BEGIN_DECLS
-
-#define GST_CAPS_FEATURE_MEMORY_DMA "memory:DMABuf"
-
 #define QTICODEC2VDEC_SINK_WH_CAPS    \
   "width  = (int) [ 32, 8192 ], "     \
   "height = (int) [ 32, 8192 ]"
-
+#define QTICODEC2VDEC_SINK_COMPRESSION_CAPS    \
+    "compression = (string) { ubwc, linear }"
+#define QTICODEC2VDEC_SINK_FPS_CAPS    \
+  "framerate = (fraction) [ 0, 480 ]"
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
   "video/x-raw, "                       \
   "format = (string) " formats ", "     \
-  QTICODEC2VDEC_SINK_WH_CAPS
-
+  QTICODEC2VDEC_SINK_WH_CAPS ", "       \
+  QTICODEC2VDEC_SINK_FPS_CAPS ", "      \
+  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
 #define QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES(features, formats) \
   "video/x-raw(" features "), "                                 \
   "format = (string) " formats ", "                             \
-  QTICODEC2VDEC_SINK_WH_CAPS
-
+  QTICODEC2VDEC_SINK_WH_CAPS   ", "                             \
+  QTICODEC2VDEC_SINK_FPS_CAPS  ", "                             \
+  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
 #define GST_IS_QTICODEC2VDEC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VDEC))
 #define GST_IS_QTICODEC2VDEC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VDEC))
-
-typedef struct _Gstqticodec2vdec      Gstqticodec2vdec;
+typedef struct _Gstqticodec2vdec Gstqticodec2vdec;
 typedef struct _Gstqticodec2vdecClass Gstqticodec2vdecClass;
+
+typedef guint64 (*f_get_modifier) (void *bo);
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  64
@@ -76,6 +79,7 @@ struct _Gstqticodec2vdec
   void *comp_store;
   void *comp;
   void *comp_intf;
+  gchar *comp_name;
 
   guint64 queued_frame[MAX_QUEUED_FRAME];
   gboolean downstream_supports_gbm;
@@ -89,17 +93,24 @@ struct _Gstqticodec2vdec
 
   gint width;
   gint height;
-  guint32 output_size;
-  gchar* streamformat;
   guint64 frame_index;
   GstVideoInterlaceMode interlace_mode;
   GstVideoFormat outPixelfmt;
   guint64 num_input_queued;
   guint64 num_output_done;
   gboolean downstream_supports_dma;
+  gboolean output_picture_order_mode;
+  gboolean low_latency_mode;
+  gboolean map_outbuf;
 
   GMutex pending_lock;
-  GCond  pending_cond;
+  GCond pending_cond;
+  struct timeval start_time;
+  struct timeval first_frame_time;
+  GstBufferPool *out_port_pool;
+  void *gbm_lib;
+  f_get_modifier gbm_api_bo_get_modifier;
+  gboolean is_ubwc;
 };
 
 /*
@@ -113,5 +124,4 @@ struct _Gstqticodec2vdecClass
 GType gst_qticodec2vdec_get_type (void);
 
 G_END_DECLS
-
 #endif /* __GST_QTICODEC2VDEC_H__ */

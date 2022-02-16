@@ -1,6 +1,6 @@
 plugin_LTLIBRARIES = libgstqticodec2venc.la
 
-WRAPPER_CFLAGS  = -I$(CURDIR)/../wrapper
+WRAPPER_CFLAGS  = -I$(CURDIR)/../wrapper/include
 COMMON_CFLAGS   = -I$(CURDIR)/../common
 WRAPPER_LDFLAGS = -L$(CURDIR)/../wrapper/.libs
 COMMON_LDFLAGS  = -L$(CURDIR)/../common/.libs
@@ -12,7 +12,6 @@ libgstqticodec2venc_la_SOURCES = gstqticodec2venc.c
 libgstqticodec2venc_la_CFLAGS = $(GST_CFLAGS) \
                                 $(GST_PLUGINS_BASE_CFLAGS) \
                                 $(GST_BASE_CFLAGS) \
-                                $(GST_IONBUF_CFLAGS) \
                                 $(WRAPPER_CFLAGS) \
                                 $(COMMON_CFLAGS)
 
