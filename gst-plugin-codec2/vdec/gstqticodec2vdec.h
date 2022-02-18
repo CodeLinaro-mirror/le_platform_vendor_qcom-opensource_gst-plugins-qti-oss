@@ -35,6 +35,7 @@
 #include <gst/video/gstvideodecoder.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
+#include "codec2wrapper.h"
 
 #define GST_USE_UNSTABLE_API
 #include <gst/codecparsers/gstvp9parser.h>
@@ -116,6 +117,8 @@ struct _Gstqticodec2vdec
   gboolean is_ubwc;
   gboolean is_10bit;
   gboolean check_vp9_10bit;
+  gboolean secure;
+  comp_cb cb;
 };
 
 /*

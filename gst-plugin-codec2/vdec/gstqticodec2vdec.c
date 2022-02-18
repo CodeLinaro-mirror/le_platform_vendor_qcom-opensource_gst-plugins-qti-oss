@@ -42,7 +42,6 @@
 
 #include "gstqticodec2vdec.h"
 #include "gstqticodec2vdecbufferpool.h"
-#include "codec2wrapper.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
@@ -61,6 +60,7 @@ G_DEFINE_TYPE (Gstqticodec2vdec, gst_qticodec2vdec, GST_TYPE_VIDEO_DECODER);
 #define GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT             (FALSE)
 #define GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT                   (0xffffffff)
+#define GST_QTI_CODEC2_SECURE_MODE_DEFAULT                      (FALSE)
 
 /* Function will be named qticodec2vdec_qdata_quark() */
 static G_DEFINE_QUARK (QtiCodec2DecoderQuark, qticodec2vdec_qdata);
@@ -75,6 +75,9 @@ enum
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
   PROP_MAP_OUTBUF,
+  PROP_SECURE,
+  PROP_DATA_COPY_FUNTION,
+  PROP_DATA_COPY_FUNTION_PARAM,
 };
 
 /* GstVideoDecoder base class method */
@@ -250,7 +253,10 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
   gchar *str = NULL;
   gchar *concat_str = NULL;
   gchar *str_low_latency = g_strdup (".low_latency");
+  gchar *str_secure = g_strdup (".secure");
+  gchar *str_suffix = NULL;
   gboolean supported = FALSE;
+  gboolean secure = dec->secure;
   gint mpegversion = 0;
 
   if (gst_structure_has_name (s, "video/x-h264")) {
@@ -270,7 +276,16 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
   }
 
   if (low_latency) {
-    concat_str = g_strconcat (str, str_low_latency, NULL);
+    str_suffix = str_low_latency;
+    GST_DEBUG_OBJECT (dec, "selected low latency component");
+  }
+  if (secure) {
+    str_suffix = str_secure;
+    GST_DEBUG_OBJECT (dec, "selected secure component");
+  }
+
+  if (low_latency || secure) {
+    concat_str = g_strconcat (str, str_suffix, NULL);
     supported =
         c2componentStore_isComponentSupported (dec->comp_store, concat_str);
 
@@ -285,6 +300,8 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
 
   if (str_low_latency)
     g_free (str_low_latency);
+  if (str_secure)
+    g_free (str_secure);
 
   return str;
 }
@@ -333,7 +350,7 @@ gst_qticodec2vdec_create_component (GstVideoDecoder * decoder)
   if (dec->comp_store) {
     ret =
         c2componentStore_createComponent (dec->comp_store, dec->comp_name,
-        &dec->comp);
+        &dec->comp, &dec->cb);
     if (ret == TRUE) {
       dec->comp_intf = c2component_intf (dec->comp);
       if (dec->comp_intf) {
@@ -1409,6 +1426,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   inBuf.timestamp = NANO_TO_MILLI (frame->pts);
   inBuf.index = frame->system_frame_number;
+  inBuf.secure = dec->secure;
 
   /* Queue buffer to Codec2 */
   status = c2component_queue (dec->comp, &inBuf);
@@ -1451,6 +1469,15 @@ gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     case PROP_MAP_OUTBUF:
       dec->map_outbuf = g_value_get_uint (value);
       break;
+    case PROP_SECURE:
+      dec->secure = g_value_get_boolean (value);
+      break;
+    case PROP_DATA_COPY_FUNTION:
+      dec->cb.data_copy_func = g_value_get_pointer (value);
+      break;
+    case PROP_DATA_COPY_FUNTION_PARAM:
+      dec->cb.data_copy_func_param = g_value_get_pointer (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1477,6 +1504,15 @@ gst_qticodec2vdec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_MAP_OUTBUF:
       g_value_set_uint (value, dec->map_outbuf);
+      break;
+    case PROP_SECURE:
+      g_value_set_boolean (value, dec->secure);
+      break;
+    case PROP_DATA_COPY_FUNTION:
+      g_value_set_pointer (value, dec->cb.data_copy_func);
+      break;
+    case PROP_DATA_COPY_FUNTION_PARAM:
+      g_value_set_pointer (value, dec->cb.data_copy_func_param);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1582,6 +1618,30 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
           0, G_MAXUINT, GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_SECURE,
+      g_param_spec_boolean ("secure", "secure mode",
+          "If enabled, decoder should be in secure mode",
+          GST_QTI_CODEC2_SECURE_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_DATA_COPY_FUNTION, g_param_spec_pointer ("data-copy-func",
+          "set input date copy callback function",
+          "set input data copy callback function, app could implement this callback function "
+          "to copy data from dec plugin's sinkpad buf to codec2's input buf. Function prototype "
+          "is: int datacopy(int dstbuf_fd, void* srcbuf, int datalen, void* param), returning "
+          "zero means copy succeed. If this callback is NULL, plugin implement it internally",
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+      );
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_DATA_COPY_FUNTION_PARAM,
+      g_param_spec_pointer ("data-copy-func-param",
+          "set input parameter of date copy callback function",
+          "work with data-copy-func callback function, app could set input parameter for "
+          "that function, this property will be passed as the 4th parameter of that function",
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+      );
 
   video_decoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_set_format);
@@ -1626,6 +1686,8 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->out_port_pool = NULL;
   dec->is_10bit = FALSE;
   dec->check_vp9_10bit = FALSE;
+  dec->cb.data_copy_func = NULL;
+  dec->cb.data_copy_func_param = NULL;
 
   memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
   memset (&dec->start_time, 0, sizeof (struct timeval));

@@ -589,7 +589,7 @@ const gchar* c2componentStore_getName(void* const comp_store)
     return name;
 }
 
-gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component)
+gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component, comp_cb* cb)
 {
 
     LOG_MESSAGE("Creating component");
@@ -602,6 +602,11 @@ gboolean c2componentStore_createComponent(void* const comp_store, const gchar* n
 
         c2Status = store_Wrapper->createComponent(C2String(name), component);
         if (c2Status == C2_OK) {
+            C2ComponentAdapter* comp_adapter = *(C2ComponentAdapter**)component;
+            if (cb) {
+                LOG_DEBUG("comp name:%s, set func for copying", name);
+                comp_adapter->setDataCopyFunc(cb->data_copy_func, cb->data_copy_func_param);
+            }
             ret = TRUE;
         } else {
             LOG_ERROR("Failed(%d) to create component (%s)", c2Status, name);

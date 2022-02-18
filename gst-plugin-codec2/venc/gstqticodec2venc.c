@@ -650,7 +650,7 @@ gst_qticodec2venc_create_component (GstVideoEncoder * encoder)
 
     ret =
         c2componentStore_createComponent (enc->comp_store, enc->comp_name,
-        &enc->comp);
+        &enc->comp, NULL);
     if (ret == FALSE) {
       GST_DEBUG_OBJECT (enc, "Failed to create component");
     }
