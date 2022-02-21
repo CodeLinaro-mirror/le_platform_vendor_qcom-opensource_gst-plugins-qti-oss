@@ -455,6 +455,10 @@ void CodecCallback::onOutputBufferAvailable(
                 /* get valid size for NV12_UBWC format */
                 if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
                     outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
+                } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
+                } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
+                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
                 }
                 outBuf.data = (guint8*)view.data()[0];
             } else {

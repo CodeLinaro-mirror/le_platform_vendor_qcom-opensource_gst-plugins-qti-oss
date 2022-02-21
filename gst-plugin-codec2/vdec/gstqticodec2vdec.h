@@ -36,6 +36,9 @@
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
 
+#define GST_USE_UNSTABLE_API
+#include <gst/codecparsers/gstvp9parser.h>
+
 G_BEGIN_DECLS
 #define QTICODEC2VDEC_SINK_WH_CAPS    \
   "width  = (int) [ 32, 8192 ], "     \
@@ -111,6 +114,8 @@ struct _Gstqticodec2vdec
   void *gbm_lib;
   f_get_modifier gbm_api_bo_get_modifier;
   gboolean is_ubwc;
+  gboolean is_10bit;
+  gboolean check_vp9_10bit;
 };
 
 /*

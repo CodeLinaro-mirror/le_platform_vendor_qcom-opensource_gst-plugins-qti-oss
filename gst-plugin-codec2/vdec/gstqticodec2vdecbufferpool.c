@@ -112,6 +112,7 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool,
   gint64 *buf_key = NULL;
   GValue new_index = { 0, };
   g_value_init (&new_index, G_TYPE_UINT64);
+  guint32 color_fmt = 0;
 
   out_buf =
       (GstBuffer *) g_hash_table_lookup (out_port_pool->buffer_table, &key);
@@ -152,24 +153,27 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool,
     switch (GST_VIDEO_INFO_FORMAT (vinfo)) {
       case GST_VIDEO_FORMAT_NV12:
         if (dec->is_ubwc) {
-          stride[0] = stride[1] =
-              VENUS_Y_STRIDE (COLOR_FMT_NV12_UBWC,
-              GST_VIDEO_INFO_WIDTH (vinfo));
-          offset[0] = 0;
-          offset[1] = stride[0] * VENUS_Y_SCANLINES (COLOR_FMT_NV12_UBWC,
-              GST_VIDEO_INFO_HEIGHT (vinfo));
+          color_fmt = COLOR_FMT_NV12_UBWC;
         } else {
-          stride[0] = stride[1] =
-              VENUS_Y_STRIDE (COLOR_FMT_NV12, GST_VIDEO_INFO_WIDTH (vinfo));
-          offset[0] = 0;
-          offset[1] = stride[0] * VENUS_Y_SCANLINES (COLOR_FMT_NV12,
-              GST_VIDEO_INFO_HEIGHT (vinfo));
+          color_fmt = COLOR_FMT_NV12;
         }
+        break;
+      case GST_VIDEO_FORMAT_NV12_10LE32:
+        color_fmt = COLOR_FMT_NV12_BPP10_UBWC;
+        break;
+      case GST_VIDEO_FORMAT_P010_10LE:
+        color_fmt = COLOR_FMT_P010;
         break;
       default:
         g_assert_not_reached ();
         break;
     }
+
+    stride[0] = stride[1] =
+        VENUS_Y_STRIDE (color_fmt, GST_VIDEO_INFO_WIDTH (vinfo));
+    offset[0] = 0;
+    offset[1] = stride[0] * VENUS_Y_SCANLINES (color_fmt,
+        GST_VIDEO_INFO_HEIGHT (vinfo));
 
     /* Add video meta data, which is needed for downstream element. */
     GST_DEBUG_OBJECT (pool,

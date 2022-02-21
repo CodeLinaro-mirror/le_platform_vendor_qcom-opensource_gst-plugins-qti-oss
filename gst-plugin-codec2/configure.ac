@@ -28,9 +28,8 @@ AC_DEFINE(USE_GBM, [], [define USE_GBM macro])
 
 AG_GST_LIBTOOL_PREPARE
 
-dnl required versions of gstreamer and plugins-base
+dnl required versions of gstreamer
 GST_REQUIRED=1.0.0
-GSTPB_REQUIRED=1.0.0
 
 dnl Add parameters for aclocal
 AC_SUBST(ACLOCAL_AMFLAGS, "-I m4")
@@ -56,7 +55,7 @@ dnl This will export GST_CFLAGS and GST_LIBS variables for use in Makefile.am
 PKG_CHECK_MODULES(GST, [
   gstreamer-1.0 >= $GST_REQUIRED
   gstreamer-base-1.0 >= $GST_REQUIRED
-  gstreamer-controller-1.0 >= $GST_REQUIRED
+  gstreamer-plugins-bad-1.0 >= $GST_REQUIRED
 ], [
   AC_SUBST(GST_CFLAGS)
   AC_SUBST(GST_LIBS)

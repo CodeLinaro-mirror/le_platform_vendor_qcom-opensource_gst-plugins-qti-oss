@@ -18,6 +18,7 @@ libgstqticodec2vdec_la_LIBADD = $(GST_LIBS) \
                 $(GST_PLUGINS_BASE_LIBS) \
                 $(GST_BASE_LIBS) \
                 -lgstvideo-$(GST_API_VERSION) \
+                -lgstcodecparsers-$(GST_API_VERSION) \
                 -lgstallocators-$(GST_API_VERSION) \
                 -lcodec2wrapper -ldl
 

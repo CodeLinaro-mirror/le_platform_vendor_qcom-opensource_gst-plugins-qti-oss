@@ -45,6 +45,7 @@
 #include "codec2wrapper.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
+#include <media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2vdec_debug);
 #define GST_CAT_DEFAULT gst_qticodec2vdec_debug
@@ -136,6 +137,12 @@ static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_CAPS (QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ NV12 }")
         ";" QTICODEC2VDEC_RAW_CAPS ("{ NV12 }")
+        ";" QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ NV12_10LE32 }")
+        ";" QTICODEC2VDEC_RAW_CAPS ("{ NV12_10LE32 }")
+        ";" QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ P010_10LE }")
+        ";" QTICODEC2VDEC_RAW_CAPS ("{ P010_10LE }")
     )
     );
 
@@ -295,6 +302,12 @@ gst_to_c2_pixelformat (GstVideoDecoder * decoder, GstVideoFormat format)
       } else {
         result = PIXEL_FORMAT_NV12_LINEAR;
       }
+      break;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      result = PIXEL_FORMAT_TP10_UBWC;
+      break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      result = PIXEL_FORMAT_P010;
       break;
     default:
       result = PIXEL_FORMAT_NV12_UBWC;
@@ -469,6 +482,13 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
   GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
       dec->output_state->caps);
 
+  if (dec->is_10bit) {
+    if (dec->is_ubwc)
+      output_format = GST_VIDEO_FORMAT_NV12_10LE32;
+    else
+      output_format = GST_VIDEO_FORMAT_P010_10LE;
+  }
+
   dec->outPixelfmt = output_format;
 
   GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d",
@@ -561,6 +581,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   ConfigParams interlace;
   ConfigParams output_picture_order_mode;
   ConfigParams low_latency_mode;
+  const gchar *profile_string = NULL;
 
   GST_DEBUG_OBJECT (dec, "set_format");
 
@@ -570,6 +591,22 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_ERROR_OBJECT (dec, "Failed to get relevant component name, caps:%"
         GST_PTR_FORMAT, state->caps);
     return FALSE;
+  }
+
+  profile_string = gst_structure_get_string (structure, "profile");
+  if (!profile_string) {
+    GST_DEBUG_OBJECT (dec, "no profile field in caps");
+  } else {
+    GST_DEBUG_OBJECT (dec, "profile:%s", profile_string);
+  }
+
+  if (gst_structure_has_name (structure, "video/x-h265")
+      && !g_strcmp0 (profile_string, "main-10")) {
+    dec->is_10bit = TRUE;
+    GST_DEBUG_OBJECT (dec, "10 bit output");
+  } else if (gst_structure_has_name (structure, "video/x-vp9")) {
+    dec->check_vp9_10bit = TRUE;
+    GST_DEBUG_OBJECT (dec, "try to check whether vp9 10 bit later");
   }
 
   retval = gst_structure_get_int (structure, "width", &width);
@@ -872,11 +909,11 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
 
   if (gst_qticodec2vdec_caps_has_feature (outcaps,
           GST_CAPS_FEATURE_MEMORY_DMABUF)) {
-    GST_INFO_OBJECT (dec, "downstream support dma buffer");
+    GST_INFO_OBJECT (dec, "downstream support DMA buffer");
   } else {
     GST_INFO_OBJECT (dec,
-        "downstream don't support dma buffer, return directly");
-    return FALSE;
+        "downstream don't support DMA buffer, return to use normal buffer");
+    return TRUE;
   }
 
   if (!use_peer_pool) {
@@ -894,7 +931,7 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
       max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
 
     min = MAX (min, QCODEC2_MIN_OUTBUFFERS);
-    /* disable gst buffer pool's allocator, since actual buffer(underlying dma/ion buffer)
+    /* disable gst buffer pool's allocator, since actual buffer(underlying DMA/ION buffer)
      * is allocated inside of C2 allocator */
     size = 0;
 
@@ -959,6 +996,9 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
   guint output_size = decode_buf->size;
   GstBufferPoolAcquireParamsExt param_ext;
   guint64 *p_modifier = NULL;
+  guint32 color_fmt = 0;
+  gsize offset[GST_VIDEO_MAX_PLANES] = { 0, };
+  gint stride[GST_VIDEO_MAX_PLANES] = { 0, };
 
   memset (&param_ext, 0, sizeof (GstBufferPoolAcquireParamsExt));
 
@@ -991,20 +1031,45 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
     if (!dec->downstream_supports_dma) {
       GstVideoMeta *QGVMeta = NULL;
 
+      switch (GST_VIDEO_INFO_FORMAT (vinfo)) {
+        case GST_VIDEO_FORMAT_NV12:
+          if (dec->is_ubwc) {
+            color_fmt = COLOR_FMT_NV12_UBWC;
+          } else {
+            color_fmt = COLOR_FMT_NV12;
+          }
+          break;
+        case GST_VIDEO_FORMAT_NV12_10LE32:
+          color_fmt = COLOR_FMT_NV12_BPP10_UBWC;
+          break;
+        case GST_VIDEO_FORMAT_P010_10LE:
+          color_fmt = COLOR_FMT_P010;
+          break;
+        default:
+          g_assert_not_reached ();
+          break;
+      }
+
+      stride[0] = stride[1] =
+          VENUS_Y_STRIDE (color_fmt, GST_VIDEO_INFO_WIDTH (vinfo));
+      offset[0] = 0;
+      offset[1] = stride[0] * VENUS_Y_SCANLINES (color_fmt,
+          GST_VIDEO_INFO_HEIGHT (vinfo));
+
       QGVMeta = gst_buffer_get_video_meta (out_buf);
       if (!QGVMeta) {
         QGVMeta =
             gst_buffer_add_video_meta_full (out_buf, GST_VIDEO_FRAME_FLAG_NONE,
             GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
             GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo),
-            vinfo->offset, vinfo->stride);
+            offset, stride);
         if (!QGVMeta) {
           GST_ERROR_OBJECT (dec, "Failed to attach video info into meta");
           goto fail;
         }
       }
-      GST_DEBUG_OBJECT (dec, "offset:%ld %ld stride:%d %d", vinfo->offset[0],
-          vinfo->offset[1], vinfo->stride[0], vinfo->stride[1]);
+      GST_DEBUG_OBJECT (dec, "offset:%ld %ld stride:%d %d", offset[0],
+          offset[1], stride[0], stride[1]);
 
       QGVMeta->offset[2] = GST_MAKE_FOURCC ('Q', 'a', 'U', 'T');
       QGVMeta->offset[3] = output_size;
@@ -1261,6 +1326,11 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstMapInfo mapinfo = { 0, };
   GstBuffer *buf = NULL;
   BufferDescriptor inBuf;
+  GstVp9Parser *vp9_parser = NULL;
+  GstVp9FrameHdr *vp9_hdr = NULL;
+  GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
+  ConfigParams pixelformat;
+  GPtrArray *config = NULL;
   gboolean status = FALSE;
   GstFlowReturn ret = GST_FLOW_OK;
 
@@ -1278,6 +1348,56 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   inBuf.data = mapinfo.data;
   inBuf.size = mapinfo.size;
   inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
+
+  /*check whether VP9 10bit */
+  if (dec->check_vp9_10bit) {
+    vp9_parser = gst_vp9_parser_new ();
+    vp9_hdr = g_slice_new0 (GstVp9FrameHdr);
+    config = g_ptr_array_new ();
+    if (vp9_parser && vp9_hdr && config) {
+      gst_vp9_parser_parse_frame_header (vp9_parser, vp9_hdr, inBuf.data,
+          inBuf.size);
+    } else {
+      if (config)
+        g_ptr_array_free (config, FALSE);
+      if (vp9_hdr)
+        g_slice_free (GstVp9FrameHdr, vp9_hdr);
+      if (vp9_parser)
+        gst_vp9_parser_free (vp9_parser);
+      GST_ERROR_OBJECT (dec, "failed to new some structure");
+      gst_buffer_unmap (buf, &mapinfo);
+      return GST_FLOW_ERROR;
+    }
+    if (vp9_parser->bit_depth == GST_VP9_BIT_DEPTH_10) {
+      if (dec->is_ubwc)
+        output_format = GST_VIDEO_FORMAT_NV12_10LE32;
+      else
+        output_format = GST_VIDEO_FORMAT_P010_10LE;
+
+      dec->outPixelfmt = output_format;
+      GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d for VP9",
+          dec->width, dec->height, output_format);
+
+      if (config) {
+        pixelformat =
+            make_pixelFormat_param (gst_to_c2_pixelformat (decoder,
+                output_format), FALSE);
+        GST_LOG_OBJECT (dec, "set c2 output format: %d for VP9",
+            pixelformat.pixelFormat.fmt);
+      }
+
+      g_ptr_array_add (config, &pixelformat);
+      if (!c2componentInterface_config (dec->comp_intf,
+              config, BLOCK_MODE_MAY_BLOCK)) {
+        GST_WARNING_OBJECT (dec, "Failed to set config");
+      }
+    }
+
+    g_ptr_array_free (config, FALSE);
+    g_slice_free (GstVp9FrameHdr, vp9_hdr);
+    gst_vp9_parser_free (vp9_parser);
+    dec->check_vp9_10bit = FALSE;
+  }
 
   GST_INFO_OBJECT (dec, "frame->pts (%" G_GUINT64_FORMAT ")", frame->pts);
 
@@ -1504,6 +1624,8 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->low_latency_mode = GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT;
   dec->map_outbuf = GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT;
   dec->out_port_pool = NULL;
+  dec->is_10bit = FALSE;
+  dec->check_vp9_10bit = FALSE;
 
   memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
   memset (&dec->start_time, 0, sizeof (struct timeval));
