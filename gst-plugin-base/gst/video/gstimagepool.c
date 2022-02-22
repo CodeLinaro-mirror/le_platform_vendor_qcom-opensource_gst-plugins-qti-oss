@@ -25,6 +25,40 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*     * Redistributions of source code must retain the above copyright
+*       notice, this list of conditions and the following disclaimer.
+*
+*     * Redistributions in binary form must reproduce the above
+*       copyright notice, this list of conditions and the following
+*       disclaimer in the documentation and/or other materials provided
+*       with the distribution.
+*
+*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*       contributors may be used to endorse or promote products derived
+*       from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "gstimagepool.h"
@@ -101,6 +135,8 @@ gst_video_format_to_gbm_format (GstVideoFormat format)
       return GBM_FORMAT_NV21_ZSL;
     case GST_VIDEO_FORMAT_YUY2:
       return GBM_FORMAT_YCrCb_422_I;
+    case GST_VIDEO_FORMAT_UYVY:
+      return GBM_FORMAT_UYVY;
     case GST_VIDEO_FORMAT_BGRx:
       return GBM_FORMAT_BGRX8888;
     case GST_VIDEO_FORMAT_BGRA:
@@ -562,6 +598,37 @@ gst_image_buffer_pool_free (GstBufferPool * pool, GstBuffer * buffer)
   gst_buffer_unref (buffer);
 }
 
+static gboolean
+remove_buffer_meta (GstBuffer * buffer, GstMeta ** meta, gpointer user_data)
+{
+  if (!GST_META_FLAG_IS_SET (*meta, GST_META_FLAG_POOLED)) {
+    GST_META_FLAG_UNSET (*meta, GST_META_FLAG_LOCKED);
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
+static void
+gst_image_buffer_pool_reset (GstBufferPool * pool, GstBuffer * buffer)
+{
+  GstImageBufferPoolPrivate *priv = GST_IMAGE_BUFFER_POOL_CAST (pool)->priv;
+
+  // Resize the buffer to the original size because it will be discarded in
+  // default_release_buffer
+  gst_buffer_resize (buffer, 0, priv->info.size);
+
+  GST_BUFFER_OFFSET (buffer) = GST_BUFFER_OFFSET_NONE;
+  GST_BUFFER_OFFSET_END (buffer) = GST_BUFFER_OFFSET_NONE;
+  GST_BUFFER_DURATION (buffer) = GST_CLOCK_TIME_NONE;
+  GST_BUFFER_PTS (buffer) = GST_CLOCK_TIME_NONE;
+  GST_BUFFER_DTS (buffer) = GST_CLOCK_TIME_NONE;
+  GST_BUFFER_FLAGS (buffer) &= GST_BUFFER_FLAG_TAG_MEMORY;
+
+  // Remove metadata
+  gst_buffer_foreach_meta (buffer, remove_buffer_meta, pool);
+}
+
 static void
 gst_image_buffer_pool_finalize (GObject * object)
 {
@@ -598,6 +665,7 @@ gst_image_buffer_pool_class_init (GstImageBufferPoolClass * klass)
   pool->set_config = gst_image_buffer_pool_set_config;
   pool->alloc_buffer = gst_image_buffer_pool_alloc;
   pool->free_buffer = gst_image_buffer_pool_free;
+  pool->reset_buffer = gst_image_buffer_pool_reset;
 
   GST_DEBUG_CATEGORY_INIT (gst_image_pool_debug, "image-pool", 0,
       "image-pool object");
