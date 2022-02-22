@@ -35,71 +35,36 @@
 #include <gst/video/gstvideodecoder.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
-#include <gst/allocators/gstdmabuf.h>
 
 G_BEGIN_DECLS
-
 #define QTICODEC2VDEC_SINK_WH_CAPS    \
   "width  = (int) [ 32, 8192 ], "     \
   "height = (int) [ 32, 8192 ]"
-
+#define QTICODEC2VDEC_SINK_COMPRESSION_CAPS    \
+    "compression = (string) { ubwc, linear }"
 #define QTICODEC2VDEC_SINK_FPS_CAPS    \
   "framerate = (fraction) [ 0, 480 ]"
-
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
   "video/x-raw, "                       \
   "format = (string) " formats ", "     \
   QTICODEC2VDEC_SINK_WH_CAPS ", "       \
-  QTICODEC2VDEC_SINK_FPS_CAPS
-
+  QTICODEC2VDEC_SINK_FPS_CAPS ", "      \
+  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
 #define QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES(features, formats) \
   "video/x-raw(" features "), "                                 \
   "format = (string) " formats ", "                             \
   QTICODEC2VDEC_SINK_WH_CAPS   ", "                             \
-  QTICODEC2VDEC_SINK_FPS_CAPS
-
+  QTICODEC2VDEC_SINK_FPS_CAPS  ", "                             \
+  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
 #define GST_IS_QTICODEC2VDEC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VDEC))
 #define GST_IS_QTICODEC2VDEC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VDEC))
-
-typedef struct _Gstqticodec2vdec      Gstqticodec2vdec;
+typedef struct _Gstqticodec2vdec Gstqticodec2vdec;
 typedef struct _Gstqticodec2vdecClass Gstqticodec2vdecClass;
 
-typedef struct _Gstqticodec2vdecBufferPool Gstqticodec2vdecBufferPool;
-typedef struct _Gstqticodec2vdecBufferPoolClass Gstqticodec2vdecBufferPoolClass;
-
-/* buffer pool functions */
-#define GST_TYPE_QTICODEC2VDEC_BUFFER_POOL      (gst_qticodec2vdec_buffer_pool_get_type())
-#define GST_IS_QTICODEC2VDEC_BUFFER_POOL(obj)   (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL))
-#define GST_QTICODEC2VDEC_BUFFER_POOL(obj)      (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL, Gstqticodec2vdecBufferPool))
-#define GST_QTICODEC2VDEC_BUFFER_POOL_CAST(obj) ((Gstqticodec2vdecBufferPool*)(obj))
-
-struct _Gstqticodec2vdecBufferPool
-{
-  GstBufferPool bufferpool;
-  Gstqticodec2vdec *qticodec2vdec;
-  GstAllocator *allocator;
-  GHashTable *buffer_table;
-};
-
-struct _Gstqticodec2vdecBufferPoolClass
-{
-  GstBufferPoolClass parent_class;
-};
-
-typedef struct GstBufferPoolAcquireParamsExt {
-  GstBufferPoolAcquireParams params;
-  gint32 fd;
-  gint32 meta_fd;
-  guint64 index;
-  guint32 size;
-} GstBufferPoolAcquireParamsExt;
-
-GType gst_qticodec2vdec_buffer_pool_get_type (void);
-GstBufferPool *gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec * qticodec2vdec, GstAllocator * allocator,
-                                                            GHashTable *buffer_table);
+typedef guint64 (*f_get_modifier) (void *bo);
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  64
@@ -114,6 +79,7 @@ struct _Gstqticodec2vdec
   void *comp_store;
   void *comp;
   void *comp_intf;
+  gchar *comp_name;
 
   guint64 queued_frame[MAX_QUEUED_FRAME];
   gboolean downstream_supports_gbm;
@@ -127,7 +93,6 @@ struct _Gstqticodec2vdec
 
   gint width;
   gint height;
-  gchar* streamformat;
   guint64 frame_index;
   GstVideoInterlaceMode interlace_mode;
   GstVideoFormat outPixelfmt;
@@ -139,10 +104,13 @@ struct _Gstqticodec2vdec
   gboolean map_outbuf;
 
   GMutex pending_lock;
-  GCond  pending_cond;
+  GCond pending_cond;
   struct timeval start_time;
   struct timeval first_frame_time;
   GstBufferPool *out_port_pool;
+  void *gbm_lib;
+  f_get_modifier gbm_api_bo_get_modifier;
+  gboolean is_ubwc;
 };
 
 /*
@@ -156,5 +124,4 @@ struct _Gstqticodec2vdecClass
 GType gst_qticodec2vdec_get_type (void);
 
 G_END_DECLS
-
 #endif /* __GST_QTICODEC2VDEC_H__ */

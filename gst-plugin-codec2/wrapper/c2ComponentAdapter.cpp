@@ -35,7 +35,7 @@
 #include <gst/gst.h>
 #include <C2AllocatorGBM.h>
 
-GST_DEBUG_CATEGORY_EXTERN (gst_qticodec2wrapper_debug);
+GST_DEBUG_CATEGORY_EXTERN(gst_qticodec2wrapper_debug);
 #define GST_CAT_DEFAULT gst_qticodec2wrapper_debug
 
 /* Currently, size of input queue is 6 in video driver.
@@ -45,17 +45,20 @@ GST_DEBUG_CATEGORY_EXTERN (gst_qticodec2wrapper_debug);
 
 using namespace std::chrono_literals;
 
-std::shared_ptr<C2Buffer> createLinearBuffer(const std::shared_ptr<C2LinearBlock> &block) {
-  return C2Buffer::CreateLinearBuffer(block->share(block->offset(), block->size(), ::C2Fence()));
+std::shared_ptr<C2Buffer> createLinearBuffer(const std::shared_ptr<C2LinearBlock>& block)
+{
+    return C2Buffer::CreateLinearBuffer(block->share(block->offset(), block->size(), ::C2Fence()));
 }
 
-std::shared_ptr<C2Buffer> createGraphicBuffer( const std::shared_ptr<C2GraphicBlock> &block) {
-  return C2Buffer::CreateGraphicBuffer(block->share(C2Rect(block->width(), block->height()), ::C2Fence()));
+std::shared_ptr<C2Buffer> createGraphicBuffer(const std::shared_ptr<C2GraphicBlock>& block)
+{
+    return C2Buffer::CreateGraphicBuffer(block->share(C2Rect(block->width(), block->height()), ::C2Fence()));
 }
 
 namespace QTI {
 
-C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp) {
+C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
+{
 
     LOG_MESSAGE("Component(%p) created", this);
 
@@ -69,7 +72,8 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp) {
     mNumPendingWorks = 0;
 }
 
-C2ComponentAdapter::~C2ComponentAdapter() {
+C2ComponentAdapter::~C2ComponentAdapter()
+{
 
     LOG_MESSAGE("Component(%p) destroyed", this);
 
@@ -83,14 +87,15 @@ C2ComponentAdapter::~C2ComponentAdapter() {
     mGraphicPool = nullptr;
 }
 
-c2_status_t C2ComponentAdapter::setListenercallback (std::unique_ptr<EventCallback> callback,
-    c2_blocking_t mayBlock) {
+c2_status_t C2ComponentAdapter::setListenercallback(std::unique_ptr<EventCallback> callback,
+    c2_blocking_t mayBlock)
+{
 
     LOG_MESSAGE("Component(%p) listener set", this);
 
     c2_status_t result = C2_NO_INIT;
 
-    if (callback != NULL){
+    if (callback != NULL) {
         mListener = std::shared_ptr<C2Component::Listener>(new C2ComponentListenerAdapter(this));
         result = mComp->setListener_vb(mListener, mayBlock);
     }
@@ -102,10 +107,11 @@ c2_status_t C2ComponentAdapter::setListenercallback (std::unique_ptr<EventCallba
     return result;
 }
 
-c2_status_t C2ComponentAdapter::writePlane(uint8_t *dest, BufferDescriptor *buffer_info) {
+c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buffer_info)
+{
     c2_status_t result = C2_OK;
-    uint8_t *dst = dest;
-    uint8_t *src = buffer_info->data;
+    uint8_t* dst = dest;
+    uint8_t* src = buffer_info->data;
 
     if (dst == nullptr || src == nullptr) {
         LOG_ERROR("Inavlid buffer in writePlane(%p)", this);
@@ -120,7 +126,7 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t *dest, BufferDescriptor *buff
         uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
         uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
 
-        for (int i = 0; i < height; i ++) {
+        for (int i = 0; i < height; i++) {
             memcpy(dst, src, width);
             dst += y_stride;
             src += width;
@@ -129,11 +135,37 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t *dest, BufferDescriptor *buff
         uint32_t offset = y_stride * y_scanlines;
         dst = dest + offset;
 
-        for (int i = 0; i < height/2; i ++) {
+        for (int i = 0; i < height / 2; i++) {
             memcpy(dst, src, width);
             dst += uv_stride;
             src += width;
         }
+    } else if (buffer_info->format == GST_VIDEO_FORMAT_P010_10LE) {
+        uint32_t width = buffer_info->width;
+        uint32_t height = buffer_info->height;
+        uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_P010, width);
+        uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_P010, width);
+        uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_P010, height);
+
+        for (int i = 0; i < height; i++) {
+            memcpy(dst, src, width * 2);
+            dst += y_stride;
+            src += width * 2;
+        }
+
+        uint32_t offset = y_stride * y_scanlines;
+        dst = dest + offset;
+
+        for (int i = 0; i < height / 2; i++) {
+            memcpy(dst, src, width * 2);
+            dst += uv_stride;
+            src += width * 2;
+        }
+    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32_UBWC) {
+        uint32_t width = buffer_info->width;
+        uint32_t height = buffer_info->height;
+        uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
+        memcpy(dst, src, buf_size);
     } else {
         result = C2_BAD_VALUE;
     }
@@ -141,7 +173,8 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t *dest, BufferDescriptor *buff
     return result;
 }
 
-c2_status_t C2ComponentAdapter::prepareC2Buffer (std::shared_ptr<C2Buffer> *c2Buf, BufferDescriptor* buffer) {
+c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer)
+{
     uint8_t* rawBuffer = buffer->data;
     uint8_t* destBuffer = nullptr;
     uint32_t frameSize = buffer->size;
@@ -162,7 +195,7 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer (std::shared_ptr<C2Buffer> *c2Bu
 
         if (poolType == C2BlockPool::BASIC_LINEAR) {
             allocSize = ALIGN(frameSize, 4096);
-            err = mLinearPool->fetchLinearBlock (allocSize, usage, &linear_block);
+            err = mLinearPool->fetchLinearBlock(allocSize, usage, &linear_block);
             if (err != C2_OK || linear_block == nullptr) {
                 LOG_ERROR("Linear pool failed to allocate input buffer of size : (%d)", frameSize);
                 return C2_NO_MEMORY;
@@ -178,30 +211,30 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer (std::shared_ptr<C2Buffer> *c2Bu
             linear_block->mSize = frameSize;
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
-          if (mGraphicPool) {
-              // TODO support NV12_UBWC input by usage
-              usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
-              err = mGraphicPool->fetchGraphicBlock (buffer->width, buffer->height,
-                      gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
-              C2GraphicView view(graphic_block->map().get());
-              if (view.error() != C2_OK) {
-                  LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
-                  return C2_NO_MEMORY;
-              }
+            if (mGraphicPool) {
+                // TODO support NV12_UBWC input by usage
+                usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+                err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
+                    gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
+                C2GraphicView view(graphic_block->map().get());
+                if (view.error() != C2_OK) {
+                    LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
+                    return C2_NO_MEMORY;
+                }
 
-              destBuffer = (guint8*) view.data()[0];
+                destBuffer = (guint8*)view.data()[0];
 
-              if (C2_OK != writePlane(destBuffer, buffer)) {
-                  LOG_ERROR("failed to write planes for graphic buffer");
-                  return C2_NO_MEMORY;
-              }
+                if (C2_OK != writePlane(destBuffer, buffer)) {
+                    LOG_ERROR("failed to write planes for graphic buffer");
+                    return C2_NO_MEMORY;
+                }
 
-              buf = createGraphicBuffer(graphic_block);
-              if (err != C2_OK || buf == nullptr) {
-                  LOG_ERROR("Graphic pool failed to allocate input buffer");
-                  return C2_NO_MEMORY;
-              }
-          }
+                buf = createGraphicBuffer(graphic_block);
+                if (err != C2_OK || buf == nullptr) {
+                    LOG_ERROR("Graphic pool failed to allocate input buffer");
+                    return C2_NO_MEMORY;
+                }
+            }
         }
 
         *c2Buf = buf;
@@ -212,23 +245,23 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer (std::shared_ptr<C2Buffer> *c2Bu
 
 c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
     uint32_t maxPendingWorks,
-    uint32_t timeoutMs) {
+    uint32_t timeoutMs)
+{
 
     std::unique_lock<std::mutex> ul(mLock);
     LOG_MESSAGE("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
 
     while (mNumPendingWorks > maxPendingWorks) {
         if (timeoutMs > 0) {
-            if (mCondition.wait_for(ul, timeoutMs*1ms) == std::cv_status::timeout) {
+            if (mCondition.wait_for(ul, timeoutMs * 1ms) == std::cv_status::timeout) {
                 LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
-                        mNumPendingWorks);
+                    mNumPendingWorks);
                 return C2_TIMED_OUT;
             } else {
                 LOG_MESSAGE("wait done");
                 break;
             }
-        }
-        else if (timeoutMs == 0) {
+        } else if (timeoutMs == 0) {
             mCondition.wait(ul);
         }
     }
@@ -236,7 +269,8 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
     return C2_OK;
 }
 
-std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer) {
+std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
+{
     c2_status_t err = C2_OK;
     std::shared_ptr<C2Buffer> buf;
 
@@ -245,24 +279,30 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer) {
         std::shared_ptr<C2GraphicBlock> graphic_block;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
-              // TODO support NV12_UBWC input by usage
-              usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE};
-              err = mGraphicPool->fetchGraphicBlock (buffer->width, buffer->height,
-                      gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
-              C2GraphicView view(graphic_block->map().get());
-              if (view.error() != C2_OK) {
-                  LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
-                  return NULL;
-              }
-              buf = createGraphicBuffer(graphic_block);
-              if (err != C2_OK || buf == nullptr) {
-                  LOG_ERROR("Graphic pool failed to allocate input buffer");
-                  return NULL;
-              } else {
+            // TODO support NV12_UBWC input by usage
+            usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+            err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
+                gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
+            C2GraphicView view(graphic_block->map().get());
+            if (view.error() != C2_OK) {
+                LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
+                return NULL;
+            }
+            buf = createGraphicBuffer(graphic_block);
+            if (err != C2_OK || buf == nullptr) {
+                LOG_ERROR("Graphic pool failed to allocate input buffer");
+                return NULL;
+            } else {
+                const C2Handle* handle = graphic_block->handle();
+                if (nullptr == handle) {
+                    LOG_ERROR("C2GraphicBlock handle is null");
+                    return NULL;
+                }
+
                 /* ref the buffer and store it. When the fd is queued,
                  * we can find the C2buffer with the input fd
                  * */
-                uint32_t fd = graphic_block->handle()->data[0];
+                gint32 fd = handle->data[0];
                 mInPendingBuffer[fd] = buf;
                 buffer->fd = fd;
                 guint32 width = 0;
@@ -272,7 +312,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer) {
                 guint64 usage = 0;
                 guint32 size = 0;
 
-                _UnwrapNativeCodec2GBMMetadata (graphic_block->handle(), &width, &height, &format, &usage, &stride, &size, NULL);
+                _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
                 buffer->capacity = size;
                 LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d", fd, buffer->capacity);
             }
@@ -288,7 +328,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer) {
     return buf;
 }
 
-c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
+c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
 {
     uint8_t* inputBuffer = buffer->data;
     gint32 fd = buffer->fd;
@@ -304,8 +344,9 @@ c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
         this, frame_index, timestamp);
 
     c2_status_t result = C2_OK;
-    std::list<std::unique_ptr<C2Work>> workList;
+    std::list<std::unique_ptr<C2Work> > workList;
     std::unique_ptr<C2Work> work = std::make_unique<C2Work>();
+    std::shared_ptr<C2Buffer> c2_buf;
 
     work->input.flags = inputFrameFlag;
     work->input.ordinal.timestamp = timestamp;
@@ -316,8 +357,15 @@ c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
 
     /* check if input buffer contains fd/va and decide if we need to
      * allocate a new C2 buffer or not */
-    if (fd > 0) {
-        std::map<uint64_t, std::shared_ptr<C2Buffer>>::iterator it;
+    if (buffer->c2_buffer) {
+        /* Disable delete function for this shared_ptr to avoid double free issue
+         * since it is created from raw pointer got from another shared_ptr. That
+         * shared_ptr takes responsibility to call delete function.*/
+        std::shared_ptr<C2Buffer> c2_buf(static_cast<C2Buffer*>(buffer->c2_buffer), [](C2Buffer*) {});
+        work->input.buffers.emplace_back(c2_buf);
+        result = C2_OK;
+    } else if (fd > 0) {
+        std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
 
         /* Find the buffer with fd */
         it = mInPendingBuffer.find(fd);
@@ -340,10 +388,10 @@ c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
             return C2_BAD_VALUE;
         }
     } else if (isEOSFrame) {
-        LOG_MESSAGE ("queue EOS frame");
+        LOG_MESSAGE("queue EOS frame");
     } else {
-      LOG_ERROR ("invalid buffer decriptor");
-      return C2_BAD_VALUE;
+        LOG_ERROR("invalid buffer decriptor");
+        return C2_BAD_VALUE;
     }
 
     work->worklets.clear();
@@ -352,8 +400,7 @@ c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
 
     if (!isEOSFrame) {
         waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
-    }
-    else {
+    } else {
         LOG_MESSAGE("EOS reached");
     }
 
@@ -363,13 +410,14 @@ c2_status_t C2ComponentAdapter::queue (BufferDescriptor* buffer)
     }
 
     std::unique_lock<std::mutex> ul(mLock);
-    mNumPendingWorks ++;
+    mNumPendingWorks++;
 
     return result;
 }
 
-c2_status_t C2ComponentAdapter::flush (C2Component::flush_mode_t mode,
-    std::list< std::unique_ptr< C2Work >> *const flushedWork) {
+c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode,
+    std::list<std::unique_ptr<C2Work> >* const flushedWork)
+{
 
     LOG_MESSAGE("Component(%p) flushed", this);
 
@@ -380,7 +428,8 @@ c2_status_t C2ComponentAdapter::flush (C2Component::flush_mode_t mode,
     return result;
 }
 
-c2_status_t C2ComponentAdapter::drain (C2Component::drain_mode_t mode) {
+c2_status_t C2ComponentAdapter::drain(C2Component::drain_mode_t mode)
+{
 
     LOG_MESSAGE("Component(%p) drain", this);
 
@@ -390,35 +439,40 @@ c2_status_t C2ComponentAdapter::drain (C2Component::drain_mode_t mode) {
     return result;
 }
 
-c2_status_t C2ComponentAdapter::start () {
+c2_status_t C2ComponentAdapter::start()
+{
 
     LOG_MESSAGE("Component(%p) start", this);
 
     return mComp->start();
 }
 
-c2_status_t C2ComponentAdapter::stop () {
+c2_status_t C2ComponentAdapter::stop()
+{
 
     LOG_MESSAGE("Component(%p) stop", this);
 
     return mComp->stop();
 }
 
-c2_status_t C2ComponentAdapter::reset () {
+c2_status_t C2ComponentAdapter::reset()
+{
 
     LOG_MESSAGE("Component(%p) reset", this);
 
     return mComp->reset();
 }
 
-c2_status_t C2ComponentAdapter::release () {
+c2_status_t C2ComponentAdapter::release()
+{
 
     LOG_MESSAGE("Component(%p) release", this);
 
     return mComp->release();
 }
 
-C2ComponentInterfaceAdapter* C2ComponentAdapter::intf () {
+C2ComponentInterfaceAdapter* C2ComponentAdapter::intf()
+{
 
     LOG_MESSAGE("Component(%p) interface created", this);
 
@@ -432,7 +486,8 @@ C2ComponentInterfaceAdapter* C2ComponentAdapter::intf () {
     return (mIntf == NULL) ? NULL : mIntf.get();
 }
 
-c2_status_t C2ComponentAdapter::createBlockpool(C2BlockPool::local_id_t poolType) {
+c2_status_t C2ComponentAdapter::createBlockpool(C2BlockPool::local_id_t poolType)
+{
 
     LOG_MESSAGE("Component(%p) block pool (%lu) allocated", this, poolType);
 
@@ -451,24 +506,25 @@ c2_status_t C2ComponentAdapter::createBlockpool(C2BlockPool::local_id_t poolType
     }
 
     if (ret != C2_OK) {
-        LOG_ERROR("Failed (%d) to create block pool (%lu)",ret, poolType);
+        LOG_ERROR("Failed (%d) to create block pool (%lu)", ret, poolType);
     }
 
     return ret;
 }
 
-c2_status_t C2ComponentAdapter::configBlockPool(C2BlockPool::local_id_t poolType) {
+c2_status_t C2ComponentAdapter::configBlockPool(C2BlockPool::local_id_t poolType)
+{
     C2BlockPool::local_id_t local_id;
     c2_status_t ret = C2_OK;
 
     LOG_MESSAGE("Component(%p) config block pool (%lu)", this, poolType);
 
     local_id = (poolType == C2BlockPool::BASIC_GRAPHIC) ? mGraphicPool->getLocalId() : mLinearPool->getLocalId();
-    LOG_MESSAGE ("Get pool local id:%lu", local_id);
+    LOG_MESSAGE("Get pool local id:%lu", local_id);
     std::vector<C2Param*> params;
-    std::unique_ptr<C2PortBlockPoolsTuning::output> pool = C2PortBlockPoolsTuning::output::AllocUnique({local_id});
+    std::unique_ptr<C2PortBlockPoolsTuning::output> pool = C2PortBlockPoolsTuning::output::AllocUnique({ local_id });
     params.push_back(pool.get());
-    ret = mIntf->config (params, C2_DONT_BLOCK);
+    ret = mIntf->config(params, C2_DONT_BLOCK);
     if (ret != C2_OK) {
         LOG_ERROR("Failed (%d) to config block pool (%lu)", ret, poolType);
     }
@@ -478,7 +534,8 @@ c2_status_t C2ComponentAdapter::configBlockPool(C2BlockPool::local_id_t poolType
 
 void C2ComponentAdapter::handleWorkDone(
     std::weak_ptr<C2Component> component,
-    std::list<std::unique_ptr<C2Work>> workItems) {
+    std::list<std::unique_ptr<C2Work> > workItems)
+{
 
     LOG_MESSAGE("Component(%p) work done", this);
 
@@ -506,7 +563,7 @@ void C2ComponentAdapter::handleWorkDone(
             break;
         }
 
-        const std::unique_ptr<C2Worklet> &worklet = work->worklets.front();
+        const std::unique_ptr<C2Worklet>& worklet = work->worklets.front();
         std::shared_ptr<C2Buffer> buffer = nullptr;
         uint64_t bufferIdx = 0;
         C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
@@ -517,26 +574,24 @@ void C2ComponentAdapter::handleWorkDone(
             worklet->output.configUpdate.back().swap(param);
             worklet->output.configUpdate.pop_back();
             switch (param->coreIndex().coreIndex()) {
-              case C2PortActualDelayTuning::CORE_INDEX: {
-                  if (param->forOutput()) {
+            case C2PortActualDelayTuning::CORE_INDEX: {
+                if (param->forOutput()) {
                     C2PortActualDelayTuning::output outputDelay;
                     std::shared_ptr<C2BlockPool> pool;
                     std::shared_ptr<C2Allocator> allocator;
                     if (outputDelay.updateFrom(*param)) {
                         uint64_t local_id = mGraphicPool->getLocalId();
-                        LOG_MESSAGE ("onWorkDone: updating output delay:%u local_id:%lu", outputDelay.value, local_id);
-                        android::GetCodec2BlockPoolWithAllocator (local_id, mComp, &pool, &allocator);
+                        LOG_MESSAGE("onWorkDone: updating output delay:%u local_id:%lu", outputDelay.value, local_id);
+                        android::GetCodec2BlockPoolWithAllocator(local_id, mComp, &pool, &allocator);
                         if (allocator == nullptr) {
-                            LOG_ERROR ("Failed to get allocator");
+                            LOG_ERROR("Failed to get allocator");
                             break;
                         }
-                        std::shared_ptr<android::C2AllocatorGBM> allocatorGBM =
-                            std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
-                        allocatorGBM->setMaxAllocationCount (outputDelay.value);
+                        std::shared_ptr<android::C2AllocatorGBM> allocatorGBM = std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
+                        allocatorGBM->setMaxAllocationCount(outputDelay.value);
                     }
                 }
-              }
-              break;
+            } break;
             }
         }
 
@@ -553,27 +608,30 @@ void C2ComponentAdapter::handleWorkDone(
                 this, bufferIdx, worklet->output.ordinal.timestamp.peeku(), outputFrameFlag);
 
             // ref count ++
-            mOutPendingBuffer[bufferIdx] = buffer;
+            {
+                std::unique_lock<std::mutex> lck(mLockOut);
+                mOutPendingBuffer[bufferIdx] = buffer;
+            }
 
             mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
             std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks --;
+            mNumPendingWorks--;
             mCondition.notify_one();
-        }
-        else {
+        } else {
 
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
                 mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
                 LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple"
-                            "output frames, or codec config update event", this);
+                            "output frames, or codec config update event",
+                    this);
                 continue;
             } else {
                 LOG_ERROR("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
             }
             std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks --;
+            mNumPendingWorks--;
             mCondition.notify_one();
             break;
         }
@@ -582,7 +640,8 @@ void C2ComponentAdapter::handleWorkDone(
 
 void C2ComponentAdapter::handleTripped(
     std::weak_ptr<C2Component> component,
-    std::vector<std::shared_ptr<C2SettingResult>> settingResult) {
+    std::vector<std::shared_ptr<C2SettingResult> > settingResult)
+{
 
     LOG_MESSAGE("Component(%p) work tripped", this);
 
@@ -593,7 +652,8 @@ void C2ComponentAdapter::handleTripped(
     }
 }
 
-void C2ComponentAdapter::handleError(std::weak_ptr<C2Component> component, uint32_t errorCode) {
+void C2ComponentAdapter::handleError(std::weak_ptr<C2Component> component, uint32_t errorCode)
+{
 
     LOG_MESSAGE("Component(%p) work failed", this);
 
@@ -602,38 +662,44 @@ void C2ComponentAdapter::handleError(std::weak_ptr<C2Component> component, uint3
     mCallback->onError(errorCode);
 }
 
-c2_status_t C2ComponentAdapter::setCompStore (std::weak_ptr<C2ComponentStore> store) {
+c2_status_t C2ComponentAdapter::setCompStore(std::weak_ptr<C2ComponentStore> store)
+{
 
     LOG_MESSAGE("Component store for component(%p) set", this);
 
     c2_status_t result = C2_BAD_VALUE;
-    if (!store.expired()){
+    if (!store.expired()) {
         mStore = store;
-        result =  C2_OK;
+        result = C2_OK;
     }
     return result;
 }
 
-c2_status_t C2ComponentAdapter::freeOutputBuffer (uint64_t bufferIdx) {
+c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
+{
 
     LOG_MESSAGE("Freeing component(%p) output buffer(%lu)", this, bufferIdx);
 
     c2_status_t result = C2_BAD_VALUE;
-    std::map<uint64_t, std::shared_ptr<C2Buffer>>::iterator it;
+    std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
 
-    it = mOutPendingBuffer.find(bufferIdx);
-    if (it != mOutPendingBuffer.end()) {
-        mOutPendingBuffer.erase (it);
-        result = C2_OK;
+    {
+        std::unique_lock<std::mutex> lck(mLockOut);
+        it = mOutPendingBuffer.find(bufferIdx);
+        if (it != mOutPendingBuffer.end()) {
+            mOutPendingBuffer.erase(it);
+            result = C2_OK;
 
-    } else {
-        LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+        } else {
+            LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+        }
     }
 
     return result;
 }
 
-c2_status_t C2ComponentAdapter::setMapBufferToCpu (bool enable) {
+c2_status_t C2ComponentAdapter::setMapBufferToCpu(bool enable)
+{
 
     c2_status_t c2Status = C2_NO_INIT;
 
@@ -648,19 +714,22 @@ c2_status_t C2ComponentAdapter::setMapBufferToCpu (bool enable) {
     return c2Status;
 }
 
-C2ComponentListenerAdapter::C2ComponentListenerAdapter(C2ComponentAdapter* comp) {
+C2ComponentListenerAdapter::C2ComponentListenerAdapter(C2ComponentAdapter* comp)
+{
 
     mComp = comp;
 }
 
-C2ComponentListenerAdapter::~C2ComponentListenerAdapter() {
+C2ComponentListenerAdapter::~C2ComponentListenerAdapter()
+{
 
     mComp = nullptr;
 }
 
 void C2ComponentListenerAdapter::onWorkDone_nb(
     std::weak_ptr<C2Component> component,
-    std::list<std::unique_ptr<C2Work>> workItems) {
+    std::list<std::unique_ptr<C2Work> > workItems)
+{
 
     LOG_MESSAGE("Component listener (%p) onWorkDone_nb", this);
 
@@ -671,7 +740,8 @@ void C2ComponentListenerAdapter::onWorkDone_nb(
 
 void C2ComponentListenerAdapter::onTripped_nb(
     std::weak_ptr<C2Component> component,
-    std::vector<std::shared_ptr<C2SettingResult>> settingResult) {
+    std::vector<std::shared_ptr<C2SettingResult> > settingResult)
+{
 
     LOG_MESSAGE("Component listener (%p) onTripped_nb", this);
 
@@ -680,7 +750,8 @@ void C2ComponentListenerAdapter::onTripped_nb(
     }
 }
 
-void C2ComponentListenerAdapter::onError_nb(std::weak_ptr<C2Component> component, uint32_t errorCode) {
+void C2ComponentListenerAdapter::onError_nb(std::weak_ptr<C2Component> component, uint32_t errorCode)
+{
 
     LOG_MESSAGE("Component listener (%p) onError_nb", this);
 
