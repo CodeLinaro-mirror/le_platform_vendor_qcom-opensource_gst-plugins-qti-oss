@@ -59,6 +59,7 @@ G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_TYPE_CODEC2_ENC_FULL_RANGE (gst_qticodec2venc_full_range_get_type())
 #define GST_TYPE_CODEC2_ENC_INTRA_REFRESH_MODE (gst_qticodec2venc_intra_refresh_mode_get_type ())
 #define GST_TYPE_CODEC2_ENC_SLICE_MODE (gst_qticodec2venc_slice_mode_get_type ())
+#define GST_TYPE_CODEC2_ENC_BLUR_MODE (gst_qticodec2venc_blur_mode_get_type ())
 #define parent_class gst_qticodec2venc_parent_class
 #define NANO_TO_MILLI(x)  ((x) / 1000)
 #define EOS_WAITING_TIMEOUT 5
@@ -87,10 +88,12 @@ enum
   PROP_TARGET_BITRATE,
   PROP_SLICE_MODE,
   PROP_SLICE_SIZE,
+  PROP_BLUR_MODE,
+  PROP_BLUR_WIDTH,
+  PROP_BLUR_HEIGHT,
 };
 
 /* GstVideoEncoder base class method */
-static gboolean gst_qticodec2venc_start (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_stop (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GstVideoCodecState * state);
@@ -363,8 +366,37 @@ make_intraRefresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
   return param;
 }
 
+static ConfigParams
+make_blur_mode_param (BLUR_MODE mode, gboolean isInput)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_BLUR_MODE;
+  param.isInput = isInput;
+  param.blur.mode = mode;
+
+  return param;
+}
+
+static ConfigParams
+make_blur_resolution_param (guint32 width, guint32 height, gboolean isInput)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_BLUR_RESOLUTION;
+  param.isInput = isInput;
+  param.resolution.width = width;
+  param.resolution.height = height;
+
+  return param;
+}
+
 static gchar *
-gst_to_c2_streamformat (GstStructure * structure)
+get_c2_comp_name (GstStructure * structure)
 {
   gchar *ret = NULL;
 
@@ -437,6 +469,26 @@ gst_qticodec2venc_slice_mode_get_type (void)
     };
 
     qtype = g_enum_register_static ("GstCodec2VencSliceMode", values);
+  }
+  return qtype;
+}
+
+static GType
+gst_qticodec2venc_blur_mode_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {BLUR_AUTO, "Disable External Blur but Enable Internal Blur. If set "
+          "before start, blur is disabled throughout the session.", "auto"},
+      {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
+            "Blur is applied when valid resolution is set.", "manual"},
+      {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstCodec2VencBlurMode", values);
   }
   return qtype;
 }
@@ -612,7 +664,7 @@ gst_qticodec2venc_create_component (GstVideoEncoder * encoder)
   if (enc->comp_store) {
 
     ret =
-        c2componentStore_createComponent (enc->comp_store, enc->streamformat,
+        c2componentStore_createComponent (enc->comp_store, enc->comp_name,
         &enc->comp);
     if (ret == FALSE) {
       GST_DEBUG_OBJECT (enc, "Failed to create component");
@@ -670,7 +722,7 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
   outcaps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
   if (outcaps) {
     GstStructure *structure;
-    gchar *streamformat;
+    gchar *comp_name;
 
     if (gst_caps_is_empty (outcaps)) {
       gst_caps_unref (outcaps);
@@ -702,17 +754,23 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
 
     GST_INFO_OBJECT (enc, "Fixed output caps: %" GST_PTR_FORMAT, outcaps);
 
-    streamformat = gst_to_c2_streamformat (structure);
-    if (!streamformat) {
+    comp_name = get_c2_comp_name (structure);
+    if (!comp_name) {
       GST_ERROR_OBJECT (enc, "Unsupported format in caps: %" GST_PTR_FORMAT,
           outcaps);
       gst_caps_unref (outcaps);
       return GST_FLOW_ERROR;
     }
 
-    enc->streamformat = streamformat;
+    enc->comp_name = comp_name;
     enc->output_state =
         gst_video_encoder_set_output_state (encoder, outcaps, state);
+    if (!enc->output_state) {
+      GST_ERROR_OBJECT (enc, "set output state error");
+      gst_caps_unref (outcaps);
+      g_free(comp_name);
+      return GST_FLOW_ERROR;
+    }
     enc->output_setup = TRUE;
 
     if ((enc->rotation == 90) || (enc->rotation == 270)) {
@@ -722,17 +780,6 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
   }
 
   return ret;
-}
-
-/* Called when the element starts processing. Opening external resources. */
-static gboolean
-gst_qticodec2venc_start (GstVideoEncoder * encoder)
-{
-  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-
-  GST_DEBUG_OBJECT (enc, "start");
-
-  return TRUE;
 }
 
 /* Called when the element stops processing. Close external resources. */
@@ -829,6 +876,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   ConfigParams intra_refresh;
   ConfigParams bitrate;
   ConfigParams slice_mode;
+  ConfigParams blur_info;
 
   GST_DEBUG_OBJECT (enc, "set_format");
 
@@ -952,6 +1000,15 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
         enc->intra_refresh_mbs);
     g_ptr_array_add (config, &intra_refresh);
   }
+
+  if ((enc->blur_mode == BLUR_MANUAL) &&
+      (enc->blur_width != 0) && (enc->blur_height != 0)) {
+    blur_info =
+        make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
+  } else {
+    blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+  }
+  g_ptr_array_add (config, &blur_info);
 
   /* Create component */
   if (!gst_qticodec2venc_create_component (encoder)) {
@@ -1361,62 +1418,67 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstMemory *mem;
   GstMapInfo mapinfo = { 0, };
   gboolean mem_mapped = FALSE;
-  gboolean ret = FALSE;
+  gboolean status = FALSE;
+  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (enc, "encode");
+  if (!frame) {
+    GST_WARNING_OBJECT (enc, "frame is NULL, ret GST_FLOW_EOS");
+    return GST_FLOW_EOS;
+  }
 
   memset (&inBuf, 0, sizeof (BufferDescriptor));
-  inBuf.flag = 0;
 
   GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
-  if (frame) {
-    buf = frame->input_buffer;
-    mem = gst_buffer_get_memory (buf, 0);
 
-    if (gst_is_dmabuf_memory (mem)) {
-      inBuf.fd = gst_dmabuf_memory_get_fd (mem);
-      inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
-      inBuf.data = NULL;
-      inBuf.c2_buffer =
-          gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
-          qticodec2_c2buf_qdata_quark ());
-      GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2_buffer,
-          inBuf.fd);
-    } else {
-      gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
-      mem_mapped = TRUE;
-      inBuf.fd = -1;
-      inBuf.data = mapinfo.data;
-      inBuf.size = mapinfo.size;
-    }
+  buf = frame->input_buffer;
+  mem = gst_buffer_get_memory (buf, 0);
 
-    inBuf.timestamp = NANO_TO_MILLI (frame->pts);
-    inBuf.index = frame->system_frame_number;
-    inBuf.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
-    inBuf.width = enc->width;
-    inBuf.height = enc->height;
-    inBuf.format = enc->input_format;
-
-    gst_memory_unref (mem);
-
-    GST_DEBUG_OBJECT (enc,
-        "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld",
-        inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index);
+  if (gst_is_dmabuf_memory (mem)) {
+    inBuf.fd = gst_dmabuf_memory_get_fd (mem);
+    inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
+    inBuf.data = NULL;
+    inBuf.c2_buffer =
+        gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
+        qticodec2_c2buf_qdata_quark ());
+    GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2_buffer,
+        inBuf.fd);
+  } else {
+    gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
+    mem_mapped = TRUE;
+    inBuf.fd = -1;
+    inBuf.data = mapinfo.data;
+    inBuf.size = mapinfo.size;
   }
+
+  inBuf.timestamp = NANO_TO_MILLI (frame->pts);
+  inBuf.index = frame->system_frame_number;
+  inBuf.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
+  inBuf.width = enc->width;
+  inBuf.height = enc->height;
+  inBuf.format = enc->input_format;
+
+  gst_memory_unref (mem);
+
+  GST_DEBUG_OBJECT (enc,
+      "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld",
+      inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index);
 
   /* Keep track of queued frame */
   enc->queued_frame[(enc->frame_index) % MAX_QUEUED_FRAME] =
       frame->system_frame_number;
 
   /* Queue buffer to Codec2 */
-  ret = c2component_queue (enc->comp, &inBuf);
+  status = c2component_queue (enc->comp, &inBuf);
   /* unmap the gstbuffer if it's mapped */
   if (mem_mapped) {
     gst_buffer_unmap (buf, &mapinfo);
   }
 
-  if (!ret) {
-    goto error_setup_input;
+  if (!status) {
+    GST_ERROR_OBJECT(enc, "failed to queue input frame to Codec2");
+    ret = GST_FLOW_ERROR;
+    goto out;
   }
 
   g_mutex_lock (&(enc->pending_lock));
@@ -1430,13 +1492,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     gst_buffer_ref (frame->input_buffer);
   }
 
-  GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
+out:
+  GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
-  return GST_FLOW_OK;
-
-error_setup_input:
-  GST_ERROR_OBJECT (enc, "failed to setup input");
-  return GST_FLOW_ERROR;
+  return ret;
 }
 
 static void
@@ -1457,6 +1516,15 @@ gst_qticodec2venc_set_property (GObject * object, guint prop_id,
       break;
     case PROP_ROTATION:
       enc->rotation = g_value_get_uint (value);
+      break;
+    case PROP_BLUR_MODE:
+      enc->blur_mode = g_value_get_enum (value);
+      break;
+    case PROP_BLUR_WIDTH:
+      enc->blur_width = g_value_get_uint (value);
+      break;
+    case PROP_BLUR_HEIGHT:
+      enc->blur_height = g_value_get_uint (value);
       break;
     case PROP_RATE_CONTROL:
       enc->rcMode = g_value_get_enum (value);
@@ -1522,6 +1590,15 @@ gst_qticodec2venc_get_property (GObject * object, guint prop_id,
     case PROP_ROTATION:
       g_value_set_uint (value, enc->rotation);
       break;
+    case PROP_BLUR_MODE:
+      g_value_set_enum (value, enc->blur_mode);
+      break;
+    case PROP_BLUR_WIDTH:
+      g_value_set_uint (value, enc->blur_width);
+      break;
+    case PROP_BLUR_HEIGHT:
+      g_value_set_uint (value, enc->blur_height);
+      break;
     case PROP_RATE_CONTROL:
       g_value_set_enum (value, enc->rcMode);
       break;
@@ -1578,10 +1655,10 @@ gst_qticodec2venc_finalize (GObject * object)
   g_mutex_clear (&enc->pending_lock);
   g_cond_clear (&enc->pending_cond);
 
-  g_free (enc->streamformat);
+  g_free (enc->comp_name);
 
-  if (enc->streamformat) {
-    enc->streamformat = NULL;
+  if (enc->comp_name) {
+    enc->comp_name = NULL;
   }
 
   gst_qticodec2venc_destroy_component (GST_VIDEO_ENCODER (enc));
@@ -1649,6 +1726,28 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_uint ("rotation", "Rotation",
           "Specify the angle of clockwise rotation. [0|90|180|270]",
           0, 270, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_MODE,
+      g_param_spec_enum ("blur-mode", "Blur Mode",
+          "Specify the blur mode",
+          GST_TYPE_CODEC2_ENC_BLUR_MODE,
+          BLUR_DISABLE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_WIDTH,
+      g_param_spec_uint ("blur-width", "Blur Width",
+          "Specify the blur filter width.",
+          0, UINT_MAX, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_BLUR_HEIGHT,
+      g_param_spec_uint ("blur-height", "Blur Height",
+          "Specify the blur filter height.",
+          0, UINT_MAX, 0,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -1739,7 +1838,6 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
           GST_PARAM_MUTABLE_READY));
 
 
-  video_encoder_class->start = GST_DEBUG_FUNCPTR (gst_qticodec2venc_start);
   video_encoder_class->stop = GST_DEBUG_FUNCPTR (gst_qticodec2venc_stop);
   video_encoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2venc_set_format);
@@ -1786,6 +1884,9 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->downscale_width = 0;
   enc->downscale_height = 0;
   enc->target_bitrate = 0;
+  enc->blur_mode = BLUR_DISABLE;
+  enc->blur_width = 0;
+  enc->blur_height = 0;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 

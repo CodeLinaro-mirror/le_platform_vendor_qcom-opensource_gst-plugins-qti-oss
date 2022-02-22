@@ -71,6 +71,8 @@ std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param);
 std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param);
 std::unique_ptr<C2Param> setSliceMode(gpointer param);
+std::unique_ptr<C2Param> setBlurMode(gpointer param);
+std::unique_ptr<C2Param> setBlurResolution(gpointer param);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -87,6 +89,8 @@ static configFunctionMap sConfigFunctionMap = {
     { CONFIG_FUNCTION_KEY_COLOR_ASPECTS_INFO, setColorAspectsInfo },
     { CONFIG_FUNCTION_KEY_INTRAREFRESH, setIntraRefresh },
     { CONFIG_FUNCTION_KEY_SLICE_MODE, setSliceMode },
+    { CONFIG_FUNCTION_KEY_BLUR_MODE, setBlurMode },
+    { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -319,6 +323,42 @@ std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
     intraRefreshMode.mode = (C2Config::intra_refresh_mode_t)config->irMode.type;
     intraRefreshMode.period = config->irMode.intra_refresh_mbs;
     return C2Param::Copy(intraRefreshMode);
+}
+
+std::unique_ptr<C2Param> setBlurMode(gpointer param)
+{
+    if (param == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput) {
+        qc2::C2VideoBlurInfo::input blur;
+        blur.info = qc2::QCBlurMode(config->blur.mode);
+        return C2Param::Copy(blur);
+    } else {
+        LOG_WARNING("setBlurMode output not implemented");
+    }
+
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setBlurResolution(gpointer param)
+{
+    if (param == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput) {
+        qc2::C2VideoBlurInfo::input blur;
+        blur.info = ((config->resolution.width << 16) | (config->resolution.height & 0xFFFF));
+        return C2Param::Copy(blur);
+    } else {
+        LOG_WARNING("setBlurResolution output not implemented");
+    }
+
+    return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

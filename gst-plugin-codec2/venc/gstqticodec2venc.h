@@ -61,6 +61,7 @@ struct _Gstqticodec2venc
   void *comp_store;
   void *comp;
   void *comp_intf;
+  gchar *comp_name;
 
   guint64 queued_frame[MAX_QUEUED_FRAME];
 
@@ -75,7 +76,6 @@ struct _Gstqticodec2venc
   gint width;
   gint height;
   GstVideoFormat input_format;
-  gchar *streamformat;
   guint64 frame_index;
   guint64 num_input_queued;
   guint64 num_output_done;
@@ -99,6 +99,9 @@ struct _Gstqticodec2venc
   guint32 slice_size;
   GMutex pending_lock;
   GCond pending_cond;
+  BLUR_MODE blur_mode;
+  guint32 blur_width;
+  guint32 blur_height;
 };
 
 /*

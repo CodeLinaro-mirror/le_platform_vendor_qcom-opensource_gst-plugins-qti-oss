@@ -61,7 +61,6 @@ C2Color::transfer_t toC2TransferChar(TRANSFER_CHAR transfer_char);
 C2Color::matrix_t toC2Matrix(MATRIX matrix);
 C2Color::range_t toC2FullRange(FULL_RANGE full_range);
 
-// namespace QTI
-}
+} // namespace QTI
 
 #endif /* __WRAPPER_UTILS_H__ */

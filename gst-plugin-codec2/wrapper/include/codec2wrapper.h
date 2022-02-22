@@ -55,6 +55,8 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_ENC_CSC "enc_colorspace_conversion"
 #define CONFIG_FUNCTION_KEY_COLOR_ASPECTS_INFO "colorspace_color_aspects"
 #define CONFIG_FUNCTION_KEY_SLICE_MODE "slice_mode"
+#define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
+#define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
 
 #define C2_TICKS_PER_SECOND 1000000
 
@@ -166,6 +168,12 @@ typedef enum {
 } SLICE_MODE;
 
 typedef enum {
+    BLUR_AUTO = 0,
+    BLUR_MANUAL,
+    BLUR_DISABLE,
+} BLUR_MODE;
+
+typedef enum {
     COLOR_PRIMARIES_UNSPECIFIED,
     COLOR_PRIMARIES_BT709,
     COLOR_PRIMARIES_BT470_M,
@@ -269,6 +277,10 @@ typedef struct {
     union {
         SLICE_MODE type;
     } SliceMode;
+
+    union {
+        BLUR_MODE mode;
+    } blur;
 
     struct {
         IR_MODE_TYPE type;

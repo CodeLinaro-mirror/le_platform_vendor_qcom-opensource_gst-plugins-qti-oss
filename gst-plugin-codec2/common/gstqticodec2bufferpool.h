@@ -35,46 +35,20 @@
 #include <gst/allocators/allocators.h>
 
 G_BEGIN_DECLS
-#define GST_TYPE_QTICODEC2_ALLOCATOR      (gst_qticodec2_allocator_get_type())
-#define GST_QTICODEC2_ALLOCATOR(obj)      (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QTICODEC2_ALLOCATOR, GstQticodec2Allocator))
-#define GST_QTICODEC2_ALLOCATOR_CAST(obj) ((GstQticodec2Allocator*)(obj))
-typedef struct _GstQticodec2Allocator GstQticodec2Allocator;
-typedef struct _GstQticodec2AllocatorClass GstQticodec2AllocatorClass;
-
-GType gst_qticodec2_allocator_get_type (void);
-
-struct _GstQticodec2Allocator
-{
-  GstFdAllocator parent;        // parent
-  GstVideoInfo *info;           // info used for allocation
-  void *comp;                   // c2 component
-  BUFFER_POOL_TYPE pool_type;   // graphic or linear
-  gsize alloc_size;             // allocation size
-};
-
-struct _GstQticodec2AllocatorClass
-{
-  GstFdAllocatorClass parent_class;
-
-  gpointer _gst_reserved[GST_PADDING];
-};
-
-GstAllocator *gst_qticodec2_allocator_new (gpointer comp,
-    BUFFER_POOL_TYPE pool_type, GstCaps * caps);
-
-typedef struct _GstQticodec2BufferPool GstQticodec2BufferPool;
-typedef struct _GstQticodec2BufferPoolClass GstQticodec2BufferPoolClass;
-
 /* buffer pool functions */
 #define GST_TYPE_QTICODEC2_BUFFER_POOL      (gst_qticodec2_buffer_pool_get_type())
 #define GST_IS_QTICODEC2_BUFFER_POOL(obj)   (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_QTICODEC2_BUFFER_POOL))
 #define GST_QTICODEC2_BUFFER_POOL(obj)      (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QTICODEC2_BUFFER_POOL, GstQticodec2BufferPool))
 #define GST_QTICODEC2_BUFFER_POOL_CAST(obj) ((GstQticodec2BufferPool*)(obj))
+typedef struct _GstQticodec2BufferPool GstQticodec2BufferPool;
+typedef struct _GstQticodec2BufferPoolClass GstQticodec2BufferPoolClass;
 
 struct _GstQticodec2BufferPool
 {
   GstBufferPool bufferpool;
-  GstAllocator *c2_allocator;
+  GstAllocator *allocator;
+  GstVideoInfo *info;
+  void *c2_comp;
 };
 
 struct _GstQticodec2BufferPoolClass
