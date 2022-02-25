@@ -530,7 +530,7 @@ void* ebd_thread(void* pArg)
       pBuffer->nFilledLen = 0;
       DEBUG_PRINT("%s: Timestamp sent(%lld)", __FUNCTION__, pBuffer->nTimeStamp);
       OMX_EmptyThisBuffer(dec_handle,pBuffer);
-      DEBUG_PRINT("EBD::Either EOS or Some Error while reading file");
+      DEBUG_PRINT_ERROR("EBD::Either EOS or Some Error while reading file");
       etb_count++;
       break;
     }
@@ -801,10 +801,10 @@ OMX_ERRORTYPE EventHandler(OMX_IN OMX_HANDLETYPE hComponent,
       if (OMX_ErrorInvalidState == (OMX_ERRORTYPE)nData1 ||
          OMX_ErrorHardware == (OMX_ERRORTYPE)nData1)
       {
-        DEBUG_PRINT("Invalid State or hardware error ");
+        DEBUG_PRINT_ERROR("Invalid State or hardware error ");
         if(event_is_done == 0)
         {
-          DEBUG_PRINT("Event error in the middle of Decode ");
+          DEBUG_PRINT_ERROR("Event error in the middle of Decode ");
           pthread_mutex_lock(&eos_lock);
           bOutputEosReached = true;
           pthread_mutex_unlock(&eos_lock);
@@ -1546,7 +1546,7 @@ int Play_Decoder(bool secure)
   DEBUG_PRINT("Dec: Buffer Size %d", portFmt.nBufferSize);
 
   if(OMX_DirInput != portFmt.eDir) {
-    DEBUG_PRINT ("Dec: Expect Input Port");
+    DEBUG_PRINT_ERROR ("Dec: Expect Input Port");
     return -1;
   }
 
@@ -1584,7 +1584,7 @@ int Play_Decoder(bool secure)
     if(OMX_SetParameter(dec_handle, OMX_IndexParamVideoPortFormat,
         (OMX_PTR)&videoportFmt) != OMX_ErrorNone)
     {
-      DEBUG_PRINT_ERROR(" Setting Tile format failed");
+      DEBUG_PRINT_ERROR(" Setting color format failed");
       return -1;
     }
   }
@@ -2215,7 +2215,7 @@ static int Read_Buffer_From_Size_Nal(uint8_t *data)
   bytes_read = read(inputBufferFileFd, data, nalSize);
   if (bytes_read == 0 || bytes_read == -1)
   {
-    DEBUG_PRINT("Failed to read frame or it might be EOF");
+    DEBUG_PRINT_ERROR("Failed to read frame or it might be EOF");
     return 0;
   }
 
