@@ -122,23 +122,29 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
     if (buffer_info->format == GST_VIDEO_FORMAT_NV12) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+                    width, height, 0);
+            memcpy(dst, src, buf_size);
+        } else {
+            uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
 
-        for (int i = 0; i < height; i++) {
-            memcpy(dst, src, width);
-            dst += y_stride;
-            src += width;
-        }
+            for (int i = 0; i < height; i++) {
+                memcpy(dst, src, width);
+                dst += y_stride;
+                src += width;
+            }
 
-        uint32_t offset = y_stride * y_scanlines;
-        dst = dest + offset;
+            uint32_t offset = y_stride * y_scanlines;
+            dst = dest + offset;
 
-        for (int i = 0; i < height / 2; i++) {
-            memcpy(dst, src, width);
-            dst += uv_stride;
-            src += width;
+            for (int i = 0; i < height / 2; i++) {
+                memcpy(dst, src, width);
+                dst += uv_stride;
+                src += width;
+            }
         }
     } else if (buffer_info->format == GST_VIDEO_FORMAT_P010_10LE) {
         uint32_t width = buffer_info->width;
@@ -161,11 +167,17 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
             dst += uv_stride;
             src += width * 2;
         }
-    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32_UBWC) {
+    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-        memcpy(dst, src, buf_size);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC,
+                    width, height);
+            memcpy(dst, src, buf_size);
+        } else {
+            LOG_ERROR("Non UBWC NV12_10LE32 not supported yet");
+            result = C2_BAD_VALUE;
+        }
     } else {
         result = C2_BAD_VALUE;
     }
@@ -212,8 +224,14 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
             if (mGraphicPool) {
-                // TODO support NV12_UBWC input by usage
-                usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+                if (buffer->format == GST_VIDEO_FORMAT_NV12
+                    && buffer->ubwc_flag) {
+                    LOG_MESSAGE("NV12: usage add UBWC");
+                    usage = {
+                        C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+                        C2MemoryUsage::CPU_WRITE
+                    };
+                }
                 err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                     gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
                 C2GraphicView view(graphic_block->map().get());
