@@ -63,8 +63,9 @@ gst_meta_mux_data_pad_class_init (GstMetaMuxDataPadClass * klass)
 void
 gst_meta_mux_data_pad_init (GstMetaMuxDataPad * pad)
 {
+  pad->type = GST_DATA_TYPE_UNKNOWN;
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
-  pad->queue = g_queue_new ();
   pad->stash = NULL;
+  pad->queue = g_queue_new ();
 }
 

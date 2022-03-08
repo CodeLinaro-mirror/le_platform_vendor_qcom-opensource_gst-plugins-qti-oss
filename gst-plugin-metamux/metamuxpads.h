@@ -55,17 +55,24 @@ G_BEGIN_DECLS
 typedef struct _GstMetaMuxDataPad GstMetaMuxDataPad;
 typedef struct _GstMetaMuxDataPadClass GstMetaMuxDataPadClass;
 
+typedef enum {
+  GST_DATA_TYPE_UNKNOWN,
+  GST_DATA_TYPE_TEXT,
+} GstDataType;
+
 struct _GstMetaMuxDataPad {
   /// Inherited parent structure.
-  GstPad     parent;
+  GstPad      parent;
 
+  // Format of negotiated metadata.
+  GstDataType type;
   /// Segment.
-  GstSegment segment;
+  GstSegment  segment;
 
   /// Variable for temporarily storing partial data(meta).
-  gpointer   stash;
+  gpointer    stash;
   /// Queue for managing incoming data(meta) buffers.
-  GQueue     *queue;
+  GQueue      *queue;
 };
 
 struct _GstMetaMuxDataPadClass {
