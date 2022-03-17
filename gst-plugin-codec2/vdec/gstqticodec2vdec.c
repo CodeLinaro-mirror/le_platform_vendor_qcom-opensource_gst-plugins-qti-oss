@@ -124,13 +124,9 @@ static GstFlowReturn gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 static GstFlowReturn gst_qticodec2vdec_finish (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_open (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_close (GstVideoDecoder * decoder);
-static gboolean gst_qticodec2vdec_src_query (GstVideoDecoder * decoder,
-    GstQuery * query);
-static gboolean gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder,
-    GstQuery * query);
+
 static gboolean gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query);
-
 static void gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_qticodec2vdec_get_property (GObject * object, guint prop_id,
@@ -225,14 +221,14 @@ modifier_free (gpointer p_modifier)
 }
 
 static ConfigParams
-make_resolution_param (guint32 width, guint32 height, gboolean isInput)
+make_resolution_param (guint32 width, guint32 height, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_RESOLUTION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.resolution.width = width;
   param.resolution.height = height;
 
@@ -240,28 +236,28 @@ make_resolution_param (guint32 width, guint32 height, gboolean isInput)
 }
 
 static ConfigParams
-make_pixelFormat_param (guint32 fmt, gboolean isInput)
+make_pixel_format_param (guint32 fmt, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_PIXELFORMAT;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.pixelFormat.fmt = fmt;
 
   return param;
 }
 
 static ConfigParams
-make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean isInput)
+make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.interlaceMode.type = mode;
 
   return param;
@@ -561,7 +557,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   if (config) {
     pixelformat =
-        make_pixelFormat_param (gst_to_c2_pixelformat (decoder, output_format),
+        make_pixel_format_param (gst_to_c2_pixelformat (decoder, output_format),
         FALSE);
     GST_LOG_OBJECT (dec, "set c2 output format: %d",
         pixelformat.pixelFormat.fmt);
@@ -862,44 +858,6 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
     GST_DEBUG_OBJECT (dec, "EOS reached in handle_frame");
     return GST_FLOW_EOS;
   }
-}
-
-static gboolean
-gst_qticodec2vdec_src_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SRC_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "src_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_query (decoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SINK_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "sink_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->sink_query (decoder, query);
-      break;
-  }
-
-  return ret;
 }
 
 static gboolean
@@ -1340,7 +1298,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
       if (config) {
         pixelformat =
-            make_pixelFormat_param (gst_to_c2_pixelformat (decoder,
+            make_pixel_format_param (gst_to_c2_pixelformat (decoder,
                 output_format), FALSE);
         GST_LOG_OBJECT (dec, "set c2 output format: %d for VP9",
             pixelformat.pixelFormat.fmt);
@@ -1593,10 +1551,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
   video_decoder_class->finish = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_finish);
   video_decoder_class->open = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_open);
   video_decoder_class->close = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_close);
-  video_decoder_class->src_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_src_query);
-  video_decoder_class->sink_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_sink_query);
   video_decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_decide_allocation);
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
