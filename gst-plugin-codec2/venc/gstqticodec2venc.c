@@ -167,7 +167,7 @@ static GstStaticPadTemplate gst_qtivenc_src_template =
     GST_QC2VENC_CAPS_MAKE("NV12_10LE32",128,8192)
 
 static GstStaticPadTemplate gst_qtivenc_sink_template =
-    GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SINK_NAME,
+GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SINK_NAME,
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_QC2VENC_SINK_TEMPLATE_CAP));
@@ -466,7 +466,7 @@ gst_qticodec2venc_blur_mode_get_type (void)
   if (qtype == 0) {
     static const GEnumValue values[] = {
       {BLUR_AUTO, "Disable External Blur but Enable Internal Blur. If set "
-          "before start, blur is disabled throughout the session.", "auto"},
+            "before start, blur is disabled throughout the session.", "auto"},
       {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
             "Blur is applied when valid resolution is set.", "manual"},
       {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
@@ -753,7 +753,7 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
     if (!enc->output_state) {
       GST_ERROR_OBJECT (enc, "set output state error");
       gst_caps_unref (outcaps);
-      g_free(comp_name);
+      g_free (comp_name);
       return GST_FLOW_ERROR;
     }
     enc->output_setup = TRUE;
@@ -895,8 +895,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
 
   GST_DEBUG_OBJECT (enc, "caps: %" GST_PTR_FORMAT, state->caps);
   enc->is_ubwc = caps_has_compression (state->caps, "ubwc");
-  GST_DEBUG_OBJECT (enc, "Fixed color format:%s, UBWC:%d", fmt,
-      enc->is_ubwc);
+  GST_DEBUG_OBJECT (enc, "Fixed color format:%s, UBWC:%d", fmt, enc->is_ubwc);
 
   if (enc->input_setup) {
     /* Already setup, check to see if something has changed on input caps... */
@@ -1196,7 +1195,7 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   if (gst_qticodec2_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     enc->pool =
         gst_qticodec2_buffer_pool_new (enc->comp, BUFFER_POOL_BASIC_GRAPHIC,
-        num_max_buffers, caps);
+        num_max_buffers, caps, enc->is_ubwc);
 
     if (!enc->pool)
       goto cleanup;
@@ -1481,7 +1480,7 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 
   if (!status) {
-    GST_ERROR_OBJECT(enc, "failed to queue input frame to Codec2");
+    GST_ERROR_OBJECT (enc, "failed to queue input frame to Codec2");
     ret = GST_FLOW_ERROR;
     goto out;
   }

@@ -57,15 +57,16 @@ _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
   buffer.width = info->width;
   buffer.height = info->height;
   buffer.format = format;
+  buffer.ubwc_flag = self_pool->ubwc_buf;
 
   /* Note: size is not used here for graphic buffer */
   GST_DEBUG_OBJECT (pool,
-      "Allocating buffer size: %lu, format: %s, width: %d, height: %d",
-      info->size, gst_video_format_to_string (format), info->width,
-      info->height);
+      "Allocating buffer size: %lu, format: %s, ubwc: %d, width: %d, height: %d",
+      info->size, gst_video_format_to_string (format), buffer.ubwc_flag,
+      info->width, info->height);
 
   /*TODO: add support for Linear buffer */
-  if (format == GST_VIDEO_FORMAT_NV12 || format == GST_VIDEO_FORMAT_NV12_UBWC) {
+  if (format == GST_VIDEO_FORMAT_NV12) {
     buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
 
     if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
@@ -74,7 +75,7 @@ _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
       GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d",
           buffer.fd, buffer.capacity);
 
-      /* use GstFdAllocator to allocate GBM based fd memory */
+      /* use GstDmaBufAllocator to allocate GBM based fd memory */
       mem =
           gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
           buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
@@ -213,7 +214,7 @@ gst_qticodec2_buffer_pool_class_init (GstQticodec2BufferPoolClass * klass)
 
 GstBufferPool *
 gst_qticodec2_buffer_pool_new (gpointer comp, BUFFER_POOL_TYPE pool_type,
-    guint num_buffers, GstCaps * caps)
+    guint num_buffers, GstCaps * caps, gboolean ubwc)
 {
   GstQticodec2BufferPool *pool;
   GstStructure *config;
@@ -248,6 +249,7 @@ gst_qticodec2_buffer_pool_new (gpointer comp, BUFFER_POOL_TYPE pool_type,
 
   pool->c2_comp = comp;
   pool->info = info;
+  pool->ubwc_buf = ubwc;
 
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
 

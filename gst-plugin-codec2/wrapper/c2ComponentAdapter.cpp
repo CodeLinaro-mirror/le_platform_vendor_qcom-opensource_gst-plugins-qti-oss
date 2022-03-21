@@ -124,7 +124,7 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
         uint32_t height = buffer_info->height;
         if (buffer_info->ubwc_flag) {
             uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
-                    width, height, 0);
+                width, height, 0);
             memcpy(dst, src, buf_size);
         } else {
             uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
@@ -172,7 +172,7 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
         uint32_t height = buffer_info->height;
         if (buffer_info->ubwc_flag) {
             uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC,
-                    width, height);
+                width, height);
             memcpy(dst, src, buf_size);
         } else {
             LOG_ERROR("Non UBWC NV12_10LE32 not supported yet");
@@ -297,8 +297,9 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
         std::shared_ptr<C2GraphicBlock> graphic_block;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
-            // TODO support NV12_UBWC input by usage
-            usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+            if (buffer->ubwc_flag) {
+                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
+            }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                 gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
             C2GraphicView view(graphic_block->map().get());
@@ -332,7 +333,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 
                 _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
                 buffer->capacity = size;
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d", fd, buffer->capacity);
+                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");

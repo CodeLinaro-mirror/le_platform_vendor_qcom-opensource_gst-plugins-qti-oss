@@ -49,6 +49,7 @@ struct _GstQticodec2BufferPool
   GstAllocator *allocator;
   GstVideoInfo *info;
   void *c2_comp;
+  gboolean ubwc_buf;
 };
 
 struct _GstQticodec2BufferPoolClass
@@ -59,7 +60,8 @@ struct _GstQticodec2BufferPoolClass
 GType gst_qticodec2_buffer_pool_get_type (void);
 
 GstBufferPool *gst_qticodec2_buffer_pool_new (gpointer comp,
-    BUFFER_POOL_TYPE pool_type, guint num_buffers, GstCaps * caps);
+    BUFFER_POOL_TYPE pool_type, guint num_buffers, GstCaps * caps,
+    gboolean ubwc);
 
 G_END_DECLS
 #endif /* __GST_QTICODEC2_BUFFER_POOL__ */
