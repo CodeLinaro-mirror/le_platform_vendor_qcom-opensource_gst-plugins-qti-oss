@@ -647,6 +647,14 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
 
   g_ptr_array_free (config, FALSE);
 
+  /* Start decoder */
+  if (!c2component_start (dec->comp)) {
+    GST_ERROR_OBJECT (dec, "Failed to start component");
+    goto error_set_format;
+  }
+
+  /* NOTICE: Config own graphic block pool should be called after c2 compoennt
+   * started and before buffer queued. */
   ret = c2component_createBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
   if (ret == FALSE) {
     GST_ERROR_OBJECT (dec, "Failed to create graphic pool");
@@ -658,12 +666,6 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_ERROR_OBJECT (dec,
         "Failed to let component use graphic pool created by client");
     return FALSE;
-  }
-
-  /* Start decoder */
-  if (!c2component_start (dec->comp)) {
-    GST_ERROR_OBJECT (dec, "Failed to start component");
-    goto error_set_format;
   }
 
 done:

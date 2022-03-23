@@ -70,6 +70,7 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mGraphicPool = nullptr;
     mMapBufferToCpu = false;
     mNumPendingWorks = 0;
+    mPendingTimeOut = 0;
 }
 
 C2ComponentAdapter::~C2ComponentAdapter()
@@ -122,23 +123,29 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
     if (buffer_info->format == GST_VIDEO_FORMAT_NV12) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+                width, height, 0);
+            memcpy(dst, src, buf_size);
+        } else {
+            uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
 
-        for (int i = 0; i < height; i++) {
-            memcpy(dst, src, width);
-            dst += y_stride;
-            src += width;
-        }
+            for (int i = 0; i < height; i++) {
+                memcpy(dst, src, width);
+                dst += y_stride;
+                src += width;
+            }
 
-        uint32_t offset = y_stride * y_scanlines;
-        dst = dest + offset;
+            uint32_t offset = y_stride * y_scanlines;
+            dst = dest + offset;
 
-        for (int i = 0; i < height / 2; i++) {
-            memcpy(dst, src, width);
-            dst += uv_stride;
-            src += width;
+            for (int i = 0; i < height / 2; i++) {
+                memcpy(dst, src, width);
+                dst += uv_stride;
+                src += width;
+            }
         }
     } else if (buffer_info->format == GST_VIDEO_FORMAT_P010_10LE) {
         uint32_t width = buffer_info->width;
@@ -161,11 +168,17 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
             dst += uv_stride;
             src += width * 2;
         }
-    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32_UBWC) {
+    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-        memcpy(dst, src, buf_size);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC,
+                width, height);
+            memcpy(dst, src, buf_size);
+        } else {
+            LOG_ERROR("Non UBWC NV12_10LE32 not supported yet");
+            result = C2_BAD_VALUE;
+        }
     } else {
         result = C2_BAD_VALUE;
     }
@@ -212,8 +225,14 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
             if (mGraphicPool) {
-                // TODO support NV12_UBWC input by usage
-                usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+                if (buffer->format == GST_VIDEO_FORMAT_NV12
+                    && buffer->ubwc_flag) {
+                    LOG_MESSAGE("NV12: usage add UBWC");
+                    usage = {
+                        C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+                        C2MemoryUsage::CPU_WRITE
+                    };
+                }
                 err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                     gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
                 C2GraphicView view(graphic_block->map().get());
@@ -244,11 +263,11 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
 }
 
 c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
-    uint32_t maxPendingWorks,
-    uint32_t timeoutMs)
+    uint32_t maxPendingWorks)
 {
 
     std::unique_lock<std::mutex> ul(mLock);
+    uint32_t timeoutMs = mPendingTimeOut;
     LOG_MESSAGE("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
 
     while (mNumPendingWorks > maxPendingWorks) {
@@ -256,6 +275,7 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
             if (mCondition.wait_for(ul, timeoutMs * 1ms) == std::cv_status::timeout) {
                 LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
                     mNumPendingWorks);
+                mNumPendingWorks--;
                 return C2_TIMED_OUT;
             } else {
                 LOG_MESSAGE("wait done");
@@ -264,6 +284,17 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
         } else if (timeoutMs == 0) {
             mCondition.wait(ul);
         }
+    }
+
+    /* In case notification is done immediately by ease pending,
+     * but it's meant to wait for another round by mPendingTimeOut ms.
+     * So continue to wait once more.
+     */
+    if (mPendingTimeOut > 0) {
+        timeoutMs = mPendingTimeOut;
+        LOG_WARNING("wait another round in case of timeout changed to %d ms",
+            timeoutMs);
+        mCondition.wait_for(ul, timeoutMs * 1ms);
     }
 
     return C2_OK;
@@ -279,8 +310,9 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
         std::shared_ptr<C2GraphicBlock> graphic_block;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
-            // TODO support NV12_UBWC input by usage
-            usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+            if (buffer->ubwc_flag) {
+                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
+            }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                 gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
             C2GraphicView view(graphic_block->map().get());
@@ -314,7 +346,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 
                 _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
                 buffer->capacity = size;
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d", fd, buffer->capacity);
+                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
@@ -399,7 +431,7 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     workList.push_back(std::move(work));
 
     if (!isEOSFrame) {
-        waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
+        waitForProgressOrStateChange(MAX_PENDING_WORK);
     } else {
         LOG_MESSAGE("EOS reached");
     }
@@ -568,6 +600,7 @@ void C2ComponentAdapter::handleWorkDone(
         uint64_t bufferIdx = 0;
         C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
         uint64_t timestamp = worklet->output.ordinal.timestamp.peeku();
+        bool ease_pending = false;
 
         while (!worklet->output.configUpdate.empty()) {
             std::unique_ptr<C2Param> param;
@@ -587,6 +620,7 @@ void C2ComponentAdapter::handleWorkDone(
                             LOG_ERROR("Failed to get allocator");
                             break;
                         }
+                        ease_pending = true;
                         std::shared_ptr<android::C2AllocatorGBM> allocatorGBM = std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
                         allocatorGBM->setMaxAllocationCount(outputDelay.value);
                     }
@@ -616,6 +650,7 @@ void C2ComponentAdapter::handleWorkDone(
             mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
             std::unique_lock<std::mutex> ul(mLock);
             mNumPendingWorks--;
+            mPendingTimeOut = 0;
             mCondition.notify_one();
         } else {
 
@@ -626,12 +661,33 @@ void C2ComponentAdapter::handleWorkDone(
                 LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple"
                             "output frames, or codec config update event",
                     this);
-                continue;
+                /* If pending works reach maximums, waitForProgressOrStateChange
+                 * will wait and no more buffer to be queued to component.
+                 * In some cases component configure updates, output buffers
+                 * will be re-allocated in C2 and it needs more input for output.
+                 *
+                 * Refer to IComponentListener.hal#onInputBuffersReleased on LA,
+                 * try timeout-wait to wake up queue_nb again so as to ease pending works,
+                 * e.g., when the component needs more input before an output can be produced.
+                 *
+                 * Back to block-wait once a new onWorkDone arrival from C2.
+                 */
+                if (ease_pending) {
+                    LOG_MESSAGE("Component(%p) ease pending works", this);
+                    std::unique_lock<std::mutex> ul(mLock);
+                    mNumPendingWorks--;
+                    mPendingTimeOut = 30; // try to wait for 30ms timeout
+                    mCondition.notify_one();
+                    break;
+                } else {
+                    continue;
+                }
             } else {
                 LOG_ERROR("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
             }
             std::unique_lock<std::mutex> ul(mLock);
             mNumPendingWorks--;
+            mPendingTimeOut = 0;
             mCondition.notify_one();
             break;
         }

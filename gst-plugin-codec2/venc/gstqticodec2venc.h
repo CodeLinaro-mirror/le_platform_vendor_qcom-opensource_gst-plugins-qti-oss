@@ -102,6 +102,7 @@ struct _Gstqticodec2venc
   BLUR_MODE blur_mode;
   guint32 blur_width;
   guint32 blur_height;
+  gboolean is_ubwc;
 };
 
 /*
