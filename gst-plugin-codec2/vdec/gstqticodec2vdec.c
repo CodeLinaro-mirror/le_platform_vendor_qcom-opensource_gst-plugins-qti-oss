@@ -115,22 +115,37 @@ static GstBuffer *gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder *
 static gboolean gst_qticodec2vdec_caps_has_feature (const GstCaps * caps,
     const gchar * partten);
 
+#define COMMON_VIDEO_CAPS(min, max) \
+    "width = (int) [" #min ", " #max "], "    \
+    "height = (int) [" #min ", " #max "]"
+
+#define H264_CAPS \
+    "video/x-h264, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+
+#define H265_CAPS \
+    "video/x-h265, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+
+#define VP9_CAPS \
+    "video/x-vp9, " \
+    COMMON_VIDEO_CAPS(96, 4096)
+
+#define MPEG2_CAPS \
+    "video/mpeg, " \
+    "mpegversion = (int)2, " \
+    COMMON_VIDEO_CAPS(96, 1920)
+
 /* pad templates */
 static GstStaticPadTemplate gst_qtivdec_sink_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-h264,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-h265,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-vp8"
-        ";" "video/x-vp9" ";" "video/mpeg," "mpegversion = (int)2")
-    );
+    GST_STATIC_CAPS (H264_CAPS ";" H265_CAPS ";" VP9_CAPS ";" MPEG2_CAPS));
 
 static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SRC_NAME,
@@ -144,9 +159,7 @@ static GstStaticPadTemplate gst_qtivdec_src_template =
         ";" QTICODEC2VDEC_RAW_CAPS ("{ NV12_10LE32 }")
         ";" QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ P010_10LE }")
-        ";" QTICODEC2VDEC_RAW_CAPS ("{ P010_10LE }")
-    )
-    );
+        ";" QTICODEC2VDEC_RAW_CAPS ("{ P010_10LE }")));
 
 static gboolean
 caps_has_compression (const GstCaps * caps, const gchar * compression)
