@@ -102,8 +102,8 @@ bool do_secure_copy(uint8_t *buf, size_t *size, int fd, int direction)
   size_t size_in = *size;
 
   bool ret = sc->copy(buf, *size, fd, 0, size, direction);
-  printf("%s: size=%lu, copied=%lu, fd=%d, direction=%d, ret=%d\n",
-         __func__, size_in, *size, fd, direction, ret);
+  printf("%s: size=%lu, copied=%lu, fd=%d, direction=%d, ret=%d(copy %s)\n",
+         __func__, size_in, *size, fd, direction, ret, ret?"suc":"fail");
 
   return ret;
 }

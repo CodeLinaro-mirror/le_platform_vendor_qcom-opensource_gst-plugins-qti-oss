@@ -170,12 +170,12 @@ bool c2d_blend::Open(unsigned int src_height,unsigned int src_width,
 
 void c2d_blend::Close()
 {
+    pthread_mutex_lock(&m_lock);
     if (m_c2d_conv) {
-        pthread_mutex_lock(&m_lock);
         delete (m_c2d_conv);
-        pthread_mutex_unlock(&m_lock);
         m_c2d_conv = NULL;
     }
+    pthread_mutex_unlock(&m_lock);
 }
 
 int c2d_blend::GetSrcFormat()

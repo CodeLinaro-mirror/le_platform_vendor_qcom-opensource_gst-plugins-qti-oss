@@ -105,9 +105,7 @@ public:
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);
     c2_status_t writePlane(uint8_t* dest, BufferDescriptor* buffer_info);
-    c2_status_t waitForProgressOrStateChange(
-        uint32_t numPendingWorks,
-        uint32_t timeoutMs);
+    c2_status_t waitForProgressOrStateChange(uint32_t numPendingWorks);
 
     std::weak_ptr<C2ComponentStore> mStore;
     std::shared_ptr<C2Component> mComp;
@@ -122,7 +120,9 @@ private:
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
 
     uint32_t mNumPendingWorks;
+    uint32_t mPendingTimeOut;
     std::mutex mLock;
+    std::mutex mLockOut;
     std::condition_variable mCondition;
 };
 
