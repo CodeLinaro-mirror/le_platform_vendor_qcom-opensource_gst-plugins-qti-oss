@@ -1,31 +1,65 @@
 /*
-* Copyright (c) 2020, The Linux Foundation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are
-* met:
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*     * Neither the name of The Linux Foundation nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
-* ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-* BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-* BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-* WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-* OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of The Linux Foundation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -40,7 +74,12 @@
 #define GST_CAT_DEFAULT gst_video_composer_debug
 GST_DEBUG_CATEGORY_STATIC (gst_video_composer_debug);
 
+static void gst_video_composer_child_proxy_init (gpointer g_iface, gpointer data);
+
 #define gst_video_composer_parent_class parent_class
+G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
+     GST_TYPE_AGGREGATOR, G_IMPLEMENT_INTERFACE (GST_TYPE_CHILD_PROXY,
+         gst_video_composer_child_proxy_init));
 
 #define DEFAULT_VIDEO_WIDTH       640
 #define DEFAULT_VIDEO_HEIGHT      480
@@ -56,16 +95,14 @@ GST_DEBUG_CATEGORY_STATIC (gst_video_composer_debug);
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
-// Caps video size range.
 #undef GST_VIDEO_SIZE_RANGE
 #define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
 
-// Caps FPS range.
 #undef GST_VIDEO_FPS_RANGE
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
-// Caps formats.
-#define GST_VIDEO_FORMATS "{ BGRA, RGBA, BGR, RGB, NV12, NV21 }"
+#define GST_VIDEO_FORMATS \
+  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
 
 static GType gst_converter_request_get_type(void);
 #define GST_TYPE_CONVERTER_REQUEST  (gst_converter_request_get_type())
@@ -76,6 +113,22 @@ enum
   PROP_0,
   PROP_BACKGROUND,
 };
+
+static GstStaticPadTemplate gst_video_composer_sink_template =
+    GST_STATIC_PAD_TEMPLATE("sink_%u",
+        GST_PAD_SINK,
+        GST_PAD_REQUEST,
+        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
+            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
+    );
+
+static GstStaticPadTemplate gst_video_composer_src_template =
+    GST_STATIC_PAD_TEMPLATE("src",
+        GST_PAD_SRC,
+        GST_PAD_ALWAYS,
+        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
+            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
+    );
 
 typedef struct _GstConverterRequest GstConverterRequest;
 
@@ -160,35 +213,42 @@ gst_converter_request_unref (GstConverterRequest * request)
 }
 
 static void
-gst_video_composer_free_queue_item (gpointer data)
+gst_data_queue_item_free (gpointer data)
 {
   GstDataQueueItem *item = data;
   gst_converter_request_unref (GST_CONVERTER_REQUEST (item->object));
   g_slice_free (GstDataQueueItem, item);
 }
 
-static void
-gst_video_composer_child_proxy_init (gpointer g_iface, gpointer data);
+static gboolean
+gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
+{
+  guint idx = 0;
 
-G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
-     GST_TYPE_AGGREGATOR, G_IMPLEMENT_INTERFACE (GST_TYPE_CHILD_PROXY,
-         gst_video_composer_child_proxy_init));
+  for (idx = 0; idx < gst_caps_get_size (caps); idx++) {
+    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
 
-static GstStaticPadTemplate gst_video_composer_sink_template =
-    GST_STATIC_PAD_TEMPLATE("sink_%u",
-        GST_PAD_SINK,
-        GST_PAD_REQUEST,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("ANY", GST_VIDEO_FORMATS))
-    );
+    // Skip ANY caps and return immediately if feature is present.
+    if (!gst_caps_features_is_any (features) &&
+        gst_caps_features_contains (features, feature))
+      return TRUE;
+  }
 
-static GstStaticPadTemplate gst_video_composer_src_template =
-    GST_STATIC_PAD_TEMPLATE("src",
-        GST_PAD_SRC,
-        GST_PAD_ALWAYS,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("ANY", GST_VIDEO_FORMATS))
-    );
+  return FALSE;
+}
+
+static gboolean
+gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "compression") ?
+      gst_structure_get_string (structure, "compression") : NULL;
+
+  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+}
 
 static GstC2dVideoRotate
 gst_video_composer_rotation_to_c2d_rotate (GstVideoComposerRotate rotation)
@@ -222,38 +282,6 @@ gst_video_composer_index_compare (const GstVideoComposerSinkPad * pad,
   return pad->index - (*index);
 }
 
-static gboolean
-gst_video_composer_caps_has_feature (const GstCaps * caps,
-    const gchar * feature)
-{
-  guint idx = 0;
-
-  for (idx = 0; idx < gst_caps_get_size (caps); idx++) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    // Skip ANY caps and return immediately if feature is present.
-    if (!gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-  }
-
-  return FALSE;
-}
-
-static gboolean
-gst_video_composer_caps_has_compression (const GstCaps * caps,
-    const gchar * compression)
-{
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
-
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
-}
-
 static GstBufferPool *
 gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
 {
@@ -268,7 +296,7 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
   }
 
   // If downstream allocation query supports GBM, allocate gbm memory.
-  if (gst_video_composer_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
     GST_INFO_OBJECT (vcomposer, "Uses GBM memory");
     pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
   } else {
@@ -284,7 +312,7 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
-  if (gst_video_composer_caps_has_compression (caps, "ubwc")) {
+  if (gst_caps_has_compression (caps, "ubwc")) {
     gst_buffer_pool_config_add_option (config,
         GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
   }
@@ -305,45 +333,61 @@ gst_video_composer_set_opts (GstElement * element, GstPad * pad, gpointer data)
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (element);
   GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (pad);
   GstCaps *caps = gst_pad_get_current_caps (pad);
-  GstStructure *options = NULL;
+  GstStructure *opts = NULL;
+  GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
   guint idx = 0;
 
   GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
-  options = gst_structure_new (GST_PAD_NAME (sinkpad),
+  opts = gst_structure_new (GST_PAD_NAME (sinkpad),
       GST_C2D_VIDEO_CONVERTER_OPT_FLIP_HORIZONTAL, G_TYPE_BOOLEAN,
-      sinkpad->flip_h,
+          sinkpad->flip_h,
       GST_C2D_VIDEO_CONVERTER_OPT_FLIP_VERTICAL, G_TYPE_BOOLEAN,
-      sinkpad->flip_v,
+          sinkpad->flip_v,
       GST_C2D_VIDEO_CONVERTER_OPT_ROTATION, GST_TYPE_C2D_VIDEO_ROTATION,
-      gst_video_composer_rotation_to_c2d_rotate (sinkpad->rotation),
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_X, G_TYPE_INT,
-      sinkpad->crop.x,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_Y, G_TYPE_INT,
-      sinkpad->crop.y,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_WIDTH, G_TYPE_INT,
-      sinkpad->crop.w,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_HEIGHT, G_TYPE_INT,
-      sinkpad->crop.h,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_X, G_TYPE_INT,
-      sinkpad->destination.x,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_Y, G_TYPE_INT,
-      sinkpad->destination.y,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_WIDTH, G_TYPE_INT,
-      sinkpad->destination.w,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_HEIGHT, G_TYPE_INT,
-      sinkpad->destination.h,
-      GST_C2D_VIDEO_CONVERTER_OPT_ALPHA, G_TYPE_DOUBLE,
-      sinkpad->alpha,
+          gst_video_composer_rotation_to_c2d_rotate (sinkpad->rotation),
+      GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
+          gst_caps_has_compression (caps, "ubwc"),
+      GST_C2D_VIDEO_CONVERTER_OPT_ALPHA, G_TYPE_DOUBLE, sinkpad->alpha,
       NULL);
 
+  g_value_init (&rects, GST_TYPE_ARRAY);
+  g_value_init (&entry, GST_TYPE_ARRAY);
+  g_value_init (&value, G_TYPE_INT);
 
-  // Check whether the input caps have ubwc compression.
-  if (gst_video_composer_caps_has_compression (caps, "ubwc")) {
-    gst_structure_set (options,
-        GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN, TRUE,
-        NULL);
-  }
+  g_value_set_int (&value, sinkpad->crop.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+  g_value_reset (&entry);
+
+  gst_structure_set_value (opts,
+      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
+  g_value_reset (&rects);
+
+  g_value_set_int (&value, sinkpad->destination.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+
+  gst_structure_set_value (opts,
+      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &rects);
+
+  g_value_unset (&value);
+  g_value_unset (&entry);
+  g_value_unset (&rects);
 
   GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
 
@@ -353,8 +397,7 @@ gst_video_composer_set_opts (GstElement * element, GstPad * pad, gpointer data)
   idx = g_list_index (element->sinkpads, pad);
   GST_OBJECT_UNLOCK (vcomposer);
 
-  return gst_c2d_video_converter_set_input_opts (
-      vcomposer->c2dconvert, idx, options);
+  return gst_c2d_video_converter_set_input_opts (vcomposer->c2dconvert, idx, opts);
 }
 
 static void
@@ -389,25 +432,39 @@ gst_video_composer_property_crop_cb (GObject * object,
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (data);
   GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (object);
   GstStructure *opts = NULL;
+  GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
   guint idx = 0;
 
   GST_LOG_OBJECT (vcomposer, "Property '%s' of pad %s has changed",
       pspec->name, GST_PAD_NAME (sinkpad));
 
+  g_value_init (&rects, GST_TYPE_ARRAY);
+  g_value_init (&entry, GST_TYPE_ARRAY);
+  g_value_init (&value, G_TYPE_INT);
+
   GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
-  opts = gst_structure_new (GST_PAD_NAME (sinkpad),
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_X, G_TYPE_INT,
-      sinkpad->crop.x,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_Y, G_TYPE_INT,
-      sinkpad->crop.y,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_WIDTH, G_TYPE_INT,
-      sinkpad->crop.w,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_HEIGHT, G_TYPE_INT,
-      sinkpad->crop.h,
-      NULL);
+  opts = gst_structure_new_empty ("options");
+
+  g_value_set_int (&value, sinkpad->crop.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->crop.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+
+  gst_structure_set_value (opts,
+      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
 
   GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
+
+  g_value_unset (&value);
+  g_value_unset (&entry);
+  g_value_unset (&rects);
 
   GST_OBJECT_LOCK (vcomposer);
   idx = g_list_index (GST_ELEMENT (vcomposer)->sinkpads, sinkpad);
@@ -423,25 +480,39 @@ gst_video_composer_property_destination_cb (GObject * object,
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (data);
   GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (object);
   GstStructure *opts = NULL;
+  GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
   guint idx = 0;
 
   GST_LOG_OBJECT (vcomposer, "Property '%s' of pad %s has changed",
       pspec->name, GST_PAD_NAME (sinkpad));
 
+  g_value_init (&rects, GST_TYPE_ARRAY);
+  g_value_init (&entry, GST_TYPE_ARRAY);
+  g_value_init (&value, G_TYPE_INT);
+
   GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
-  opts = gst_structure_new (GST_PAD_NAME (sinkpad),
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_X, G_TYPE_INT,
-      sinkpad->destination.x,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_Y, G_TYPE_INT,
-      sinkpad->destination.y,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_WIDTH, G_TYPE_INT,
-      sinkpad->destination.w,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_HEIGHT, G_TYPE_INT,
-      sinkpad->destination.h,
-      NULL);
+  opts = gst_structure_new_empty ("options");
+
+  g_value_set_int (&value, sinkpad->destination.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, sinkpad->destination.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+
+  gst_structure_set_value (opts,
+      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &rects);
 
   GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
+
+  g_value_unset (&value);
+  g_value_unset (&entry);
+  g_value_unset (&rects);
 
   GST_OBJECT_LOCK (vcomposer);
   idx = g_list_index (GST_ELEMENT (vcomposer)->sinkpads, sinkpad);
@@ -674,18 +745,17 @@ gst_video_composer_prepare_input_frame (GstElement * element, GstPad * pad,
   if (gst_aggregator_pad_is_eos (GST_AGGREGATOR_PAD (pad)))
     return TRUE;
 
-  if (!gst_aggregator_pad_has_buffer (GST_AGGREGATOR_PAD (pad))) {
-    GST_TRACE_OBJECT (vcomposer, "Pad %s does not have a buffer!",
-        GST_PAD_NAME (pad));
+  buffer = gst_aggregator_pad_peek_buffer (GST_AGGREGATOR_PAD (pad));
+
+  if (buffer == NULL) {
+    GST_TRACE_OBJECT (pad, "No buffer available!");
     return FALSE;
   }
-
-  buffer = gst_aggregator_pad_peek_buffer (GST_AGGREGATOR_PAD (pad));
 
   // GAP buffer, nothing to do.
   if (gst_buffer_get_size (buffer) == 0 &&
       GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_GAP)) {
-    GST_TRACE_OBJECT (vcomposer, "Pad %s GAP buffer!", GST_PAD_NAME (pad));
+    GST_TRACE_OBJECT (pad, "GAP buffer!");
     return TRUE;
   }
 
@@ -704,8 +774,8 @@ gst_video_composer_prepare_input_frame (GstElement * element, GstPad * pad,
         segment->position) + vcomposer->duration;
 
     if (timestamp > position)
-      GST_TRACE_OBJECT (vcomposer, "Pad %s keeping buffer at least until %"
-          GST_TIME_FORMAT, GST_PAD_NAME (pad), GST_TIME_ARGS (timestamp));
+      GST_TRACE_OBJECT (pad, "Keeping buffer at least until %"
+          GST_TIME_FORMAT, GST_TIME_ARGS (timestamp));
     else
       gst_aggregator_pad_drop_buffer (GST_AGGREGATOR_PAD (pad));
 
@@ -715,13 +785,11 @@ gst_video_composer_prepare_input_frame (GstElement * element, GstPad * pad,
 
   if (!gst_video_frame_map (&frames[idx], sinkpad->info, buffer,
           GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to map input buffer!");
+    GST_ERROR_OBJECT (pad, "Failed to map input buffer!");
     return FALSE;
   }
 
-  GST_TRACE_OBJECT (vcomposer, "Pad %s %" GST_PTR_FORMAT, GST_PAD_NAME (pad),
-      buffer);
-
+  GST_TRACE_OBJECT (pad, "Buffer: %" GST_PTR_FORMAT, buffer);
   return TRUE;
 }
 
@@ -1120,17 +1188,10 @@ gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
   }
 
   // Fill the converter output options structure.
-  if (NULL == (options = gst_structure_new_empty ("qtivtransform"))) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to create options structure!");
-    return FALSE;
-  }
-
-  // Check whether the output caps have ubwc compression.
-  if (gst_video_composer_caps_has_compression (caps, "ubwc")) {
-    gst_structure_set (options,
-        GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN, TRUE,
-        NULL);
-  }
+  options = gst_structure_new ("options",
+      GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
+          gst_caps_has_compression (caps, "ubwc"),
+      NULL);
 
   gst_c2d_video_converter_set_output_opts (vcomposer->c2dconvert, options);
 
@@ -1347,7 +1408,7 @@ gst_video_composer_aggregate (GstAggregator * aggregator, gboolean timeout)
   item = g_slice_new0 (GstDataQueueItem);
   item->object = GST_MINI_OBJECT (request);
   item->visible = TRUE;
-  item->destroy = gst_video_composer_free_queue_item;
+  item->destroy = gst_data_queue_item_free;
 
   // Push the request into the queue or free it on failure.
   if (!gst_data_queue_push (vcomposer->requests, item)) {
@@ -1648,10 +1709,8 @@ gst_video_composer_child_proxy_get_child_by_index (GstChildProxy * proxy,
   list = g_list_find_custom (GST_ELEMENT_CAST (vcomposer)->sinkpads, &index,
       (GCompareFunc) gst_video_composer_index_compare);
 
-  if (list != NULL) {
+  if (list != NULL)
     gobject = gst_object_ref (list->data);
-    GST_INFO_OBJECT (vcomposer, "Pad: '%s'", GST_PAD_NAME (gobject));
-  }
 
   GST_OBJECT_UNLOCK (vcomposer);
 
@@ -1667,8 +1726,6 @@ gst_video_composer_child_proxy_get_children_count (GstChildProxy * proxy)
   GST_OBJECT_LOCK (vcomposer);
   count = GST_ELEMENT_CAST (vcomposer)->numsinkpads;
   GST_OBJECT_UNLOCK (vcomposer);
-
-  GST_INFO_OBJECT (vcomposer, "Children Count: %d", count);
 
   return count;
 }

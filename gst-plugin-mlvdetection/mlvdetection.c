@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -55,14 +89,14 @@ GST_DEBUG_CATEGORY_STATIC (gst_ml_video_detection_debug);
 
 #define gst_ml_video_detection_parent_class parent_class
 G_DEFINE_TYPE (GstMLVideoDetection, gst_ml_video_detection,
-               GST_TYPE_BASE_TRANSFORM);
+    GST_TYPE_BASE_TRANSFORM);
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
 #define GST_ML_VIDEO_DETECTION_VIDEO_FORMATS \
-    "{ BGRA, RGBA, BGRx, xRGB, BGR16 }"
+    "{ BGRA, BGRx, BGR16 }"
 
 #define GST_ML_VIDEO_DETECTION_TEXT_FORMATS \
     "{ utf8 }"
@@ -340,10 +374,11 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
     GList * predictions, GstBuffer * buffer)
 {
   GstVideoMeta *vmeta = NULL;
+  GList *list = NULL;
   GstMapInfo memmap;
-  guint idx = 0, n_predictions = 0;
   gdouble x = 0.0, y = 0.0, width = 0.0, height = 0.0;
   gdouble fontsize = 0.0, borderwidth = 0.0;
+  guint n_predictions = 0;
 
   cairo_format_t format;
   cairo_surface_t* surface = NULL;
@@ -356,11 +391,9 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
 
   switch (vmeta->format) {
     case GST_VIDEO_FORMAT_BGRA:
-    case GST_VIDEO_FORMAT_ARGB:
       format = CAIRO_FORMAT_ARGB32;
       break;
     case GST_VIDEO_FORMAT_BGRx:
-    case GST_VIDEO_FORMAT_xRGB:
       format = CAIRO_FORMAT_RGB24;
       break;
     case GST_VIDEO_FORMAT_BGR16:
@@ -423,19 +456,17 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
     cairo_font_options_destroy (options);
   }
 
-  for (idx = 0; idx < g_list_length (predictions); ++idx) {
-    const GstMLPrediction *prediction = NULL;
+  for (list = predictions; list != NULL; list = list->next) {
+    const GstMLPrediction *prediction = (const GstMLPrediction *) list->data;
     gchar *string = NULL;
 
     // Break immediately if we reach the number of results limit.
     if (n_predictions >= detection->n_results)
       break;
 
-    // Extract the prediction data.
-    prediction = g_list_nth_data (predictions, idx);
-
+    // Break immediately if sorted prediction confidence is below the threshold.
     if (prediction->confidence < detection->threshold)
-      continue;
+      break;
 
     // Concat the prediction data to the output string.
     string = g_strdup_printf ("%s: %.1f%%", prediction->label,
@@ -468,14 +499,14 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
         EXTRACT_ALPHA_COLOR (prediction->color));
 
     // Set the starting position of the bounding box text.
-    cairo_move_to (context, (x + 1), (y + fontsize + 1));
+    cairo_move_to (context, (x + 3), (y + fontsize / 2 + 3));
 
     // Draw text string.
     cairo_show_text (context, string);
     g_return_val_if_fail (CAIRO_STATUS_SUCCESS == cairo_status (context), FALSE);
 
-    GST_TRACE_OBJECT (detection, "idx: %u, label: %s, confidence: %.1f%%, "
-        "[%.2f %.2f %.2f %.2f]", idx, prediction->label, prediction->confidence,
+    GST_TRACE_OBJECT (detection, "label: %s, confidence: %.1f%%, "
+        "[%.2f %.2f %.2f %.2f]", prediction->label, prediction->confidence,
         prediction->top, prediction->left, prediction->bottom, prediction->right);
 
     // Set rectangle borders width.
@@ -518,16 +549,17 @@ static gboolean
 gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
     GList * predictions, GstBuffer * buffer)
 {
+  GList *list = NULL;
   GstMapInfo memmap = {};
   GValue entries = G_VALUE_INIT;
   gchar *string = NULL;
-  guint idx = 0, n_predictions = 0;
+  guint n_predictions = 0;
   gsize length = 0;
 
   g_value_init (&entries, GST_TYPE_LIST);
 
-  for (idx = 0; idx < g_list_length (predictions); ++idx) {
-    GstMLPrediction *prediction = NULL;
+  for (list = predictions; list != NULL; list = list->next) {
+    GstMLPrediction *prediction = (GstMLPrediction*) list->data;
     GstStructure *entry = NULL;
     GValue value = G_VALUE_INIT, rectangle = G_VALUE_INIT;
 
@@ -535,14 +567,12 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
     if (n_predictions >= detection->n_results)
       break;
 
-    // Extract the prediction data.
-    prediction = g_list_nth_data (predictions, idx);
-
+    // Break immediately if sorted prediction confidence is below the threshold.
     if (prediction->confidence < detection->threshold)
       continue;
 
-    GST_TRACE_OBJECT (detection, "idx: %u, label: %s, confidence: %.1f%%, "
-        "[%.2f %.2f %.2f %.2f]", idx, prediction->label, prediction->confidence,
+    GST_TRACE_OBJECT (detection, "label: %s, confidence: %.1f%%, "
+        "[%.2f %.2f %.2f %.2f]", prediction->label, prediction->confidence,
         prediction->top, prediction->left, prediction->bottom, prediction->right);
 
     prediction->label = g_strdelimit (prediction->label, " ", '-');
@@ -719,8 +749,8 @@ gst_ml_video_detection_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
   GstMLVideoDetection *detection = GST_ML_VIDEO_DETECTION (base);
-  GstCaps *result = NULL;
-  const GValue *value = NULL;
+  GstCaps *tmplcaps = NULL, *result = NULL;
+  guint idx = 0, num = 0, length = 0;
 
   GST_DEBUG_OBJECT (detection, "Transforming caps: %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
@@ -728,26 +758,46 @@ gst_ml_video_detection_transform_caps (GstBaseTransform * base,
 
   if (direction == GST_PAD_SRC) {
     GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   }
 
-  // Extract the rate and propagate it to result caps.
-  value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
-      (direction == GST_PAD_SRC) ? "framerate" : "rate");
+  result = gst_caps_new_empty ();
+  length = gst_caps_get_size (tmplcaps);
 
-  if (value != NULL) {
-    gint idx = 0, length = 0;
+  for (idx = 0; idx < length; idx++) {
+    GstStructure *structure = NULL;
+    GstCapsFeatures *features = NULL;
 
-    result = gst_caps_make_writable (result);
-    length = gst_caps_get_size (result);
+    for (num = 0; num < gst_caps_get_size (caps); num++) {
+      const GValue *value = NULL;
 
-    for (idx = 0; idx < length; idx++) {
-      GstStructure *structure = gst_caps_get_structure (result, idx);
-      gst_structure_set_value (structure,
-          (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      structure = gst_caps_get_structure (tmplcaps, idx);
+      features = gst_caps_get_features (tmplcaps, idx);
+
+      // Make a copy that will be modified.
+      structure = gst_structure_copy (structure);
+
+      // Extract the rate from incoming caps and propagate it to result caps.
+      value = gst_structure_get_value (gst_caps_get_structure (caps, num),
+          (direction == GST_PAD_SRC) ? "framerate" : "rate");
+
+      // Skip if there is no value or if current caps structure is text.
+      if (value != NULL && !gst_structure_has_name (structure, "text/x-raw")) {
+        gst_structure_set_value (structure,
+            (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      }
+
+      // If this is already expressed by the existing caps skip this structure.
+      if (gst_caps_is_subset_structure_full (result, structure, features)) {
+        gst_structure_free (structure);
+        continue;
+      }
+
+      gst_caps_append_structure_full (result, structure,
+          gst_caps_features_copy (features));
     }
   }
 
@@ -847,10 +897,12 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstMLInfo ininfo;
 
   if (NULL == detection->labels) {
-    GST_ERROR_OBJECT (detection, "Labels not set!");
+    GST_ELEMENT_ERROR (detection, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels not set!"));
     return FALSE;
   } else if (NULL == detection->modname) {
-    GST_ERROR_OBJECT (detection, "Module not set!");
+    GST_ELEMENT_ERROR (detection, RESOURCE, NOT_FOUND, (NULL),
+        ("Module not set!"));
     return FALSE;
   }
 
