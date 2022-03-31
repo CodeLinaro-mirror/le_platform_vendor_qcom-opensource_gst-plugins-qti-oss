@@ -95,6 +95,8 @@ enum
   PROP_INTRA_REFRESH_MODE,
   PROP_INTRA_REFRESH_MBS,
   PROP_TARGET_BITRATE,
+  PROP_I_FRAME_ONLY,
+  PROP_IDR_FRAME_INTERVAL,
   PROP_SLICE_MODE,
   PROP_SLICE_SIZE,
   PROP_MAX_QP_B_FRAMES,
@@ -248,6 +250,19 @@ make_rateControl_param (rc_mode_t mode)
 
   param.config_name = CONFIG_FUNCTION_KEY_RATECONTROL;
   param.rc_mode = mode;
+
+  return param;
+}
+
+static config_params_t
+make_sync_frame_interval_param (int64_t period_ms)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_SYNC_FRAME_INT;
+  param.val.i64 = period_ms;
 
   return param;
 }
@@ -569,10 +584,11 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   gint height = 0;
   GstVideoFormat input_format = GST_VIDEO_FORMAT_UNKNOWN;
   GPtrArray *config = NULL;
+  GstVideoInfo *vinfo = NULL;
   config_params_t resolution;
   config_params_t pixelformat;
   config_params_t rate_control;
-  config_params_t downscale;
+  config_params_t sync_frame_int;
   config_params_t color_aspects;
   config_params_t intra_refresh;
   config_params_t bitrate;
@@ -584,6 +600,13 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   retval &= gst_structure_get_int (structure, "height", &height);
   if (!retval) {
     GST_ERROR_OBJECT (c2venc, "Unable to get width/height value");
+    return FALSE;
+  }
+
+  if (state) {
+    vinfo = &state->info;
+  } else {
+    GST_ERROR_OBJECT (c2venc, "video codec state is NULL, unexpected!");
     return FALSE;
   }
 
@@ -650,6 +673,17 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
   resolution = make_resolution_param (width, height, TRUE);
   g_ptr_array_add (config, &resolution);
+
+  if (c2venc->iframe_only) {
+    sync_frame_int = make_sync_frame_interval_param (1 * 1e6 / vinfo->fps_n);
+    g_ptr_array_add (config, &sync_frame_int);
+    GST_DEBUG_OBJECT (c2venc, "I frame only mode");
+  } else if (c2venc->idr_interval != 0) {
+    sync_frame_int =
+        make_sync_frame_interval_param (c2venc->idr_interval * 1000);
+    g_ptr_array_add (config, &sync_frame_int);
+    GST_DEBUG_OBJECT (c2venc, "IDR frame interval - %d", c2venc->idr_interval);
+  }
 
   pixelformat =
       make_pixelFormat_param (gst_to_c2_pixelformat (input_format), TRUE);
@@ -886,6 +920,12 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_TARGET_BITRATE:
       c2venc->target_bitrate = g_value_get_uint (value);
       break;
+    case PROP_I_FRAME_ONLY:
+      c2venc->iframe_only = g_value_get_boolean (value);
+      break;
+    case PROP_IDR_FRAME_INTERVAL:
+      c2venc->idr_interval = g_value_get_uint (value);
+      break;
     case PROP_SLICE_SIZE:
       c2venc->slice_size = g_value_get_uint (value);
       break;
@@ -938,6 +978,12 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_TARGET_BITRATE:
       g_value_set_uint (value, c2venc->target_bitrate);
+      break;
+    case PROP_I_FRAME_ONLY:
+      g_value_set_boolean (value, c2venc->iframe_only);
+      break;
+    case PROP_IDR_FRAME_INTERVAL:
+      g_value_set_uint (value, c2venc->idr_interval);
       break;
     case PROP_SLICE_SIZE:
       g_value_set_uint (value, c2venc->slice_size);
@@ -1035,6 +1081,19 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
 
+  g_object_class_install_property (gobject, PROP_I_FRAME_ONLY,
+      g_param_spec_boolean ("iframe-only", "I Frame only",
+          "I Frame only mode", FALSE,
+          static_cast<GParamFlags>(G_PARAM_CONSTRUCT | G_PARAM_READWRITE |
+          G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+
+  g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_IDR_FRAME_INTERVAL,
+      g_param_spec_uint ("idr-interval", "IDR frame interval",
+          "IDR frame interval (0 means not explicitly set IDR interval)",
+          0, G_MAXUINT, 0,
+          static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY)));
+
   g_object_class_install_property (gobject, PROP_SLICE_MODE,
       g_param_spec_enum ("slice-mode", "slice mode",
           "Slice mode, support MB and BYTES mode",
@@ -1124,6 +1183,8 @@ gst_c2_venc_init (GstC2_VENCEncoder * c2venc)
   c2venc->rcMode = RC_MODE_OFF;
   c2venc->target_bitrate = 0;
   c2venc->slice_size = 0;
+  c2venc->iframe_only = FALSE;
+  c2venc->idr_interval = 0;
 
   c2venc->max_qp_b_frames = 0;
   c2venc->max_qp_i_frames = 0;

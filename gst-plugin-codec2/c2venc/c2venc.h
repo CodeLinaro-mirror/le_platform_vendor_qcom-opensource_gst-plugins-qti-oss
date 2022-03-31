@@ -90,6 +90,8 @@ struct _GstC2_VENCEncoder {
   guint32 target_bitrate;
   slice_mode_t slice_mode;
   guint32 slice_size;
+  gboolean iframe_only;
+  guint32 idr_interval;
 
   guint32 max_qp_b_frames;
   guint32 max_qp_i_frames;
