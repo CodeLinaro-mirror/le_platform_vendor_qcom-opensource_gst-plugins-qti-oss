@@ -209,8 +209,8 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool,
         GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
         GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo), offset,
         stride);
-    /* In case of non-DMABUF, attach QTI specific info into video meta */
-    if (video_meta && !out_port_pool->use_dmabuf) {
+    /* attach QTI specific info into video meta */
+    if (video_meta) {
       video_meta->offset[2] = GST_MAKE_FOURCC ('Q', 'a', 'U', 'T');
       video_meta->offset[3] = param_ext->size;
       video_meta->stride[2] = param_ext->fd;
