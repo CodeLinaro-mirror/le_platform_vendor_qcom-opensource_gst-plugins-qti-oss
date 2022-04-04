@@ -150,14 +150,15 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool,
      * dmabuf allocator of GST.
      */
     out_buf = gst_buffer_new ();
+    /* GST_FD_MEMORY_FLAG_KEEP_MAPPED is used to avoid remapping
+     * for the same gst buffer. The mapped address may be used by waylandsink
+     * for checking whether need to create a new wayland buffer.
+     */
     if (out_port_pool->use_dmabuf) {
       mem = gst_dmabuf_allocator_alloc_with_flags (out_port_pool->allocator,
-          param_ext->fd, param_ext->size, GST_FD_MEMORY_FLAG_DONT_CLOSE);
+          param_ext->fd, param_ext->size,
+          GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
     } else {
-      /* FIXME: GST_FD_MEMORY_FLAG_KEEP_MAPPED is used to avoid remapping
-       * for the same gst buffer. The mapped address may be used by waylandsink
-       * for checking whether need to create a new wayland buffer.
-       */
       mem =
           gst_fd_allocator_alloc (out_port_pool->allocator, param_ext->fd,
           param_ext->size,
