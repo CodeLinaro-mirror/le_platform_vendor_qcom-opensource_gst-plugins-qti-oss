@@ -59,6 +59,7 @@ struct _Gstqticodec2vdecBufferPool
   Gstqticodec2vdec *qticodec2vdec;
   GstAllocator *allocator;
   GHashTable *buffer_table;
+  gboolean use_dmabuf;
 };
 
 struct _Gstqticodec2vdecBufferPoolClass
@@ -77,7 +78,7 @@ typedef struct GstBufferPoolAcquireParamsExt
 
 GType gst_qticodec2vdec_buffer_pool_get_type (void);
 GstBufferPool *gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec *
-    qticodec2vdec, GstAllocator * allocator, GHashTable * buffer_table);
+    qticodec2vdec, gboolean use_dmabuf);
 
 G_END_DECLS
 #endif /* __GST_QTICODEC2VDECBUFFERPOOL_H__ */

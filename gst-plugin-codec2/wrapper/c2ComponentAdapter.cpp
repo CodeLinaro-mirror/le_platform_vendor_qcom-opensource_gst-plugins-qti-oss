@@ -71,6 +71,8 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mMapBufferToCpu = false;
     mNumPendingWorks = 0;
     mPendingTimeOut = 0;
+    mDataCopyFunc = nullptr;
+    mDataCopyFuncParam = nullptr;
 }
 
 C2ComponentAdapter::~C2ComponentAdapter()
@@ -104,6 +106,15 @@ c2_status_t C2ComponentAdapter::setListenercallback(std::unique_ptr<EventCallbac
     if (result == C2_OK) {
         mCallback = std::move(callback);
     }
+
+    return result;
+}
+
+c2_status_t C2ComponentAdapter::setDataCopyFunc(void* func, void* param)
+{
+    c2_status_t result = C2_OK;
+    mDataCopyFunc = reinterpret_cast<fnDataCopy>(func);
+    mDataCopyFuncParam = param;
 
     return result;
 }
@@ -205,6 +216,9 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
         std::shared_ptr<C2Buffer> buf;
         c2_status_t err = C2_OK;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+        if (buffer->secure) {
+            usage = { C2MemoryUsage::READ_PROTECTED, 0 };
+        }
 
         if (poolType == C2BlockPool::BASIC_LINEAR) {
             allocSize = ALIGN(frameSize, 4096);
@@ -214,13 +228,27 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
                 return C2_NO_MEMORY;
             }
 
-            C2WriteView view = linear_block->map().get();
-            if (view.error() != C2_OK) {
-                LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
-                return C2_NO_MEMORY;
+            if (mDataCopyFunc) {
+                uint32_t dest_fd = linear_block->handle()->data[0];
+                int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                if (ret) {
+                    LOG_ERROR("data copy failed");
+                    return C2_CORRUPTED;
+                }
+            } else {
+                if (!buffer->secure) {
+                    C2WriteView view = linear_block->map().get();
+                    if (view.error() != C2_OK) {
+                        LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
+                        return C2_NO_MEMORY;
+                    }
+                    destBuffer = view.base();
+                    memcpy(destBuffer, rawBuffer, frameSize);
+                } else {
+                    LOG_ERROR("should not be here for secure mode");
+                    return C2_CORRUPTED;
+                }
             }
-            destBuffer = view.base();
-            memcpy(destBuffer, rawBuffer, frameSize);
             linear_block->mSize = frameSize;
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {

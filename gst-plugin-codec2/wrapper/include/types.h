@@ -41,7 +41,7 @@ namespace QTI {
 #define LOG_MESSAGE GST_LOG
 #define LOG_INFO GST_INFO
 #define LOG_WARNING GST_WARNING
-#define LOG_DEBUG GST_DBEUG
+#define LOG_DEBUG GST_DEBUG
 #define LOG_ERROR GST_ERROR
 
 #define UNUSED(x) (void)(x)

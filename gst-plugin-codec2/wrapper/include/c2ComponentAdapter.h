@@ -98,6 +98,7 @@ public:
 
     /* This class methods */
     c2_status_t setListenercallback(std::unique_ptr<EventCallback> callback, c2_blocking_t mayBlock);
+    c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
     c2_status_t setMapBufferToCpu(bool enable);
@@ -124,6 +125,8 @@ private:
     std::mutex mLock;
     std::mutex mLockOut;
     std::condition_variable mCondition;
+    fnDataCopy mDataCopyFunc;
+    void* mDataCopyFuncParam;
 };
 
 } // namespace QTI

@@ -119,31 +119,46 @@ int secure_copy::load_lib(void)
 {
     lib_cc_handle = dlopen(SCC_LibName, RTLD_NOW);
     if (nullptr == lib_cc_handle) {
-        cerr << "Falied to open " << SCC_LibName << ", " << dlerror() << endl;
+        const char *dlerr = dlerror();
+        if (NULL == dlerr)
+            dlerr = "NULL";
+        cerr << "Falied to open " << SCC_LibName << ", " << dlerr << endl;
         return -1;
     }
 
     secure_copy_set_app_name = (secure_copy_set_app_name_t)dlsym(lib_cc_handle, SCC_SetAppName);
     if (nullptr == secure_copy_set_app_name) {
-        cerr<< "Failed to get symbol " << SCC_SetAppName << ", " << dlerror() << endl;
+        const char *dlerr = dlerror();
+        if (NULL == dlerr)
+            dlerr = "NULL";
+        cerr<< "Failed to get symbol " << SCC_SetAppName << ", " << dlerr << endl;
         return -1;
     }
 
     secure_copy_init = (secure_copy_init_t)dlsym(lib_cc_handle, SCC_Init);
     if (nullptr == secure_copy_init) {
-        cerr<< "Failed to get symbol " << SCC_Init << ", " << dlerror() << endl;
+        const char *dlerr = dlerror();
+        if (NULL == dlerr)
+            dlerr = "NULL";
+        cerr<< "Failed to get symbol " << SCC_Init << ", " << dlerr << endl;
         return -1;
     }
 
     secure_copy_deinit = (secure_copy_deinit_t)dlsym(lib_cc_handle, SCC_Terminate);
     if (nullptr == secure_copy_deinit) {
-        cerr<< "Failed to get symbol " << SCC_Terminate << ", " << dlerror() << endl;
+        const char *dlerr = dlerror();
+        if (NULL == dlerr)
+            dlerr = "NULL";
+        cerr<< "Failed to get symbol " << SCC_Terminate << ", " << dlerr << endl;
         return -1;
     }
 
     secure_copy_func = (secure_copy_func_t)dlsym(lib_cc_handle, SCC_Copy);
     if (nullptr == secure_copy_func) {
-        cerr<< "Failed to get symbol " << SCC_Copy << ", " << dlerror() << endl;
+        const char *dlerr = dlerror();
+        if (NULL == dlerr)
+            dlerr = "NULL";
+        cerr<< "Failed to get symbol " << SCC_Copy << ", " << dlerr << endl;
         return -1;
     }
 
