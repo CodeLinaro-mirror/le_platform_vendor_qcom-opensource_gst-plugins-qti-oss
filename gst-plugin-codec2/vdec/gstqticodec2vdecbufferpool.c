@@ -46,12 +46,12 @@ G_DEFINE_TYPE (Gstqticodec2vdecBufferPool, gst_qticodec2vdec_buffer_pool,
     GST_TYPE_BUFFER_POOL);
 
 /* Function will be named qticodec2vdecbufferpool_qdata_quark() */
-static G_DEFINE_QUARK(QtiCodec2BufferPoolQuark, qticodec2vdecbufferpool_qdata);
+static G_DEFINE_QUARK (QtiCodec2BufferPoolQuark, qticodec2vdecbufferpool_qdata);
 
 static void
 print_gst_buf (gpointer key, gpointer value, gpointer data)
 {
-  GST_DEBUG ("key:0x%lx value:%p", *(gint64*)key, value);
+  GST_DEBUG ("key:0x%lx value:%p", *(gint64 *) key, value);
 }
 
 static void
@@ -77,11 +77,23 @@ gst_qticodec2vdec_buffer_pool_finalize (GObject * obj)
   }
 
   if (pool->allocator) {
-    GST_DEBUG_OBJECT (pool, "finalize allocator:%p ref cnt:%d", pool->allocator, GST_OBJECT_REFCOUNT (pool->allocator));
+    GST_DEBUG_OBJECT (pool, "finalize allocator:%p ref cnt:%d", pool->allocator,
+        GST_OBJECT_REFCOUNT (pool->allocator));
     gst_object_unref (pool->allocator);
   }
 
   G_OBJECT_CLASS (gst_qticodec2vdec_buffer_pool_parent_class)->finalize (obj);
+}
+
+static void
+destroy_gst_buffer (gpointer data)
+{
+  GstBuffer *gst_buf = (GstBuffer *) data;
+  if (gst_buf) {
+    GST_DEBUG ("destory gst buffer:%p ref_cnt:%d", gst_buf,
+        GST_OBJECT_REFCOUNT (gst_buf));
+    gst_buffer_unref (gst_buf);
+  }
 }
 
 static gboolean
@@ -94,27 +106,37 @@ mark_meta_data_pooled (GstBuffer * buffer, GstMeta ** meta, gpointer user_data)
 }
 
 static GstFlowReturn
-gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool, GstBuffer ** buffer, GstBufferPoolAcquireParams * params)
+gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool,
+    GstBuffer ** buffer, GstBufferPoolAcquireParams * params)
 {
   GstFlowReturn result;
   GstMemory *mem;
   GstBuffer *out_buf;
-  GstStructure* structure;
-  GstBufferPoolAcquireParamsExt *param_ext = (GstBufferPoolAcquireParamsExt *) params;
-  Gstqticodec2vdecBufferPool *out_port_pool = GST_QTICODEC2VDEC_BUFFER_POOL_CAST (pool);
-  Gstqticodec2vdec* dec = out_port_pool->qticodec2vdec;
-  GstVideoInfo* vinfo;
-  gint64 key = ((gint64)param_ext->fd << 32) | param_ext->meta_fd;
+  GstStructure *structure;
+  GstBufferPoolAcquireParamsExt *param_ext =
+      (GstBufferPoolAcquireParamsExt *) params;
+  Gstqticodec2vdecBufferPool *out_port_pool =
+      GST_QTICODEC2VDEC_BUFFER_POOL_CAST (pool);
+  Gstqticodec2vdec *dec = out_port_pool->qticodec2vdec;
+  GstVideoInfo *vinfo;
+  gint64 key = ((gint64) param_ext->fd << 32) | param_ext->meta_fd;
   gint64 *buf_key = NULL;
   GValue new_index = { 0, };
+  GstVideoMeta *video_meta = NULL;
   g_value_init (&new_index, G_TYPE_UINT64);
+  guint32 color_fmt = 0;
 
-  out_buf = (GstBuffer *) g_hash_table_lookup(out_port_pool->buffer_table, &key);
+  out_buf =
+      (GstBuffer *) g_hash_table_lookup (out_port_pool->buffer_table, &key);
   if (out_buf) {
-    GST_DEBUG_OBJECT (pool, "found a gst buf:%p fd:%d meta_fd:%d idx:%lu ref_cnt:%d", out_buf,
-        param_ext->fd, param_ext->meta_fd, param_ext->index, GST_OBJECT_REFCOUNT(out_buf));
-    /*replace buffer index with current one*/
-    structure = gst_mini_object_get_qdata (GST_MINI_OBJECT (out_buf), qticodec2vdecbufferpool_qdata_quark ());
+    GST_DEBUG_OBJECT (pool,
+        "found a gst buf:%p fd:%d meta_fd:%d idx:%lu ref_cnt:%d", out_buf,
+        param_ext->fd, param_ext->meta_fd, param_ext->index,
+        GST_OBJECT_REFCOUNT (out_buf));
+    /*replace buffer index with current one */
+    structure =
+        gst_mini_object_get_qdata (GST_MINI_OBJECT (out_buf),
+        qticodec2vdecbufferpool_qdata_quark ());
     if (structure) {
       g_value_set_uint64 (&new_index, param_ext->index);
       gst_structure_set_value (structure, "index", &new_index);
@@ -128,8 +150,19 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool, GstBuffer **
      * dmabuf allocator of GST.
      */
     out_buf = gst_buffer_new ();
-    mem = gst_dmabuf_allocator_alloc_with_flags (out_port_pool->allocator,
-            param_ext->fd, param_ext->size, GST_FD_MEMORY_FLAG_DONT_CLOSE);
+    if (out_port_pool->use_dmabuf) {
+      mem = gst_dmabuf_allocator_alloc_with_flags (out_port_pool->allocator,
+          param_ext->fd, param_ext->size, GST_FD_MEMORY_FLAG_DONT_CLOSE);
+    } else {
+      /* FIXME: GST_FD_MEMORY_FLAG_KEEP_MAPPED is used to avoid remapping
+       * for the same gst buffer. The mapped address may be used by waylandsink
+       * for checking whether need to create a new wayland buffer.
+       */
+      mem =
+          gst_fd_allocator_alloc (out_port_pool->allocator, param_ext->fd,
+          param_ext->size,
+          GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+    }
     if (G_UNLIKELY (!mem)) {
       GST_ERROR_OBJECT (pool, "failed to allocate GstDmaMemory");
       return GST_FLOW_ERROR;
@@ -143,46 +176,65 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool, GstBuffer **
     switch (GST_VIDEO_INFO_FORMAT (vinfo)) {
       case GST_VIDEO_FORMAT_NV12:
         if (dec->is_ubwc) {
-          stride[0] = stride[1] =
-            VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
-          offset[0] = 0;
-          offset[1] = stride[0] * VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC,
-              GST_VIDEO_INFO_HEIGHT (vinfo));
+          color_fmt = COLOR_FMT_NV12_UBWC;
         } else {
-          stride[0] = stride[1] =
-            VENUS_Y_STRIDE(COLOR_FMT_NV12, GST_VIDEO_INFO_WIDTH (vinfo));
-          offset[0] = 0;
-          offset[1] = stride[0] * VENUS_Y_SCANLINES(COLOR_FMT_NV12,
-              GST_VIDEO_INFO_HEIGHT (vinfo));
+          color_fmt = COLOR_FMT_NV12;
         }
+        break;
+      case GST_VIDEO_FORMAT_NV12_10LE32:
+        color_fmt = COLOR_FMT_NV12_BPP10_UBWC;
+        break;
+      case GST_VIDEO_FORMAT_P010_10LE:
+        color_fmt = COLOR_FMT_P010;
         break;
       default:
         g_assert_not_reached ();
         break;
     }
 
-    /* Add video meta data, which is needed for downstream element. */
-    GST_DEBUG_OBJECT (pool, "attach video meta: width:%d height:%d offset:%lu %lu stride:%d %d planes:%d size:%lu gst size:%lu",
-        GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo), offset[0], offset[1], stride[0], stride[1],
-        GST_VIDEO_INFO_N_PLANES (vinfo), GST_VIDEO_INFO_SIZE (vinfo), gst_buffer_get_size(out_buf));
-    gst_buffer_add_video_meta_full (out_buf, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_INFO_FORMAT (vinfo),
-        GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo),
-        offset, stride);
+    stride[0] = stride[1] =
+        VENUS_Y_STRIDE (color_fmt, GST_VIDEO_INFO_WIDTH (vinfo));
+    offset[0] = 0;
+    offset[1] = stride[0] * VENUS_Y_SCANLINES (color_fmt,
+        GST_VIDEO_INFO_HEIGHT (vinfo));
 
-    /* lock all metadata and mark as pooled, we want this to remain on the buffer*/
+    /* Add video meta data, which is needed for downstream element. */
+    GST_DEBUG_OBJECT (pool,
+        "attach video meta: width:%d height:%d offset:%lu %lu stride:%d %d planes:%d size:%lu gst size:%lu",
+        GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo), offset[0],
+        offset[1], stride[0], stride[1], GST_VIDEO_INFO_N_PLANES (vinfo),
+        GST_VIDEO_INFO_SIZE (vinfo), gst_buffer_get_size (out_buf));
+    video_meta =
+        gst_buffer_add_video_meta_full (out_buf, GST_VIDEO_FRAME_FLAG_NONE,
+        GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
+        GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo), offset,
+        stride);
+    /* In case of non-DMABUF, attach QTI specific info into video meta */
+    if (video_meta && !out_port_pool->use_dmabuf) {
+      video_meta->offset[2] = GST_MAKE_FOURCC ('Q', 'a', 'U', 'T');
+      video_meta->offset[3] = param_ext->size;
+      video_meta->stride[2] = param_ext->fd;
+      video_meta->stride[3] = param_ext->meta_fd;
+      GST_DEBUG_OBJECT (pool, "attach QTI info into video meta");
+    }
+
+    /* lock all metadata and mark as pooled, we want this to remain on the buffer */
     gst_buffer_foreach_meta (out_buf, mark_meta_data_pooled, NULL);
 
-    buf_key = g_malloc(sizeof(gint64));
+    buf_key = g_malloc (sizeof (gint64));
     *buf_key = key;
     g_hash_table_insert (out_port_pool->buffer_table, buf_key, out_buf);
-    GST_DEBUG_OBJECT (pool, "add a gst buf:%p fd:%d meta_fd:%d idx:%lu ref_cnt:%d", out_buf,
-        param_ext->fd, param_ext->meta_fd, param_ext->index, GST_OBJECT_REFCOUNT(out_buf));
+    GST_DEBUG_OBJECT (pool,
+        "add a gst buf:%p fd:%d meta_fd:%d idx:%lu ref_cnt:%d", out_buf,
+        param_ext->fd, param_ext->meta_fd, param_ext->index,
+        GST_OBJECT_REFCOUNT (out_buf));
 
-    structure = gst_structure_new_empty("BUFFER");
+    structure = gst_structure_new_empty ("BUFFER");
     g_value_set_uint64 (&new_index, param_ext->index);
     gst_structure_set_value (structure, "index", &new_index);
-    gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf), qticodec2vdecbufferpool_qdata_quark (),
-      structure, (GDestroyNotify)gst_structure_free);
+    gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
+        qticodec2vdecbufferpool_qdata_quark (), structure,
+        (GDestroyNotify) gst_structure_free);
   }
 
   *buffer = out_buf;
@@ -192,15 +244,18 @@ gst_qticodec2vdec_buffer_pool_acquire_buffer (GstBufferPool * pool, GstBuffer **
 }
 
 static void
-gst_qticodec2vdec_buffer_pool_release_buffer (GstBufferPool * pool, GstBuffer * buffer)
+gst_qticodec2vdec_buffer_pool_release_buffer (GstBufferPool * pool,
+    GstBuffer * buffer)
 {
-  GstBufferPoolClass *bp_class  = GST_BUFFER_POOL_CLASS (gst_qticodec2vdec_buffer_pool_parent_class);
-  Gstqticodec2vdecBufferPool *out_port_pool = GST_QTICODEC2VDEC_BUFFER_POOL_CAST (pool);
+  GstBufferPoolClass *bp_class =
+      GST_BUFFER_POOL_CLASS (gst_qticodec2vdec_buffer_pool_parent_class);
+  Gstqticodec2vdecBufferPool *out_port_pool =
+      GST_QTICODEC2VDEC_BUFFER_POOL_CAST (pool);
 
-  Gstqticodec2vdec* dec = out_port_pool->qticodec2vdec;
+  Gstqticodec2vdec *dec = out_port_pool->qticodec2vdec;
   guint64 index = 0;
-  GstStructure* structure = (GstStructure*) gst_mini_object_get_qdata
-                              (GST_MINI_OBJECT (buffer), qticodec2vdecbufferpool_qdata_quark ());
+  GstStructure *structure = (GstStructure *) gst_mini_object_get_qdata
+      (GST_MINI_OBJECT (buffer), qticodec2vdecbufferpool_qdata_quark ());
 
   if (structure) {
     /* If buffer comes from sink, free it.
@@ -211,7 +266,7 @@ gst_qticodec2vdec_buffer_pool_release_buffer (GstBufferPool * pool, GstBuffer * 
 
     if (dec) {
       GST_DEBUG_OBJECT (pool, "release output buffer index: %ld", index);
-      if (!c2component_freeOutBuffer(dec->comp, index)) {
+      if (!c2component_freeOutBuffer (dec->comp, index)) {
         GST_ERROR_OBJECT (pool, "Failed to release buffer (%lu)", index);
       }
     } else {
@@ -223,14 +278,15 @@ gst_qticodec2vdec_buffer_pool_release_buffer (GstBufferPool * pool, GstBuffer * 
      * gst_qticodec2vdec_buffer_pool_acquire_buffer is used. Here is used for releasing preallocated
      * gst buffer to internal queue of buffer pool. As a result, it can be freed once pool destroyed.
      */
-    bp_class->release_buffer(pool, buffer);
+    bp_class->release_buffer (pool, buffer);
   }
 
   return;
 }
 
 static void
-gst_qticodec2vdec_buffer_pool_class_init (Gstqticodec2vdecBufferPoolClass * klass)
+gst_qticodec2vdec_buffer_pool_class_init (Gstqticodec2vdecBufferPoolClass *
+    klass)
 {
   GObjectClass *gobj_class = (GObjectClass *) klass;
   GstBufferPoolClass *bp_class = (GstBufferPoolClass *) klass;
@@ -242,20 +298,32 @@ gst_qticodec2vdec_buffer_pool_class_init (Gstqticodec2vdecBufferPoolClass * klas
 }
 
 GstBufferPool *
-gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec * qticodec2vdec, GstAllocator * allocator,
-                                            GHashTable *buffer_table)
+gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec * qticodec2vdec,
+    gboolean use_dmabuf)
 {
   Gstqticodec2vdecBufferPool *pool;
+  GHashTable *buffer_table = NULL;
+  GstAllocator *allocator = NULL;
 
   g_return_val_if_fail (GST_IS_QTICODEC2VDEC (qticodec2vdec), NULL);
   pool = (Gstqticodec2vdecBufferPool *)
-          g_object_new (GST_TYPE_QTICODEC2VDEC_BUFFER_POOL, NULL);
+      g_object_new (GST_TYPE_QTICODEC2VDEC_BUFFER_POOL, NULL);
+  if (use_dmabuf) {
+    allocator = gst_dmabuf_allocator_new ();
+  } else {
+    allocator = gst_fd_allocator_new ();
+  }
+  buffer_table =
+      g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free,
+      destroy_gst_buffer);
   pool->qticodec2vdec = qticodec2vdec;
   pool->allocator = allocator;
   pool->buffer_table = buffer_table;
+  pool->use_dmabuf = use_dmabuf;
 
-  GST_INFO_OBJECT (pool, "new output buffer pool:%p allocator:%p table:%p", pool, allocator, buffer_table);
+  GST_INFO_OBJECT (pool,
+      "new output buffer pool:%p allocator:%p table:%p dmabuf:%d", pool,
+      allocator, buffer_table, use_dmabuf);
 
   return GST_BUFFER_POOL (pool);
 }
-

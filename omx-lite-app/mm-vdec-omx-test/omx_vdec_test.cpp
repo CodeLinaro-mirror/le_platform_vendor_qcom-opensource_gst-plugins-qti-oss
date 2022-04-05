@@ -530,7 +530,7 @@ void* ebd_thread(void* pArg)
       pBuffer->nFilledLen = 0;
       DEBUG_PRINT("%s: Timestamp sent(%lld)", __FUNCTION__, pBuffer->nTimeStamp);
       OMX_EmptyThisBuffer(dec_handle,pBuffer);
-      DEBUG_PRINT("EBD::Either EOS or Some Error while reading file");
+      DEBUG_PRINT_ERROR("EBD::Either EOS or Some Error while reading file");
       etb_count++;
       break;
     }
@@ -801,10 +801,10 @@ OMX_ERRORTYPE EventHandler(OMX_IN OMX_HANDLETYPE hComponent,
       if (OMX_ErrorInvalidState == (OMX_ERRORTYPE)nData1 ||
          OMX_ErrorHardware == (OMX_ERRORTYPE)nData1)
       {
-        DEBUG_PRINT("Invalid State or hardware error ");
+        DEBUG_PRINT_ERROR("Invalid State or hardware error ");
         if(event_is_done == 0)
         {
-          DEBUG_PRINT("Event error in the middle of Decode ");
+          DEBUG_PRINT_ERROR("Event error in the middle of Decode ");
           pthread_mutex_lock(&eos_lock);
           bOutputEosReached = true;
           pthread_mutex_unlock(&eos_lock);
@@ -1057,7 +1057,8 @@ static void print_usage(char **argv)
   printf("Example: %s %s/data/xxx.h264 1 4 0 1 0 0\n\n", argv[0], KPI_INDICATOR_STR);
 
   printf("For secure mode, add %s before input file without blank\n", SECURE_INDICATOR_STR);
-  printf("Example: %s %s/data/xxx.h264 1 4 0 1 0 0\n\n", argv[0], SECURE_INDICATOR_STR);
+  printf("For secure mode, output_op only could be UBWC, linear yuv output isn't supported!\n");
+  printf("Example: %s %s/data/xxx.h264 1 4 8 1 0 0\n\n", argv[0], SECURE_INDICATOR_STR);
 }
 
 static bool open_gbm_device()
@@ -1137,6 +1138,12 @@ int main(int argc, char **argv)
 
   if (parse_argv1_mode_and_infile(argv[1]))
     return -1;
+
+  if (secure_mode && COLOR_FMT_NV12_UBWC != venus_color_fmt)
+  {
+    printf("Secure mode only support UBWC output, not support linear output!\n");
+    return -1;
+  }
 
   if (file_type_option >= FILE_TYPE_COMMON_CODEC_MAX)
   {
@@ -1384,11 +1391,11 @@ static bool setup_omx_output_buffers(void)
     return false;
   }
 
-  DEBUG_PRINT("nBufferCountMin=%d", portFmt.nBufferCountMin);
-  DEBUG_PRINT("nBufferSize=%d", portFmt.nBufferSize);
-  DEBUG_PRINT("nFrameHeight=%d", portFmt.format.video.nFrameHeight);
-  DEBUG_PRINT("nFrameWidth=%d", portFmt.format.video.nFrameWidth);
-  DEBUG_PRINT("xFramerate=%d", portFmt.format.video.xFramerate);
+  printf("Output port nBufferCountMin=%d\n", portFmt.nBufferCountMin);
+  printf("Output port nBufferSize=%d\n", portFmt.nBufferSize);
+  printf("Output port nFrameHeight=%d\n", portFmt.format.video.nFrameHeight);
+  printf("Output port nFrameWidth=%d\n", portFmt.format.video.nFrameWidth);
+  printf("Output port xFramerate=%d\n", portFmt.format.video.xFramerate);
 
   const char *str = "OMX_AllocateBuffer";
   /* Allocate or use buffer on decoder's o/p port */
@@ -1546,7 +1553,7 @@ int Play_Decoder(bool secure)
   DEBUG_PRINT("Dec: Buffer Size %d", portFmt.nBufferSize);
 
   if(OMX_DirInput != portFmt.eDir) {
-    DEBUG_PRINT ("Dec: Expect Input Port");
+    DEBUG_PRINT_ERROR ("Dec: Expect Input Port");
     return -1;
   }
 
@@ -1584,7 +1591,7 @@ int Play_Decoder(bool secure)
     if(OMX_SetParameter(dec_handle, OMX_IndexParamVideoPortFormat,
         (OMX_PTR)&videoportFmt) != OMX_ErrorNone)
     {
-      DEBUG_PRINT_ERROR(" Setting Tile format failed");
+      DEBUG_PRINT_ERROR(" Setting color format failed");
       return -1;
     }
   }
@@ -1629,6 +1636,7 @@ int Play_Decoder(bool secure)
   }
 
   input_buf_cnt = portFmt.nBufferCountActual;
+  printf("Input port buf cnt %d, sz %d\n", input_buf_cnt, (int)portFmt.nBufferSize);
   DEBUG_PRINT("Transition to Idle State succesful...");
 
   // Allocate buffer on decoder's i/p port
@@ -2214,7 +2222,7 @@ static int Read_Buffer_From_Size_Nal(uint8_t *data)
   bytes_read = read(inputBufferFileFd, data, nalSize);
   if (bytes_read == 0 || bytes_read == -1)
   {
-    DEBUG_PRINT("Failed to read frame or it might be EOF");
+    DEBUG_PRINT_ERROR("Failed to read frame or it might be EOF");
     return 0;
   }
 
