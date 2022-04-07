@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2019-2022, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -60,6 +60,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_PROP_CROP_WIDTH      0
 #define DEFAULT_PROP_CROP_HEIGHT     0
 #define DEFAULT_PROP_EXTRA_BUFFERS   0
+#define DEFAULT_PROP_STREAM_MODE      (-1)
 
 enum
 {
@@ -75,6 +76,7 @@ enum
   PROP_VIDEO_FRAMERATE,
   PROP_VIDEO_CROP,
   PROP_VIDEO_EXTRA_BUFFERS,
+  PROP_STREAM_MODE,
 };
 
 static guint signals[LAST_SIGNAL];
@@ -510,6 +512,9 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_SOURCE_INDEX:
       pad->srcidx = g_value_get_int (value);
       break;
+    case PROP_STREAM_MODE:
+      pad->stream_mode = g_value_get_int (value);
+      break;
     case PROP_VIDEO_FRAMERATE:
       pad->framerate = g_value_get_double (value);
       break;
@@ -548,6 +553,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
   switch (property_id) {
     case PROP_VIDEO_SOURCE_INDEX:
       g_value_set_int (value, pad->srcidx);
+      break;
+    case PROP_STREAM_MODE:
+      g_value_set_int (value, pad->stream_mode);
       break;
     case PROP_VIDEO_FRAMERATE:
       g_value_set_double (value, pad->framerate);
@@ -642,6 +650,13 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject, PROP_STREAM_MODE,
+      g_param_spec_int ("stream-mode", "Stream Mode",
+          "Stream Mode : video/preview",
+          -1, 1, DEFAULT_PROP_STREAM_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0, G_TYPE_NONE);
@@ -662,6 +677,8 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
 
   pad->session_id   = 0;
   pad->index        = -1;
+  pad->stream_mode   = -1;
+
   pad->srcidx       = -1;
 
   pad->width        = -1;
