@@ -1,5 +1,6 @@
 /*
 * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -1484,11 +1485,15 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
+  if(vpad->stream_mode == 1) {
+      GST_TRACE ("stream_mode: %d is preview mode", vpad->stream_mode);
+  }
+
   rotate = qmmfsrc_gst_get_stream_rotaion (vpad->rotate);
   colorimetry = qmmfsrc_gst_get_stream_colorimetry (vpad->colorimetry);
   ::qmmf::recorder::VideoTrackParam params (
       context->camera_id, vpad->width, vpad->height, vpad->framerate, format,
-      colorimetry, rotate, vpad->xtrabufs
+      colorimetry, rotate, vpad->xtrabufs, ::qmmf::recorder::VideoFlags::kNone, vpad->stream_mode
   );
 
 #ifdef GST_VIDEO_TYPE_SUPPORT

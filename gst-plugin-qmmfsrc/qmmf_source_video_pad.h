@@ -1,5 +1,6 @@
 /*
 * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -197,6 +198,9 @@ struct _GstQmmfSrcVideoPad {
 
   /// Video colorimetry name
   gchar               *colorimetry;
+
+  /// Flags to distinguish preview mode or video mode.
+  gint                stream_mode;
 };
 
 struct _GstQmmfSrcVideoPadClass {
