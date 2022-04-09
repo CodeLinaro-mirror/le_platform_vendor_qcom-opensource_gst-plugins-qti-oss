@@ -1,4 +1,6 @@
-The demo secureappsrc is used for verifying the secure video playback in secure memory.
+Secure application:
+
+1. The demo secureappsrc is used for verifying the secure video playback in secure memory.
 
 Now the demo only supports the special clips. In the clips, there are a four bytes header before every frame data.
 If disable the macro SECURE_PLAYBACK in file secureappsrc.c, the demo will be changed to non-secure version. The
@@ -38,3 +40,7 @@ Please make sure the alignment of some definitions:
 secure_handle <-> QSEECom_handle (in QSEEComAPI.h)
 enum SecureCopyResult <-> enum SampleClientResult (in content_protection_copy.h)
 SecureCopyDir <-> SampleClientCopyDir (in content_protection_copy.h)
+
+2. secure-app: add a secure demo for gst-codec2
+usage:
+secure-gst-codec2 "file:///data/350x280.mp4 video-sink="fakesink""
