@@ -888,9 +888,8 @@ gboolean c2component_queue(void* const comp, BufferDescriptor* buffer)
     return ret;
 }
 
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork)
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode)
 {
-
     LOG_MESSAGE("Flushing work");
 
     gboolean ret = FALSE;
@@ -898,8 +897,14 @@ gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const f
 
     if (comp) {
         C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
-        LOG_MESSAGE("Not implemented");
+        c2Status = comp_wrapper->flush(toC2FlushMode(mode));
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_ERROR("Failed to flush work (%d)", c2Status);
+        }
+    } else {
+        LOG_ERROR("Component is null");
     }
 
     return ret;

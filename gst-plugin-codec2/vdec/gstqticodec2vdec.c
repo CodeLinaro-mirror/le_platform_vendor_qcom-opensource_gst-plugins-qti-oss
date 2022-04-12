@@ -124,11 +124,14 @@ static gboolean gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
 static GstFlowReturn gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
 static GstFlowReturn gst_qticodec2vdec_finish (GstVideoDecoder * decoder);
+static GstFlowReturn gst_qticodec2vdec_flush (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_open (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_close (GstVideoDecoder * decoder);
-
+static gboolean gst_qticodec2vdec_stop (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query);
+static gboolean gst_qticodec2vdec_src_event (GstVideoDecoder * decoder,
+    GstEvent * event);
 static void gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_qticodec2vdec_get_property (GObject * object, guint prop_id,
@@ -584,6 +587,21 @@ gst_qticodec2vdec_finish (GstVideoDecoder * decoder)
   return GST_FLOW_OK;
 }
 
+static GstFlowReturn
+gst_qticodec2vdec_flush (GstVideoDecoder * decoder)
+{
+  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  gboolean ret = FALSE;
+
+  GST_DEBUG_OBJECT (dec, "flush");
+
+  GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+  ret = c2component_flush (dec->comp, FLUSH_MODE_COMPONENT);
+  GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+
+  return ret;
+}
+
 /* Called to inform the caps describing input video data that decoder is about to receive.
   Might be called more than once, if changing input parameters require reconfiguration.*/
 static gboolean
@@ -768,6 +786,22 @@ gst_qticodec2vdec_open (GstVideoDecoder * decoder)
   return ret;
 }
 
+static gboolean
+gst_qticodec2vdec_stop (GstVideoDecoder * decoder)
+{
+  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  gboolean ret = TRUE;
+
+  GST_DEBUG_OBJECT (dec, "stop");
+
+  /* Stop the component */
+  if (dec->comp) {
+    ret = c2component_stop (dec->comp);
+  }
+
+  return ret;
+}
+
 /* Called when the element changes to GST_STATE_NULL */
 static gboolean
 gst_qticodec2vdec_close (GstVideoDecoder * decoder)
@@ -776,11 +810,6 @@ gst_qticodec2vdec_close (GstVideoDecoder * decoder)
   gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (dec, "close");
-
-  /* Stop the component */
-  if (dec->comp) {
-    ret = c2component_stop (dec->comp);
-  }
 
   if (dec->input_state) {
     gst_video_codec_state_unref (dec->input_state);
@@ -1046,13 +1075,14 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
   GstVideoCodecState *state;
   GstVideoInfo *vinfo;
 
-  GST_DEBUG_OBJECT (dec, "push_frame_downstream");
+  GST_DEBUG_OBJECT (dec, "push frame to downstream");
 
   state = gst_video_decoder_get_output_state (decoder);
   if (state) {
     vinfo = &state->info;
   } else {
     GST_ERROR_OBJECT (dec, "video codec state is NULL, unexpected!");
+    ret = GST_FLOW_ERROR;
     goto out;
   }
 
@@ -1063,9 +1093,16 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
 
   frame = gst_video_decoder_get_frame (decoder, decode_buf->index);
   if (frame == NULL) {
-    GST_ERROR_OBJECT (dec,
-        "Error in gst_video_decoder_get_frame, frame number: %lu",
+    GST_DEBUG_OBJECT (dec,
+        "seek: can't get frame (%lu), which was released during FLUSH-STOP event",
         decode_buf->index);
+    /* free old output buffer since of seeking */
+    if (!c2component_freeOutBuffer (dec->comp, decode_buf->index)) {
+      GST_ERROR_OBJECT (dec, "Failed to release the buffer (%lu)",
+          decode_buf->index);
+    }
+    GST_DEBUG_OBJECT (dec, "seek: release old buffer since of seeking");
+    ret = GST_FLOW_OK;
     goto out;
   }
 
@@ -1092,17 +1129,16 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
    * writable when it's pushed downstream */
   gst_video_codec_frame_unref (frame);
   ret = gst_video_decoder_finish_frame (decoder, frame);
-  if (ret != GST_FLOW_OK) {
+  if (ret == GST_FLOW_FLUSHING) {
+    GST_DEBUG_OBJECT (dec, "seek: downstream is flushing");
+  } else if (ret != GST_FLOW_OK) {
     GST_ERROR_OBJECT (dec, "Failed(%d) to push frame downstream", ret);
-    goto out;
   }
 
-  gst_video_codec_state_unref (state);
-  return GST_FLOW_OK;
-
 out:
-  gst_video_codec_state_unref (state);
-  return GST_FLOW_ERROR;
+  if (state)
+    gst_video_codec_state_unref (state);
+  return ret;
 }
 
 /* Handle event from Codec2 */
@@ -1168,8 +1204,12 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
         }
         dec->num_output_done++;
         GST_DEBUG_OBJECT (dec, "output done, count: %lu", dec->num_output_done);
+
         ret = push_frame_downstream (decoder, outBuffer);
-        if (ret != GST_FLOW_OK) {
+        if (ret == GST_FLOW_FLUSHING) {
+          GST_DEBUG_OBJECT (dec,
+              "seek: it's a successful case since of downstream flushing");
+        } else if (ret != GST_FLOW_OK) {
           GST_ERROR_OBJECT (dec, "Failed to push frame downstream");
         }
       } else if (outBuffer->flag & FLAG_TYPE_END_OF_STREAM) {
@@ -1377,6 +1417,41 @@ gst_qticodec2vdec_get_property (GObject * object, guint prop_id, GValue * value,
   }
 }
 
+static gboolean
+gst_qticodec2vdec_src_event (GstVideoDecoder * decoder, GstEvent * event)
+{
+  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+
+  gboolean ret = TRUE;
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_SEEK:
+    {
+      GstFormat format;
+      gdouble rate;
+      GstSeekFlags flags;
+      GstSeekType start_type, stop_type;
+      gint64 start, stop;
+      guint32 seqnum;
+
+      gst_event_parse_seek (event, &rate, &format, &flags, &start_type, &start,
+          &stop_type, &stop);
+      seqnum = gst_event_get_seqnum (event);
+      GST_DEBUG_OBJECT (dec,
+          "seek: start time:%" GST_TIME_FORMAT " stop time:%" GST_TIME_FORMAT
+          " rate:%f format:%u flags:%u start_type:%u stop_type:%u seqnum:%u",
+          GST_TIME_ARGS (start), GST_TIME_ARGS (stop), rate, format, flags,
+          start_type, stop_type, seqnum);
+      break;
+    }
+    default:
+      break;
+  }
+
+  ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_event (decoder, event);
+
+  return ret;
+}
+
 /* Called during object destruction process */
 static void
 gst_qticodec2vdec_finalize (GObject * object)
@@ -1518,8 +1593,13 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
   video_decoder_class->finish = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_finish);
   video_decoder_class->open = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_open);
   video_decoder_class->close = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_close);
+  video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_stop);
+  video_decoder_class->flush = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_flush);
   video_decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_decide_allocation);
+  video_decoder_class->src_event =
+      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_src_event);
+
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
       "Codec2 video decoder", "Decoder/Video",
       "Video Decoder based on Codec2.0", "QTI");

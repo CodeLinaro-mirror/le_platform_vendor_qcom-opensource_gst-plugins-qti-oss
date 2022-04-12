@@ -459,7 +459,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
                 }
 
                 /* ref the buffer and store it. When the fd is queued,
-                 * we can find the graphic block ith the input fd */
+                 * we can find the graphic block with the input fd */
                 fd = handle->data[0];
                 mInPendingBuffer[fd] = graphicBlock;
                 buffer->fd = fd;
@@ -577,16 +577,18 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     return result;
 }
 
-c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode,
-    std::list<std::unique_ptr<C2Work> >* const flushedWork)
+c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode)
 {
-
-    LOG_MESSAGE("Component(%p) flushed", this);
-
     c2_status_t result = C2_OK;
-    UNUSED(mode);
+    std::list<std::unique_ptr<C2Work> > flushedWork;
 
-    unregisterTrackBuffer(*flushedWork);
+    result = mComp->flush_sm(mode, &flushedWork);
+    if (result == C2_OK) {
+        LOG_MESSAGE("Component(%p) flushed work num:%zu", this, flushedWork.size());
+        unregisterTrackBuffer(flushedWork);
+    } else {
+        LOG_ERROR("Failed to flush work");
+    }
 
     return result;
 }
@@ -729,7 +731,7 @@ void C2ComponentAdapter::handleWorkDone(
 
         if (work->result != C2_OK) {
             LOG_DEBUG("No output for component(%p), ret:%d", this, work->result);
-            break;
+            continue;
         }
 
         const std::unique_ptr<C2Worklet>& worklet = work->worklets.front();
