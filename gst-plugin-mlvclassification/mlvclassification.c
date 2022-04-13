@@ -43,6 +43,11 @@
 #include <gst/video/gstimagepool.h>
 #include <cairo/cairo.h>
 
+#ifdef HAVE_LINUX_DMA_BUF_H
+#include <sys/ioctl.h>
+#include <linux/dma-buf.h>
+#endif // HAVE_LINUX_DMA_BUF_H
+
 #include "modules/ml-video-classification-module.h"
 
 #define GST_CAT_DEFAULT gst_ml_video_classification_debug
@@ -83,6 +88,8 @@ G_DEFINE_TYPE (GstMLVideoClassification, gst_ml_video_classification,
 #define DEFAULT_MAX_BUFFERS        10
 #define DEFAULT_TEXT_BUFFER_SIZE   4096
 #define DEFAULT_FONT_SIZE          20
+
+#define MAX_TEXT_LENGTH            25
 
 #define EXTRACT_RED_COLOR(color)   (((color >> 24) & 0xFF) / 255.0)
 #define EXTRACT_GREEN_COLOR(color) (((color >> 16) & 0xFF) / 255.0)
@@ -155,8 +162,7 @@ gst_ml_module_new (const gchar * libname, const gchar * labels)
   GstMLModule *module = NULL;
   gchar *location = NULL;
 
-  location = g_strdup_printf ("/usr/lib/gstreamer-1.0/ml/modules/lib%s.so",
-      libname);
+  location = g_strdup_printf ("%s/lib%s.so", GST_ML_MODULES_DIR, libname);
 
   module = g_slice_new0 (GstMLModule);
   g_return_val_if_fail (module != NULL, NULL);
@@ -371,6 +377,18 @@ gst_ml_video_classification_fill_video_output (
     return FALSE;
   }
 
+#ifdef HAVE_LINUX_DMA_BUF_H
+  if (gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
+    struct dma_buf_sync bufsync;
+    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
+
+    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
+
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (classification, "DMA IOCTL SYNC START failed!");
+  }
+#endif // HAVE_LINUX_DMA_BUF_H
+
   surface = cairo_image_surface_create_for_data (memmap.data, format,
       vmeta->width, vmeta->height, vmeta->stride[0]);
   g_return_val_if_fail (surface, FALSE);
@@ -394,15 +412,17 @@ gst_ml_video_classification_fill_video_output (
   // Select font.
   cairo_select_font_face (context, "@cairo:Georgia",
       CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_antialias (context, CAIRO_ANTIALIAS_BEST);
 
   // Set the most appropriate font size based on number of results.
-  fontsize = vmeta->height / classification->n_results;
+  fontsize = ((gdouble) vmeta->width / MAX_TEXT_LENGTH) * (5.0F / 3.0F);
+  fontsize = MIN (fontsize, vmeta->height / classification->n_results);
   cairo_set_font_size (context, fontsize);
 
   {
     // Set font options.
     cairo_font_options_t *options = cairo_font_options_create ();
-    cairo_font_options_set_antialias (options, CAIRO_ANTIALIAS_DEFAULT);
+    cairo_font_options_set_antialias (options, CAIRO_ANTIALIAS_BEST);
     cairo_set_font_options (context, options);
     cairo_font_options_destroy (options);
   }
@@ -449,6 +469,18 @@ gst_ml_video_classification_fill_video_output (
   cairo_destroy (context);
   cairo_surface_destroy (surface);
 
+#ifdef HAVE_LINUX_DMA_BUF_H
+  if (gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
+    struct dma_buf_sync bufsync;
+    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
+
+    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
+
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (classification, "DMA IOCTL SYNC END failed!");
+  }
+#endif // HAVE_LINUX_DMA_BUF_H
+
   // Unmap buffer memory blocks.
   gst_buffer_unmap (buffer, &memmap);
 
@@ -464,6 +496,7 @@ gst_ml_video_classification_fill_text_output (
   GValue entries = G_VALUE_INIT;
   gchar *string = NULL;
   guint idx = 0, n_predictions = 0;
+  gsize length = 0;
 
   g_value_init (&entries, GST_TYPE_LIST);
 
@@ -484,7 +517,8 @@ gst_ml_video_classification_fill_text_output (
 
     prediction->label = g_strdelimit (prediction->label, " ", '-');
 
-    entry = gst_structure_new (prediction->label,
+    entry = gst_structure_new ("ImageClassification",
+        "label", G_TYPE_STRING, prediction->label,
         "confidence", G_TYPE_FLOAT, prediction->confidence,
         "color", G_TYPE_UINT, prediction->color,
         NULL);
@@ -508,14 +542,21 @@ gst_ml_video_classification_fill_text_output (
     return FALSE;
   }
 
-  // Serialize the predictions.
-  if ((string = gst_value_serialize (&entries)) == NULL) {
+  // Serialize the predictions into string format.
+  string = gst_value_serialize (&entries);
+  g_value_unset (&entries);
+
+  if (string == NULL) {
     GST_ERROR_OBJECT (classification, "Failed serialize predictions structure!");
     gst_buffer_unmap (buffer, &memmap);
     return FALSE;
   }
 
-  if (g_strv_length (&string) > memmap.maxsize) {
+  // Increase the length by 1 byte for the '\0' character.
+  length = strlen (string) + 1;
+
+  // Check whether the length +1 byte for the additional '\n' is within maxsize.
+  if ((length + 1) > memmap.maxsize) {
     GST_ERROR_OBJECT (classification, "String size exceeds max buffer size!");
 
     gst_buffer_unmap (buffer, &memmap);
@@ -524,11 +565,12 @@ gst_ml_video_classification_fill_text_output (
     return FALSE;
   }
 
-  g_stpcpy ((gchar*) memmap.data, string);
-  gst_buffer_unmap (buffer, &memmap);
-
-  gst_buffer_resize (buffer, 0, g_strv_length (&string));
+  // Copy the serialized GValue into the output buffer with '\n' termination.
+  length = g_snprintf ((gchar *) memmap.data, (length + 1), "%s\n", string);
   g_free (string);
+
+  gst_buffer_unmap (buffer, &memmap);
+  gst_buffer_resize (buffer, 0, length);
 
   return TRUE;
 }
@@ -722,7 +764,7 @@ gst_ml_video_classification_fixate_caps (GstBaseTransform * base,
     value = gst_structure_get_value (output, "width");
 
     if ((NULL == value) || !gst_value_is_fixed (value)) {
-      width = GST_ROUND_UP_4 (DEFAULT_FONT_SIZE * 20 * 3 / 5);
+      width = GST_ROUND_UP_4 (DEFAULT_FONT_SIZE * MAX_TEXT_LENGTH * 3 / 5);
       gst_structure_set (output, "width", G_TYPE_INT, width, NULL);
       value = gst_structure_get_value (output, "width");
     }
@@ -813,10 +855,16 @@ gst_ml_video_classification_transform (GstBaseTransform * base,
   g_return_val_if_fail (classification->module != NULL, GST_FLOW_ERROR);
 
   n_blocks = gst_buffer_n_memory (inbuffer);
-  if (n_blocks != classification->mlinfo->n_tensors) {
-    GST_ERROR_OBJECT (classification, "Input buffer has %u memory blocks but "
-        "negotiated caps require %u!", n_blocks, classification->mlinfo->n_tensors);
-    return GST_FLOW_ERROR;
+
+  if (gst_buffer_get_size (inbuffer) != gst_ml_info_size (classification->mlinfo)) {
+    GST_ERROR_OBJECT (classification, "Mismatch, expected buffer size %"
+        G_GSIZE_FORMAT " but actual size is %" G_GSIZE_FORMAT "!",
+        gst_ml_info_size (classification->mlinfo), gst_buffer_get_size (inbuffer));
+    return FALSE;
+  } else if ((n_blocks > 1) && n_blocks != classification->mlinfo->n_tensors) {
+    GST_ERROR_OBJECT (classification, "Mismatch, expected %u memory blocks "
+        "but buffer has %u!", classification->mlinfo->n_tensors, n_blocks);
+    return FALSE;
   }
 
   n_blocks = gst_buffer_get_n_meta (inbuffer, GST_ML_TENSOR_META_API_TYPE);

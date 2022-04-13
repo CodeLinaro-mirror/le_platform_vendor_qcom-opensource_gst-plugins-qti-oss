@@ -33,8 +33,14 @@
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
-#include <gst/video/c2d-video-converter.h>
 #include <gst/ml/ml-info.h>
+
+#ifdef USE_C2D_CONVERTER
+#include <gst/video/c2d-video-converter.h>
+#endif //USE_C2D_CONVERTER
+#ifdef USE_GLES_CONVERTER
+#include <gst/video/gles-video-converter.h>
+#endif //USE_GLES_CONVERTER
 
 G_BEGIN_DECLS
 
@@ -71,15 +77,20 @@ struct _GstMLVideoConverter {
   GstVideoInfo         *vinfo;
   GstMLInfo            *mlinfo;
 
+  // Internal operational mode.
+  guint                mode;
+
   /// Buffer pools.
   GstBufferPool        *outpool;
 
-  /// Source aspect ratio, extracted from input caps.
-  gint                 sar_n;
-  gint                 sar_d;
-
   /// Supported converters.
+#ifdef USE_C2D_CONVERTER
   GstC2dVideoConverter *c2dconvert;
+#endif // USE_C2D_CONVERTER
+
+#ifdef USE_GLES_CONVERTER
+  GstGlesConverter     *glesconvert;
+#endif // USE_GLES_CONVERTER
 
   /// Properties.
   GstVideoPixelLayout  pixlayout;
