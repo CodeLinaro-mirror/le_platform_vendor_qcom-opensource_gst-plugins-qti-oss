@@ -65,23 +65,29 @@ main (int argc, char *argv[])
 {
   gchar* str_playbin = g_strdup("playbin uri=");
   gchar *concat_str = NULL;
+  GstElement *pipeline = NULL;
+  GstBus *bus = NULL;
+  GstMessage *msg = NULL;
 
   crypto = (Crypto*)g_new0(Crypto, 1);
+  if (!crypto) {
+    g_error ("failed to alloc Crypto");
+    goto CLEAN;
+  }
+
   crypto_init (crypto);
-
   concat_str = g_strconcat (str_playbin, argv[1], NULL);
-  g_debug ("pipeline is :%s", concat_str);
-
-  GstElement *pipeline;
-  GstBus *bus;
-  GstMessage *msg;
-
+  g_debug ("Pipeline is :%s", concat_str);
 
   /* Initialize GStreamer */
   gst_init (&argc, &argv);
 
   /* Build the pipeline */
   pipeline = gst_parse_launch (concat_str, NULL);
+  if (!pipeline) {
+    g_error ("failed to create pipeline");
+    goto CLEAN;
+  }
 
   g_signal_connect (pipeline, "element-setup", G_CALLBACK (element_setup), NULL);
 
@@ -90,23 +96,34 @@ main (int argc, char *argv[])
 
   /* Wait until error or EOS */
   bus = gst_element_get_bus (pipeline);
+  if (!bus) {
+    g_error ("failed to get bus");
+    goto CLEAN;
+  }
   msg =
       gst_bus_timed_pop_filtered (bus, GST_CLOCK_TIME_NONE,
       GST_MESSAGE_ERROR | GST_MESSAGE_EOS);
 
   /* See next tutorial for proper error message handling/parsing */
-  if (GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ERROR) {
+  if (msg && GST_MESSAGE_TYPE (msg) == GST_MESSAGE_ERROR) {
     g_error ("An error occurred! Re-run with the GST_DEBUG=*:WARN environment "
         "variable set for more details.");
   }
 
+CLEAN:
   /* Free resources */
-  crypto_deinit (crypto);
-  g_free (crypto);
-  gst_message_unref (msg);
-  gst_object_unref (bus);
-  gst_element_set_state (pipeline, GST_STATE_NULL);
-  gst_object_unref (pipeline);
+  if (crypto) {
+    crypto_deinit (crypto);
+    g_free (crypto);
+  }
+  if (msg)
+    gst_message_unref (msg);
+  if (bus)
+    gst_object_unref (bus);
+  if (pipeline) {
+    gst_element_set_state (pipeline, GST_STATE_NULL);
+    gst_object_unref (pipeline);
+  }
 
   return 0;
 }
