@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(GST_PLUGINS_QTI_OSS_CVP_OPTCLFLOW
+project(GST_PLUGINS_QTI_OSS_DFS
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
 )
@@ -30,30 +30,34 @@ add_definitions(-DHAVE_CONFIG_H)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
-# GStreamer CVP OticalFlow plugin.
-set(GST_CVP_OPTCLFLOW gstqticvpoptclflow)
+# GStreamer DFS plugin.
+set(GST_DFS gstqtidfs)
 
-add_library(${GST_CVP_OPTCLFLOW} SHARED
-  opticalflow.c
-  cvp-opticalflow-engine.cc
+add_library(${GST_DFS} SHARED
+  dfs.c
+  dfs-engine.cc
 )
 
-target_include_directories(${GST_CVP_OPTCLFLOW} PUBLIC
+target_include_directories(${GST_DFS} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_link_libraries(${GST_CVP_OPTCLFLOW} PRIVATE
+target_include_directories(${GST_DFS} PRIVATE
+  ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(${GST_DFS} PRIVATE
   ${GST_LIBRARIES}
+  ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
-  qtimlmeta
-  gstqtimemorybase
-  cvp2
-  gbm
+  gstqtivideobase
+  rv
+  fastcvopt
 )
 
 install(
-  TARGETS ${GST_CVP_OPTCLFLOW}
+  TARGETS ${GST_DFS}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ

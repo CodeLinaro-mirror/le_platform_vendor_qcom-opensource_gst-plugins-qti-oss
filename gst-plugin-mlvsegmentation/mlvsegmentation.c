@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -49,7 +83,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_ml_video_segmentation_debug);
 
 #define gst_ml_video_segmentation_parent_class parent_class
 G_DEFINE_TYPE (GstMLVideoSegmentation, gst_ml_video_segmentation,
-               GST_TYPE_BASE_TRANSFORM);
+    GST_TYPE_BASE_TRANSFORM);
 
 #define DEFAULT_PROP_MODULE         NULL
 #define DEFAULT_PROP_LABELS         NULL
@@ -379,8 +413,8 @@ gst_ml_video_segmentation_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
   GstMLVideoSegmentation *segmentation = GST_ML_VIDEO_SEGMENTATION (base);
-  GstCaps *result = NULL;
-  const GValue *value = NULL;
+  GstCaps *tmplcaps = NULL, *result = NULL;
+  guint idx = 0, num = 0, length = 0;
 
   GST_DEBUG_OBJECT (segmentation, "Transforming caps: %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
@@ -388,26 +422,46 @@ gst_ml_video_segmentation_transform_caps (GstBaseTransform * base,
 
   if (direction == GST_PAD_SRC) {
     GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   }
 
-  // Extract the rate and propagate it to result caps.
-  value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
-      (direction == GST_PAD_SRC) ? "framerate" : "rate");
+  result = gst_caps_new_empty ();
+  length = gst_caps_get_size (tmplcaps);
 
-  if (value != NULL) {
-    gint idx = 0, length = 0;
+  for (idx = 0; idx < length; idx++) {
+    GstStructure *structure = NULL;
+    GstCapsFeatures *features = NULL;
 
-    result = gst_caps_make_writable (result);
-    length = gst_caps_get_size (result);
+    for (num = 0; num < gst_caps_get_size (caps); num++) {
+      const GValue *value = NULL;
 
-    for (idx = 0; idx < length; idx++) {
-      GstStructure *structure = gst_caps_get_structure (result, idx);
-      gst_structure_set_value (structure,
-          (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      structure = gst_caps_get_structure (tmplcaps, idx);
+      features = gst_caps_get_features (tmplcaps, idx);
+
+      // Make a copy that will be modified.
+      structure = gst_structure_copy (structure);
+
+      // Extract the rate from incoming caps and propagate it to result caps.
+      value = gst_structure_get_value (gst_caps_get_structure (caps, num),
+          (direction == GST_PAD_SRC) ? "framerate" : "rate");
+
+      // Skip if there is no value.
+      if (value != NULL) {
+        gst_structure_set_value (structure,
+            (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      }
+
+      // If this is already expressed by the existing caps skip this structure.
+      if (gst_caps_is_subset_structure_full (result, structure, features)) {
+        gst_structure_free (structure);
+        continue;
+      }
+
+      gst_caps_append_structure_full (result, structure,
+          gst_caps_features_copy (features));
     }
   }
 
@@ -546,10 +600,12 @@ gst_ml_video_segmentation_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstVideoInfo outinfo;
 
   if (NULL == segmentation->labels) {
-    GST_ERROR_OBJECT (segmentation, "Labels not set!");
+    GST_ELEMENT_ERROR (segmentation, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels not set!"));
     return FALSE;
   } else if (NULL == segmentation->modname) {
-    GST_ERROR_OBJECT (segmentation, "Module not set!");
+    GST_ELEMENT_ERROR (segmentation, RESOURCE, NOT_FOUND, (NULL),
+        ("Module not set!"));
     return FALSE;
   }
 

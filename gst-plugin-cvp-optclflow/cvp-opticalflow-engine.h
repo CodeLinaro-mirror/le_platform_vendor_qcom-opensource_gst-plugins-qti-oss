@@ -61,81 +61,105 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_ML_SNPE_ENGINE_H__
-#define __GST_ML_SNPE_ENGINE_H__
+#ifndef __GST_CVP_OPTCLFLOW_ENGINE_H__
+#define __GST_CVP_OPTCLFLOW_ENGINE_H__
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
 #include <gst/allocators/allocators.h>
-#include <gst/ml/ml-info.h>
-#include <gst/ml/ml-frame.h>
+
+#include <ml-meta/ml_meta.h>
 
 G_BEGIN_DECLS
 
 /**
- * GST_ML_SNPE_ENGINE_OPT_MODEL:
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH:
  *
- * #G_TYPE_STRING, neural network model file path and name
- * Default: NULL
+ * #G_TYPE_UINT, video source width
+ * Default: 0
  */
-#define GST_ML_SNPE_ENGINE_OPT_MODEL \
-    "GstMLSnpeEngine.model"
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH \
+    "GstCvpOptclFlowEngine.video-width"
 
 /**
- * GstMLSnpeDelegate:
- * @GST_ML_SNPE_DELEGATE_NONE: CPU is used for all operations
- * @GST_ML_SNPE_DELEGATE_DSP: Hexagon Digital Signal Processor
- * @GST_ML_SNPE_DELEGATE_GPU: Graphics Processing Unit
- * @GST_ML_SNPE_DELEGATE_AIP: Snapdragon AIX + HVX
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT:
  *
- * Different delegates for transferring part or all of the model execution.
+ * #G_TYPE_UINT, video source height
+ * Default: 0
+ *
+ * Not applicable for output
  */
-typedef enum {
-  GST_ML_SNPE_DELEGATE_NONE,
-  GST_ML_SNPE_DELEGATE_DSP,
-  GST_ML_SNPE_DELEGATE_GPU,
-  GST_ML_SNPE_DELEGATE_AIP,
-} GstMLSnpeDelegate;
-
-GST_API GType gst_ml_snpe_delegate_get_type (void);
-#define GST_TYPE_ML_SNPE_DELEGATE (gst_ml_snpe_delegate_get_type())
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT \
+    "GstCvpOptclFlowEngine.video-height"
 
 /**
- * GST_ML_SNPE_ENGINE_OPT_DELEGATE:
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE:
  *
- * #GST_TYPE_ML_SNPE_DELEGATE, set the delegate
- * Default: #GST_ML_SNPE_DELEGATE_NONE.
+ * #G_TYPE_UINT, video source aligned width
+ * Default: 0
  */
-#define GST_ML_SNPE_ENGINE_OPT_DELEGATE \
-    "GstMLSnpeEngine.delegate"
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE \
+    "GstCvpOptclFlowEngine.video-stride"
 
 /**
- * GST_ML_SNPE_ENGINE_OPT_LAYERS:
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE:
  *
- * #GST_TYPE_ARRAY, list of layers
- * Default: NULL.
+ * #G_TYPE_UINT, video source aligned height
+ * Default: 0
+ *
+ * Not applicable for output
  */
-#define GST_ML_SNPE_ENGINE_OPT_LAYERS \
-    "GstMLSnpeEngine.layers"
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE \
+    "GstCvpOptclFlowEngine.video-scanline"
 
-typedef struct _GstMLSnpeEngine GstMLSnpeEngine;
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT:
+ *
+ * #GST_TYPE_VIDEO_SOURCE_FORMAT, set the video source format
+ * Default: #GST_VIDEO_FORMAT_UNKNOWN.
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT \
+    "GstCvpOptclFlowEngine.video-format"
 
-GST_API GstMLSnpeEngine *
-gst_ml_snpe_engine_new              (GstStructure * settings);
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS:
+ *
+ * #G_TYPE_UINT, video source frame rate in frames per second
+ * Default: 0
+ *
+ * Not applicable for output
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS \
+    "GstCvpOptclFlowEngine.video-fps"
+
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS:
+ *
+ * #G_TYPE_BOOLEAN, Enable/disable additional motion vector statistics
+ * Default: TRUE
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS \
+    "GstCvpOptclFlowEngine.enable-stats"
+
+
+typedef struct _GstCvpOptclFlowEngine GstCvpOptclFlowEngine;
+
+GST_API GstCvpOptclFlowEngine *
+gst_cvp_optclflow_engine_new     (GstStructure * settings);
 
 GST_API void
-gst_ml_snpe_engine_free             (GstMLSnpeEngine * engine);
-
-GST_API const GstMLInfo *
-gst_ml_snpe_engine_get_input_info   (GstMLSnpeEngine * engine);
-
-GST_API const GstMLInfo *
-gst_ml_snpe_engine_get_output_info  (GstMLSnpeEngine * engine);
+gst_cvp_optclflow_engine_free    (GstCvpOptclFlowEngine * engine);
 
 GST_API gboolean
-gst_ml_snpe_engine_execute          (GstMLSnpeEngine * engine,
-                                     GstMLFrame * inframe,
-                                     GstMLFrame * outframe);
+gst_cvp_optclflow_engine_sizes   (GstCvpOptclFlowEngine * engine,
+                                  guint * mvsize, guint * statsize,
+                                  guint * metasize);
+
+GST_API gboolean
+gst_cvp_optclflow_engine_execute (GstCvpOptclFlowEngine * engine,
+                                  const GstVideoFrame * inframes, guint n_inputs,
+                                  GstBuffer * outbuffer);
 
 G_END_DECLS
 
-#endif /* __GST_ML_SNPE_ENGINE_H__ */
+#endif /* __GST_CVP_OPTCLFLOW_ENGINE_H__ */

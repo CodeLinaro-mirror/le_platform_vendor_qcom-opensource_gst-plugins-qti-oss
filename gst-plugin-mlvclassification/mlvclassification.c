@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -55,24 +89,24 @@ GST_DEBUG_CATEGORY_STATIC (gst_ml_video_classification_debug);
 
 #define gst_ml_video_classification_parent_class parent_class
 G_DEFINE_TYPE (GstMLVideoClassification, gst_ml_video_classification,
-               GST_TYPE_BASE_TRANSFORM);
+    GST_TYPE_BASE_TRANSFORM);
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
 #define GST_ML_VIDEO_CLASSIFICATION_VIDEO_FORMATS \
-    "{ BGRA, RGBA, BGRx, xRGB, BGR16 }"
+    "{ BGRA, BGRx, BGR16 }"
 
 #define GST_ML_VIDEO_CLASSIFICATION_TEXT_FORMATS \
     "{ utf8 }"
 
 #define GST_ML_VIDEO_CLASSIFICATION_SRC_CAPS                            \
-    "video/x-raw, "                                                 \
+    "video/x-raw, "                                                     \
     "format = (string) " GST_ML_VIDEO_CLASSIFICATION_VIDEO_FORMATS "; " \
-    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "                \
+    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "                    \
     "format = (string) " GST_ML_VIDEO_CLASSIFICATION_VIDEO_FORMATS "; " \
-    "text/x-raw, "                                                  \
+    "text/x-raw, "                                                      \
     "format = (string) " GST_ML_VIDEO_CLASSIFICATION_TEXT_FORMATS
 
 #define GST_ML_VIDEO_CLASSIFICATION_SINK_CAPS \
@@ -340,8 +374,9 @@ gst_ml_video_classification_fill_video_output (
     GstBuffer *buffer)
 {
   GstVideoMeta *vmeta = NULL;
+  GList *list = NULL;
   GstMapInfo memmap;
-  guint idx = 0, n_predictions = 0;
+  guint n_predictions = 0;
   gdouble fontsize = 0.0;
 
   cairo_format_t format;
@@ -355,11 +390,9 @@ gst_ml_video_classification_fill_video_output (
 
   switch (vmeta->format) {
     case GST_VIDEO_FORMAT_BGRA:
-    case GST_VIDEO_FORMAT_ARGB:
       format = CAIRO_FORMAT_ARGB32;
       break;
     case GST_VIDEO_FORMAT_BGRx:
-    case GST_VIDEO_FORMAT_xRGB:
       format = CAIRO_FORMAT_RGB24;
       break;
     case GST_VIDEO_FORMAT_BGR16:
@@ -409,6 +442,10 @@ gst_ml_video_classification_fill_video_output (
   // Mark the surface dirty so Cairo clears its caches.
   cairo_surface_mark_dirty (surface);
 
+  // Fill a semi-transperant black background.
+  cairo_set_source_rgba (context, 0.0, 0.0, 0.0, 0.5);
+  cairo_paint (context);
+
   // Select font.
   cairo_select_font_face (context, "@cairo:Georgia",
       CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
@@ -427,23 +464,24 @@ gst_ml_video_classification_fill_video_output (
     cairo_font_options_destroy (options);
   }
 
-  for (idx = 0; idx < g_list_length (predictions); ++idx) {
-    const GstMLPrediction *prediction = NULL;
+  for (list = predictions; list != NULL; list = list->next) {
+    const GstMLPrediction *prediction = (const GstMLPrediction*) list->data;
     gchar *string = NULL;
 
     // Break immediately if we reach the number of results limit.
     if (n_predictions >= classification->n_results)
       break;
 
-    // Extract the prediction data.
-    prediction = g_list_nth_data (predictions, idx);
+    // Break immediately if sorted prediction confidence is below the threshold.
+    if (prediction->confidence < classification->threshold)
+      break;
 
     // Concat the prediction data to the output string.
     string = g_strdup_printf ("%s: %.1f%%", prediction->label,
         prediction->confidence);
 
-    GST_TRACE_OBJECT (classification, "idx: %u, label: %s, confidence: %.1f%%",
-        idx, prediction->label, prediction->confidence);
+    GST_TRACE_OBJECT (classification, "label: %s, confidence: %.1f%%",
+        prediction->label, prediction->confidence);
 
     // Set text color.
     cairo_set_source_rgba (context,
@@ -453,7 +491,7 @@ gst_ml_video_classification_fill_video_output (
         EXTRACT_ALPHA_COLOR (prediction->color));
 
     // (0,0) is at top left corner of the buffer.
-    cairo_move_to (context, 0.0, fontsize * (idx + 1));
+    cairo_move_to (context, 0.0, (fontsize * (n_predictions + 1)) - 6);
 
     // Draw text string.
     cairo_show_text (context, string);
@@ -492,16 +530,17 @@ gst_ml_video_classification_fill_text_output (
     GstMLVideoClassification * classification, GList * predictions,
     GstBuffer *buffer)
 {
+  GList *list = NULL;
   GstMapInfo memmap = {};
   GValue entries = G_VALUE_INIT;
   gchar *string = NULL;
-  guint idx = 0, n_predictions = 0;
+  guint n_predictions = 0;
   gsize length = 0;
 
   g_value_init (&entries, GST_TYPE_LIST);
 
-  for (idx = 0; idx < g_list_length (predictions); ++idx) {
-    GstMLPrediction *prediction = NULL;
+  for (list = predictions; list != NULL; list = list->next) {
+    GstMLPrediction *prediction = (GstMLPrediction*) list->data;
     GstStructure *entry = NULL;
     GValue value = G_VALUE_INIT;
 
@@ -509,11 +548,12 @@ gst_ml_video_classification_fill_text_output (
     if (n_predictions >= classification->n_results)
       break;
 
-    // Extract the prediction data.
-    prediction = g_list_nth_data (predictions, idx);
+    // Break immediately if sorted prediction confidence is below the threshold.
+    if (prediction->confidence < classification->threshold)
+      break;
 
-    GST_TRACE_OBJECT (classification, "idx: %u, label: %s, confidence: %.1f%%",
-        idx, prediction->label, prediction->confidence);
+    GST_TRACE_OBJECT (classification, "label: %s, confidence: %.1f%%",
+        prediction->label, prediction->confidence);
 
     prediction->label = g_strdelimit (prediction->label, " ", '-');
 
@@ -671,8 +711,8 @@ gst_ml_video_classification_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
   GstMLVideoClassification *classification = GST_ML_VIDEO_CLASSIFICATION (base);
-  GstCaps *result = NULL;
-  const GValue *value = NULL;
+  GstCaps *tmplcaps = NULL, *result = NULL;
+  guint idx = 0, num = 0, length = 0;
 
   GST_DEBUG_OBJECT (classification, "Transforming caps: %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
@@ -680,26 +720,46 @@ gst_ml_video_classification_transform_caps (GstBaseTransform * base,
 
   if (direction == GST_PAD_SRC) {
     GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   }
 
-  // Extract the rate and propagate it to result caps.
-  value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
-      (direction == GST_PAD_SRC) ? "framerate" : "rate");
+  result = gst_caps_new_empty ();
+  length = gst_caps_get_size (tmplcaps);
 
-  if (value != NULL) {
-    gint idx = 0, length = 0;
+  for (idx = 0; idx < length; idx++) {
+    GstStructure *structure = NULL;
+    GstCapsFeatures *features = NULL;
 
-    result = gst_caps_make_writable (result);
-    length = gst_caps_get_size (result);
+    for (num = 0; num < gst_caps_get_size (caps); num++) {
+      const GValue *value = NULL;
 
-    for (idx = 0; idx < length; idx++) {
-      GstStructure *structure = gst_caps_get_structure (result, idx);
-      gst_structure_set_value (structure,
-          (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      structure = gst_caps_get_structure (tmplcaps, idx);
+      features = gst_caps_get_features (tmplcaps, idx);
+
+      // Make a copy that will be modified.
+      structure = gst_structure_copy (structure);
+
+      // Extract the rate from incoming caps and propagate it to result caps.
+      value = gst_structure_get_value (gst_caps_get_structure (caps, num),
+          (direction == GST_PAD_SRC) ? "framerate" : "rate");
+
+      // Skip if there is no value or if current caps structure is text.
+      if (value != NULL && !gst_structure_has_name (structure, "text/x-raw")) {
+        gst_structure_set_value (structure,
+            (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      }
+
+      // If this is already expressed by the existing caps skip this structure.
+      if (gst_caps_is_subset_structure_full (result, structure, features)) {
+        gst_structure_free (structure);
+        continue;
+      }
+
+      gst_caps_append_structure_full (result, structure,
+          gst_caps_features_copy (features));
     }
   }
 
@@ -711,7 +771,6 @@ gst_ml_video_classification_transform_caps (GstBaseTransform * base,
   }
 
   GST_DEBUG_OBJECT (classification, "Returning caps: %" GST_PTR_FORMAT, result);
-
   return result;
 }
 
@@ -799,10 +858,12 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstMLInfo ininfo;
 
   if (NULL == classification->labels) {
-    GST_ERROR_OBJECT (classification, "Labels not set!");
+    GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels not set!"));
     return FALSE;
   } else if (NULL == classification->modname) {
-    GST_ERROR_OBJECT (classification, "Module not set!");
+    GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
+        ("Module not set!"));
     return FALSE;
   }
 
