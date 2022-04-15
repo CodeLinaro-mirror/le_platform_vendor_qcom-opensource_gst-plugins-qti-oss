@@ -98,6 +98,7 @@ public:
 
     /* This class methods */
     c2_status_t setListenercallback(std::unique_ptr<EventCallback> callback, c2_blocking_t mayBlock);
+    c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
     c2_status_t setMapBufferToCpu(bool enable);
@@ -105,9 +106,7 @@ public:
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);
     c2_status_t writePlane(uint8_t* dest, BufferDescriptor* buffer_info);
-    c2_status_t waitForProgressOrStateChange(
-        uint32_t numPendingWorks,
-        uint32_t timeoutMs);
+    c2_status_t waitForProgressOrStateChange(uint32_t numPendingWorks);
 
     std::weak_ptr<C2ComponentStore> mStore;
     std::shared_ptr<C2Component> mComp;
@@ -122,9 +121,12 @@ private:
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
 
     uint32_t mNumPendingWorks;
+    uint32_t mPendingTimeOut;
     std::mutex mLock;
     std::mutex mLockOut;
     std::condition_variable mCondition;
+    fnDataCopy mDataCopyFunc;
+    void* mDataCopyFuncParam;
 };
 
 } // namespace QTI

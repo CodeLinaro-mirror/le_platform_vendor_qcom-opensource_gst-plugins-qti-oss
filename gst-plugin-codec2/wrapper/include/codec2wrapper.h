@@ -60,6 +60,13 @@ extern "C" {
 
 #define C2_TICKS_PER_SECOND 1000000
 
+typedef struct comp_cb {
+    gpointer data_copy_func;
+    gpointer data_copy_func_param;
+} comp_cb;
+
+typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, int datalen, void* param);
+
 typedef enum {
     BUFFER_POOL_BASIC_LINEAR = 0,
     BUFFER_POOL_BASIC_GRAPHIC
@@ -241,6 +248,7 @@ typedef struct {
     guint32 config_size; // size of codec config data
     void* c2_buffer;
     void* gbm_bo;
+    gboolean secure;
 } BufferDescriptor;
 
 typedef struct {
@@ -304,7 +312,7 @@ typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void* c2componentStore_create();
 const gchar* c2componentStore_getName(void* const comp_store);
-gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component);
+gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component, comp_cb* cb);
 gboolean c2componentStore_createInterface(void* const comp_store, const gchar* name, void** const interface);
 gboolean c2componentStore_listComponents(void* const comp_store, GPtrArray* array);
 gboolean c2componentStore_isComponentSupported(void* const comp_store, gchar* name);

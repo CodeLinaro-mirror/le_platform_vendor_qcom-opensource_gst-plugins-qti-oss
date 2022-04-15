@@ -115,7 +115,7 @@ OMX_ERRORTYPE load_crypto_lib(Crypto *crypto) {
         return OMX_ErrorUndefined;
     }
 
-    crypto->m_crypto_set_appname = (Crypto_Init)dlsym(crypto->m_lib_handle, SymOEMCryptoSetAppName);
+    crypto->m_crypto_set_appname = (Crypto_Set_AppName)dlsym(crypto->m_lib_handle, SymOEMCryptoSetAppName);
     if (crypto->m_crypto_set_appname == NULL) {
         GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerror());
         result = OMX_ErrorUndefined;

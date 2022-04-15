@@ -1262,6 +1262,7 @@ gst_videoblend_finalize (GObject * o)
 
     if (blend->c2d != NULL)
     {
+        blend->c2d->Close();
         delete (blend->c2d);
         blend->c2d = NULL;
         blend->c2d_loaded = FALSE;
