@@ -45,7 +45,7 @@ G_BEGIN_DECLS
   "width  = (int) [ 32, 8192 ], "     \
   "height = (int) [ 32, 8192 ]"
 #define QTICODEC2VDEC_SINK_COMPRESSION_CAPS    \
-    "compression = (string) { ubwc, linear }"
+    "compression = (string) { linear, ubwc }"
 #define QTICODEC2VDEC_SINK_FPS_CAPS    \
   "framerate = (fraction) [ 0, 480 ]"
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
