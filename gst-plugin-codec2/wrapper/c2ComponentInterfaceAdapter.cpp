@@ -119,7 +119,7 @@ c2_status_t C2ComponentInterfaceAdapter::initReflectedParamUpdater(std::shared_p
 }
 
 std::unique_ptr<C2Param> C2ComponentInterfaceAdapter::updateParamFromConfig(
-    const android::ReflectedParamUpdater::Dict &kvpairs)
+    const android::ReflectedParamUpdater::Dict& kvpairs)
 {
 
     if (mParamUpdater == nullptr)

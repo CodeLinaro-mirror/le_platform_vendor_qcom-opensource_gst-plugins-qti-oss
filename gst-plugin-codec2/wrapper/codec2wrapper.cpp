@@ -231,7 +231,7 @@ std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf)
         std::unique_ptr<C2Param> mirror;
 
         item.set((int32_t)config->mirror.type);
-        kvpairs.emplace("vendor.qti-ext-enc-preprocess-mirror.flip",item);
+        kvpairs.emplace("vendor.qti-ext-enc-preprocess-mirror.flip", item);
 
         mirror = intf_wrapper->updateParamFromConfig(kvpairs);
 
@@ -258,7 +258,7 @@ std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf)
         std::unique_ptr<C2Param> rotation;
 
         item.set((int32_t)config->val.u32);
-        kvpairs.emplace("vendor.qti-ext-enc-preprocess-rotate.angle",item);
+        kvpairs.emplace("vendor.qti-ext-enc-preprocess-rotate.angle", item);
 
         rotation = intf_wrapper->updateParamFromConfig(kvpairs);
 
@@ -302,7 +302,7 @@ std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param, void* const c
         item.set((int32_t)C2_FALSE);
     }
 
-    kvpairs.emplace("vendor.qti-ext-dec-picture-order.enable",item);
+    kvpairs.emplace("vendor.qti-ext-dec-picture-order.enable", item);
     outputPictureOrderMode = intf_wrapper->updateParamFromConfig(kvpairs);
 
     return std::move(outputPictureOrderMode);
@@ -323,12 +323,12 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
 
     if (config->SliceMode.type == SLICE_MODE_BYTES) {
         item.set((int32_t)config->val.u32);
-        kvpairs.emplace("vendor.qti-ext-enc-error-correction.resync-marker-spacing-bits",item);
+        kvpairs.emplace("vendor.qti-ext-enc-error-correction.resync-marker-spacing-bits", item);
 
         sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
     } else if (config->SliceMode.type == SLICE_MODE_MB) {
         item.set((int32_t)config->val.u32);
-        kvpairs.emplace("vendor.qti-ext-enc-slice.spacing",item);
+        kvpairs.emplace("vendor.qti-ext-enc-slice.spacing", item);
 
         sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
     }
@@ -365,12 +365,12 @@ std::unique_ptr<C2Param> setDownscale(gpointer param, void* const comp_intf)
         C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
         std::unique_ptr<C2Param> scale;
         android::ReflectedParamUpdater::Dict kvpairs;
-        android::ReflectedParamUpdater::Value item1,item2;
+        android::ReflectedParamUpdater::Value item1, item2;
 
         item1.set((int32_t)config->resolution.width);
         item2.set((int32_t)config->resolution.height);
-        kvpairs.emplace("vendor.qti-ext-down-scalar.output-width",item1);
-        kvpairs.emplace("vendor.qti-ext-down-scalar.output-height",item2);
+        kvpairs.emplace("vendor.qti-ext-down-scalar.output-width", item1);
+        kvpairs.emplace("vendor.qti-ext-down-scalar.output-height", item2);
 
         scale = intf_wrapper->updateParamFromConfig(kvpairs);
 
@@ -394,8 +394,7 @@ std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param, void* const comp_i
     android::ReflectedParamUpdater::Dict kvpairs;
     android::ReflectedParamUpdater::Value item;
     item.set((int32_t)config->color_space_conversion);
-    kvpairs.emplace("vendor.qti-ext-enc-colorspace-conversion.enable",item);
-
+    kvpairs.emplace("vendor.qti-ext-enc-colorspace-conversion.enable", item);
 
     colorSpaceConv = intf_wrapper->updateParamFromConfig(kvpairs);
 
@@ -449,8 +448,7 @@ std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf)
         android::ReflectedParamUpdater::Dict kvpairs;
         android::ReflectedParamUpdater::Value item;
         item.set((int32_t)config->blur.mode);
-        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info",item);
-
+        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info", item);
 
         blur = intf_wrapper->updateParamFromConfig(kvpairs);
 
@@ -478,7 +476,7 @@ std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf
 
         guint32 info = ((config->resolution.width << 16) | (config->resolution.height & 0xFFFF));
         item.set((int32_t)info);
-        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info",item);
+        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info", item);
 
         blur = intf_wrapper->updateParamFromConfig(kvpairs);
 

@@ -78,9 +78,11 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 
 #include "gstqticodec2venc.h"
+#include "gstqcodec2h264enc.h"
+#include "gstqcodec2h265enc.h"
 
 
-GST_DEBUG_CATEGORY_STATIC (gst_qticodec2venc_debug);
+GST_DEBUG_CATEGORY (gst_qticodec2venc_debug);
 #define GST_CAT_DEFAULT gst_qticodec2venc_debug
 #define GST_QTI_CODEC2_ENC_COLOR_SPACE_CONVERSION             (FALSE)
 
@@ -159,23 +161,6 @@ static GstFlowReturn gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
 static void gst_qticodec2venc_buffer_release (GstStructure * structure);
 
 /* pad templates */
-static GstStaticPadTemplate gst_qtivenc_src_template =
-    GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SRC_NAME,
-    GST_PAD_SRC,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-h264,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-h265,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-heic,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }")
-    );
-
 #define GST_QC2VENC_CAPS_MAKE(format,min,max) \
     "video/x-raw, "                           \
     "format = (string) " format ", "          \
@@ -344,8 +329,8 @@ make_color_space_conv_param (gboolean csc)
 }
 
 static ConfigParams
-make_color_aspects_param (COLOR_PRIMARIES primaries, TRANSFER_CHAR transfer_char,
-    MATRIX matrix, FULL_RANGE full_range)
+make_color_aspects_param (COLOR_PRIMARIES primaries,
+    TRANSFER_CHAR transfer_char, MATRIX matrix, FULL_RANGE full_range)
 {
   ConfigParams param;
 
@@ -1681,8 +1666,18 @@ plugin_init (GstPlugin * qticodec2venc)
   GST_DEBUG_CATEGORY_INIT (gst_qticodec2venc_debug, "qticodec2venc",
       0, "QTI GST codec2.0 video encoder");
 
-  return gst_element_register (qticodec2venc, "qticodec2venc",
-      GST_RANK_PRIMARY + 1, GST_TYPE_QTICODEC2VENC);
+  if (!gst_element_register (qticodec2venc, "qcodec2h264enc",
+          GST_RANK_PRIMARY + 1, GST_TYPE_QCODEC2_H264_ENC)) {
+    GST_ERROR ("failed to register element qcodec2h264enc");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2venc, "qcodec2h265enc",
+          GST_RANK_PRIMARY + 1, GST_TYPE_QCODEC2_H265_ENC)) {
+    GST_ERROR ("failed to register element qcodec2h265enc");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 /* Initialize the qticodec2venc's class */
@@ -1692,9 +1687,6 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
   GstVideoEncoderClass *video_encoder_class = GST_VIDEO_ENCODER_CLASS (klass);
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
-
-  gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_qtivenc_src_template));
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_qtivenc_sink_template));
