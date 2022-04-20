@@ -56,8 +56,10 @@ using namespace QTI;
 int main()
 {
   void *lib = dlopen("libqcodec2_core.so", RTLD_NOW);
+  const char* dlerr = nullptr;
   if (lib == nullptr) {
-    printf("failed to open %s: %s", "libqcodec2_core.so", dlerror());
+    if (!(dlerr = dlerror())) dlerr = "NULL";
+    printf("failed to open %s: err: %s\n", "libqcodec2_core.so", dlerr);
     return -1;
   }
 
@@ -65,14 +67,15 @@ int main()
     (QC2ComponentStoreFactoryGetter_t)dlsym(lib, kFn_QC2ComponentStoreFactoryGetter);
 
   if (factoryGetter == nullptr) {
-    printf("failed to load symbol %s: %s", kFn_QC2ComponentStoreFactoryGetter, dlerror());
+    if (!(dlerr = dlerror())) dlerr = "NULL";
+    printf("failed to load symbol %s: err: %s\n", kFn_QC2ComponentStoreFactoryGetter, dlerr);
     dlclose(lib);
     return -1;
   }
 
   auto c2StoreFactory = (*factoryGetter)(1, 0);    // get version 1.0
   if (c2StoreFactory == nullptr) {
-    printf("failed to get Store factory !");
+    printf("failed to get Store factory !\n");
     dlclose(lib);
     return -1;
   }
