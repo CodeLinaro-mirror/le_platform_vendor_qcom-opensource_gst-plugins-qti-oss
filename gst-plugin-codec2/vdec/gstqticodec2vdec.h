@@ -44,22 +44,18 @@ G_BEGIN_DECLS
 #define QTICODEC2VDEC_SINK_WH_CAPS    \
   "width  = (int) [ 32, 8192 ], "     \
   "height = (int) [ 32, 8192 ]"
-#define QTICODEC2VDEC_SINK_COMPRESSION_CAPS    \
-    "compression = (string) { linear, ubwc }"
 #define QTICODEC2VDEC_SINK_FPS_CAPS    \
   "framerate = (fraction) [ 0, 480 ]"
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
   "video/x-raw, "                       \
   "format = (string) " formats ", "     \
   QTICODEC2VDEC_SINK_WH_CAPS ", "       \
-  QTICODEC2VDEC_SINK_FPS_CAPS ", "      \
-  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
+  QTICODEC2VDEC_SINK_FPS_CAPS
 #define QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES(features, formats) \
   "video/x-raw(" features "), "                                 \
   "format = (string) " formats ", "                             \
   QTICODEC2VDEC_SINK_WH_CAPS   ", "                             \
-  QTICODEC2VDEC_SINK_FPS_CAPS  ", "                             \
-  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
+  QTICODEC2VDEC_SINK_FPS_CAPS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))

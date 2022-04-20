@@ -198,12 +198,21 @@ caps_has_compression (const GstCaps * caps, const gchar * compression)
 {
   GstStructure *structure = NULL;
   const gchar *string = NULL;
+  guint count = gst_caps_get_size (caps);
+  gboolean ret = FALSE;
 
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
+  for (gint i = 0; i < count; i++) {
+    structure = gst_caps_get_structure (caps, i);
+    string =
+        gst_structure_has_field (structure,
+        "compression") ? gst_structure_to_string (structure) : NULL;
+    if (string && g_strrstr (string, compression)) {
+      ret = TRUE;
+      break;
+    }
+  }
 
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+  return ret;
 }
 
 static void
@@ -478,6 +487,8 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
     goto error_setup_output;
   }
 
+  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
+
   /* Fixate color format */
   intersection = gst_caps_truncate (intersection);
   intersection = gst_caps_fixate (intersection);
@@ -485,7 +496,6 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   s = gst_caps_get_structure (intersection, 0);
   format_str = gst_structure_get_string (s, "format");
-  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
   GST_DEBUG_OBJECT (dec, "Fixed color format:%s, UBWC:%d", format_str,
       dec->is_ubwc);
 
