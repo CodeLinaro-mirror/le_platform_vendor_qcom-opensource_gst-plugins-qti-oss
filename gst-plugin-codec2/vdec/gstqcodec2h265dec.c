@@ -43,8 +43,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_qticodec2vdec_debug);
 #define GST_CAT_DEFAULT gst_qticodec2vdec_debug
 
 /* class initialization */
-G_DEFINE_TYPE (GstQcodec2H265Dec, gst_qcodec2_h265_dec,
-    GST_TYPE_QTICODEC2VDEC);
+G_DEFINE_TYPE (GstQcodec2H265Dec, gst_qcodec2_h265_dec, GST_TYPE_QTICODEC2VDEC);
 
 static GstStaticPadTemplate gst_qcodec2_h265_dec_sink_template =
 GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,

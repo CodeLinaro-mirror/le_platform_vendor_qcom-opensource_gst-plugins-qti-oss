@@ -102,7 +102,6 @@ public:
     c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
-    c2_status_t setMapBufferToCpu(bool enable);
 
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);
@@ -121,7 +120,6 @@ private:
     std::shared_ptr<C2ComponentInterfaceAdapter> mIntf;
     std::shared_ptr<C2Component::Listener> mListener;
     std::unique_ptr<EventCallback> mCallback;
-    bool mMapBufferToCpu;
 
     struct TrackBuffer {
         C2ComponentAdapter* adapter;

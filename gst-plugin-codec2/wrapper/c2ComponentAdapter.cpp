@@ -68,7 +68,6 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mCallback = nullptr;
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
-    mMapBufferToCpu = false;
     mNumPendingWorks = 0;
     mDataCopyFunc = nullptr;
     mDataCopyFuncParam = nullptr;
@@ -854,22 +853,6 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
     }
 
     return result;
-}
-
-c2_status_t C2ComponentAdapter::setMapBufferToCpu(bool enable)
-{
-
-    c2_status_t c2Status = C2_NO_INIT;
-
-    mMapBufferToCpu = enable;
-
-    if (mCallback) {
-        mCallback->setMapBufferToCpu(mMapBufferToCpu);
-
-        c2Status = C2_OK;
-    }
-
-    return c2Status;
 }
 
 C2ComponentListenerAdapter::C2ComponentListenerAdapter(C2ComponentAdapter* comp)
