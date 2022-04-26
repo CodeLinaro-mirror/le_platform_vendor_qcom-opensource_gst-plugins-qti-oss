@@ -81,8 +81,12 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
+#include "gstqcodec2h264dec.h"
+#include "gstqcodec2h265dec.h"
+#include "gstqcodec2vp9dec.h"
+#include "gstqcodec2mpeg2dec.h"
 
-GST_DEBUG_CATEGORY_STATIC (gst_qticodec2vdec_debug);
+GST_DEBUG_CATEGORY (gst_qticodec2vdec_debug);
 #define GST_CAT_DEFAULT gst_qticodec2vdec_debug
 
 /* class initialization */
@@ -147,38 +151,7 @@ static GstBuffer *gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder *
 static gboolean gst_qticodec2vdec_caps_has_feature (const GstCaps * caps,
     const gchar * partten);
 
-#define COMMON_VIDEO_CAPS(min, max) \
-    "width = (int) [" #min ", " #max "], "    \
-    "height = (int) [" #min ", " #max "]"
-
-#define H264_CAPS \
-    "video/x-h264, " \
-    "stream-format = (string) { byte-stream }, " \
-    "alignment = (string) { au }, " \
-    COMMON_VIDEO_CAPS(96, 8192)
-
-#define H265_CAPS \
-    "video/x-h265, " \
-    "stream-format = (string) { byte-stream }, " \
-    "alignment = (string) { au }, " \
-    COMMON_VIDEO_CAPS(96, 8192)
-
-#define VP9_CAPS \
-    "video/x-vp9, " \
-    COMMON_VIDEO_CAPS(96, 4096)
-
-#define MPEG2_CAPS \
-    "video/mpeg, " \
-    "mpegversion = (int)2, " \
-    COMMON_VIDEO_CAPS(96, 1920)
-
 /* pad templates */
-static GstStaticPadTemplate gst_qtivdec_sink_template =
-    GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (H264_CAPS ";" H265_CAPS ";" VP9_CAPS ";" MPEG2_CAPS));
-
 static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SRC_NAME,
     GST_PAD_SRC,
@@ -1480,8 +1453,28 @@ plugin_init (GstPlugin * qticodec2vdec)
   GST_DEBUG_CATEGORY_INIT (gst_qticodec2vdec_debug, "qticodec2vdec",
       0, "QTI GST codec2.0 video decoder");
 
-  return gst_element_register (qticodec2vdec, "qticodec2vdec",
-      GST_RANK_PRIMARY + 10, GST_TYPE_QTICODEC2VDEC);
+  if (!gst_element_register (qticodec2vdec, "qcodec2h264dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_H264_DEC)) {
+    GST_ERROR ("failed to register element qcodec2h264dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2h265dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_H265_DEC)) {
+    GST_ERROR ("failed to register element qcodec2h265dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2vp9dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_VP9_DEC)) {
+    GST_ERROR ("failed to register element qcodec2vp9dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2mpeg2dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_MPEG2_DEC)) {
+    GST_ERROR ("failed to register element qcodec2mpeg2dec");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 /* Initialize the qticodec2vdec's class */
@@ -1494,9 +1487,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_qtivdec_src_template));
-
-  gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_qtivdec_sink_template));
 
   /* Set GObject class property */
   gobject_class->set_property = gst_qticodec2vdec_set_property;
