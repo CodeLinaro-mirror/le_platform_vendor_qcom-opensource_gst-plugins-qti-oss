@@ -99,7 +99,6 @@ G_DEFINE_TYPE (Gstqticodec2vdec, gst_qticodec2vdec, GST_TYPE_VIDEO_DECODER);
 
 #define GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT             (FALSE)
-#define GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT                   (0xffffffff)
 #define GST_QTI_CODEC2_SECURE_MODE_DEFAULT                      (FALSE)
 
 /* Function will be named qticodec2vdec_qdata_quark() */
@@ -114,7 +113,6 @@ enum
   PROP_SILENT,
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
-  PROP_MAP_OUTBUF,
   PROP_SECURE,
   PROP_DATA_COPY_FUNTION,
   PROP_DATA_COPY_FUNTION_PARAM,
@@ -503,24 +501,6 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   GST_INFO_OBJECT (dec, "DMA output feature is %s",
       (dec->downstream_supports_dma ? "enabled" : "disabled"));
-
-  switch (dec->map_outbuf) {
-    case 0:
-      actual_map = FALSE;
-      break;
-    case 1:
-      actual_map = TRUE;
-      break;
-    default:
-      actual_map = (dec->downstream_supports_dma) ? FALSE : TRUE;
-      break;
-  }
-
-  if (!c2component_mapOutBuffer (dec->comp, actual_map)) {
-
-    GST_ERROR_OBJECT (dec, "Failed to set map config");
-    goto error_setup_output;
-  }
 
   dec->output_state->caps = intersection;
   GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
@@ -1091,7 +1071,6 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
 
   outbuf = gst_qticodec2vdec_wrap_output_buffer (decoder, decode_buf);
   if (outbuf) {
-    gst_buffer_set_flags (outbuf, GST_BUFFER_FLAG_SYNC_AFTER);
     GST_BUFFER_PTS (outbuf) =
         gst_util_uint64_scale (decode_buf->timestamp, GST_SECOND,
         C2_TICKS_PER_SECOND);
@@ -1350,9 +1329,6 @@ gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     case PROP_LOW_LATENCY:
       dec->low_latency_mode = g_value_get_boolean (value);
       break;
-    case PROP_MAP_OUTBUF:
-      dec->map_outbuf = g_value_get_uint (value);
-      break;
     case PROP_SECURE:
       dec->secure = g_value_get_boolean (value);
       break;
@@ -1385,9 +1361,6 @@ gst_qticodec2vdec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_LOW_LATENCY:
       g_value_set_boolean (value, dec->low_latency_mode);
-      break;
-    case PROP_MAP_OUTBUF:
-      g_value_set_uint (value, dec->map_outbuf);
       break;
     case PROP_SECURE:
       g_value_set_boolean (value, dec->secure);
@@ -1513,12 +1486,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
-  g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_MAP_OUTBUF,
-      g_param_spec_uint ("map-outbuf", "Map output buffer",
-          "enable output buffer mapping (0xffffffff=default, 0: always NOT map output buffer, 1: always map output buffer",
-          0, G_MAXUINT, GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_SECURE,
       g_param_spec_boolean ("secure", "secure mode",
           "If enabled, decoder should be in secure mode",
@@ -1579,7 +1546,6 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->output_picture_order_mode =
       GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
   dec->low_latency_mode = GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT;
-  dec->map_outbuf = GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT;
   dec->out_port_pool = NULL;
   dec->is_10bit = FALSE;
   dec->check_vp9_10bit = FALSE;

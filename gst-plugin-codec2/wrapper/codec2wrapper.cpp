@@ -502,12 +502,10 @@ public:
         C2FrameData::flags_t flag) override;
     void onTripped(uint32_t errorCode) override;
     void onError(uint32_t errorCode) override;
-    void setMapBufferToCpu(bool enable) override;
 
 private:
     listener_cb mCallback;
     const void* mHandle;
-    bool mMapBufferToCpu;
 };
 
 CodecCallback::CodecCallback(const void* handle, listener_cb cb)
@@ -517,7 +515,6 @@ CodecCallback::CodecCallback(const void* handle, listener_cb cb)
 
     mCallback = cb;
     mHandle = handle;
-    mMapBufferToCpu = false;
 }
 
 CodecCallback::~CodecCallback()
@@ -577,18 +574,15 @@ void CodecCallback::onOutputBufferAvailable(
             LOG_INFO("get crop info (%d,%d) [%dx%d] bo:%p", crop.left, crop.top, crop.width, crop.height, outBuf.gbm_bo);
             outBuf.width = crop.width;
             outBuf.height = crop.height;
-            if (mMapBufferToCpu) {
-                /* get valid size for NV12_UBWC format */
-                if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
-                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
-                } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-                } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
-                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
-                }
-                outBuf.data = (guint8*)view.data()[0];
-            } else {
-                outBuf.data = NULL;
+            /* get valid size for NV12_UBWC format */
+            if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
+                outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
+            } else if (format == GBM_FORMAT_NV12) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
+            } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
+            } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
             }
 
             /* graphic_block unmapped once out of scope. */
@@ -656,12 +650,6 @@ void CodecCallback::onError(uint32_t errorCode)
     }
 
     mCallback(mHandle, EVENT_ERROR, &errorCode);
-}
-
-void CodecCallback::setMapBufferToCpu(bool enable)
-{
-
-    mMapBufferToCpu = enable;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1090,24 +1078,6 @@ gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType)
             ret = TRUE;
         } else {
             LOG_ERROR("Failed(%d) to allocate block pool(%d)", c2Status, poolType);
-        }
-    }
-
-    return ret;
-}
-
-gboolean c2component_mapOutBuffer(void* const comp, gboolean map)
-{
-
-    gboolean ret = FALSE;
-    c2_status_t c2Status = C2_NO_INIT;
-
-    if (comp) {
-        C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
-        c2Status = comp_wrapper->setMapBufferToCpu((map == TRUE) ? true : false);
-        if (c2Status == C2_OK) {
-            ret = TRUE;
         }
     }
 

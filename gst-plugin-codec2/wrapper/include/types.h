@@ -98,8 +98,6 @@ public:
     virtual void onTripped(uint32_t errorCode) = 0;
     virtual void onError(uint32_t errorCode) = 0;
 
-    // Map buffer
-    virtual void setMapBufferToCpu(bool enable) = 0;
     virtual ~EventCallback() {}
 };
 

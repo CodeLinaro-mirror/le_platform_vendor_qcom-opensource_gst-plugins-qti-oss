@@ -43,8 +43,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_qticodec2venc_debug);
 #define GST_CAT_DEFAULT gst_qticodec2venc_debug
 
 /* class initialization */
-G_DEFINE_TYPE (GstQcodec2H265Enc, gst_qcodec2_h265_enc,
-    GST_TYPE_QTICODEC2VENC);
+G_DEFINE_TYPE (GstQcodec2H265Enc, gst_qcodec2_h265_enc, GST_TYPE_QTICODEC2VENC);
 
 static GstStaticPadTemplate gst_qtivenc_src_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SRC_NAME,

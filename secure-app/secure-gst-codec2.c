@@ -52,7 +52,7 @@ int secure_copy (int dstbuf_fd, void* srcbuf, int datalen, void* param) {
 static void
 element_setup (GstElement * playbin, GstElement * element, GQueue * elts)
 {
-  if (strstr(GST_OBJECT_NAME (element), "qticodec2vdec")) {
+  if (strstr(GST_OBJECT_NAME (element), "qcodec2")) {
     g_debug ("found QTI codec2 vdec element");
     g_object_set (element, "secure", 1, NULL);
     g_object_set (element, "data-copy-func", (void*)&secure_copy, NULL);
