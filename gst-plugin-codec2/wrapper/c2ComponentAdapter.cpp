@@ -228,10 +228,15 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             }
 
             if (mDataCopyFunc) {
-                uint32_t dest_fd = linear_block->handle()->data[0];
-                int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
-                if (ret) {
-                    LOG_ERROR("data copy failed");
+                if (linear_block->handle()) {
+                    uint32_t dest_fd = linear_block->handle()->data[0];
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    if (ret) {
+                        LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+                } else {
+                    LOG_ERROR("invalid handle of linear block");
                     return C2_CORRUPTED;
                 }
             } else {
