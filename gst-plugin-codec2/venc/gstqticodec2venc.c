@@ -1424,10 +1424,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     inBuf.fd = gst_dmabuf_memory_get_fd (mem);
     inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
     inBuf.data = NULL;
-    inBuf.c2_buffer =
+    inBuf.c2Buffer =
         gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
         qticodec2_c2buf_qdata_quark ());
-    GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2_buffer,
+    GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2Buffer,
         inBuf.fd);
   } else {
     gst_buffer_map (buf, &mapinfo, GST_MAP_READ);

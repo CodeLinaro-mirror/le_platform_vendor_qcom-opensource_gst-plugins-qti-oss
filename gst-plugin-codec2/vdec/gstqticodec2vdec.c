@@ -995,7 +995,7 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
 
   if (out_buf) {
     gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
-        qticodec2_c2buf_qdata_quark (), decode_buf->c2_buffer, NULL);
+        qticodec2_c2buf_qdata_quark (), decode_buf->c2Buffer, NULL);
   } else {
     GST_ERROR_OBJECT (dec, "Fail to allocate output gst buffer");
     goto fail;
