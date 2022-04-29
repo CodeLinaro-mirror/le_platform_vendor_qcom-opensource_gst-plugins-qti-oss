@@ -581,7 +581,7 @@ void CodecCallback::onOutputBufferAvailable(
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
             } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-            } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
+            } else if (format == GBM_FORMAT_P010) {
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
             }
 
