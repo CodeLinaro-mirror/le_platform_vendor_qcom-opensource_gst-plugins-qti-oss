@@ -293,7 +293,7 @@ gst_to_c2_gbmformat(GstVideoFormat format)
     case GST_VIDEO_FORMAT_P010_10LE:
         result = GBM_FORMAT_YCbCr_420_P010_VENUS;
         break;
-    case GST_VIDEO_FORMAT_NV12_10LE32_UBWC:
+    case GST_VIDEO_FORMAT_NV12_10LE32:
         result = GBM_FORMAT_YCbCr_420_TP10_UBWC;
         break;
     default:

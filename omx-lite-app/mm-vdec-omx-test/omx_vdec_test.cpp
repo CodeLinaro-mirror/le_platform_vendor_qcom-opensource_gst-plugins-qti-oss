@@ -1057,7 +1057,8 @@ static void print_usage(char **argv)
   printf("Example: %s %s/data/xxx.h264 1 4 0 1 0 0\n\n", argv[0], KPI_INDICATOR_STR);
 
   printf("For secure mode, add %s before input file without blank\n", SECURE_INDICATOR_STR);
-  printf("Example: %s %s/data/xxx.h264 1 4 0 1 0 0\n\n", argv[0], SECURE_INDICATOR_STR);
+  printf("For secure mode, output_op only could be UBWC, linear yuv output isn't supported!\n");
+  printf("Example: %s %s/data/xxx.h264 1 4 8 1 0 0\n\n", argv[0], SECURE_INDICATOR_STR);
 }
 
 static bool open_gbm_device()
@@ -1137,6 +1138,12 @@ int main(int argc, char **argv)
 
   if (parse_argv1_mode_and_infile(argv[1]))
     return -1;
+
+  if (secure_mode && COLOR_FMT_NV12_UBWC != venus_color_fmt)
+  {
+    printf("Secure mode only support UBWC output, not support linear output!\n");
+    return -1;
+  }
 
   if (file_type_option >= FILE_TYPE_COMMON_CODEC_MAX)
   {

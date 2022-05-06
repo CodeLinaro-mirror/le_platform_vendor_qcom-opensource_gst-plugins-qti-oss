@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -102,10 +138,6 @@ static GstFlowReturn gst_qticodec2venc_handle_frame (GstVideoEncoder * encoder,
 static GstFlowReturn gst_qticodec2venc_finish (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_open (GstVideoEncoder * encoder);
 static gboolean gst_qticodec2venc_close (GstVideoEncoder * encoder);
-static gboolean gst_qticodec2venc_src_query (GstVideoEncoder * encoder,
-    GstQuery * query);
-static gboolean gst_qticodec2venc_sink_query (GstVideoEncoder * encoder,
-    GstQuery * query);
 static gboolean gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
     GstQuery * query);
 
@@ -144,81 +176,57 @@ static GstStaticPadTemplate gst_qtivenc_src_template =
         "alignment = (string) { au }")
     );
 
+#define GST_QC2VENC_CAPS_MAKE(format,min,max) \
+    "video/x-raw, "                           \
+    "format = (string) " format ", "          \
+    "width = (int) [" #min ", " #max "], "    \
+    "height = (int) [" #min ", " #max "],"    \
+    "framerate = " GST_VIDEO_FPS_RANGE
+
+#define GST_QC2VENC_CAPS_MAKE_WITH_FEATURES(feature,format,min,max) \
+    "video/x-raw(" feature "), "                                    \
+    "format = (string) " format ", "                                \
+    "width = (int) [" #min ", " #max "], "                          \
+    "height = (int) [" #min ", " #max "],"                          \
+    "framerate = " GST_VIDEO_FPS_RANGE
+
+#define GST_QC2VENC_SINK_TEMPLATE_CAP \
+    GST_QC2VENC_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_MEMORY_DMABUF,"NV12",128,8192)";" \
+    GST_QC2VENC_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_MEMORY_DMABUF,"P010_10LE",128,8192)";" \
+    GST_QC2VENC_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_MEMORY_DMABUF,"NV12_10LE32",128,8192)";" \
+    GST_QC2VENC_CAPS_MAKE("NV12",128,8192)";" \
+    GST_QC2VENC_CAPS_MAKE("P010_10LE",128,8192)";" \
+    GST_QC2VENC_CAPS_MAKE("NV12_10LE32",128,8192)
+
 static GstStaticPadTemplate gst_qtivenc_sink_template =
-    GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SINK_NAME,
+GST_STATIC_PAD_TEMPLATE (GST_VIDEO_ENCODER_SINK_NAME,
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw(memory:DMABuf), "
-        "format = (string) NV12, "
-        "width  = (int) [ 32, 4096 ], "
-        "height = (int) [ 32, 4096 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw(memory:DMABuf), "
-        "format = (string) NV12_UBWC, "
-        "width  = (int) [ 32, 4096 ], "
-        "height = (int) [ 32, 4096 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw(memory:DMABuf), "
-        "format = (string) P010_10LE, "
-        "width  = (int) [ 128, 8192 ], "
-        "height = (int) [ 128, 8192 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw(memory:DMABuf), "
-        "format = (string) NV12_10LE32_UBWC, "
-        "width  = (int) [ 128, 8192 ], "
-        "height = (int) [ 128, 8192 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw, "
-        "format = (string) NV12, "
-        "width  = (int) [ 32, 4096 ], "
-        "height = (int) [ 32, 4096 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw, "
-        "format = (string) NV12_UBWC, "
-        "width  = (int) [ 32, 4096 ], "
-        "height = (int) [ 32, 4096 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw, "
-        "format = (string) P010_10LE, "
-        "width  = (int) [ 128, 8192 ], "
-        "height = (int) [ 128, 8192 ],"
-        "framerate = " GST_VIDEO_FPS_RANGE ""
-        ";"
-        "video/x-raw, "
-        "format = (string) NV12_10LE32_UBWC, "
-        "width  = (int) [ 128, 8192 ], "
-        "height = (int) [ 128, 8192 ]," "framerate = " GST_VIDEO_FPS_RANGE "")
-    );
+    GST_STATIC_CAPS (GST_QC2VENC_SINK_TEMPLATE_CAP));
 
 static ConfigParams
-make_bitrate_param (guint32 bitrate, gboolean isInput)
+make_bitrate_param (guint32 bitrate, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_BITRATE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.val.u32 = bitrate;
 
   return param;
 }
 
 static ConfigParams
-make_resolution_param (guint32 width, guint32 height, gboolean isInput)
+make_resolution_param (guint32 width, guint32 height, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_RESOLUTION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.resolution.width = width;
   param.resolution.height = height;
 
@@ -226,63 +234,63 @@ make_resolution_param (guint32 width, guint32 height, gboolean isInput)
 }
 
 static ConfigParams
-make_pixelFormat_param (guint32 fmt, gboolean isInput)
+make_pixel_format_param (guint32 fmt, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_PIXELFORMAT;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.pixelFormat.fmt = fmt;
 
   return param;
 }
 
 static ConfigParams
-make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean isInput)
+make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.interlaceMode.type = mode;
 
   return param;
 }
 
 static ConfigParams
-make_mirror_param (MIRROR_TYPE mirror, gboolean isInput)
+make_mirror_param (MIRROR_TYPE mirror, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_MIRROR;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.mirror.type = mirror;
 
   return param;
 }
 
 static ConfigParams
-make_rotation_param (guint32 rotation, gboolean isInput)
+make_rotation_param (guint32 rotation, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_ROTATION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.val.u32 = rotation;
 
   return param;
 }
 
 static ConfigParams
-make_rateControl_param (RC_MODE_TYPE mode)
+make_rate_control_param (RC_MODE_TYPE mode)
 {
   ConfigParams param;
 
@@ -323,7 +331,7 @@ make_slicemode_param (guint32 size, SLICE_MODE mode)
 }
 
 static ConfigParams
-make_colorSpaceConv_param (gboolean csc)
+make_color_space_conv_param (gboolean csc)
 {
   ConfigParams param;
 
@@ -336,7 +344,7 @@ make_colorSpaceConv_param (gboolean csc)
 }
 
 static ConfigParams
-make_colorAspects_param (COLOR_PRIMARIES primaries, TRANSFER_CHAR transfer_char,
+make_color_aspects_param (COLOR_PRIMARIES primaries, TRANSFER_CHAR transfer_char,
     MATRIX matrix, FULL_RANGE full_range)
 {
   ConfigParams param;
@@ -353,7 +361,7 @@ make_colorAspects_param (COLOR_PRIMARIES primaries, TRANSFER_CHAR transfer_char,
 }
 
 static ConfigParams
-make_intraRefresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
+make_intra_refresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
 {
   ConfigParams param;
 
@@ -367,28 +375,28 @@ make_intraRefresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
 }
 
 static ConfigParams
-make_blur_mode_param (BLUR_MODE mode, gboolean isInput)
+make_blur_mode_param (BLUR_MODE mode, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_BLUR_MODE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.blur.mode = mode;
 
   return param;
 }
 
 static ConfigParams
-make_blur_resolution_param (guint32 width, guint32 height, gboolean isInput)
+make_blur_resolution_param (guint32 width, guint32 height, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_BLUR_RESOLUTION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.resolution.width = width;
   param.resolution.height = height;
 
@@ -412,26 +420,35 @@ get_c2_comp_name (GstStructure * structure)
 }
 
 static guint32
-gst_to_c2_pixelformat (GstVideoFormat format)
+gst_to_c2_pixelformat (GstVideoEncoder * encoder, GstVideoFormat format)
 {
   guint32 result = 0;
+  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
 
   switch (format) {
     case GST_VIDEO_FORMAT_NV12:
-      result = PIXEL_FORMAT_NV12_LINEAR;
-      break;
-    case GST_VIDEO_FORMAT_NV12_UBWC:
-      result = PIXEL_FORMAT_NV12_UBWC;
+      if (enc->is_ubwc) {
+        result = PIXEL_FORMAT_NV12_UBWC;
+      } else {
+        result = PIXEL_FORMAT_NV12_LINEAR;
+      }
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
       result = PIXEL_FORMAT_P010;
       break;
-    case GST_VIDEO_FORMAT_NV12_10LE32_UBWC:
-      result = PIXEL_FORMAT_TP10_UBWC;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      if (enc->is_ubwc) {
+        result = PIXEL_FORMAT_TP10_UBWC;
+      } else {
+        GST_ERROR_OBJECT (enc, "unsupported format Linear NV12_10LE32 yet");
+      }
       break;
     default:
       break;
   }
+
+  GST_DEBUG_OBJECT (enc, "to_c2_pixelformat (%s), c2 format: %d",
+      gst_video_format_to_string (format), result);
 
   return result;
 }
@@ -481,7 +498,7 @@ gst_qticodec2venc_blur_mode_get_type (void)
   if (qtype == 0) {
     static const GEnumValue values[] = {
       {BLUR_AUTO, "Disable External Blur but Enable Internal Blur. If set "
-          "before start, blur is disabled throughout the session.", "auto"},
+            "before start, blur is disabled throughout the session.", "auto"},
       {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
             "Blur is applied when valid resolution is set.", "manual"},
       {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
@@ -665,7 +682,7 @@ gst_qticodec2venc_create_component (GstVideoEncoder * encoder)
 
     ret =
         c2componentStore_createComponent (enc->comp_store, enc->comp_name,
-        &enc->comp);
+        &enc->comp, NULL);
     if (ret == FALSE) {
       GST_DEBUG_OBJECT (enc, "Failed to create component");
     }
@@ -768,7 +785,7 @@ gst_qticodec2venc_setup_output (GstVideoEncoder * encoder,
     if (!enc->output_state) {
       GST_ERROR_OBJECT (enc, "set output state error");
       gst_caps_unref (outcaps);
-      g_free(comp_name);
+      g_free (comp_name);
       return GST_FLOW_ERROR;
     }
     enc->output_setup = TRUE;
@@ -799,7 +816,7 @@ gst_qticodec2venc_stop (GstVideoEncoder * encoder)
   return ret;
 }
 
-/* Dispatch any pending remaining data at EOS. Class can refuse to decode new data after. */
+/* Dispatch any pending remaining data at EOS. Class can refuse to encode new data after. */
 static GstFlowReturn
 gst_qticodec2venc_finish (GstVideoEncoder * encoder)
 {
@@ -838,13 +855,26 @@ gst_qticodec2venc_finish (GstVideoEncoder * encoder)
       GST_ERROR_OBJECT (enc, "Timed out on wait, exiting!");
     }
   } else {
-    GST_DEBUG_OBJECT (enc, "EOS reached on output, finish the decoding");
+    GST_DEBUG_OBJECT (enc, "EOS reached on output, finish encoding");
   }
 
   g_mutex_unlock (&enc->pending_lock);
   GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
   return GST_FLOW_OK;
+}
+
+static gboolean
+caps_has_compression (const GstCaps * caps, const gchar * compression)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "compression") ?
+      gst_structure_get_string (structure, "compression") : NULL;
+
+  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
 }
 
 /* Called to inform the caps describing input video data that encoder is about to receive.
@@ -894,6 +924,10 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
       goto error_format;
     }
   }
+
+  GST_DEBUG_OBJECT (enc, "caps: %" GST_PTR_FORMAT, state->caps);
+  enc->is_ubwc = caps_has_compression (state->caps, "ubwc");
+  GST_DEBUG_OBJECT (enc, "Fixed color format:%s, UBWC:%d", fmt, enc->is_ubwc);
 
   if (enc->input_setup) {
     /* Already setup, check to see if something has changed on input caps... */
@@ -953,10 +987,11 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   g_ptr_array_add (config, &resolution);
 
   pixelformat =
-      make_pixelFormat_param (gst_to_c2_pixelformat (input_format), TRUE);
+      make_pixel_format_param (gst_to_c2_pixelformat (encoder, input_format),
+      TRUE);
   g_ptr_array_add (config, &pixelformat);
 
-  rate_control = make_rateControl_param (enc->rcMode);
+  rate_control = make_rate_control_param (enc->rcMode);
   g_ptr_array_add (config, &rate_control);
 
   if (enc->mirror != MIRROR_NONE) {
@@ -983,11 +1018,11 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   if (enc->color_space_conversion) {
     GST_DEBUG_OBJECT (enc, "enable color space conversion");
     color_space_conversion =
-        make_colorSpaceConv_param (enc->color_space_conversion);
+        make_color_space_conv_param (enc->color_space_conversion);
     g_ptr_array_add (config, &color_space_conversion);
     GST_DEBUG_OBJECT (enc, "set color aspect info");
     color_aspects =
-        make_colorAspects_param (enc->primaries, enc->transfer_char,
+        make_color_aspects_param (enc->primaries, enc->transfer_char,
         enc->matrix, enc->full_range);
     g_ptr_array_add (config, &color_aspects);
   }
@@ -996,7 +1031,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GST_DEBUG_OBJECT (enc, "set intra refresh mode: %d, mbs:%d",
         enc->intra_refresh_mode, enc->intra_refresh_mbs);
     intra_refresh =
-        make_intraRefresh_param (enc->intra_refresh_mode,
+        make_intra_refresh_param (enc->intra_refresh_mode,
         enc->intra_refresh_mbs);
     g_ptr_array_add (config, &intra_refresh);
   }
@@ -1018,6 +1053,11 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   GST_DEBUG_OBJECT (enc,
       "set graphic pool with: %d, height: %d, format: %x, rc mode: %d",
       enc->width, enc->height, enc->input_format, enc->rcMode);
+
+  if (!c2componentInterface_initReflectedParamUpdater (enc->comp_store,
+          enc->comp_intf)) {
+    GST_WARNING_OBJECT (enc, "Failed to init ReflectedParamUpdater");
+  }
 
   if (!c2componentInterface_config (enc->comp_intf,
           config, BLOCK_MODE_MAY_BLOCK)) {
@@ -1127,44 +1167,6 @@ gst_qticodec2venc_handle_frame (GstVideoEncoder * encoder,
 }
 
 static gboolean
-gst_qticodec2venc_src_query (GstVideoEncoder * encoder, GstQuery * query)
-{
-  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  GstPad *pad = GST_VIDEO_ENCODER_SRC_PAD (encoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (enc, "src_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_ENCODER_CLASS (parent_class)->src_query (encoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_qticodec2venc_sink_query (GstVideoEncoder * encoder, GstQuery * query)
-{
-  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  GstPad *pad = GST_VIDEO_ENCODER_SINK_PAD (encoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (enc, "sink_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_ENCODER_CLASS (parent_class)->sink_query (encoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
 gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
     GstQuery * query)
 {
@@ -1192,7 +1194,7 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   if (gst_qticodec2_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     enc->pool =
         gst_qticodec2_buffer_pool_new (enc->comp, BUFFER_POOL_BASIC_GRAPHIC,
-        num_max_buffers, caps);
+        num_max_buffers, caps, enc->is_ubwc);
 
     if (!enc->pool)
       goto cleanup;
@@ -1234,7 +1236,7 @@ cleanup:
   return FALSE;
 }
 
-/* Push decoded frame to downstream element */
+/* Push encoded frame to downstream element */
 static GstFlowReturn
 push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
 {
@@ -1457,6 +1459,7 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   inBuf.width = enc->width;
   inBuf.height = enc->height;
   inBuf.format = enc->input_format;
+  inBuf.ubwc_flag = enc->is_ubwc;
 
   gst_memory_unref (mem);
 
@@ -1476,7 +1479,7 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 
   if (!status) {
-    GST_ERROR_OBJECT(enc, "failed to queue input frame to Codec2");
+    GST_ERROR_OBJECT (enc, "failed to queue input frame to Codec2");
     ret = GST_FLOW_ERROR;
     goto out;
   }
@@ -1846,10 +1849,6 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
   video_encoder_class->finish = GST_DEBUG_FUNCPTR (gst_qticodec2venc_finish);
   video_encoder_class->open = GST_DEBUG_FUNCPTR (gst_qticodec2venc_open);
   video_encoder_class->close = GST_DEBUG_FUNCPTR (gst_qticodec2venc_close);
-  video_encoder_class->src_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2venc_src_query);
-  video_encoder_class->sink_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2venc_sink_query);
   video_encoder_class->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_qticodec2venc_propose_allocation);
 
@@ -1887,6 +1886,7 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->blur_mode = BLUR_DISABLE;
   enc->blur_width = 0;
   enc->blur_height = 0;
+  enc->is_ubwc = FALSE;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 

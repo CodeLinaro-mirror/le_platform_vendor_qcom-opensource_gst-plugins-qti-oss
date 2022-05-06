@@ -45,7 +45,7 @@ OMX_ERRORTYPE crypto_init(Crypto *crypto) {
     crypto->m_crypto_set_appname = NULL;
     crypto->m_crypto_deinit = NULL;
     crypto->m_crypto_copy = NULL;
-    GST_ERROR ("Crypto init");
+    GST_DEBUG ("Crypto init");
     OMX_ERRORTYPE result = load_crypto_lib(crypto);
     if (result == OMX_ErrorNone) {
         if (crypto->m_crypto_init) {
@@ -89,7 +89,7 @@ OMX_ERRORTYPE crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
         return OMX_ErrorBadParameter;
     }
 
-    GST_ERROR ("CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d",
+    GST_DEBUG ("CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d",
         (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir);
     result = crypto->m_crypto_copy(crypto->m_secure_handle, pBuffer, nBufferSize,
             nBufferFd, 0, &nBytesCopied, eCopyDir);
@@ -107,7 +107,7 @@ OMX_ERRORTYPE load_crypto_lib(Crypto *crypto) {
 
     OMX_ERRORTYPE result = OMX_ErrorNone;
 
-    GST_ERROR ("Loading crypto lib");
+    GST_DEBUG ("Loading crypto lib");
 
     crypto->m_lib_handle = dlopen(SymOEMCryptoLib, RTLD_NOW);
     if (crypto->m_lib_handle == NULL) {
@@ -115,7 +115,7 @@ OMX_ERRORTYPE load_crypto_lib(Crypto *crypto) {
         return OMX_ErrorUndefined;
     }
 
-    crypto->m_crypto_set_appname = (Crypto_Init)dlsym(crypto->m_lib_handle, SymOEMCryptoSetAppName);
+    crypto->m_crypto_set_appname = (Crypto_Set_AppName)dlsym(crypto->m_lib_handle, SymOEMCryptoSetAppName);
     if (crypto->m_crypto_set_appname == NULL) {
         GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerror());
         result = OMX_ErrorUndefined;

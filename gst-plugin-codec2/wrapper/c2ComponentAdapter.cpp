@@ -70,6 +70,8 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mGraphicPool = nullptr;
     mMapBufferToCpu = false;
     mNumPendingWorks = 0;
+    mDataCopyFunc = nullptr;
+    mDataCopyFuncParam = nullptr;
 }
 
 C2ComponentAdapter::~C2ComponentAdapter()
@@ -83,6 +85,7 @@ C2ComponentAdapter::~C2ComponentAdapter()
     mCallback = nullptr;
     mInPendingBuffer.clear();
     mOutPendingBuffer.clear();
+    mTrackBuffers.clear();
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
 }
@@ -107,6 +110,15 @@ c2_status_t C2ComponentAdapter::setListenercallback(std::unique_ptr<EventCallbac
     return result;
 }
 
+c2_status_t C2ComponentAdapter::setDataCopyFunc(void* func, void* param)
+{
+    c2_status_t result = C2_OK;
+    mDataCopyFunc = reinterpret_cast<fnDataCopy>(func);
+    mDataCopyFuncParam = param;
+
+    return result;
+}
+
 c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buffer_info)
 {
     c2_status_t result = C2_OK;
@@ -122,23 +134,29 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
     if (buffer_info->format == GST_VIDEO_FORMAT_NV12) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
-        uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+                width, height, 0);
+            memcpy(dst, src, buf_size);
+        } else {
+            uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+            uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
 
-        for (int i = 0; i < height; i++) {
-            memcpy(dst, src, width);
-            dst += y_stride;
-            src += width;
-        }
+            for (int i = 0; i < height; i++) {
+                memcpy(dst, src, width);
+                dst += y_stride;
+                src += width;
+            }
 
-        uint32_t offset = y_stride * y_scanlines;
-        dst = dest + offset;
+            uint32_t offset = y_stride * y_scanlines;
+            dst = dest + offset;
 
-        for (int i = 0; i < height / 2; i++) {
-            memcpy(dst, src, width);
-            dst += uv_stride;
-            src += width;
+            for (int i = 0; i < height / 2; i++) {
+                memcpy(dst, src, width);
+                dst += uv_stride;
+                src += width;
+            }
         }
     } else if (buffer_info->format == GST_VIDEO_FORMAT_P010_10LE) {
         uint32_t width = buffer_info->width;
@@ -161,11 +179,17 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
             dst += uv_stride;
             src += width * 2;
         }
-    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32_UBWC) {
+    } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32) {
         uint32_t width = buffer_info->width;
         uint32_t height = buffer_info->height;
-        uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-        memcpy(dst, src, buf_size);
+        if (buffer_info->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC,
+                width, height);
+            memcpy(dst, src, buf_size);
+        } else {
+            LOG_ERROR("Non UBWC NV12_10LE32 not supported yet");
+            result = C2_BAD_VALUE;
+        }
     } else {
         result = C2_BAD_VALUE;
     }
@@ -192,6 +216,9 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
         std::shared_ptr<C2Buffer> buf;
         c2_status_t err = C2_OK;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+        if (buffer->secure) {
+            usage = { C2MemoryUsage::READ_PROTECTED, 0 };
+        }
 
         if (poolType == C2BlockPool::BASIC_LINEAR) {
             allocSize = ALIGN(frameSize, 4096);
@@ -201,19 +228,39 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
                 return C2_NO_MEMORY;
             }
 
-            C2WriteView view = linear_block->map().get();
-            if (view.error() != C2_OK) {
-                LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
-                return C2_NO_MEMORY;
+            if (mDataCopyFunc) {
+                uint32_t dest_fd = linear_block->handle()->data[0];
+                int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                if (ret) {
+                    LOG_ERROR("data copy failed");
+                    return C2_CORRUPTED;
+                }
+            } else {
+                if (!buffer->secure) {
+                    C2WriteView view = linear_block->map().get();
+                    if (view.error() != C2_OK) {
+                        LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
+                        return C2_NO_MEMORY;
+                    }
+                    destBuffer = view.base();
+                    memcpy(destBuffer, rawBuffer, frameSize);
+                } else {
+                    LOG_ERROR("should not be here for secure mode");
+                    return C2_CORRUPTED;
+                }
             }
-            destBuffer = view.base();
-            memcpy(destBuffer, rawBuffer, frameSize);
             linear_block->mSize = frameSize;
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
             if (mGraphicPool) {
-                // TODO support NV12_UBWC input by usage
-                usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+                if (buffer->format == GST_VIDEO_FORMAT_NV12
+                    && buffer->ubwc_flag) {
+                    LOG_MESSAGE("NV12: usage add UBWC");
+                    usage = {
+                        C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+                        C2MemoryUsage::CPU_WRITE
+                    };
+                }
                 err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                     gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
                 C2GraphicView view(graphic_block->map().get());
@@ -244,8 +291,7 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
 }
 
 c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
-    uint32_t maxPendingWorks,
-    uint32_t timeoutMs)
+    uint32_t maxPendingWorks, uint32_t timeoutMs)
 {
 
     std::unique_lock<std::mutex> ul(mLock);
@@ -269,6 +315,112 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
     return C2_OK;
 }
 
+void C2ComponentAdapter::registerTrackBuffer(const C2FrameData& input)
+{
+    uint64_t frameIndex = input.ordinal.frameIndex.peeku();
+
+    for (size_t i = 0; i < input.buffers.size(); ++i) {
+        TrackBuffer* trackbuf = new TrackBuffer(this, frameIndex, input.buffers[i]);
+        if (trackbuf != nullptr) {
+            c2_status_t status = input.buffers[i]->registerOnDestroyNotify(
+                onDestroyNotify, trackbuf);
+
+            if (status != C2_OK) {
+                LOG_ERROR("TrackBuffer registerOnDestroyNotify failed, buf idx:%zu", trackbuf->frameIndex);
+                delete trackbuf;
+            } else {
+                LOG_MESSAGE("emplace buf idx:%zu TrackBuffer %p to mTrackBuffers", trackbuf->frameIndex, trackbuf);
+                std::unique_lock<std::mutex> ul(mLock);
+                mTrackBuffers.emplace(trackbuf);
+            }
+        }
+    }
+}
+
+void C2ComponentAdapter::unregisterTrackBuffer(
+    std::list<std::unique_ptr<C2Work> >& workItems)
+{
+    // Unregister input buffers onDestroyNotify
+    for (const std::unique_ptr<C2Work>& work : workItems) {
+        if (work) {
+
+            uint64_t frameIndex = work->input.ordinal.frameIndex.peeku();
+
+            {
+                std::unique_lock<std::mutex> ul(mLock);
+                for (auto it = mTrackBuffers.begin();
+                     it != mTrackBuffers.end(); ++it) {
+                    if ((*it)->frameIndex == frameIndex) {
+                        if (auto buffer = (*it)->buffer.lock()) {
+                            buffer->unregisterOnDestroyNotify(
+                                onDestroyNotify, this);
+                        }
+
+                        LOG_MESSAGE("erase buf idx:%zu, TrackBuffer %p",
+                            frameIndex, (*it));
+                        mTrackBuffers.erase(it);
+                        delete (*it);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void C2ComponentAdapter::unregisterTrackBufferAll()
+{
+    LOG_MESSAGE("unregister all track buffers");
+
+    std::unique_lock<std::mutex> ul(mLock);
+
+    for (auto it = mTrackBuffers.begin(); it != mTrackBuffers.end(); ++it) {
+        if (auto buf = (*it)->buffer.lock()) {
+            LOG_MESSAGE("erase buf idx:%zu TrackBuffer %p", (*it)->frameIndex, (*it));
+            buf->unregisterOnDestroyNotify(onDestroyNotify, this);
+        }
+
+        mTrackBuffers.erase(it);
+        delete (*it);
+    }
+}
+
+void C2ComponentAdapter::onDestroyNotify(const C2Buffer* buf, void* arg)
+{
+    if (!buf || !arg) {
+        LOG_MESSAGE("no buf");
+        return;
+    }
+
+    TrackBuffer* trackbuf = (TrackBuffer*)arg;
+    if (trackbuf->adapter) {
+        trackbuf->adapter->onBufferDestroyed(buf, arg);
+    }
+}
+
+void C2ComponentAdapter::onBufferDestroyed(const C2Buffer* buf, void* arg)
+{
+    std::unique_lock<std::mutex> ul(mLock);
+
+    LOG_MESSAGE("%s mNumPendingWorks %d", __func__, mNumPendingWorks);
+
+    TrackBuffer* trackbuf = (TrackBuffer*)arg;
+    if (!mTrackBuffers.empty()) {
+
+        auto buf = mTrackBuffers.find(trackbuf);
+        if (buf != mTrackBuffers.end()) {
+            LOG_MESSAGE("erase buf idx:%zu TrackBuffer %p", trackbuf->frameIndex, trackbuf);
+            mTrackBuffers.erase(buf);
+            delete trackbuf;
+        }
+
+        if (mNumPendingWorks > 0) {
+            mNumPendingWorks--;
+        }
+
+        mCondition.notify_one();
+    }
+}
+
 std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 {
     c2_status_t err = C2_OK;
@@ -279,8 +431,9 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
         std::shared_ptr<C2GraphicBlock> graphic_block;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
-            // TODO support NV12_UBWC input by usage
-            usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+            if (buffer->ubwc_flag) {
+                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
+            }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                 gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
             C2GraphicView view(graphic_block->map().get());
@@ -314,7 +467,7 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 
                 _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
                 buffer->capacity = size;
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d", fd, buffer->capacity);
+                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
@@ -394,6 +547,8 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
         return C2_BAD_VALUE;
     }
 
+    registerTrackBuffer(work->input);
+
     work->worklets.clear();
     work->worklets.emplace_back(new C2Worklet);
     workList.push_back(std::move(work));
@@ -407,10 +562,10 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     result = mComp->queue_nb(&workList);
     if (result != C2_OK) {
         LOG_ERROR("Failed to queue work");
+    } else {
+        std::unique_lock<std::mutex> ul(mLock);
+        mNumPendingWorks++;
     }
-
-    std::unique_lock<std::mutex> ul(mLock);
-    mNumPendingWorks++;
 
     return result;
 }
@@ -423,7 +578,8 @@ c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode,
 
     c2_status_t result = C2_OK;
     UNUSED(mode);
-    UNUSED(flushedWork);
+
+    unregisterTrackBuffer(*flushedWork);
 
     return result;
 }
@@ -452,7 +608,11 @@ c2_status_t C2ComponentAdapter::stop()
 
     LOG_MESSAGE("Component(%p) stop", this);
 
-    return mComp->stop();
+    c2_status_t result = mComp->stop();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 c2_status_t C2ComponentAdapter::reset()
@@ -460,7 +620,11 @@ c2_status_t C2ComponentAdapter::reset()
 
     LOG_MESSAGE("Component(%p) reset", this);
 
-    return mComp->reset();
+    c2_status_t result = mComp->reset();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 c2_status_t C2ComponentAdapter::release()
@@ -468,7 +632,11 @@ c2_status_t C2ComponentAdapter::release()
 
     LOG_MESSAGE("Component(%p) release", this);
 
-    return mComp->release();
+    c2_status_t result = mComp->release();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 C2ComponentInterfaceAdapter* C2ComponentAdapter::intf()
@@ -548,18 +716,12 @@ void C2ComponentAdapter::handleWorkDone(
         }
 
         if (work->worklets.empty()) {
-            LOG_MESSAGE("Component(%p) worklet empty", this);
+            LOG_DEBUG("Component(%p) worklet empty", this);
             continue;
         }
 
-        if (work->result == C2_NOT_FOUND) {
-            LOG_MESSAGE("No output for component(%p)", this);
-            break;
-        }
-
-        // Work failed to complete
         if (work->result != C2_OK) {
-            LOG_MESSAGE("Failed to generate output for component(%p)", this);
+            LOG_DEBUG("No output for component(%p), ret:%d", this, work->result);
             break;
         }
 
@@ -587,6 +749,7 @@ void C2ComponentAdapter::handleWorkDone(
                             LOG_ERROR("Failed to get allocator");
                             break;
                         }
+
                         std::shared_ptr<android::C2AllocatorGBM> allocatorGBM = std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
                         allocatorGBM->setMaxAllocationCount(outputDelay.value);
                     }
@@ -614,25 +777,20 @@ void C2ComponentAdapter::handleWorkDone(
             }
 
             mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
-            std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks--;
-            mCondition.notify_one();
         } else {
 
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
                 mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
-                LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple"
+                LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple "
                             "output frames, or codec config update event",
                     this);
                 continue;
             } else {
-                LOG_ERROR("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
+                LOG_MESSAGE("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
             }
-            std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks--;
-            mCondition.notify_one();
+
             break;
         }
     }
@@ -691,7 +849,7 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
             result = C2_OK;
 
         } else {
-            LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+            LOG_ERROR("Buffer index(%lu) not found", bufferIdx);
         }
     }
 

@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -42,9 +78,9 @@
 
 #include "gstqticodec2vdec.h"
 #include "gstqticodec2vdecbufferpool.h"
-#include "codec2wrapper.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
+#include <media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2vdec_debug);
 #define GST_CAT_DEFAULT gst_qticodec2vdec_debug
@@ -60,6 +96,7 @@ G_DEFINE_TYPE (Gstqticodec2vdec, gst_qticodec2vdec, GST_TYPE_VIDEO_DECODER);
 #define GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT             (FALSE)
 #define GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT                   (0xffffffff)
+#define GST_QTI_CODEC2_SECURE_MODE_DEFAULT                      (FALSE)
 
 /* Function will be named qticodec2vdec_qdata_quark() */
 static G_DEFINE_QUARK (QtiCodec2DecoderQuark, qticodec2vdec_qdata);
@@ -74,6 +111,9 @@ enum
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
   PROP_MAP_OUTBUF,
+  PROP_SECURE,
+  PROP_DATA_COPY_FUNTION,
+  PROP_DATA_COPY_FUNTION_PARAM,
 };
 
 /* GstVideoDecoder base class method */
@@ -84,13 +124,9 @@ static GstFlowReturn gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 static GstFlowReturn gst_qticodec2vdec_finish (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_open (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_close (GstVideoDecoder * decoder);
-static gboolean gst_qticodec2vdec_src_query (GstVideoDecoder * decoder,
-    GstQuery * query);
-static gboolean gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder,
-    GstQuery * query);
+
 static gboolean gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query);
-
 static void gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_qticodec2vdec_get_property (GObject * object, guint prop_id,
@@ -108,26 +144,40 @@ static GstFlowReturn gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder,
     GPtrArray * config);
 static GstBuffer *gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder *
     decoder, BufferDescriptor * buffer);
-static void gst_video_decoder_buffer_release (GstStructure * structure);
 static gboolean gst_qticodec2vdec_caps_has_feature (const GstCaps * caps,
     const gchar * partten);
+
+#define COMMON_VIDEO_CAPS(min, max) \
+    "width = (int) [" #min ", " #max "], "    \
+    "height = (int) [" #min ", " #max "]"
+
+#define H264_CAPS \
+    "video/x-h264, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+
+#define H265_CAPS \
+    "video/x-h265, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+
+#define VP9_CAPS \
+    "video/x-vp9, " \
+    COMMON_VIDEO_CAPS(96, 4096)
+
+#define MPEG2_CAPS \
+    "video/mpeg, " \
+    "mpegversion = (int)2, " \
+    COMMON_VIDEO_CAPS(96, 1920)
 
 /* pad templates */
 static GstStaticPadTemplate gst_qtivdec_sink_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-h264,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-h265,"
-        "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "video/x-vp8"
-        ";" "video/x-vp9" ";" "video/mpeg," "mpegversion = (int)2")
-    );
+    GST_STATIC_CAPS (H264_CAPS ";" H265_CAPS ";" VP9_CAPS ";" MPEG2_CAPS));
 
 static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SRC_NAME,
@@ -136,20 +186,33 @@ static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_CAPS (QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ NV12 }")
         ";" QTICODEC2VDEC_RAW_CAPS ("{ NV12 }")
-    )
-    );
+        ";" QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ NV12_10LE32 }")
+        ";" QTICODEC2VDEC_RAW_CAPS ("{ NV12_10LE32 }")
+        ";" QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_DMABUF, "{ P010_10LE }")
+        ";" QTICODEC2VDEC_RAW_CAPS ("{ P010_10LE }")));
 
 static gboolean
 caps_has_compression (const GstCaps * caps, const gchar * compression)
 {
   GstStructure *structure = NULL;
   const gchar *string = NULL;
+  guint count = gst_caps_get_size (caps);
+  gboolean ret = FALSE;
 
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
+  for (gint i = 0; i < count; i++) {
+    structure = gst_caps_get_structure (caps, i);
+    string =
+        gst_structure_has_field (structure,
+        "compression") ? gst_structure_to_string (structure) : NULL;
+    if (string && g_strrstr (string, compression)) {
+      ret = TRUE;
+      break;
+    }
+  }
 
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+  return ret;
 }
 
 static void
@@ -167,14 +230,14 @@ modifier_free (gpointer p_modifier)
 }
 
 static ConfigParams
-make_resolution_param (guint32 width, guint32 height, gboolean isInput)
+make_resolution_param (guint32 width, guint32 height, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_RESOLUTION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.resolution.width = width;
   param.resolution.height = height;
 
@@ -182,28 +245,28 @@ make_resolution_param (guint32 width, guint32 height, gboolean isInput)
 }
 
 static ConfigParams
-make_pixelFormat_param (guint32 fmt, gboolean isInput)
+make_pixel_format_param (guint32 fmt, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_PIXELFORMAT;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.pixelFormat.fmt = fmt;
 
   return param;
 }
 
 static ConfigParams
-make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean isInput)
+make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.interlaceMode.type = mode;
 
   return param;
@@ -243,7 +306,10 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
   gchar *str = NULL;
   gchar *concat_str = NULL;
   gchar *str_low_latency = g_strdup (".low_latency");
+  gchar *str_secure = g_strdup (".secure");
+  gchar *str_suffix = NULL;
   gboolean supported = FALSE;
+  gboolean secure = dec->secure;
   gint mpegversion = 0;
 
   if (gst_structure_has_name (s, "video/x-h264")) {
@@ -263,7 +329,16 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
   }
 
   if (low_latency) {
-    concat_str = g_strconcat (str, str_low_latency, NULL);
+    str_suffix = str_low_latency;
+    GST_DEBUG_OBJECT (dec, "selected low latency component");
+  }
+  if (secure) {
+    str_suffix = str_secure;
+    GST_DEBUG_OBJECT (dec, "selected secure component");
+  }
+
+  if (low_latency || secure) {
+    concat_str = g_strconcat (str, str_suffix, NULL);
     supported =
         c2componentStore_isComponentSupported (dec->comp_store, concat_str);
 
@@ -278,6 +353,8 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
 
   if (str_low_latency)
     g_free (str_low_latency);
+  if (str_secure)
+    g_free (str_secure);
 
   return str;
 }
@@ -295,6 +372,12 @@ gst_to_c2_pixelformat (GstVideoDecoder * decoder, GstVideoFormat format)
       } else {
         result = PIXEL_FORMAT_NV12_LINEAR;
       }
+      break;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      result = PIXEL_FORMAT_TP10_UBWC;
+      break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      result = PIXEL_FORMAT_P010;
       break;
     default:
       result = PIXEL_FORMAT_NV12_UBWC;
@@ -320,7 +403,7 @@ gst_qticodec2vdec_create_component (GstVideoDecoder * decoder)
   if (dec->comp_store) {
     ret =
         c2componentStore_createComponent (dec->comp_store, dec->comp_name,
-        &dec->comp);
+        &dec->comp, &dec->cb);
     if (ret == TRUE) {
       dec->comp_intf = c2component_intf (dec->comp);
       if (dec->comp_intf) {
@@ -404,6 +487,8 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
     goto error_setup_output;
   }
 
+  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
+
   /* Fixate color format */
   intersection = gst_caps_truncate (intersection);
   intersection = gst_caps_fixate (intersection);
@@ -411,7 +496,6 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   s = gst_caps_get_structure (intersection, 0);
   format_str = gst_structure_get_string (s, "format");
-  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
   GST_DEBUG_OBJECT (dec, "Fixed color format:%s, UBWC:%d", format_str,
       dec->is_ubwc);
 
@@ -469,6 +553,13 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
   GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
       dec->output_state->caps);
 
+  if (dec->is_10bit) {
+    if (dec->is_ubwc)
+      output_format = GST_VIDEO_FORMAT_NV12_10LE32;
+    else
+      output_format = GST_VIDEO_FORMAT_P010_10LE;
+  }
+
   dec->outPixelfmt = output_format;
 
   GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d",
@@ -476,7 +567,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   if (config) {
     pixelformat =
-        make_pixelFormat_param (gst_to_c2_pixelformat (decoder, output_format),
+        make_pixel_format_param (gst_to_c2_pixelformat (decoder, output_format),
         FALSE);
     GST_LOG_OBJECT (dec, "set c2 output format: %d",
         pixelformat.pixelFormat.fmt);
@@ -561,6 +652,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   ConfigParams interlace;
   ConfigParams output_picture_order_mode;
   ConfigParams low_latency_mode;
+  const gchar *profile_string = NULL;
 
   GST_DEBUG_OBJECT (dec, "set_format");
 
@@ -570,6 +662,22 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_ERROR_OBJECT (dec, "Failed to get relevant component name, caps:%"
         GST_PTR_FORMAT, state->caps);
     return FALSE;
+  }
+
+  profile_string = gst_structure_get_string (structure, "profile");
+  if (!profile_string) {
+    GST_DEBUG_OBJECT (dec, "no profile field in caps");
+  } else {
+    GST_DEBUG_OBJECT (dec, "profile:%s", profile_string);
+  }
+
+  if (gst_structure_has_name (structure, "video/x-h265")
+      && !g_strcmp0 (profile_string, "main-10")) {
+    dec->is_10bit = TRUE;
+    GST_DEBUG_OBJECT (dec, "10 bit output");
+  } else if (gst_structure_has_name (structure, "video/x-vp9")) {
+    dec->check_vp9_10bit = TRUE;
+    GST_DEBUG_OBJECT (dec, "try to check whether vp9 10 bit later");
   }
 
   retval = gst_structure_get_int (structure, "width", &width);
@@ -638,6 +746,11 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   if (GST_FLOW_OK != gst_qticodec2vdec_setup_output (decoder, config)) {
     g_ptr_array_free (config, FALSE);
     goto error_set_format;
+  }
+
+  if (!c2componentInterface_initReflectedParamUpdater (dec->comp_store,
+          dec->comp_intf)) {
+    GST_WARNING_OBJECT (dec, "Failed to init ReflectedParamUpdater");
   }
 
   if (!c2componentInterface_config (dec->comp_intf,
@@ -758,44 +871,6 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 }
 
 static gboolean
-gst_qticodec2vdec_src_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SRC_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "src_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_query (decoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SINK_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "sink_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->sink_query (decoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
 gst_qticodec2vdec_caps_has_feature (const GstCaps * caps, const gchar * partten)
 {
   guint count = gst_caps_get_size (caps);
@@ -816,17 +891,6 @@ gst_qticodec2vdec_caps_has_feature (const GstCaps * caps, const gchar * partten)
   return ret;
 }
 
-static void
-destroy_gst_buffer (gpointer data)
-{
-  GstBuffer *gst_buf = (GstBuffer *) data;
-  if (gst_buf) {
-    GST_DEBUG ("destory gst buffer:%p ref_cnt:%d", gst_buf,
-        GST_OBJECT_REFCOUNT (gst_buf));
-    gst_buffer_unref (gst_buf);
-  }
-}
-
 static gboolean
 gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query)
@@ -836,7 +900,7 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
   guint size, min, max;
   gboolean update = FALSE;
   gboolean use_peer_pool = FALSE;
-  GHashTable *buffer_table = NULL;
+  gboolean use_dmabuf = FALSE;
   GstBufferPool *out_port_pool = NULL;
 
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
@@ -847,7 +911,6 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
 
   GstAllocationParams params = { (GstMemoryFlags) 0 };
   GstBufferPool *pool = NULL;
-  GstAllocator *allocator = NULL;
   min = max = size = 0;
 
   gst_query_parse_allocation (query, &outcaps, NULL);
@@ -872,11 +935,12 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
 
   if (gst_qticodec2vdec_caps_has_feature (outcaps,
           GST_CAPS_FEATURE_MEMORY_DMABUF)) {
-    GST_INFO_OBJECT (dec, "downstream support dma buffer");
+    use_dmabuf = TRUE;
+    GST_INFO_OBJECT (dec, "downstream support DMA buffer");
   } else {
     GST_INFO_OBJECT (dec,
-        "downstream don't support dma buffer, return directly");
-    return FALSE;
+        "downstream don't support DMA buffer, use FD buffer instead");
+    use_dmabuf = FALSE;
   }
 
   if (!use_peer_pool) {
@@ -884,17 +948,13 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
       gst_object_unref (out_port_pool);
     }
 
-    allocator = gst_dmabuf_allocator_new ();
-    buffer_table =
-        g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free,
-        destroy_gst_buffer);
-    pool = gst_qticodec2vdec_buffer_pool_new (dec, allocator, buffer_table);
+    pool = gst_qticodec2vdec_buffer_pool_new (dec, use_dmabuf);
 
     if (max)
       max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
 
     min = MAX (min, QCODEC2_MIN_OUTBUFFERS);
-    /* disable gst buffer pool's allocator, since actual buffer(underlying dma/ion buffer)
+    /* disable gst buffer pool's allocator, since actual buffer(underlying DMA/ION buffer)
      * is allocated inside of C2 allocator */
     size = 0;
 
@@ -959,6 +1019,9 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
   guint output_size = decode_buf->size;
   GstBufferPoolAcquireParamsExt param_ext;
   guint64 *p_modifier = NULL;
+  guint32 color_fmt = 0;
+  gsize offset[GST_VIDEO_MAX_PLANES] = { 0, };
+  gint stride[GST_VIDEO_MAX_PLANES] = { 0, };
 
   memset (&param_ext, 0, sizeof (GstBufferPoolAcquireParamsExt));
 
@@ -970,50 +1033,16 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
     return NULL;
   }
 
-  if (!dec->downstream_supports_dma) {
-    if (decode_buf->data) {
-      GST_DEBUG_OBJECT (dec, "wrap buffer: %p, size: %d", decode_buf->data,
-          output_size);
-      out_buf =
-          gst_buffer_new_wrapped_full (0, (gpointer) decode_buf->data,
-          output_size, 0, output_size, NULL, NULL);
-    }
-  } else {
-    param_ext.fd = decode_buf->fd;
-    param_ext.meta_fd = decode_buf->meta_fd;
-    param_ext.index = decode_buf->index;
-    param_ext.size = decode_buf->size;
-    gst_buffer_pool_acquire_buffer (dec->out_port_pool, &out_buf,
-        (GstBufferPoolAcquireParams *) & param_ext);
-  }
+  param_ext.fd = decode_buf->fd;
+  param_ext.meta_fd = decode_buf->meta_fd;
+  param_ext.index = decode_buf->index;
+  param_ext.size = decode_buf->size;
+  gst_buffer_pool_acquire_buffer (dec->out_port_pool, &out_buf,
+      (GstBufferPoolAcquireParams *) & param_ext);
 
   if (out_buf) {
-    if (!dec->downstream_supports_dma) {
-      GstVideoMeta *QGVMeta = NULL;
-
-      QGVMeta = gst_buffer_get_video_meta (out_buf);
-      if (!QGVMeta) {
-        QGVMeta =
-            gst_buffer_add_video_meta_full (out_buf, GST_VIDEO_FRAME_FLAG_NONE,
-            GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
-            GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo),
-            vinfo->offset, vinfo->stride);
-        if (!QGVMeta) {
-          GST_ERROR_OBJECT (dec, "Failed to attach video info into meta");
-          goto fail;
-        }
-      }
-      GST_DEBUG_OBJECT (dec, "offset:%ld %ld stride:%d %d", vinfo->offset[0],
-          vinfo->offset[1], vinfo->stride[0], vinfo->stride[1]);
-
-      QGVMeta->offset[2] = GST_MAKE_FOURCC ('Q', 'a', 'U', 'T');
-      QGVMeta->offset[3] = output_size;
-      QGVMeta->stride[2] = decode_buf->fd;
-      QGVMeta->stride[3] = decode_buf->meta_fd;
-    } else {
-      gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
-          qticodec2_c2buf_qdata_quark (), decode_buf->c2_buffer, NULL);
-    }
+    gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
+        qticodec2_c2buf_qdata_quark (), decode_buf->c2_buffer, NULL);
   } else {
     GST_ERROR_OBJECT (dec, "Fail to allocate output gst buffer");
     goto fail;
@@ -1041,18 +1070,6 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
     }
   }
 
-  if (!dec->downstream_supports_dma) {
-    /* Creates a new, empty GstStructure with the given name */
-    structure = gst_structure_new_empty ("BUFFER");
-    gst_structure_set (structure,
-        "decoder", G_TYPE_POINTER, decoder,
-        "index", G_TYPE_UINT64, decode_buf->index, NULL);
-
-    /* Set a notification function to signal when the buffer is no longer used. */
-    gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
-        qticodec2vdec_qdata_quark (), structure,
-        (GDestroyNotify) gst_video_decoder_buffer_release);
-  }
 done:
   gst_video_codec_state_unref (state);
   return out_buf;
@@ -1063,30 +1080,6 @@ fail:
     out_buf = NULL;
   }
   goto done;
-}
-
-static void
-gst_video_decoder_buffer_release (GstStructure * structure)
-{
-  GstVideoDecoder *decoder = NULL;
-  Gstqticodec2vdec *dec = NULL;
-  guint64 index = 0;
-
-  gst_structure_get (structure, "decoder", G_TYPE_POINTER, &decoder, NULL);
-  gst_structure_get_uint64 (structure, "index", &index);
-
-  if (decoder) {
-    dec = GST_QTICODEC2VDEC (decoder);
-
-    GST_DEBUG_OBJECT (dec, "release output buffer index: %ld", index);
-    if (!c2component_freeOutBuffer (dec->comp, index)) {
-      GST_ERROR_OBJECT (dec, "Failed to release the buffer (%lu)", index);
-    }
-  } else {
-    GST_ERROR_OBJECT (dec, "Null Gstqticodec2vdec hanlde");
-  }
-
-  gst_structure_free (structure);
 }
 
 /* Push decoded frame to downstream element */
@@ -1261,6 +1254,11 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstMapInfo mapinfo = { 0, };
   GstBuffer *buf = NULL;
   BufferDescriptor inBuf;
+  GstVp9Parser *vp9_parser = NULL;
+  GstVp9FrameHdr *vp9_hdr = NULL;
+  GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
+  ConfigParams pixelformat;
+  GPtrArray *config = NULL;
   gboolean status = FALSE;
   GstFlowReturn ret = GST_FLOW_OK;
 
@@ -1279,6 +1277,56 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   inBuf.size = mapinfo.size;
   inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
 
+  /*check whether VP9 10bit */
+  if (dec->check_vp9_10bit) {
+    vp9_parser = gst_vp9_parser_new ();
+    vp9_hdr = g_slice_new0 (GstVp9FrameHdr);
+    config = g_ptr_array_new ();
+    if (vp9_parser && vp9_hdr && config) {
+      gst_vp9_parser_parse_frame_header (vp9_parser, vp9_hdr, inBuf.data,
+          inBuf.size);
+    } else {
+      if (config)
+        g_ptr_array_free (config, FALSE);
+      if (vp9_hdr)
+        g_slice_free (GstVp9FrameHdr, vp9_hdr);
+      if (vp9_parser)
+        gst_vp9_parser_free (vp9_parser);
+      GST_ERROR_OBJECT (dec, "failed to new some structure");
+      gst_buffer_unmap (buf, &mapinfo);
+      return GST_FLOW_ERROR;
+    }
+    if (vp9_parser->bit_depth == GST_VP9_BIT_DEPTH_10) {
+      if (dec->is_ubwc)
+        output_format = GST_VIDEO_FORMAT_NV12_10LE32;
+      else
+        output_format = GST_VIDEO_FORMAT_P010_10LE;
+
+      dec->outPixelfmt = output_format;
+      GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d for VP9",
+          dec->width, dec->height, output_format);
+
+      if (config) {
+        pixelformat =
+            make_pixel_format_param (gst_to_c2_pixelformat (decoder,
+                output_format), FALSE);
+        GST_LOG_OBJECT (dec, "set c2 output format: %d for VP9",
+            pixelformat.pixelFormat.fmt);
+      }
+
+      g_ptr_array_add (config, &pixelformat);
+      if (!c2componentInterface_config (dec->comp_intf,
+              config, BLOCK_MODE_MAY_BLOCK)) {
+        GST_WARNING_OBJECT (dec, "Failed to set config");
+      }
+    }
+
+    g_ptr_array_free (config, FALSE);
+    g_slice_free (GstVp9FrameHdr, vp9_hdr);
+    gst_vp9_parser_free (vp9_parser);
+    dec->check_vp9_10bit = FALSE;
+  }
+
   GST_INFO_OBJECT (dec, "frame->pts (%" G_GUINT64_FORMAT ")", frame->pts);
 
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
@@ -1289,6 +1337,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   inBuf.timestamp = NANO_TO_MILLI (frame->pts);
   inBuf.index = frame->system_frame_number;
+  inBuf.secure = dec->secure;
 
   /* Queue buffer to Codec2 */
   status = c2component_queue (dec->comp, &inBuf);
@@ -1331,6 +1380,15 @@ gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     case PROP_MAP_OUTBUF:
       dec->map_outbuf = g_value_get_uint (value);
       break;
+    case PROP_SECURE:
+      dec->secure = g_value_get_boolean (value);
+      break;
+    case PROP_DATA_COPY_FUNTION:
+      dec->cb.data_copy_func = g_value_get_pointer (value);
+      break;
+    case PROP_DATA_COPY_FUNTION_PARAM:
+      dec->cb.data_copy_func_param = g_value_get_pointer (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1357,6 +1415,15 @@ gst_qticodec2vdec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_MAP_OUTBUF:
       g_value_set_uint (value, dec->map_outbuf);
+      break;
+    case PROP_SECURE:
+      g_value_set_boolean (value, dec->secure);
+      break;
+    case PROP_DATA_COPY_FUNTION:
+      g_value_set_pointer (value, dec->cb.data_copy_func);
+      break;
+    case PROP_DATA_COPY_FUNTION_PARAM:
+      g_value_set_pointer (value, dec->cb.data_copy_func_param);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1462,6 +1529,30 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
           0, G_MAXUINT, GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_SECURE,
+      g_param_spec_boolean ("secure", "secure mode",
+          "If enabled, decoder should be in secure mode",
+          GST_QTI_CODEC2_SECURE_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_DATA_COPY_FUNTION, g_param_spec_pointer ("data-copy-func",
+          "set input date copy callback function",
+          "set input data copy callback function, app could implement this callback function "
+          "to copy data from dec plugin's sinkpad buf to codec2's input buf. Function prototype "
+          "is: int datacopy(int dstbuf_fd, void* srcbuf, int datalen, void* param), returning "
+          "zero means copy succeed. If this callback is NULL, plugin implement it internally",
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+      );
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_DATA_COPY_FUNTION_PARAM,
+      g_param_spec_pointer ("data-copy-func-param",
+          "set input parameter of date copy callback function",
+          "work with data-copy-func callback function, app could set input parameter for "
+          "that function, this property will be passed as the 4th parameter of that function",
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
+      );
 
   video_decoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_set_format);
@@ -1470,10 +1561,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
   video_decoder_class->finish = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_finish);
   video_decoder_class->open = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_open);
   video_decoder_class->close = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_close);
-  video_decoder_class->src_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_src_query);
-  video_decoder_class->sink_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_sink_query);
   video_decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_decide_allocation);
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
@@ -1504,6 +1591,10 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->low_latency_mode = GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT;
   dec->map_outbuf = GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT;
   dec->out_port_pool = NULL;
+  dec->is_10bit = FALSE;
+  dec->check_vp9_10bit = FALSE;
+  dec->cb.data_copy_func = NULL;
+  dec->cb.data_copy_func_param = NULL;
 
   memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
   memset (&dec->start_time, 0, sizeof (struct timeval));

@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifndef __CODEC2WRAPPER_H__
 #define __CODEC2WRAPPER_H__
 
@@ -59,6 +95,13 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
 
 #define C2_TICKS_PER_SECOND 1000000
+
+typedef struct comp_cb {
+    gpointer data_copy_func;
+    gpointer data_copy_func_param;
+} comp_cb;
+
+typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, int datalen, void* param);
 
 typedef enum {
     BUFFER_POOL_BASIC_LINEAR = 0,
@@ -241,6 +284,7 @@ typedef struct {
     guint32 config_size; // size of codec config data
     void* c2_buffer;
     void* gbm_bo;
+    gboolean secure;
 } BufferDescriptor;
 
 typedef struct {
@@ -304,7 +348,7 @@ typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void* c2componentStore_create();
 const gchar* c2componentStore_getName(void* const comp_store);
-gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component);
+gboolean c2componentStore_createComponent(void* const comp_store, const gchar* name, void** const component, comp_cb* cb);
 gboolean c2componentStore_createInterface(void* const comp_store, const gchar* name, void** const interface);
 gboolean c2componentStore_listComponents(void* const comp_store, GPtrArray* array);
 gboolean c2componentStore_isComponentSupported(void* const comp_store, gchar* name);
@@ -334,6 +378,7 @@ gboolean c2component_delete(void* comp);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const gchar* c2componentInterface_getName(void* const comp_intf);
 const gint c2componentInterface_getId(void* const comp_intf);
+gboolean c2componentInterface_initReflectedParamUpdater(void* const comp_store, void* const comp_intf);
 gboolean c2componentInterface_config(void* const comp_intf, GPtrArray* config, BLOCK_MODE_TYPE block);
 
 #ifdef __cplusplus
