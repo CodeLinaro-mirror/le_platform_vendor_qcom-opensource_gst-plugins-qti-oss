@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -51,7 +85,7 @@ G_DEFINE_TYPE (GstMLSnpe, gst_ml_snpe, GST_TYPE_BASE_TRANSFORM);
 #define GST_ML_SNPE_TENSOR_TYPES "{ UINT8, INT32, FLOAT32 }"
 
 #define GST_ML_SNPE_CAPS                        \
-    "neural-network/tensors, "                    \
+    "neural-network/tensors, "                  \
     "type = (string) " GST_ML_SNPE_TENSOR_TYPES
 
 enum
@@ -266,7 +300,6 @@ gst_ml_snpe_prepare_output_buffer (GstBaseTransform * base,
   GstMLSnpe *snpe = GST_ML_SNPE (base);
   GstBufferPool *pool = snpe->outpool;
   GstProtectionMeta *pmeta = NULL;
-  GstFlowReturn ret = GST_FLOW_OK;
 
   if (gst_base_transform_is_passthrough (base)) {
     GST_DEBUG_OBJECT (snpe, "Passthrough, no need to do anything");
@@ -287,8 +320,13 @@ gst_ml_snpe_prepare_output_buffer (GstBaseTransform * base,
     return GST_FLOW_ERROR;
   }
 
-  ret = gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL);
-  if (ret != GST_FLOW_OK) {
+  // Input is marked as GAP, nothing to process. Create a GAP output buffer.
+  if (gst_buffer_get_size (inbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP))
+    *outbuffer = gst_buffer_new ();
+
+  if ((*outbuffer == NULL) &&
+      gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
     GST_ERROR_OBJECT (snpe, "Failed to create output buffer!");
     return GST_FLOW_ERROR;
   }
@@ -296,6 +334,9 @@ gst_ml_snpe_prepare_output_buffer (GstBaseTransform * base,
   // Copy the flags and timestamps from the input buffer.
   gst_buffer_copy_into (*outbuffer, inbuffer, GST_BUFFER_COPY_FLAGS |
       GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+  // Copy the offset field as it may contain channels data for batched buffers.
+  GST_BUFFER_OFFSET (*outbuffer) = GST_BUFFER_OFFSET (inbuffer);
 
   if ((pmeta = gst_buffer_get_protection_meta (inbuffer)) != NULL)
     gst_buffer_add_protection_meta (*outbuffer, gst_structure_copy (pmeta->info));
@@ -336,14 +377,6 @@ gst_ml_snpe_transform_caps (GstBaseTransform * base,
   // The source and sink pads caps do not depend on each other so directly take
   // the ML caps from the engine for the corresponding pad and apply filter.
   result = gst_ml_info_to_caps (mlinfo);
-
-  // Extract the aspect ratio.
-  value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
-      "aspect-ratio");
-
-  // Propagate aspect ratio to the ML caps if it exists.
-  if (value != NULL)
-    gst_caps_set_value (result, "aspect-ratio", value);
 
   // Extract the rate.
   value = gst_structure_get_value (gst_caps_get_structure (caps, 0), "rate");
@@ -484,6 +517,11 @@ gst_ml_snpe_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   const GstMLInfo * info = NULL;
   GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
   GstClockTimeDiff tsdelta = GST_CLOCK_STIME_NONE;
+
+  // GAP buffer, nothing to do. Propagate output buffer downstream.
+  if (gst_buffer_get_size (outbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
+    return GST_FLOW_OK;
 
   info = gst_ml_snpe_engine_get_input_info (snpe->engine);
 
@@ -667,6 +705,9 @@ gst_ml_snpe_init (GstMLSnpe * snpe)
   snpe->model = DEFAULT_PROP_MODEL;
   snpe->delegate = DEFAULT_PROP_DELEGATE;
   snpe->layers = NULL;
+
+  // Handle buffers with GAP flag internally.
+  gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM (snpe), TRUE);
 
   GST_DEBUG_CATEGORY_INIT (gst_ml_snpe_debug, "qtimlsnpe", 0,
       "QTI SNPE ML plugin");

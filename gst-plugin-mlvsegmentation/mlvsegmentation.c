@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -49,7 +83,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_ml_video_segmentation_debug);
 
 #define gst_ml_video_segmentation_parent_class parent_class
 G_DEFINE_TYPE (GstMLVideoSegmentation, gst_ml_video_segmentation,
-               GST_TYPE_BASE_TRANSFORM);
+    GST_TYPE_BASE_TRANSFORM);
 
 #define DEFAULT_PROP_MODULE         NULL
 #define DEFAULT_PROP_LABELS         NULL
@@ -62,7 +96,7 @@ G_DEFINE_TYPE (GstMLVideoSegmentation, gst_ml_video_segmentation,
 #endif
 
 #define GST_ML_VIDEO_SEGMENTATION_VIDEO_FORMATS \
-    "{ BGRA, RGBA, BGRx, xRGB }"
+    "{ RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR }"
 
 #define GST_ML_VIDEO_SEGMENTATION_SRC_CAPS                            \
     "video/x-raw, "                                                   \
@@ -341,7 +375,6 @@ gst_ml_video_segmentation_prepare_output_buffer (GstBaseTransform * base,
 {
   GstMLVideoSegmentation *segmentation = GST_ML_VIDEO_SEGMENTATION (base);
   GstBufferPool *pool = segmentation->outpool;
-  GstFlowReturn ret = GST_FLOW_OK;
 
   if (gst_base_transform_is_passthrough (base)) {
     GST_TRACE_OBJECT (segmentation, "Passthrough, no need to do anything");
@@ -361,8 +394,13 @@ gst_ml_video_segmentation_prepare_output_buffer (GstBaseTransform * base,
     return GST_FLOW_ERROR;
   }
 
-  ret = gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL);
-  if (ret != GST_FLOW_OK) {
+  // Input is marked as GAP, nothing to process. Create a GAP output buffer.
+  if (gst_buffer_get_size (inbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP))
+    *outbuffer = gst_buffer_new ();
+
+  if ((*outbuffer == NULL) &&
+      gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
     GST_ERROR_OBJECT (segmentation, "Failed to create output buffer!");
     return GST_FLOW_ERROR;
   }
@@ -379,8 +417,8 @@ gst_ml_video_segmentation_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
   GstMLVideoSegmentation *segmentation = GST_ML_VIDEO_SEGMENTATION (base);
-  GstCaps *result = NULL;
-  const GValue *value = NULL;
+  GstCaps *tmplcaps = NULL, *result = NULL;
+  guint idx = 0, num = 0, length = 0;
 
   GST_DEBUG_OBJECT (segmentation, "Transforming caps: %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
@@ -388,26 +426,46 @@ gst_ml_video_segmentation_transform_caps (GstBaseTransform * base,
 
   if (direction == GST_PAD_SRC) {
     GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
-    result = gst_pad_get_pad_template_caps (pad);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   }
 
-  // Extract the rate and propagate it to result caps.
-  value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
-      (direction == GST_PAD_SRC) ? "framerate" : "rate");
+  result = gst_caps_new_empty ();
+  length = gst_caps_get_size (tmplcaps);
 
-  if (value != NULL) {
-    gint idx = 0, length = 0;
+  for (idx = 0; idx < length; idx++) {
+    GstStructure *structure = NULL;
+    GstCapsFeatures *features = NULL;
 
-    result = gst_caps_make_writable (result);
-    length = gst_caps_get_size (result);
+    for (num = 0; num < gst_caps_get_size (caps); num++) {
+      const GValue *value = NULL;
 
-    for (idx = 0; idx < length; idx++) {
-      GstStructure *structure = gst_caps_get_structure (result, idx);
-      gst_structure_set_value (structure,
-          (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      structure = gst_caps_get_structure (tmplcaps, idx);
+      features = gst_caps_get_features (tmplcaps, idx);
+
+      // Make a copy that will be modified.
+      structure = gst_structure_copy (structure);
+
+      // Extract the rate from incoming caps and propagate it to result caps.
+      value = gst_structure_get_value (gst_caps_get_structure (caps, num),
+          (direction == GST_PAD_SRC) ? "framerate" : "rate");
+
+      // Skip if there is no value.
+      if (value != NULL) {
+        gst_structure_set_value (structure,
+            (direction == GST_PAD_SRC) ? "rate" : "framerate", value);
+      }
+
+      // If this is already expressed by the existing caps skip this structure.
+      if (gst_caps_is_subset_structure_full (result, structure, features)) {
+        gst_structure_free (structure);
+        continue;
+      }
+
+      gst_caps_append_structure_full (result, structure,
+          gst_caps_features_copy (features));
     }
   }
 
@@ -430,7 +488,7 @@ gst_ml_video_segmentation_fixate_caps (GstBaseTransform * base,
   GstMLVideoSegmentation *segmentation = GST_ML_VIDEO_SEGMENTATION (base);
   GstStructure *output = NULL;
   GstMLInfo mlinfo;
-  gint width = 0, height = 0, par_n, par_d, sar_n, sar_d, num, den;
+  gint width = 0, height = 0, par_n = 1, par_d = 1;
   const GValue *value = NULL;
 
   // Truncate and make the output caps writable.
@@ -453,17 +511,6 @@ gst_ml_video_segmentation_fixate_caps (GstBaseTransform * base,
   GST_DEBUG_OBJECT (segmentation, "Output format fixed to: %s",
       g_value_get_string (value));
 
-  // Extract source aspect ratio from ML caps.
-  value = gst_structure_get_value (
-      gst_caps_get_structure (incaps, 0), "aspect-ratio");
-
-  if ((value != NULL) && gst_value_is_fixed (value)) {
-    sar_d = gst_value_get_fraction_denominator (value);
-    sar_n = gst_value_get_fraction_numerator (value);
-  } else {
-    sar_n = sar_d = 1;
-  }
-
   // Fixate output PAR if not already fixated..
   value = gst_structure_get_value (output, "pixel-aspect-ratio");
 
@@ -483,49 +530,30 @@ gst_ml_video_segmentation_fixate_caps (GstBaseTransform * base,
 
   GST_DEBUG_OBJECT (segmentation, "Output PAR fixed to: %d/%d", par_n, par_d);
 
-  // Calculate output dimensions scale factor from output PAR and source AR.
-  gst_util_fraction_multiply (sar_n, sar_d, par_n, par_d, &num, &den);
-
   gst_ml_info_from_caps (&mlinfo, incaps);
 
   value = gst_structure_get_value (output, "width");
 
   if ((NULL == value) || !gst_value_is_fixed (value)) {
     // 2nd dimension correspond to height, 3rd dimension correspond to width.
-    width = (num >= den) ? mlinfo.tensors[0][2] :
-        gst_util_uint64_scale_int (mlinfo.tensors[0][1], num, den);
-    width = GST_ROUND_DOWN_16 (width);
+    width = GST_ROUND_DOWN_16 (mlinfo.tensors[0][2]);
 
     gst_structure_set (output, "width", G_TYPE_INT, width, NULL);
     gst_structure_get_int (output, "width", &width);
   } else {
     gst_structure_get_int (output, "width", &width);
-
-    if (((guint) width) > mlinfo.tensors[0][2]) {
-      GST_ERROR_OBJECT (segmentation, "Fixated width is above the allowed "
-          "max width of %u !", mlinfo.tensors[0][2]);
-      return NULL;
-    }
   }
 
   value = gst_structure_get_value (output, "height");
 
   if ((NULL == value) || !gst_value_is_fixed (value)) {
     // 2nd dimension correspond to height, 3rd dimension correspond to width.
-    height = (num <= den) ? mlinfo.tensors[0][1] :
-        gst_util_uint64_scale_int (
-              GST_ROUND_DOWN_16 (mlinfo.tensors[0][2]), den, num);
+    height = mlinfo.tensors[0][1];
 
     gst_structure_set (output, "height", G_TYPE_INT, height, NULL);
     gst_structure_get_int (output, "height", &height);
   } else {
     gst_structure_get_int (output, "height", &height);
-
-    if (((guint) height) > mlinfo.tensors[0][1]) {
-      GST_ERROR_OBJECT (segmentation, "Fixated height is above the allowed "
-          "max height of %u !", mlinfo.tensors[0][1]);
-      return NULL;
-    }
   }
 
   GST_DEBUG_OBJECT (segmentation, "Output width and height fixated to: %dx%d",
@@ -546,10 +574,12 @@ gst_ml_video_segmentation_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstVideoInfo outinfo;
 
   if (NULL == segmentation->labels) {
-    GST_ERROR_OBJECT (segmentation, "Labels not set!");
+    GST_ELEMENT_ERROR (segmentation, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels not set!"));
     return FALSE;
   } else if (NULL == segmentation->modname) {
-    GST_ERROR_OBJECT (segmentation, "Module not set!");
+    GST_ELEMENT_ERROR (segmentation, RESOURCE, NOT_FOUND, (NULL),
+        ("Module not set!"));
     return FALSE;
   }
 
@@ -604,6 +634,11 @@ gst_ml_video_segmentation_transform (GstBaseTransform * base,
   guint n_blocks = 0;
 
   g_return_val_if_fail (segmentation->module != NULL, GST_FLOW_ERROR);
+
+  // GAP buffer, nothing to do. Propagate output buffer downstream.
+  if (gst_buffer_get_size (outbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
+    return GST_FLOW_OK;
 
   n_blocks = gst_buffer_n_memory (inbuffer);
 
@@ -766,6 +801,9 @@ gst_ml_video_segmentation_init (GstMLVideoSegmentation * segmentation)
 
   segmentation->modname = DEFAULT_PROP_MODULE;
   segmentation->labels = DEFAULT_PROP_LABELS;
+
+  // Handle buffers with GAP flag internally.
+  gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM (segmentation), TRUE);
 
   GST_DEBUG_CATEGORY_INIT (gst_ml_video_segmentation_debug, "qtimlvsegmentation",
       0, "QTI ML image segmentation plugin");
