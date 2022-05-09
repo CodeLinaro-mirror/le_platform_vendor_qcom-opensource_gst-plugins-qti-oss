@@ -81,8 +81,12 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
+#include "gstqcodec2h264dec.h"
+#include "gstqcodec2h265dec.h"
+#include "gstqcodec2vp9dec.h"
+#include "gstqcodec2mpeg2dec.h"
 
-GST_DEBUG_CATEGORY_STATIC (gst_qticodec2vdec_debug);
+GST_DEBUG_CATEGORY (gst_qticodec2vdec_debug);
 #define GST_CAT_DEFAULT gst_qticodec2vdec_debug
 
 /* class initialization */
@@ -124,13 +128,9 @@ static GstFlowReturn gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 static GstFlowReturn gst_qticodec2vdec_finish (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_open (GstVideoDecoder * decoder);
 static gboolean gst_qticodec2vdec_close (GstVideoDecoder * decoder);
-static gboolean gst_qticodec2vdec_src_query (GstVideoDecoder * decoder,
-    GstQuery * query);
-static gboolean gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder,
-    GstQuery * query);
+
 static gboolean gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     GstQuery * query);
-
 static void gst_qticodec2vdec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_qticodec2vdec_get_property (GObject * object, guint prop_id,
@@ -151,38 +151,7 @@ static GstBuffer *gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder *
 static gboolean gst_qticodec2vdec_caps_has_feature (const GstCaps * caps,
     const gchar * partten);
 
-#define COMMON_VIDEO_CAPS(min, max) \
-    "width = (int) [" #min ", " #max "], "    \
-    "height = (int) [" #min ", " #max "]"
-
-#define H264_CAPS \
-    "video/x-h264, " \
-    "stream-format = (string) { byte-stream }, " \
-    "alignment = (string) { au }, " \
-    COMMON_VIDEO_CAPS(96, 8192)
-
-#define H265_CAPS \
-    "video/x-h265, " \
-    "stream-format = (string) { byte-stream }, " \
-    "alignment = (string) { au }, " \
-    COMMON_VIDEO_CAPS(96, 8192)
-
-#define VP9_CAPS \
-    "video/x-vp9, " \
-    COMMON_VIDEO_CAPS(96, 4096)
-
-#define MPEG2_CAPS \
-    "video/mpeg, " \
-    "mpegversion = (int)2, " \
-    COMMON_VIDEO_CAPS(96, 1920)
-
 /* pad templates */
-static GstStaticPadTemplate gst_qtivdec_sink_template =
-    GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (H264_CAPS ";" H265_CAPS ";" VP9_CAPS ";" MPEG2_CAPS));
-
 static GstStaticPadTemplate gst_qtivdec_src_template =
     GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SRC_NAME,
     GST_PAD_SRC,
@@ -202,12 +171,21 @@ caps_has_compression (const GstCaps * caps, const gchar * compression)
 {
   GstStructure *structure = NULL;
   const gchar *string = NULL;
+  guint count = gst_caps_get_size (caps);
+  gboolean ret = FALSE;
 
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
+  for (gint i = 0; i < count; i++) {
+    structure = gst_caps_get_structure (caps, i);
+    string =
+        gst_structure_has_field (structure,
+        "compression") ? gst_structure_to_string (structure) : NULL;
+    if (string && g_strrstr (string, compression)) {
+      ret = TRUE;
+      break;
+    }
+  }
 
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+  return ret;
 }
 
 static void
@@ -225,14 +203,14 @@ modifier_free (gpointer p_modifier)
 }
 
 static ConfigParams
-make_resolution_param (guint32 width, guint32 height, gboolean isInput)
+make_resolution_param (guint32 width, guint32 height, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_RESOLUTION;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.resolution.width = width;
   param.resolution.height = height;
 
@@ -240,28 +218,28 @@ make_resolution_param (guint32 width, guint32 height, gboolean isInput)
 }
 
 static ConfigParams
-make_pixelFormat_param (guint32 fmt, gboolean isInput)
+make_pixel_format_param (guint32 fmt, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_PIXELFORMAT;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.pixelFormat.fmt = fmt;
 
   return param;
 }
 
 static ConfigParams
-make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean isInput)
+make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 {
   ConfigParams param;
 
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
-  param.isInput = isInput;
+  param.isInput = is_input;
   param.interlaceMode.type = mode;
 
   return param;
@@ -482,6 +460,8 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
     goto error_setup_output;
   }
 
+  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
+
   /* Fixate color format */
   intersection = gst_caps_truncate (intersection);
   intersection = gst_caps_fixate (intersection);
@@ -489,7 +469,6 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   s = gst_caps_get_structure (intersection, 0);
   format_str = gst_structure_get_string (s, "format");
-  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
   GST_DEBUG_OBJECT (dec, "Fixed color format:%s, UBWC:%d", format_str,
       dec->is_ubwc);
 
@@ -561,7 +540,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
 
   if (config) {
     pixelformat =
-        make_pixelFormat_param (gst_to_c2_pixelformat (decoder, output_format),
+        make_pixel_format_param (gst_to_c2_pixelformat (decoder, output_format),
         FALSE);
     GST_LOG_OBJECT (dec, "set c2 output format: %d",
         pixelformat.pixelFormat.fmt);
@@ -862,44 +841,6 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
     GST_DEBUG_OBJECT (dec, "EOS reached in handle_frame");
     return GST_FLOW_EOS;
   }
-}
-
-static gboolean
-gst_qticodec2vdec_src_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SRC_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "src_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->src_query (decoder, query);
-      break;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_qticodec2vdec_sink_query (GstVideoDecoder * decoder, GstQuery * query)
-{
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstPad *pad = GST_VIDEO_DECODER_SINK_PAD (decoder);
-  gboolean ret = FALSE;
-
-  GST_DEBUG_OBJECT (dec, "sink_query of type '%s'",
-      gst_query_type_get_name (GST_QUERY_TYPE (query)));
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      ret = GST_VIDEO_DECODER_CLASS (parent_class)->sink_query (decoder, query);
-      break;
-  }
-
-  return ret;
 }
 
 static gboolean
@@ -1340,7 +1281,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
       if (config) {
         pixelformat =
-            make_pixelFormat_param (gst_to_c2_pixelformat (decoder,
+            make_pixel_format_param (gst_to_c2_pixelformat (decoder,
                 output_format), FALSE);
         GST_LOG_OBJECT (dec, "set c2 output format: %d for VP9",
             pixelformat.pixelFormat.fmt);
@@ -1512,8 +1453,28 @@ plugin_init (GstPlugin * qticodec2vdec)
   GST_DEBUG_CATEGORY_INIT (gst_qticodec2vdec_debug, "qticodec2vdec",
       0, "QTI GST codec2.0 video decoder");
 
-  return gst_element_register (qticodec2vdec, "qticodec2vdec",
-      GST_RANK_PRIMARY + 10, GST_TYPE_QTICODEC2VDEC);
+  if (!gst_element_register (qticodec2vdec, "qcodec2h264dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_H264_DEC)) {
+    GST_ERROR ("failed to register element qcodec2h264dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2h265dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_H265_DEC)) {
+    GST_ERROR ("failed to register element qcodec2h265dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2vp9dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_VP9_DEC)) {
+    GST_ERROR ("failed to register element qcodec2vp9dec");
+    return FALSE;
+  }
+  if (!gst_element_register (qticodec2vdec, "qcodec2mpeg2dec",
+          GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_MPEG2_DEC)) {
+    GST_ERROR ("failed to register element qcodec2mpeg2dec");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 /* Initialize the qticodec2vdec's class */
@@ -1526,9 +1487,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_qtivdec_src_template));
-
-  gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_qtivdec_sink_template));
 
   /* Set GObject class property */
   gobject_class->set_property = gst_qticodec2vdec_set_property;
@@ -1593,10 +1551,6 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
   video_decoder_class->finish = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_finish);
   video_decoder_class->open = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_open);
   video_decoder_class->close = GST_DEBUG_FUNCPTR (gst_qticodec2vdec_close);
-  video_decoder_class->src_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_src_query);
-  video_decoder_class->sink_query =
-      GST_DEBUG_FUNCPTR (gst_qticodec2vdec_sink_query);
   video_decoder_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_decide_allocation);
   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),

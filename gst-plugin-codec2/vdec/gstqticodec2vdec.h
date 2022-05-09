@@ -41,25 +41,41 @@
 #include <gst/codecparsers/gstvp9parser.h>
 
 G_BEGIN_DECLS
-#define QTICODEC2VDEC_SINK_WH_CAPS    \
-  "width  = (int) [ 32, 8192 ], "     \
-  "height = (int) [ 32, 8192 ]"
-#define QTICODEC2VDEC_SINK_COMPRESSION_CAPS    \
-    "compression = (string) { ubwc, linear }"
-#define QTICODEC2VDEC_SINK_FPS_CAPS    \
+#define COMMON_VIDEO_CAPS(min, max) \
+    "width = (int) [" #min ", " #max "], "    \
+    "height = (int) [" #min ", " #max "]"
+#define H264_CAPS \
+    "video/x-h264, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+#define H265_CAPS \
+    "video/x-h265, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+#define VP9_CAPS \
+    "video/x-vp9, " \
+    COMMON_VIDEO_CAPS(96, 4096)
+#define MPEG2_CAPS \
+    "video/mpeg, " \
+    "mpegversion = (int)2, " \
+    COMMON_VIDEO_CAPS(96, 1920)
+#define QTICODEC2VDEC_SRC_WH_CAPS    \
+  "width  = (int) [ 96, 8192 ], "     \
+  "height = (int) [ 96, 8192 ]"
+#define QTICODEC2VDEC_SRC_FPS_CAPS    \
   "framerate = (fraction) [ 0, 480 ]"
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
   "video/x-raw, "                       \
   "format = (string) " formats ", "     \
-  QTICODEC2VDEC_SINK_WH_CAPS ", "       \
-  QTICODEC2VDEC_SINK_FPS_CAPS ", "      \
-  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
+  QTICODEC2VDEC_SRC_WH_CAPS ", "       \
+  QTICODEC2VDEC_SRC_FPS_CAPS
 #define QTICODEC2VDEC_RAW_CAPS_WITH_FEATURES(features, formats) \
   "video/x-raw(" features "), "                                 \
   "format = (string) " formats ", "                             \
-  QTICODEC2VDEC_SINK_WH_CAPS   ", "                             \
-  QTICODEC2VDEC_SINK_FPS_CAPS  ", "                             \
-  QTICODEC2VDEC_SINK_COMPRESSION_CAPS
+  QTICODEC2VDEC_SRC_WH_CAPS   ", "                             \
+  QTICODEC2VDEC_SRC_FPS_CAPS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))

@@ -173,6 +173,8 @@ std::shared_ptr<C2ParamReflector> C2ComponentStoreAdapter::getParamReflector()
 {
     if (mStore) {
         return mStore->getParamReflector();
+    } else {
+        return nullptr;
     }
 }
 

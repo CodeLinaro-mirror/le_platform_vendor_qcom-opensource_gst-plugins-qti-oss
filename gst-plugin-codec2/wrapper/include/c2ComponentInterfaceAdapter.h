@@ -89,7 +89,7 @@ public:
     c2_status_t initReflectedParamUpdater(std::shared_ptr<C2ParamReflector>& reflector);
 
     // Update C2Params from configuration map
-    std::unique_ptr<C2Param> updateParamFromConfig(const android::ReflectedParamUpdater::Dict &kvpairs);
+    std::unique_ptr<C2Param> updateParamFromConfig(const android::ReflectedParamUpdater::Dict& kvpairs);
 
 private:
     // Set underlying Component
