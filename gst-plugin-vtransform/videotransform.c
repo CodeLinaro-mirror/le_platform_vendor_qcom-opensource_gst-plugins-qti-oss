@@ -1,31 +1,65 @@
 /*
-* Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are
-* met:
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*     * Neither the name of The Linux Foundation nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
-* ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-* BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-* BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-* WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-* OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of The Linux Foundation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -63,15 +97,14 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
-// Caps video size range.
 #undef GST_VIDEO_SIZE_RANGE
 #define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
 
-// Caps FPS range.
 #undef GST_VIDEO_FPS_RANGE
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
-#define GST_VIDEO_FORMATS "{ BGRA, RGBA, BGR, RGB, NV12, NV21, YUY2, GRAY8 }"
+#define GST_VIDEO_FORMATS \
+  "{ NV12, NV21, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
 
 enum
 {
@@ -86,12 +119,12 @@ enum
 
 static GstStaticCaps gst_video_transform_format_caps =
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("ANY", GST_VIDEO_FORMATS));
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS));
 
 static GType
 gst_video_trasform_rotate_get_type (void)
 {
-  static GType video_rotation_type = 0;
+  static GType gtype = 0;
   static const GEnumValue methods[] = {
     { GST_VIDEO_TRANSFORM_ROTATE_NONE,
         "No rotation", "none"
@@ -107,11 +140,11 @@ gst_video_trasform_rotate_get_type (void)
     },
     {0, NULL, NULL},
   };
-  if (!video_rotation_type) {
-    video_rotation_type =
-        g_enum_register_static ("GstVideoTransformRotate", methods);
-  }
-  return video_rotation_type;
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstVideoTransformRotate", methods);
+
+  return gtype;
 }
 
 static GstCaps *
@@ -140,6 +173,41 @@ gst_video_transform_sink_template (void)
       gst_video_transform_caps ());
 }
 
+static gboolean
+gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
+{
+  guint idx = 0;
+
+  while (idx != gst_caps_get_size (caps)) {
+    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
+
+    if (feature == NULL && ((gst_caps_features_get_size (features) == 0) ||
+            gst_caps_features_is_any (features)))
+      return TRUE;
+
+    // Skip ANY caps and return immediately if feature is present.
+    if ((feature != NULL) && !gst_caps_features_is_any (features) &&
+        gst_caps_features_contains (features, feature))
+      return TRUE;
+
+    idx++;
+  }
+  return FALSE;
+}
+
+static gboolean
+gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "compression") ?
+      gst_structure_get_string (structure, "compression") : NULL;
+
+  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+}
+
 static GstC2dVideoRotate
 gst_video_transform_rotation_to_c2d_rotate (GstVideoTransformRotate rotation)
 {
@@ -156,39 +224,6 @@ gst_video_transform_rotation_to_c2d_rotate (GstVideoTransformRotate rotation)
       GST_WARNING ("Invalid rotation flag %d!", rotation);
   }
   return GST_C2D_VIDEO_ROTATE_NONE;
-}
-
-static gboolean
-gst_video_transform_caps_has_feature (const GstCaps * caps,
-    const gchar * feature)
-{
-  guint idx = 0;
-
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    // Skip ANY caps and return immediately if feature is present.
-    if (!gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
-  }
-  return FALSE;
-}
-
-static gboolean
-gst_video_transform_caps_has_compression (const GstCaps * caps,
-    const gchar * compression)
-{
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
-
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
 }
 
 static void
@@ -240,11 +275,11 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps)
   }
 
   // If downstream allocation query supports GBM, allocate gbm memory.
-  if (gst_video_transform_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    GST_INFO_OBJECT (vtrans, "Video transform uses GBM memory");
+  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+    GST_INFO_OBJECT (vtrans, "Uses GBM memory");
     pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
   } else {
-    GST_INFO_OBJECT (vtrans, "Video transform uses ION memory");
+    GST_INFO_OBJECT (vtrans, "Uses ION memory");
     pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
   }
 
@@ -256,7 +291,7 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps)
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
-  if (gst_video_transform_caps_has_compression (caps, "ubwc")) {
+  if (gst_caps_has_compression (caps, "ubwc")) {
     gst_buffer_pool_config_add_option (config,
         GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
   }
@@ -273,10 +308,10 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps)
 }
 
 static gboolean
-gst_video_transform_propose_allocation (GstBaseTransform * trans,
+gst_video_transform_propose_allocation (GstBaseTransform * base,
     GstQuery * inquery, GstQuery * outquery)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
 
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
@@ -285,7 +320,7 @@ gst_video_transform_propose_allocation (GstBaseTransform * trans,
   gboolean needpool = FALSE;
 
   if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (
-        trans, inquery, outquery))
+        base, inquery, outquery))
     return FALSE;
 
   // No input query, nothing to do.
@@ -335,10 +370,10 @@ gst_video_transform_propose_allocation (GstBaseTransform * trans,
 }
 
 static gboolean
-gst_video_transform_decide_allocation (GstBaseTransform * trans,
+gst_video_transform_decide_allocation (GstBaseTransform * base,
     GstQuery * query)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
 
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
@@ -388,14 +423,24 @@ gst_video_transform_decide_allocation (GstBaseTransform * trans,
 }
 
 static GstFlowReturn
-gst_video_transform_prepare_output_buffer (GstBaseTransform * trans,
+gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
     GstBuffer * inbuffer, GstBuffer ** outbuffer)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstBufferPool *pool = vtrans->outpool;
-  GstFlowReturn ret = GST_FLOW_OK;
+  gboolean passthrough = FALSE, writable = TRUE;
 
-  if (gst_base_transform_is_passthrough (trans)) {
+  // Check whether passthrough should be true/false based on parameters.
+  gst_video_transform_determine_passthrough (vtrans);
+
+  passthrough = gst_base_transform_is_passthrough (base);
+  writable = gst_buffer_is_writable (inbuffer);
+
+  // Force a copy when the buffer is not writable.
+  if (passthrough && !writable) {
+    GST_TRACE_OBJECT (vtrans, "Input buffer not writable, disable passthrough");
+    gst_base_transform_set_passthrough (base, FALSE);
+  } else if (passthrough) {
     GST_LOG_OBJECT (vtrans, "Passthrough, no need to do anything");
     *outbuffer = inbuffer;
     return GST_FLOW_OK;
@@ -414,8 +459,13 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * trans,
     return GST_FLOW_ERROR;
   }
 
-  ret = gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL);
-  if (ret != GST_FLOW_OK) {
+  // Input is marked as GAP, nothing to process. Create a GAP output buffer.
+  if (gst_buffer_get_size (inbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP))
+    *outbuffer = gst_buffer_new ();
+
+  if ((*outbuffer == NULL) &&
+      gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
     GST_ERROR_OBJECT (vtrans, "Failed to create output video buffer!");
     return GST_FLOW_ERROR;
   }
@@ -428,20 +478,48 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * trans,
 }
 
 static GstCaps *
-gst_video_transform_transform_caps (GstBaseTransform * trans,
+gst_video_transform_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (trans);
-  GstCaps *result;
-  GstStructure *structure;
-  GstCapsFeatures *features;
-  gint idx, length;
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
+  GstCaps *result = NULL;
+  GstStructure *structure = NULL;
+  GstCapsFeatures *features = NULL;
+  gint idx = 0, length = 0;
 
   GST_DEBUG_OBJECT (vtrans, "Transforming caps %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
   GST_DEBUG_OBJECT (vtrans, "Filter caps %" GST_PTR_FORMAT, filter);
 
+
   result = gst_caps_new_empty ();
+
+  // In case there is no memory:GBM caps structure prepend one.
+  if (!gst_caps_is_empty (caps) &&
+      !gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+    structure = gst_caps_get_structure (caps, 0);
+    features = gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL);
+
+    // Make a copy that will be modified.
+    structure = gst_structure_copy (structure);
+
+    // Set width and height to a range instead of fixed value.
+    gst_structure_set (structure, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
+        "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+
+    // If pixel aspect ratio, make a range of it.
+    if (gst_structure_has_field (structure, "pixel-aspect-ratio")) {
+      gst_structure_set (structure, "pixel-aspect-ratio",
+          GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
+    }
+
+    // Remove the format/color/compression related fields.
+    gst_structure_remove_fields (structure, "format", "colorimetry",
+        "chroma-site", "compression", NULL);
+
+    gst_caps_append_structure_full (result, structure, features);
+  }
+
   length = gst_caps_get_size (caps);
 
   for (idx = 0; idx < length; idx++) {
@@ -473,6 +551,30 @@ gst_video_transform_transform_caps (GstBaseTransform * trans,
         gst_caps_features_copy (features));
   }
 
+  // In case there is no featureless caps structure append one.
+  if (!gst_caps_is_empty (caps) && !gst_caps_has_feature (caps, NULL)) {
+    structure = gst_caps_get_structure (caps, 0);
+
+    // Make a copy that will be modified.
+    structure = gst_structure_copy (structure);
+
+    // Set width and height to a range instead of fixed value.
+    gst_structure_set (structure, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT,
+        "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+
+    // If pixel aspect ratio, make a range of it.
+    if (gst_structure_has_field (structure, "pixel-aspect-ratio")) {
+      gst_structure_set (structure, "pixel-aspect-ratio",
+          GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
+    }
+
+    // Remove the format/color/compression related fields.
+    gst_structure_remove_fields (structure, "format", "colorimetry",
+        "chroma-site", "compression", NULL);
+
+    gst_caps_append_structure (result, structure);
+  }
+
   if (filter) {
     GstCaps *intersection  =
         gst_caps_intersect_full (filter, result, GST_CAPS_INTERSECT_FIRST);
@@ -481,18 +583,18 @@ gst_video_transform_transform_caps (GstBaseTransform * trans,
   }
 
   GST_DEBUG_OBJECT (vtrans, "Returning caps: %" GST_PTR_FORMAT, result);
-
   return result;
 }
 
 static gboolean
-gst_video_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
+gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
     GstCaps * outcaps)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
   GstStructure *inopts = NULL, *outopts = NULL;
   GstVideoInfo ininfo, outinfo;
-  gint from_dar_n, from_dar_d, to_dar_n, to_dar_d;
+  GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
+  gint in_dar_n, in_dar_d, out_dar_n, out_dar_d;
 
   if (!gst_video_info_from_caps (&ininfo, incaps)) {
     GST_ERROR_OBJECT (vtrans, "Failed to get input video info from caps!");
@@ -505,15 +607,15 @@ gst_video_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   }
 
   if (!gst_util_fraction_multiply (ininfo.width, ininfo.height,
-          ininfo.par_n, ininfo.par_d, &from_dar_n, &from_dar_d)) {
+          ininfo.par_n, ininfo.par_d, &in_dar_n, &in_dar_d)) {
     GST_WARNING_OBJECT (vtrans, "Failed to calculate input DAR!");
-    from_dar_n = from_dar_d = -1;
+    in_dar_n = in_dar_d = -1;
   }
 
   if (!gst_util_fraction_multiply (outinfo.width, outinfo.height,
-          outinfo.par_n, outinfo.par_d, &to_dar_n, &to_dar_d)) {
+          outinfo.par_n, outinfo.par_d, &out_dar_n, &out_dar_d)) {
     GST_WARNING_OBJECT (vtrans, "Failed to calculate output DAR!");
-    to_dar_n = to_dar_d = -1;
+    out_dar_n = out_dar_d = -1;
   }
 
   if (vtrans->c2dconvert != NULL)
@@ -522,55 +624,61 @@ gst_video_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   vtrans->c2dconvert = gst_c2d_video_converter_new ();
 
   // Fill the converter input options structure.
-  inopts = gst_structure_new ("qtivtransform",
+  inopts = gst_structure_new ("options",
       GST_C2D_VIDEO_CONVERTER_OPT_FLIP_HORIZONTAL, G_TYPE_BOOLEAN,
-      vtrans->flip_h,
+          vtrans->flip_h,
       GST_C2D_VIDEO_CONVERTER_OPT_FLIP_VERTICAL, G_TYPE_BOOLEAN,
-      vtrans->flip_v,
+          vtrans->flip_v,
       GST_C2D_VIDEO_CONVERTER_OPT_ROTATION, GST_TYPE_C2D_VIDEO_ROTATION,
-      gst_video_transform_rotation_to_c2d_rotate (vtrans->rotation),
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_X, G_TYPE_INT,
-      (vtrans->crop.w != 0 && vtrans->crop.h != 0) ? vtrans->crop.x : 0,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_Y, G_TYPE_INT,
-      (vtrans->crop.w != 0 && vtrans->crop.h != 0) ? vtrans->crop.y : 0,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_WIDTH, G_TYPE_INT,
-      (vtrans->crop.w != 0 && vtrans->crop.h != 0) ? vtrans->crop.w : 0,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_HEIGHT, G_TYPE_INT,
-      (vtrans->crop.w != 0 && vtrans->crop.h != 0) ? vtrans->crop.h : 0,
+          gst_video_transform_rotation_to_c2d_rotate (vtrans->rotation),
+      GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
+          gst_caps_has_compression (incaps, "ubwc"),
       NULL);
 
-  // In case destination rectangle was set use its values.
-  if (vtrans->destination.w != 0 && vtrans->destination.h != 0) {
-    gst_structure_set (inopts,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_X, G_TYPE_INT,
-      vtrans->destination.x,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_Y, G_TYPE_INT,
-      vtrans->destination.y,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_WIDTH, G_TYPE_INT,
-      vtrans->destination.w,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_HEIGHT, G_TYPE_INT,
-      vtrans->destination.h,
-      NULL);
-  }
+  g_value_init (&rects, GST_TYPE_ARRAY);
+  g_value_init (&entry, GST_TYPE_ARRAY);
+  g_value_init (&value, G_TYPE_INT);
 
-  // Check whether the input caps have ubwc compression.
-  if (gst_video_transform_caps_has_compression (incaps, "ubwc")) {
-    gst_structure_set (inopts,
-        GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN, TRUE,
-        NULL);
-  }
+  g_value_set_int (&value, vtrans->crop.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->crop.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->crop.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->crop.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+  g_value_reset (&entry);
+
+  gst_structure_set_value (inopts,
+      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
+  g_value_reset (&rects);
+
+  g_value_set_int (&value, vtrans->destination.x);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->destination.y);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->destination.w);
+  gst_value_array_append_value (&entry, &value);
+  g_value_set_int (&value, vtrans->destination.h);
+  gst_value_array_append_value (&entry, &value);
+
+  gst_value_array_append_value (&rects, &entry);
+
+  gst_structure_set_value (inopts,
+      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &rects);
+
+  g_value_unset (&value);
+  g_value_unset (&entry);
+  g_value_unset (&rects);
 
   // Fill the converter output options structure.
-  outopts = gst_structure_new ("qtivtransform",
-      GST_C2D_VIDEO_CONVERTER_OPT_BACKGROUND, G_TYPE_UINT,
-      vtrans->background, NULL);
-
-  // Check whether the output caps have ubwc compression.
-  if (gst_video_transform_caps_has_compression (outcaps, "ubwc")) {
-    gst_structure_set (outopts,
-        GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN, TRUE,
-        NULL);
-  }
+  outopts = gst_structure_new ("options",
+      GST_C2D_VIDEO_CONVERTER_OPT_BACKGROUND, G_TYPE_UINT, vtrans->background,
+      GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
+          gst_caps_has_compression (outcaps, "ubwc"),
+      NULL);
 
   gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
   gst_c2d_video_converter_set_output_opts (vtrans->c2dconvert, outopts);
@@ -578,8 +686,8 @@ gst_video_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   GST_DEBUG_OBJECT (vtrans, "From %dx%d (PAR: %d/%d, DAR: %d/%d), size %"
       G_GSIZE_FORMAT " -> To %dx%d (PAR: %d/%d, DAR: %d/%d), size %"
       G_GSIZE_FORMAT, ininfo.width, ininfo.height, ininfo.par_n,
-      ininfo.par_d, from_dar_n, from_dar_d, ininfo.size, outinfo.width,
-      outinfo.height, outinfo.par_n, outinfo.par_d, to_dar_n, to_dar_d,
+      ininfo.par_d, in_dar_n, in_dar_d, ininfo.size, outinfo.width,
+      outinfo.height, outinfo.par_n, outinfo.par_d, out_dar_n, out_dar_d,
       outinfo.size);
 
   if (vtrans->ininfo != NULL)
@@ -593,7 +701,7 @@ gst_video_transform_set_caps (GstBaseTransform * trans, GstCaps * incaps,
   vtrans->outinfo = gst_video_info_copy (&outinfo);
 
   // Disable passthrough in order to decide output allocation.
-  gst_base_transform_set_passthrough (trans, FALSE);
+  gst_base_transform_set_passthrough (base, FALSE);
   return TRUE;
 }
 
@@ -906,6 +1014,7 @@ gst_video_transform_fixate_width (GstVideoTransform * vtrans,
     if (!success) {
       GST_ELEMENT_ERROR (vtrans, CORE, NEGOTIATION, (NULL),
           ("Error calculating the output width scale factor!"));
+      gst_structure_free (structure);
       return;
     }
 
@@ -1066,6 +1175,7 @@ gst_video_transform_fixate_height (GstVideoTransform * vtrans,
     if (!success) {
       GST_ELEMENT_ERROR (vtrans, CORE, NEGOTIATION, (NULL),
           ("Error calculating the output height scale factor!"));
+      gst_structure_free (structure);
       return;
     }
 
@@ -1415,6 +1525,9 @@ gst_video_transform_fixate_dimensions (GstVideoTransform * vtrans,
 
       gst_structure_set (output, "pixel-aspect-ratio", GST_TYPE_FRACTION,
           set_par_n, set_par_d, NULL);
+
+      GST_DEBUG_OBJECT (vtrans, "Output dimensions fixated to: %dx%d, and PAR"
+          " fixated to: %d/%d", out_width, out_height, set_par_n, set_par_d);
       return;
     }
 
@@ -1432,10 +1545,10 @@ gst_video_transform_fixate_dimensions (GstVideoTransform * vtrans,
 }
 
 static GstCaps *
-gst_video_transform_fixate_caps (GstBaseTransform * trans,
+gst_video_transform_fixate_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * incaps, GstCaps * outcaps)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
   GstStructure *input, *output;
 
   // Truncate and make the output caps writable.
@@ -1492,18 +1605,29 @@ gst_video_transform_fixate_caps (GstBaseTransform * trans,
     }
   }
 
-  GST_DEBUG_OBJECT (vtrans, "Fixated caps to %" GST_PTR_FORMAT, outcaps);
+  // Remove compression field if caps do not contain memory:GBM feature.
+  if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
+    gst_structure_remove_field (output, "compression");
 
+  // Free the local copy of the input caps structure.
+  gst_structure_free (input);
+
+  GST_DEBUG_OBJECT (vtrans, "Fixated caps to %" GST_PTR_FORMAT, outcaps);
   return outcaps;
 }
 
 static GstFlowReturn
-gst_video_transform_transform (GstBaseTransform * trans, GstBuffer * inbuffer,
+gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
-  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (trans);
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstVideoFrame inframe, outframe;
   gpointer request_id = NULL;
+
+  // GAP buffer, nothing to do. Propagate output buffer downstream.
+  if (gst_buffer_get_size (outbuffer) == 0 &&
+      GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
+    return GST_FLOW_OK;
 
   if (!gst_video_frame_map (&inframe, vtrans->ininfo, inbuffer,
           GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
@@ -1561,12 +1685,10 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_FLIP_HORIZONTAL:
       vtrans->flip_h = g_value_get_boolean (value);
 
-      gst_video_transform_determine_passthrough (vtrans);
-
       if (vtrans->c2dconvert != NULL) {
-        GstStructure *inopts = gst_structure_new ("qtivtransform",
+        GstStructure *inopts = gst_structure_new ("options",
           GST_C2D_VIDEO_CONVERTER_OPT_FLIP_HORIZONTAL, G_TYPE_BOOLEAN,
-          vtrans->flip_h,
+              vtrans->flip_h,
           NULL);
         gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
       }
@@ -1574,12 +1696,10 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_FLIP_VERTICAL:
       vtrans->flip_v = g_value_get_boolean (value);
 
-      gst_video_transform_determine_passthrough (vtrans);
-
       if (vtrans->c2dconvert != NULL) {
-        GstStructure *inopts = gst_structure_new ("qtivtransform",
+        GstStructure *inopts = gst_structure_new ("options",
           GST_C2D_VIDEO_CONVERTER_OPT_FLIP_VERTICAL, G_TYPE_BOOLEAN,
-          vtrans->flip_v,
+              vtrans->flip_v,
           NULL);
         gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
       }
@@ -1587,77 +1707,93 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_ROTATE:
       vtrans->rotation = g_value_get_enum (value);
 
-      gst_video_transform_determine_passthrough (vtrans);
-
       if (vtrans->c2dconvert != NULL) {
-        GstStructure *inopts = gst_structure_new ("qtivtransform",
+        GstStructure *inopts = gst_structure_new ("options",
           GST_C2D_VIDEO_CONVERTER_OPT_ROTATION, GST_TYPE_C2D_VIDEO_ROTATION,
-          gst_video_transform_rotation_to_c2d_rotate (vtrans->rotation),
+              gst_video_transform_rotation_to_c2d_rotate (vtrans->rotation),
           NULL);
         gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
       }
       break;
     case PROP_CROP:
+    {
+      guint x = 0, y = 0, width = 0, height = 0;
+
       g_return_if_fail (gst_value_array_get_size (value) == 4);
 
-      vtrans->crop.x = g_value_get_int (gst_value_array_get_value (value, 0));
-      vtrans->crop.y = g_value_get_int (gst_value_array_get_value (value, 1));
-      vtrans->crop.w = g_value_get_int (gst_value_array_get_value (value, 2));
-      vtrans->crop.h = g_value_get_int (gst_value_array_get_value (value, 3));
+      x = g_value_get_int (gst_value_array_get_value (value, 0));
+      y = g_value_get_int (gst_value_array_get_value (value, 1));
+      width = g_value_get_int (gst_value_array_get_value (value, 2));
+      height = g_value_get_int (gst_value_array_get_value (value, 3));
 
-      gst_video_transform_determine_passthrough (vtrans);
+      if ((width == 0 && height != 0) || (width != 0 && height == 0)) {
+        GST_WARNING_OBJECT (vtrans, "Invalid crop parameters!");
+        break;
+      }
 
-      if (vtrans->c2dconvert != NULL &&
-          vtrans->crop.w != 0 && vtrans->crop.h != 0) {
-        GstStructure *inopts = gst_structure_new ("qtivtransform",
-          GST_C2D_VIDEO_CONVERTER_OPT_SRC_X, G_TYPE_INT,
-          vtrans->crop.x,
-          GST_C2D_VIDEO_CONVERTER_OPT_SRC_Y, G_TYPE_INT,
-          vtrans->crop.y,
-          GST_C2D_VIDEO_CONVERTER_OPT_SRC_WIDTH, G_TYPE_INT,
-          vtrans->crop.w,
-          GST_C2D_VIDEO_CONVERTER_OPT_SRC_HEIGHT, G_TYPE_INT,
-          vtrans->crop.h,
-          NULL);
+      vtrans->crop.x = x;
+      vtrans->crop.y = y;
+      vtrans->crop.w = width;
+      vtrans->crop.h = height;
+
+      if (vtrans->c2dconvert != NULL) {
+        GstStructure *inopts = gst_structure_new_empty ("options");
+        GValue rects = G_VALUE_INIT;
+
+        g_value_init (&rects, GST_TYPE_ARRAY);
+        gst_value_array_append_value (&rects, value);
+
+        gst_structure_set_value (inopts,
+            GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
+        g_value_unset (&rects);
+
         gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
       }
       break;
+    }
     case PROP_DESTINATION:
+    {
+      guint x = 0, y = 0, width = 0, height = 0;
+
       g_return_if_fail (gst_value_array_get_size (value) == 4);
 
-      vtrans->destination.x =
-          g_value_get_int (gst_value_array_get_value (value, 0));
-      vtrans->destination.y =
-          g_value_get_int (gst_value_array_get_value (value, 1));
-      vtrans->destination.w =
-          g_value_get_int (gst_value_array_get_value (value, 2));
-      vtrans->destination.h =
-          g_value_get_int (gst_value_array_get_value (value, 3));
+      x = g_value_get_int (gst_value_array_get_value (value, 0));
+      y = g_value_get_int (gst_value_array_get_value (value, 1));
+      width = g_value_get_int (gst_value_array_get_value (value, 2));
+      height = g_value_get_int (gst_value_array_get_value (value, 3));
 
-      gst_video_transform_determine_passthrough (vtrans);
+      if ((width == 0 && height != 0) || (width != 0 && height == 0)) {
+        GST_WARNING_OBJECT (vtrans, "Invalid destination parameters!");
+        break;
+      }
 
-      if (vtrans->c2dconvert != NULL &&
-          vtrans->destination.w != 0 && vtrans->destination.h != 0) {
-        GstStructure *inopts = gst_structure_new ("qtivtransform",
-          GST_C2D_VIDEO_CONVERTER_OPT_DEST_X, G_TYPE_INT,
-          vtrans->destination.x,
-          GST_C2D_VIDEO_CONVERTER_OPT_DEST_Y, G_TYPE_INT,
-          vtrans->destination.y,
-          GST_C2D_VIDEO_CONVERTER_OPT_DEST_WIDTH, G_TYPE_INT,
-          vtrans->destination.w,
-          GST_C2D_VIDEO_CONVERTER_OPT_DEST_HEIGHT, G_TYPE_INT,
-          vtrans->destination.h,
-          NULL);
+      vtrans->destination.x = x;
+      vtrans->destination.y = y;
+      vtrans->destination.w = width;
+      vtrans->destination.h = height;
+
+      if (vtrans->c2dconvert != NULL) {
+        GstStructure *inopts = gst_structure_new_empty ("options");
+        GValue rects = G_VALUE_INIT;
+
+        g_value_init (&rects, GST_TYPE_ARRAY);
+        gst_value_array_append_value (&rects, value);
+
+        gst_structure_set_value (inopts,
+            GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, value);
+        g_value_unset (&rects);
+
         gst_c2d_video_converter_set_input_opts (vtrans->c2dconvert, 0, inopts);
       }
       break;
+    }
     case PROP_BACKGROUND:
       vtrans->background = g_value_get_uint (value);
 
       if (vtrans->c2dconvert != NULL) {
-        GstStructure *opts = gst_structure_new ("qtivtransform",
+        GstStructure *opts = gst_structure_new ("options",
             GST_C2D_VIDEO_CONVERTER_OPT_BACKGROUND, G_TYPE_UINT,
-            vtrans->background,
+                vtrans->background,
             NULL);
         gst_c2d_video_converter_set_output_opts (vtrans->c2dconvert, opts);
       }
@@ -1754,7 +1890,7 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
 {
   GObjectClass *gobject        = G_OBJECT_CLASS (klass);
   GstElementClass *element     = GST_ELEMENT_CLASS (klass);
-  GstBaseTransformClass *trans = GST_BASE_TRANSFORM_CLASS (klass);
+  GstBaseTransformClass *base = GST_BASE_TRANSFORM_CLASS (klass);
 
   gobject->set_property = GST_DEBUG_FUNCPTR (gst_video_transform_set_property);
   gobject->get_property = GST_DEBUG_FUNCPTR (gst_video_transform_get_property);
@@ -1806,17 +1942,17 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
   gst_element_class_add_pad_template (element,
       gst_video_transform_src_template ());
 
-  trans->propose_allocation =
+  base->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_video_transform_propose_allocation);
-  trans->decide_allocation =
+  base->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_video_transform_decide_allocation);
-  trans->prepare_output_buffer =
+  base->prepare_output_buffer =
       GST_DEBUG_FUNCPTR (gst_video_transform_prepare_output_buffer);
-  trans->transform_caps =
+  base->transform_caps =
       GST_DEBUG_FUNCPTR (gst_video_transform_transform_caps);
-  trans->fixate_caps = GST_DEBUG_FUNCPTR (gst_video_transform_fixate_caps);
-  trans->set_caps = GST_DEBUG_FUNCPTR (gst_video_transform_set_caps);
-  trans->transform = GST_DEBUG_FUNCPTR (gst_video_transform_transform);
+  base->fixate_caps = GST_DEBUG_FUNCPTR (gst_video_transform_fixate_caps);
+  base->set_caps = GST_DEBUG_FUNCPTR (gst_video_transform_set_caps);
+  base->transform = GST_DEBUG_FUNCPTR (gst_video_transform_transform);
 }
 
 static void

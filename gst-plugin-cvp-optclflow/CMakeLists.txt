@@ -18,6 +18,7 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GBM REQUIRED gbm)
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
@@ -25,33 +26,28 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
-add_definitions(-DANDROID)
 
 # Common compiler flags.
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-terminate -Wno-attributes")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
+# GStreamer CVP OticalFlow plugin.
 set(GST_CVP_OPTCLFLOW gstqticvpoptclflow)
 
 add_library(${GST_CVP_OPTCLFLOW} SHARED
-  cvp-optclflow.cc
-  opticalflow.cc
+  opticalflow.c
+  cvp-opticalflow-engine.cc
 )
 
 target_include_directories(${GST_CVP_OPTCLFLOW} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_include_directories(${GST_CVP_OPTCLFLOW} PRIVATE
-  ${CMAKE_SOURCE_DIR}
-)
-
 target_link_libraries(${GST_CVP_OPTCLFLOW} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
-  qtimlmeta
+  ${GBM_LIBRARIES}
   gstqtimemorybase
   cvp2
 )

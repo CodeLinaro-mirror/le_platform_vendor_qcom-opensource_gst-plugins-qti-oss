@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "ml-video-segmentation-module.h"
@@ -40,7 +74,7 @@
 
 
 #define CAST_TO_GFLOAT(data) ((gfloat*)data)
-#define CAST_TO_GUINT(data) ((guint32*)data)
+#define CAST_TO_GUINT32(data) ((guint32*)data)
 
 #define EXTRACT_RED_COLOR(color)   ((color >> 24) & 0xFF)
 #define EXTRACT_GREEN_COLOR(color) ((color >> 16) & 0xFF)
@@ -190,9 +224,10 @@ gst_ml_video_segmentation_module_process (gpointer instance,
   GstPrivateModule *module = instance;
   GstMLTensorMeta *mlmeta = NULL;
   GstVideoMeta *vmeta = NULL;
-  const GstVideoFormatInfo *vfinfo = NULL;
+  GstProtectionMeta *pmeta = NULL;
   GstMapInfo inmap, outmap;
   guint idx = 0, row = 0, column = 0, bpp = 0, padding = 0;
+  guint inwidth = 0, inheight = 0, color = 0;
 
   g_return_val_if_fail (module != NULL, FALSE);
   g_return_val_if_fail (inbuffer != NULL, FALSE);
@@ -213,24 +248,28 @@ gst_ml_video_segmentation_module_process (gpointer instance,
     return FALSE;
   }
 
+  if (mlmeta->type != GST_ML_TYPE_INT32 && mlmeta->type != GST_ML_TYPE_FLOAT32) {
+    GST_ERROR ("Unsupported tensor type!");
+    return FALSE;
+  }
+
   if (!(vmeta = gst_buffer_get_video_meta (outbuffer))) {
     GST_ERROR ("Output buffer has no video meta!");
     return FALSE;
   }
 
-  vfinfo = gst_video_format_get_info (vmeta->format);
+  {
+    const GstVideoFormatInfo *vfinfo = gst_video_format_get_info (vmeta->format);
 
-  if (!GST_VIDEO_FORMAT_INFO_IS_RGB (vfinfo)) {
-    GST_ERROR ("Output buffer formats other than RGB based are not supported!");
-    return FALSE;
+    if (!GST_VIDEO_FORMAT_INFO_IS_RGB (vfinfo)) {
+      GST_ERROR ("Output buffer formats other than RGB based are not supported!");
+      return FALSE;
+    }
+
+    // Retrive the video frame Bytes Per Pixel for later calculations.
+    bpp = GST_VIDEO_FORMAT_INFO_BITS (vfinfo) *
+        GST_VIDEO_FORMAT_INFO_N_COMPONENTS (vfinfo) / CHAR_BIT;
   }
-
-  // Retrive the video frame Bits Per Pixel for later calculations.
-  bpp = GST_VIDEO_FORMAT_INFO_BITS (vfinfo) *
-      GST_VIDEO_FORMAT_INFO_N_COMPONENTS (vfinfo);
-
-  // Calculate the row padding in bytes.
-  padding = vmeta->stride[0] - (vmeta->width * bpp / 8);
 
   // Map input buffer memory blocks.
   if (!gst_buffer_map_range (inbuffer, 0, 1, &inmap, GST_MAP_READ)) {
@@ -245,6 +284,28 @@ gst_ml_video_segmentation_module_process (gpointer instance,
     return FALSE;
   }
 
+  // Calculate the row padding in bytes.
+  padding = vmeta->stride[0] - (vmeta->width * bpp);
+
+  // Set the initial width and height of the source mask.
+  inwidth = mlmeta->dimensions[2];
+  inheight = mlmeta->dimensions[1];
+
+  // Extract the SAR (Source Aspect Ratio) and adjust mask dimensions.
+  if ((pmeta = gst_buffer_get_protection_meta (inbuffer)) != NULL) {
+    guint sar_n = 1, sar_d = 1;
+
+    sar_n = gst_value_get_fraction_numerator (
+        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
+    sar_d = gst_value_get_fraction_denominator (
+        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
+
+    if (sar_n > sar_d)
+      inheight = gst_util_uint64_scale_int (inwidth, sar_d, sar_n);
+    else if (sar_n < sar_d)
+      inwidth = gst_util_uint64_scale_int (inheight, sar_n, sar_d);
+  }
+
 #ifdef HAVE_LINUX_DMA_BUF_H
   if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
     struct dma_buf_sync bufsync;
@@ -257,58 +318,33 @@ gst_ml_video_segmentation_module_process (gpointer instance,
   }
 #endif // HAVE_LINUX_DMA_BUF_H
 
-  switch (mlmeta->type) {
-    case GST_ML_TYPE_INT32:
-      for (row = 0; row < vmeta->height; row++) {
-        for (column = 0; column < vmeta->width; column++) {
-          GstLabel *label = NULL;
-          guint color = 0;
+  for (row = 0; row < vmeta->height; row++) {
+    for (column = 0; column < vmeta->width; column++) {
+      GstLabel *label = NULL;
+      guint id = 0;
 
-          idx = (row * mlmeta->dimensions[1]) + column;
-          label = g_hash_table_lookup (module->labels,
-              GUINT_TO_POINTER (CAST_TO_GUINT (inmap.data)[idx]));
-          color = (label != NULL) ? label->color : 0x00000000;
+      // Calculate the source index.
+      idx = inwidth * gst_util_uint64_scale_int (row, inheight, vmeta->height);
+      idx += gst_util_uint64_scale_int (column, inwidth, vmeta->width);
 
-          idx = (((row * vmeta->width) + column) * bpp / 8) + (row * padding);
+      if (mlmeta->type == GST_ML_TYPE_FLOAT32)
+        id = CAST_TO_GFLOAT (inmap.data)[idx];
+      else if (mlmeta->type == GST_ML_TYPE_INT32)
+        id = CAST_TO_GUINT32 (inmap.data)[idx];
 
-          outmap.data[idx] = EXTRACT_RED_COLOR (color);
-          outmap.data[idx + 1] = EXTRACT_GREEN_COLOR (color);
-          outmap.data[idx + 2] = EXTRACT_BLUE_COLOR (color);
+      label = g_hash_table_lookup (module->labels, GUINT_TO_POINTER (id));
+      color = (label != NULL) ? label->color : 0x000000FF;
 
-          if ((bpp / 8) == 4)
-            outmap.data[idx + 3] = EXTRACT_ALPHA_COLOR (color);
-        }
-      }
-      break;
-    case GST_ML_TYPE_FLOAT32:
-      for (row = 0; row < vmeta->height; row++) {
-        for (column = 0; column < vmeta->width; column++) {
-          GstLabel *label = NULL;
-          guint color = 0;
+      // Calculate the destination index.
+      idx = (((row * vmeta->width) + column) * bpp) + (row * padding);
 
-          idx = (row * mlmeta->dimensions[1]) + column;
-          label = g_hash_table_lookup (module->labels,
-              GUINT_TO_POINTER (CAST_TO_GFLOAT (inmap.data)[idx]));
-          color = (label != NULL) ? label->color : 0x00000000;
+      outmap.data[idx] = EXTRACT_RED_COLOR (color);
+      outmap.data[idx + 1] = EXTRACT_GREEN_COLOR (color);
+      outmap.data[idx + 2] = EXTRACT_BLUE_COLOR (color);
 
-          idx = (((row * vmeta->width) + column) * bpp / 8) + (row * padding);
-
-          outmap.data[idx] = EXTRACT_RED_COLOR (color);
-          outmap.data[idx + 1] = EXTRACT_GREEN_COLOR (color);
-          outmap.data[idx + 2] = EXTRACT_BLUE_COLOR (color);
-
-          if ((bpp / 8) == 4)
-            outmap.data[idx + 3] = EXTRACT_ALPHA_COLOR (color);
-        }
-      }
-      break;
-    default:
-      GST_ERROR ("Unsupported tensor type!");
-
-      gst_buffer_unmap (outbuffer, &outmap);
-      gst_buffer_unmap (inbuffer, &inmap);
-
-      return FALSE;
+      if (bpp == 4)
+        outmap.data[idx + 3] = EXTRACT_ALPHA_COLOR (color);
+    }
   }
 
 #ifdef HAVE_LINUX_DMA_BUF_H
