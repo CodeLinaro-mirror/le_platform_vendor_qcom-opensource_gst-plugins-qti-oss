@@ -461,7 +461,8 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
     goto error_setup_output;
   }
 
-  dec->is_ubwc = caps_has_compression (intersection, "ubwc");
+  /* Secure mode only support UBWC output*/
+  dec->is_ubwc = caps_has_compression (intersection, "ubwc") | dec->secure;
 
   /* Fixate color format */
   intersection = gst_caps_truncate (intersection);
@@ -1563,7 +1564,8 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
 
   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_SECURE,
       g_param_spec_boolean ("secure", "secure mode",
-          "If enabled, decoder should be in secure mode",
+          "If enabled, decoder should be in secure mode. Secure mode only support UBWC output "
+          "For any secure cases, output is forced to set UBWC",
           GST_QTI_CODEC2_SECURE_MODE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
