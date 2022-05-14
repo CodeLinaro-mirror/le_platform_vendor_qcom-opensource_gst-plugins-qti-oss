@@ -448,6 +448,20 @@ make_bitrate_saving_mode (BITRATE_SAVING_MODE mode, gboolean isInput)
   return param;
 }
 
+ConfigParams
+make_profile_level_param (C2W_PROFILE_T profile, C2W_LEVEL_T level)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_PROFILE_LEVEL;
+  param.profileAndLevel.profile = profile;
+  param.profileAndLevel.level = level;
+
+  return param;
+}
+
 static gchar *
 get_c2_comp_name (GstStructure * structure)
 {
@@ -1074,6 +1088,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GstVideoCodecState * state)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
+  Gstqticodec2vencClass *enc_class = GST_QTICODEC2VENC_GET_CLASS (encoder);
   GstStructure *structure;
   const gchar *mode;
   const gchar *fmt;
@@ -1265,6 +1280,13 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   }
 
   g_ptr_array_free (config, TRUE);
+
+  if (enc_class->set_format) {
+    if (!enc_class->set_format (enc, state)) {
+      GST_ERROR_OBJECT (enc, "Subclass failed to set the new format");
+      return FALSE;
+    }
+  }
 
   if (!c2component_start (enc->comp)) {
     GST_DEBUG_OBJECT (enc, "Failed to start component");
