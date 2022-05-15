@@ -39,8 +39,6 @@
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2_debug);
 #define GST_CAT_DEFAULT gst_qticodec2_debug
 
-#define POOL_MIN_BUFFER_COUNT 6
-
 static GstMemory *
 _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
 {
@@ -254,8 +252,7 @@ gst_qticodec2_buffer_pool_new (gpointer comp, BUFFER_POOL_TYPE pool_type,
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
 
   /* set pool params and options */
-  gst_buffer_pool_config_set_params (config, caps, info->size,
-      POOL_MIN_BUFFER_COUNT, num_buffers);
+  gst_buffer_pool_config_set_params (config, caps, info->size, 0, num_buffers);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_config_add_option (config,
       GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);

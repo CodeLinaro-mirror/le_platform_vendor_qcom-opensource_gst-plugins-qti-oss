@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifndef __CODEC2WRAPPER_H__
 #define __CODEC2WRAPPER_H__
 
@@ -246,7 +282,7 @@ typedef struct {
     BUFFER_POOL_TYPE pool_type;
     guint8* config_data; // codec config data
     guint32 config_size; // size of codec config data
-    void* c2_buffer;
+    void* c2Buffer;
     void* gbm_bo;
     gboolean secure;
 } BufferDescriptor;
@@ -324,7 +360,7 @@ gboolean c2componentStore_delete(void* comp_store);
 gboolean c2component_setListener(void* const comp, void* cb_context, listener_cb callback, BLOCK_MODE_TYPE block);
 gboolean c2component_alloc(void* const comp, BufferDescriptor* buffer);
 gboolean c2component_queue(void* const comp, BufferDescriptor* buffer);
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork);
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode);
 gboolean c2component_drain(void* const comp, DRAIN_MODE_TYPE mode);
 gboolean c2component_start(void* const comp);
 gboolean c2component_stop(void* const comp);
@@ -333,7 +369,6 @@ gboolean c2component_release(void* const comp);
 void* c2component_intf(void* const comp);
 gboolean c2component_createBlockpool(void* const comp, BUFFER_POOL_TYPE poolType);
 gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType);
-gboolean c2component_mapOutBuffer(void* const comp, gboolean map);
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId);
 gboolean c2component_delete(void* comp);
 
@@ -342,6 +377,7 @@ gboolean c2component_delete(void* comp);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const gchar* c2componentInterface_getName(void* const comp_intf);
 const gint c2componentInterface_getId(void* const comp_intf);
+gboolean c2componentInterface_initReflectedParamUpdater(void* const comp_store, void* const comp_intf);
 gboolean c2componentInterface_config(void* const comp_intf, GPtrArray* config, BLOCK_MODE_TYPE block);
 
 #ifdef __cplusplus

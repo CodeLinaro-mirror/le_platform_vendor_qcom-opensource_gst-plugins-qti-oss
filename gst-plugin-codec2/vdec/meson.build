@@ -1,5 +1,9 @@
 gstqticodec2vdec_sources = [
   'gstqticodec2vdec.c',
+  'gstqcodec2h264dec.c',
+  'gstqcodec2h265dec.c',
+  'gstqcodec2vp9dec.c',
+  'gstqcodec2mpeg2dec.c',
   'gstqticodec2vdecbufferpool.c'
 ]
 

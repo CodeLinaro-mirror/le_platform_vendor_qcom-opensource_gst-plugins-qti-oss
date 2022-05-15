@@ -1,5 +1,7 @@
 gstqticodec2venc_sources = [
-  'gstqticodec2venc.c'
+  'gstqticodec2venc.c',
+  'gstqcodec2h264enc.c',
+  'gstqcodec2h265enc.c'
 ]
 
 gstqticodec2venc = library('gstqticodec2venc',

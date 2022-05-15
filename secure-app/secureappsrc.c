@@ -442,6 +442,7 @@ int main(int argc, char **argv)
     free_ion_memory (st_vdec_ion+i);
   }
   g_free (st_vdec_ion);
-  fclose(fp);
+  if (fp)
+    fclose(fp);
   return 0;
 }
