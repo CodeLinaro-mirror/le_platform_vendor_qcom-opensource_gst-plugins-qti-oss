@@ -461,7 +461,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
     goto error_setup_output;
   }
 
-  /* Secure mode only support UBWC output*/
+  /* Secure mode only support UBWC output */
   dec->is_ubwc = caps_has_compression (intersection, "ubwc") | dec->secure;
 
   /* Fixate color format */

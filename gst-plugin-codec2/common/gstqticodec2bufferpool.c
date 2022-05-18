@@ -63,21 +63,19 @@ _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
       info->size, gst_video_format_to_string (format), buffer.ubwc_flag,
       info->width, info->height);
 
-  /*TODO: add support for Linear buffer */
-  if (format == GST_VIDEO_FORMAT_NV12) {
-    buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
+  buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
 
-    if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
-      GST_ERROR_OBJECT (pool, "Failed to allocate graphic buffer");
-    } else {
-      GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d",
-          buffer.fd, buffer.capacity);
+  if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
+    GST_ERROR_OBJECT (pool, "Failed to allocate graphic buffer, format: %u",
+        format);
+  } else {
+    GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d format: %u",
+        buffer.fd, buffer.capacity, format);
 
-      /* use GstDmaBufAllocator to allocate GBM based fd memory */
-      mem =
-          gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
-          buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
-    }
+    /* use GstDmaBufAllocator to allocate GBM based fd memory */
+    mem =
+        gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
+        buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
   }
 
   return mem;
