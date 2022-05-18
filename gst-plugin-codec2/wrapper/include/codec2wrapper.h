@@ -408,7 +408,7 @@ typedef struct {
         } rcMode;
 
         struct {
-            guint32    slice_size;
+            guint32 slice_size;
             SLICE_MODE type;
         } sliceMode;
 
