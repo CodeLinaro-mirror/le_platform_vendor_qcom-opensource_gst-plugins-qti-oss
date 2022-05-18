@@ -101,7 +101,6 @@ struct _Gstqticodec2venc
   guint64 num_output_done;
 
   GstVideoInterlaceMode interlace_mode;
-  GstVideoFormat outPixelfmt;
   RC_MODE_TYPE rcMode;
   MIRROR_TYPE mirror;
   guint32 rotation;
@@ -143,7 +142,8 @@ struct _Gstqticodec2vencClass
 
 GType gst_qticodec2venc_get_type (void);
 
-ConfigParams make_profile_level_param (C2W_PROFILE_T profile, C2W_LEVEL_T level);
+ConfigParams make_profile_level_param (C2W_PROFILE_T profile,
+    C2W_LEVEL_T level);
 
 G_END_DECLS
 #endif /* __GST_QTICODEC2VENC_H__ */
