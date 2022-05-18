@@ -138,11 +138,19 @@ gst_qcodec2_h264_dec_set_format (Gstqticodec2vdec * decoder,
   Gstqticodec2vdec *base_dec = GST_QTICODEC2VDEC (decoder);
   gboolean result = TRUE;
   ConfigParams deinterlace;
+  ConfigParams pixel_format;
   GPtrArray *config = NULL;
 
   config = g_ptr_array_new ();
 
   if (config) {
+    pixel_format =
+        make_pixel_format_param (gst_to_c2_pixelformat (base_dec,
+            base_dec->output_format), FALSE);
+    GST_LOG_OBJECT (dec, "set c2 output format: %d for H264",
+        pixel_format.pixelFormat.fmt);
+    g_ptr_array_add (config, &pixel_format);
+
     deinterlace = make_deinterlace_param (base_dec->deinterlace);
     GST_DEBUG_OBJECT (dec, "set deinterlace param");
 

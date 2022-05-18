@@ -37,9 +37,6 @@
 #include <gst/allocators/allocators.h>
 #include "codec2wrapper.h"
 
-#define GST_USE_UNSTABLE_API
-#include <gst/codecparsers/gstvp9parser.h>
-
 G_BEGIN_DECLS
 #define COMMON_VIDEO_CAPS(min, max) \
     "width = (int) [" #min ", " #max "], "    \
@@ -86,6 +83,11 @@ typedef struct _Gstqticodec2vdec Gstqticodec2vdec;
 typedef struct _Gstqticodec2vdecClass Gstqticodec2vdecClass;
 
 typedef guint64 (*f_get_modifier) (void *bo);
+ConfigParams make_pixel_format_param (guint32 fmt, gboolean is_input);
+guint32 gst_to_c2_pixelformat (Gstqticodec2vdec * decoder,
+    GstVideoFormat format);
+gboolean gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec *
+    decoder);
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  64
@@ -133,8 +135,8 @@ struct _Gstqticodec2vdec
   f_get_modifier gbm_api_bo_get_modifier;
   gboolean is_ubwc;
   gboolean is_10bit;
-  gboolean check_vp9_10bit;
   gboolean secure;
+  gboolean delay_start;
   comp_cb cb;
   gboolean deinterlace;
 };
@@ -149,8 +151,11 @@ struct _Gstqticodec2vdecClass
 {
   GstVideoDecoderClass parent_class;
 
+    gboolean (*open) (Gstqticodec2vdec * decoder);
     gboolean (*set_format) (Gstqticodec2vdec * decoder,
       GstVideoCodecState * state);
+    GstFlowReturn (*handle_frame) (Gstqticodec2vdec * decoder,
+      GstVideoCodecFrame * frame);
 };
 
 GType gst_qticodec2vdec_get_type (void);

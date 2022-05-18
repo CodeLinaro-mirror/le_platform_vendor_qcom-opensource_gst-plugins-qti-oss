@@ -215,8 +215,9 @@ gst_qcodec2_h265_enc_set_format (Gstqticodec2venc * encoder,
 
     if (config->len && !c2componentInterface_config (encoder->comp_intf,
             config, BLOCK_MODE_MAY_BLOCK)) {
-      GST_WARNING_OBJECT (encoder, "Failed to set encoder config for profile(%d)/level(%d)",
-                          profile, level);
+      GST_WARNING_OBJECT (encoder,
+          "Failed to set encoder config for profile(%d)/level(%d)", profile,
+          level);
     }
 
     g_ptr_array_free (config, TRUE);
