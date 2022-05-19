@@ -553,7 +553,7 @@ void CodecCallback::onOutputBufferAvailable(
             }
             outBuf.fd = handle->data[0];
             outBuf.meta_fd = handle->data[1];
-            outBuf.c2_buffer = static_cast<void*>(buffer.get());
+            outBuf.c2Buffer = static_cast<void*>(buffer.get());
             guint32 stride = 0;
             guint64 usage = 0;
             guint32 size = 0;
@@ -581,7 +581,7 @@ void CodecCallback::onOutputBufferAvailable(
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
             } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-            } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
+            } else if (format == GBM_FORMAT_P010) {
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
             }
 
@@ -888,9 +888,8 @@ gboolean c2component_queue(void* const comp, BufferDescriptor* buffer)
     return ret;
 }
 
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork)
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode)
 {
-
     LOG_MESSAGE("Flushing work");
 
     gboolean ret = FALSE;
@@ -898,8 +897,14 @@ gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const f
 
     if (comp) {
         C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
-        LOG_MESSAGE("Not implemented");
+        c2Status = comp_wrapper->flush(toC2FlushMode(mode));
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_ERROR("Failed to flush work (%d)", c2Status);
+        }
+    } else {
+        LOG_ERROR("Component is null");
     }
 
     return ret;

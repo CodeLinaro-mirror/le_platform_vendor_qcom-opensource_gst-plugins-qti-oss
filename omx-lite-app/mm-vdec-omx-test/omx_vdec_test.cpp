@@ -417,6 +417,8 @@ static OMX_ERRORTYPE FillBufferDone(OMX_OUT OMX_HANDLETYPE hComponent,
                                     OMX_OUT OMX_PTR pAppData,
                                     OMX_OUT OMX_BUFFERHEADERTYPE* pBuffer);
 
+static uint64_t gbm_output_buffer_get_modifier(OMX_BUFFERHEADERTYPE *omx_buf);
+
 static void do_freeHandle_and_clean_up(bool isDueToError);
 
 int kpi_place_marker(const char* str)
@@ -676,6 +678,13 @@ void* fbd_thread(void* pArg)
       }
       fbd_cnt++;
       DEBUG_PRINT_ERROR("fbd_cnt=%d pBuffer=%p Timestamp=%lld", fbd_cnt, pBuffer, pBuffer->nTimeStamp);
+
+      if (!output_dynamic_meta_mode && fbd_cnt <= 32) {
+        //This code is just to show how to get some gbm related info. from
+        //decoder output omxbuf pointer. 32 is just to limit number of log.
+        uint64_t modifier = gbm_output_buffer_get_modifier(pBuffer);
+        printf("Under OMX_AllocBuf mode, dec output omxbuf pointer %p, with modifier 0x%llx\n", pBuffer, (unsigned long long)modifier);
+      }
 
       if (takeYuvLog)
         log_yuv_frame(pBuffer, secure_mode);

@@ -82,7 +82,7 @@ public:
         uint64_t timestamp,
         C2BlockPool::local_id_t poolType);
 
-    c2_status_t flush(C2Component::flush_mode_t mode, std::list<std::unique_ptr<C2Work> >* const flushedWork);
+    c2_status_t flush(C2Component::flush_mode_t mode);
     c2_status_t drain(C2Component::drain_mode_t mode);
     c2_status_t start();
     c2_status_t stop();
@@ -137,7 +137,7 @@ private:
 
     std::shared_ptr<C2BlockPool> mLinearPool; // C2PlatformLinearBlockPool
     std::shared_ptr<C2BlockPool> mGraphicPool; // C2PlatformGraphicBlockPool
-    std::map<uint64_t, std::shared_ptr<C2Buffer> > mInPendingBuffer;
+    std::map<uint64_t, std::shared_ptr<C2GraphicBlock> > mInPendingBuffer;
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
     std::set<TrackBuffer*> mTrackBuffers;
 
