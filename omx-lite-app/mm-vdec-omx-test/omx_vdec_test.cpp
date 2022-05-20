@@ -1787,9 +1787,6 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
    * frame buffer correctly. This is just an example for getting GBM modifier. */
   DEBUG_PRINT("GBM buffer modifier=0x%llx", modifier);
 
-  /* Undefine below check code for it depends on libgbm change of adding
-   * GBM_FORMAT_MOD_QTI_SECURE to avoid compilation error. */
-#if 0
   if (!secure) {
     DEBUG_PRINT("User not need secure buffer, so no secure modifier");
   } else {
@@ -1802,12 +1799,11 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
   if (!ubwc) {
     DEBUG_PRINT("User not need UBWC buffer, so no UBWC modifier");
   } else {
-    if ((modifier & GBM_FORMAT_MOD_QTI_COMPRESSED) == GBM_FORMAT_MOD_QTI_COMPRESSED)
+    if ((modifier & DRM_FORMAT_MOD_QCOM_COMPRESSED) == DRM_FORMAT_MOD_QCOM_COMPRESSED)
       DEBUG_PRINT("GBM buffer has compressed UBWC modifier");
     else
       DEBUG_PRINT_ERROR("GBM buffer should have compressed UBWC modifier!");
   }
-#endif
 }
 
 /* This is just an example for getting GBM modifier from the GBM output buffer
