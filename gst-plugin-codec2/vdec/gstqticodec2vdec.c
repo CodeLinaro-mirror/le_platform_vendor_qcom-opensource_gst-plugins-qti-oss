@@ -145,8 +145,7 @@ static void handle_video_event (const void *handle, EVENT_TYPE type,
 
 static GstFlowReturn gst_qticodec2vdec_decode (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
-static GstFlowReturn gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder,
-    GPtrArray * config);
+static GstFlowReturn gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder);
 static GstBuffer *gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder *
     decoder, BufferDescriptor * buffer);
 static gboolean gst_qticodec2vdec_caps_has_feature (const GstCaps * caps,
@@ -422,13 +421,14 @@ gst_qticodec2vdec_destroy_component (GstVideoDecoder * decoder)
 }
 
 static GstFlowReturn
-gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
+gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   GstVideoAlignment align;
   GstFlowReturn ret = GST_FLOW_OK;
   GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
   ConfigParams pixelformat;
+  GPtrArray *config = NULL;
 
   GstCaps *templ_caps, *intersection = NULL;
   GstStructure *s;
@@ -522,13 +522,19 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder, GPtrArray * config)
   GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d",
       dec->width, dec->height, output_format);
 
+  config = g_ptr_array_new ();
   if (config) {
     pixelformat =
-        make_pixel_format_param (gst_to_c2_pixelformat (decoder, output_format),
-        FALSE);
+        make_pixel_format_param (gst_to_c2_pixelformat (decoder,
+            output_format), FALSE);
     GST_LOG_OBJECT (dec, "set c2 output format: %d",
         pixelformat.pixelFormat.fmt);
     g_ptr_array_add (config, &pixelformat);
+    if (!c2componentInterface_config (dec->comp_intf,
+            config, BLOCK_MODE_MAY_BLOCK)) {
+      GST_WARNING_OBJECT (dec, "Failed to set config");
+    }
+    g_ptr_array_free (config, FALSE);
   } else {
     goto error_setup_output;
   }
@@ -715,7 +721,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   }
 
   /* Negotiate with downstream and setup output */
-  if (GST_FLOW_OK != gst_qticodec2vdec_setup_output (decoder, config)) {
+  if (GST_FLOW_OK != gst_qticodec2vdec_setup_output (decoder)) {
     g_ptr_array_free (config, FALSE);
     goto error_set_format;
   }
