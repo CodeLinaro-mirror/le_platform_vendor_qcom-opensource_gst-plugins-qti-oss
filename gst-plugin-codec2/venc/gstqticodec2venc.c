@@ -1049,7 +1049,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GST_WARNING_OBJECT (enc, "Failed to set encoder config");
   }
 
-  g_ptr_array_free (config, FALSE);
+  g_ptr_array_free (config, TRUE);
 
   if (!c2component_start (enc->comp)) {
     GST_DEBUG_OBJECT (enc, "Failed to start component");
@@ -1422,7 +1422,7 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   if (gst_is_dmabuf_memory (mem)) {
     inBuf.fd = gst_dmabuf_memory_get_fd (mem);
-    inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);;
+    inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);
     inBuf.data = NULL;
     inBuf.c2Buffer =
         gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),

@@ -534,7 +534,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
             config, BLOCK_MODE_MAY_BLOCK)) {
       GST_WARNING_OBJECT (dec, "Failed to set config");
     }
-    g_ptr_array_free (config, FALSE);
+    g_ptr_array_free (config, TRUE);
   } else {
     goto error_setup_output;
   }
@@ -722,7 +722,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
 
   /* Negotiate with downstream and setup output */
   if (GST_FLOW_OK != gst_qticodec2vdec_setup_output (decoder)) {
-    g_ptr_array_free (config, FALSE);
+    g_ptr_array_free (config, TRUE);
     goto error_set_format;
   }
 
@@ -736,7 +736,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_WARNING_OBJECT (dec, "Failed to set config");
   }
 
-  g_ptr_array_free (config, FALSE);
+  g_ptr_array_free (config, TRUE);
 
   /* Start decoder */
   if (!c2component_start (dec->comp)) {
@@ -1286,7 +1286,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
           inBuf.size);
     } else {
       if (config)
-        g_ptr_array_free (config, FALSE);
+        g_ptr_array_free (config, TRUE);
       if (vp9_hdr)
         g_slice_free (GstVp9FrameHdr, vp9_hdr);
       if (vp9_parser)
@@ -1320,7 +1320,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       }
     }
 
-    g_ptr_array_free (config, FALSE);
+    g_ptr_array_free (config, TRUE);
     g_slice_free (GstVp9FrameHdr, vp9_hdr);
     gst_vp9_parser_free (vp9_parser);
     dec->check_vp9_10bit = FALSE;
