@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -32,58 +32,74 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_META_MUX_PADS_H__
-#define __GST_META_MUX_PADS_H__
+#ifndef __GST_QTI_VIDEO_SPLIT_H__
+#define __GST_QTI_VIDEO_SPLIT_H__
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
+
+#ifdef USE_GLES_CONVERTER
+#include <gst/video/gles-video-converter.h>
+#endif //USE_GLES_CONVERTER
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_META_MUX_DATA_PAD (gst_meta_mux_data_pad_get_type())
-#define GST_META_MUX_DATA_PAD(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_META_MUX_DATA_PAD,\
-      GstMetaMuxDataPad))
-#define GST_META_MUX_DATA_PAD_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_META_MUX_DATA_PAD,\
-      GstMetaMuxDataPadClass))
-#define GST_IS_META_MUX_DATA_PAD(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_META_MUX_DATA_PAD))
-#define GST_IS_META_MUX_DATA_PAD_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_META_MUX_DATA_PAD))
-#define GST_META_MUX_DATA_PAD_CAST(obj) ((GstMetaMuxDataPad *)(obj))
+#define GST_TYPE_VIDEO_SPLIT (gst_video_split_get_type())
+#define GST_VIDEO_SPLIT(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_VIDEO_SPLIT,GstVideoSplit))
+#define GST_VIDEO_SPLIT_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_VIDEO_SPLIT,GstVideoSplitClass))
+#define GST_IS_VIDEO_SPLIT(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_VIDEO_SPLIT))
+#define GST_IS_VIDEO_SPLIT_CLASS(obj) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_VIDEO_SPLIT))
 
-typedef struct _GstMetaMuxDataPad GstMetaMuxDataPad;
-typedef struct _GstMetaMuxDataPadClass GstMetaMuxDataPadClass;
+#define GST_VIDEO_SPLIT_GET_LOCK(obj) (&GST_VIDEO_SPLIT(obj)->lock)
+#define GST_VIDEO_SPLIT_LOCK(obj) \
+  g_mutex_lock(GST_VIDEO_SPLIT_GET_LOCK(obj))
+#define GST_VIDEO_SPLIT_UNLOCK(obj) \
+  g_mutex_unlock(GST_VIDEO_SPLIT_GET_LOCK(obj))
 
 typedef enum {
-  GST_DATA_TYPE_UNKNOWN,
-  GST_DATA_TYPE_TEXT,
-  GST_DATA_TYPE_OPTICAL_FLOW,
-} GstDataType;
+  GST_VIDEO_SPLIT_MODE_NORMAL,
+  GST_VIDEO_SPLIT_MODE_ROI,
+} GstVideoSplitMode;
 
-struct _GstMetaMuxDataPad {
+typedef struct _GstVideoSplit GstVideoSplit;
+typedef struct _GstVideoSplitClass GstVideoSplitClass;
+
+struct _GstVideoSplit
+{
   /// Inherited parent structure.
-  GstPad      parent;
+  GstElement           parent;
 
-  // Format of negotiated metadata.
-  GstDataType type;
-  /// Segment.
-  GstSegment  segment;
+  /// Global mutex lock.
+  GMutex               lock;
 
-  /// Variable for temporarily storing partial data(meta).
-  gpointer    stash;
-  /// Queue for managing incoming data(meta) buffers.
-  GQueue      *queue;
+  /// Next available index for the source pads.
+  guint                nextidx;
+
+  /// Convenient local reference to sink pad.
+  GstPad               *sinkpad;
+  /// Convenient local reference to source pads.
+  GList                *srcpads;
+
+  /// Supported converters.
+#ifdef USE_GLES_CONVERTER
+  GstGlesConverter     *glesconvert;
+#endif // USE_GLES_CONVERTER
+
+  /// Properties.
+  GstVideoSplitMode    mode;
 };
 
-struct _GstMetaMuxDataPadClass {
+struct _GstVideoSplitClass {
   /// Inherited parent structure.
-  GstPadClass parent;
+  GstElementClass parent;
 };
 
-
-GType gst_meta_mux_data_pad_get_type (void);
+GType gst_video_split_get_type (void);
 
 G_END_DECLS
 
-#endif // __GST_META_MUX_PADS_H__
+#endif // __GST_QTI_VIDEO_SPLIT_H__
