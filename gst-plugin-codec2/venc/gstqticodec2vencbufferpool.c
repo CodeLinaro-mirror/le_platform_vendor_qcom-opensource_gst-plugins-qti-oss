@@ -33,7 +33,7 @@
 
 #include "gst/gstinfo.h"
 #include "gst/gstbufferpool.h"
-#include "gstqticodec2bufferpool.h"
+#include "gstqticodec2vencbufferpool.h"
 #include <media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2_debug);
