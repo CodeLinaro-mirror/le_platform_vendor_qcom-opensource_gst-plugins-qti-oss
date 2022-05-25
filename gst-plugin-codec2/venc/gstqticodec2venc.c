@@ -1306,6 +1306,8 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   GstVideoInfo info;
   GstAllocator *allocator = NULL;
   guint num_max_buffers = MAX_INPUT_BUFFERS;
+  GstBufferPoolParam param;
+  memset (&param, 0, sizeof (GstBufferPoolParam));
 
   gst_query_parse_allocation (query, &caps, NULL);
 
@@ -1323,9 +1325,11 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
 
   /* Propose GBM backed memory if upstream has dmabuf feature */
   if (gst_qticodec2_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
-    enc->pool =
-        gst_qticodec2_buffer_pool_new (enc->comp, BUFFER_POOL_BASIC_GRAPHIC,
-        num_max_buffers, caps, enc->is_ubwc);
+    param.is_ubwc = enc->is_ubwc;
+    param.c2_comp = enc->comp;
+    param.info = info;
+    param.mode = DMABUF_MODE;
+    enc->pool = gst_qcodec2_buffer_pool_new (&param);
 
     if (!enc->pool)
       goto cleanup;

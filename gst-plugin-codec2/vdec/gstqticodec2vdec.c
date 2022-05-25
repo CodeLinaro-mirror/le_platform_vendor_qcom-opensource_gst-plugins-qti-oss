@@ -77,7 +77,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 
 #include "gstqticodec2vdec.h"
-#include "gstqticodec2vdecbufferpool.h"
+#include "gstqcodec2bufferpool.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
@@ -891,6 +891,8 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
   gboolean use_peer_pool = FALSE;
   gboolean use_dmabuf = FALSE;
   GstBufferPool *out_port_pool = NULL;
+  GstBufferPoolParam param;
+  memset (&param, 0, sizeof (GstBufferPoolParam));
 
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
 
@@ -937,7 +939,11 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
       gst_object_unref (out_port_pool);
     }
 
-    pool = gst_qticodec2vdec_buffer_pool_new (dec, use_dmabuf);
+    param.is_ubwc = dec->is_ubwc;
+    param.info = dec->output_state->info;
+    param.c2_comp = dec->comp;
+    param.mode = use_dmabuf ? DMABUF_WRAP_MODE : FDBUF_WRAP_MODE;
+    pool = gst_qcodec2_buffer_pool_new (&param);
 
     if (max)
       max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
