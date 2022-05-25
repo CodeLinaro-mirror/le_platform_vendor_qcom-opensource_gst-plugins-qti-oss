@@ -35,7 +35,7 @@
 #include <gst/video/gstvideoencoder.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
-#include "gstqticodec2bufferpool.h"
+#include "gstqticodec2vencbufferpool.h"
 
 #include "codec2wrapper.h"
 
