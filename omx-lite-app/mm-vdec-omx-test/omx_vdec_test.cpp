@@ -350,6 +350,9 @@ int bOutputEosReached = 0;
 char in_filename[512];
 unsigned etb_count = 0;
 
+OMX_S64 timeStamp_fromIVF = -1;
+unsigned int ts_scaler_fromIVF_d = 0;
+unsigned int ts_scaler_fromIVF_n = 0;
 OMX_S64 timeStampLfile = 0;
 int fps = 30;
 unsigned int timestampInterval = 33333;
@@ -678,7 +681,7 @@ void* fbd_thread(void* pArg)
         printf("====>The first decoder output frame costs %d.%06d sec.\n",time_1st_cost_us/1000000,time_1st_cost_us%1000000);
       }
       fbd_cnt++;
-      DEBUG_PRINT_ERROR("fbd_cnt=%d pBuffer=%p Timestamp=%lld", fbd_cnt, pBuffer, pBuffer->nTimeStamp);
+      DEBUG_PRINT_ERROR("fbd_cnt=%d pBuffer=%p Timestamp=%lld us", fbd_cnt, pBuffer, pBuffer->nTimeStamp);
 
       if (!output_dynamic_meta_mode && fbd_cnt <= 32) {
         //This code is just to show how to get some gbm related info. from
@@ -1369,6 +1372,14 @@ static int fill_omx_input_buffer(OMX_BUFFERHEADERTYPE *omx_buf, bool secure)
 
   omx_buf->nTimeStamp = timeStampLfile;
   timeStampLfile += timestampInterval;
+  if (Read_Buffer == Read_Buffer_From_Ivf_File) {
+    //For IVF file, use TS from that file
+    if (timeStamp_fromIVF >= 0) {
+      omx_buf->nTimeStamp = timeStamp_fromIVF;
+    }else{
+      DEBUG_PRINT_ERROR("TS from IVF has eror %lld", timeStamp_fromIVF);
+    }
+  }
 
   if (secure) {
     int sec_buf_fd = (int)(long)(omx_buf->pBuffer);
@@ -1557,9 +1568,12 @@ int Play_Decoder(bool secure)
       DEBUG_PRINT_ERROR("IVF file not begin with \"DKIF\", it's corrupted IVF file");
       return -1;
     }
-    width = ivfheader[12] + ((unsigned int)(ivfheader[13]) << 8);
-    height = ivfheader[14] + ((unsigned int)(ivfheader[15]) << 8);
+    width = ivfheader[12] + ((unsigned int)ivfheader[13] << 8);
+    height = ivfheader[14] + ((unsigned int)ivfheader[15] << 8);
     printf("Parsed from IVF file header, W x H is %d x %d\n", width, height);
+    ts_scaler_fromIVF_d = ivfheader[16] + ((unsigned int)ivfheader[17]<<8) + ((unsigned int)ivfheader[18]<<16) + ((unsigned int)ivfheader[19]<<24);
+    ts_scaler_fromIVF_n = ivfheader[20] + ((unsigned int)ivfheader[21]<<8) + ((unsigned int)ivfheader[22]<<16) + ((unsigned int)ivfheader[23]<<24);
+    printf("Parsed from IVF file header, time base denominator %d, time base numerator %d\n", ts_scaler_fromIVF_d, ts_scaler_fromIVF_n);
   }
 
   OMX_QCOM_PARAM_PORTDEFINITIONTYPE inputPortFmt;
@@ -2313,6 +2327,9 @@ static int Read_Buffer_From_Ivf_File(uint8_t *data)
   if (bytes_read != frame_sz) {
     DEBUG_PRINT_ERROR("Reading IVF frame data, %d bytes read, not equal to %d bytes, treat as EOF", bytes_read, frame_sz);
     return 0;
+  }
+  if (ts_scaler_fromIVF_d != 0 && ts_scaler_fromIVF_n != 0) {
+    timeStamp_fromIVF = frame_ts * 1000000 * ts_scaler_fromIVF_n / ts_scaler_fromIVF_d;
   }
 
   return bytes_read;
