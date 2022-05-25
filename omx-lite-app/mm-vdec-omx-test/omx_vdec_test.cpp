@@ -273,7 +273,7 @@ typedef enum {
 
   FILE_TYPE_START_OF_VP8_SPECIFIC = 60,
   FILE_TYPE_VP8_START_CODE = FILE_TYPE_START_OF_VP8_SPECIFIC,
-  FILE_TYPE_VP8,
+  FILE_TYPE_VP8,    //both vp8 and vp9 ivf, just use this format
 
   FILE_TYPE_START_OF_H265_SPECIFIC = 70,
   FILE_TYPE_265_NAL_SIZE_LENGTH = FILE_TYPE_START_OF_H265_SPECIFIC,
@@ -389,6 +389,7 @@ static int open_video_file ();
 static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_Size_Nal(uint8_t *data);
+static int Read_Buffer_From_Ivf_File(uint8_t *data);
 
 static int fill_omx_input_buffer(OMX_BUFFERHEADERTYPE *omx_buf, bool secure);
 
@@ -1043,8 +1044,8 @@ static void parse_argv4_output_option(const char *argv4)
 static void print_usage(char **argv)
 {
   printf("%s <infile_path> <codec_type> <file_type> <output_op> <test_op> <num_frames> <output_buf>\n", argv[0]);
-  printf("<codec_type>\t1:h264, 9:h265\n");
-  printf("<file_type>\t4:byte-stream without container\n");
+  printf("<codec_type>\t1:h264, 9:h265, 8:vp9\n");
+  printf("<file_type>\t4:byte-stream without container or ivf format\n");
   printf("<output_op>\t"
     "0: decoded as linear yuv but no output, 2: decoded as linear yuv but dump frames to yuvframes.yuv file under current dir\n\t\t"
     "8: decoded as UBWC yuv but no output,  10: decoded as UBWC yuv but dump frames to yuvframes.yuv file under current dir\n");
@@ -1054,12 +1055,15 @@ static void print_usage(char **argv)
          "0:OMX_AllocateBuffer() allocates buffers for OMX output port\n\t\t"
          "1:OMX_UseBuffer() with dynamic meta mode for OMX output port\n\n");
 
-  printf("Usage example(only verified h264 and h265):\n");
+  printf("Usage example(only verified h264, h265 and vp9):\n");
   printf("For h264: %s xxx.h264 1 4 2 1 0 0\n", argv[0]);
   printf("For h265: %s xxx.h265 9 4 2 1 0 0\n", argv[0]);
+  printf("For vp9: %s xxx.ivf 8 4 2 1 0 0\n", argv[0]);
+
   printf("Above cmd will output NV12 file as yuvframes.yuv under current directory.\n\n");
   printf("For h264: %s xxx.h264 1 4 0 1 0 0\n", argv[0]);
   printf("For h265: %s xxx.h265 9 4 8 1 0 0\n", argv[0]);
+  printf("For vp9: %s xxx.ivf 8 4 8 1 0 0\n", argv[0]);
   printf("Above cmd will decode video as NV12 or NV12_UBWC, but no yuvframes.yuv generated.\n\n");
 
   printf("For kpi mode, add %s before input file without blank\n", KPI_INDICATOR_STR);
@@ -1163,6 +1167,9 @@ int main(int argc, char **argv)
         break;
       case CODEC_FORMAT_HEVC:
         file_type_option = (file_type)(FILE_TYPE_START_OF_H265_SPECIFIC + file_type_option - FILE_TYPE_COMMON_CODEC_MAX);
+        break;
+      case CODEC_FORMAT_VP9:
+        file_type_option = (file_type)(FILE_TYPE_START_OF_VP8_SPECIFIC + file_type_option - FILE_TYPE_COMMON_CODEC_MAX);
         break;
       default:
         DEBUG_PRINT_ERROR("Error: Unknown code %d", codec_format_option);
@@ -1275,6 +1282,14 @@ int run_tests(bool secure)
       return -1;
     }
   }
+  else if(codec_format_option == CODEC_FORMAT_VP9) {
+    if (file_type_option == FILE_TYPE_VP8) {
+      Read_Buffer = Read_Buffer_From_Ivf_File;
+    }else{
+      DEBUG_PRINT_ERROR("Invalid file_type_option(%d) for VP9", file_type_option);
+      return -1;
+    }
+  }
 
   DEBUG_PRINT("file_type_option %d!", file_type_option);
 
@@ -1283,6 +1298,7 @@ int run_tests(bool secure)
     case FILE_TYPE_264_START_CODE_BASED:
     case FILE_TYPE_264_NAL_SIZE_LENGTH:
     case FILE_TYPE_265_START_CODE_BASED:
+    case FILE_TYPE_VP8:
       if(Init_Decoder(secure) != 0x00)
       {
         DEBUG_PRINT_ERROR("Error - Decoder Init failed");
@@ -1374,6 +1390,9 @@ static bool get_omx_component_name(char *name, size_t size, bool secure)
     break;
   case CODEC_FORMAT_HEVC:
     cname = "OMX.qcom.video.decoder.hevc";
+    break;
+  case CODEC_FORMAT_VP9:
+    cname = "OMX.qcom.video.decoder.vp9";
     break;
   default:
     DEBUG_PRINT_ERROR("Unsupported codec %d", codec_format_option);
@@ -1502,7 +1521,11 @@ int Init_Decoder(bool secure)
   }
   else if (codec_format_option == CODEC_FORMAT_HEVC)
   {
-    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)QOMX_VIDEO_CodingHevc;
+    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingHEVC;
+  }
+  else if (codec_format_option == CODEC_FORMAT_VP9)
+  {
+    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingVP9;
   }
   else
   {
@@ -1527,6 +1550,17 @@ int Play_Decoder(bool secure)
     DEBUG_PRINT_ERROR("Error in opening video file");
     return -1;
   }
+  if (Read_Buffer == Read_Buffer_From_Ivf_File) {
+    unsigned char ivfheader[32] = {0};
+    int ivfheaderlen = read(inputBufferFileFd, ivfheader, 32);
+    if(ivfheaderlen != 32 || !(ivfheader[0] == 'D' && ivfheader[1] == 'K' && ivfheader[2] == 'I' && ivfheader[3] == 'F')) {
+      DEBUG_PRINT_ERROR("IVF file not begin with \"DKIF\", it's corrupted IVF file");
+      return -1;
+    }
+    width = ivfheader[12] + ((unsigned int)(ivfheader[13]) << 8);
+    height = ivfheader[14] + ((unsigned int)(ivfheader[15]) << 8);
+    printf("Parsed from IVF file header, W x H is %d x %d\n", width, height);
+  }
 
   OMX_QCOM_PARAM_PORTDEFINITIONTYPE inputPortFmt;
   memset(&inputPortFmt, 0, sizeof(OMX_QCOM_PARAM_PORTDEFINITIONTYPE));
@@ -1536,6 +1570,7 @@ int Play_Decoder(bool secure)
   {
     case FILE_TYPE_264_START_CODE_BASED:
     case FILE_TYPE_265_START_CODE_BASED:
+    case FILE_TYPE_VP8:
     {
       inputPortFmt.nFramePackingFormat = OMX_QCOM_FramePacking_OnlyOneCompleteFrame;
       break;
@@ -2251,6 +2286,36 @@ static int Read_Buffer_From_Size_Nal(uint8_t *data)
   }
 
   return bytes_read + nalSize;
+}
+
+
+static int Read_Buffer_From_Ivf_File(uint8_t *data)
+{
+  unsigned int frame_sz = 0;
+  unsigned long long frame_ts = 0;
+  int bytes_read = 0;
+
+  DEBUG_PRINT("Inside %s", __FUNCTION__);
+  bytes_read = read(inputBufferFileFd, &frame_sz, 4);
+  if ( bytes_read > 0 && bytes_read < 4) {
+    DEBUG_PRINT_ERROR("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
+    return 0;
+  }else if ( 0 == bytes_read ) {
+    printf("0 bytes read from IVF file, really meet EOF\n");
+    return 0;
+  }
+  bytes_read = read(inputBufferFileFd, &frame_ts, 8);
+  if ( 8 != bytes_read ) {
+    DEBUG_PRINT_ERROR("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
+    return 0;
+  }
+  bytes_read = read(inputBufferFileFd, data, frame_sz);
+  if (bytes_read != frame_sz) {
+    DEBUG_PRINT_ERROR("Reading IVF frame data, %d bytes read, not equal to %d bytes, treat as EOF", bytes_read, frame_sz);
+    return 0;
+  }
+
+  return bytes_read;
 }
 
 static int open_video_file ()
