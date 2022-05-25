@@ -655,7 +655,6 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   gint rate_denominator = 0;
   GstVideoFormat input_format = GST_VIDEO_FORMAT_UNKNOWN;
   GPtrArray *config = NULL;
-  GstVideoInfo *vinfo = NULL;
   config_params_t resolution;
   config_params_t pixelformat;
   config_params_t rate_control;
@@ -755,7 +754,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   g_ptr_array_add (config, &resolution);
 
   if (c2venc->iframe_only) {
-    sync_frame_int = make_sync_frame_interval_param (1 * 1e6 / vinfo->fps_n);
+    sync_frame_int = make_sync_frame_interval_param (1 * 1e6 / rate_numerator);
     g_ptr_array_add (config, &sync_frame_int);
     GST_DEBUG_OBJECT (c2venc, "I frame only mode");
   } else if (c2venc->idr_interval != 0) {

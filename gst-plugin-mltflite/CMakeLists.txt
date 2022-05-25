@@ -51,8 +51,7 @@ target_link_libraries(${GST_QTI_ML_TFLITE} PRIVATE
   ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   gstqtimlbase
-  tensorflow-lite
-  gpu_delegate
+  ${TFLITE_LIBRARIES}
 )
 
 install(

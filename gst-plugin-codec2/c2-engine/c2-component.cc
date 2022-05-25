@@ -36,7 +36,7 @@
 
 #include <vidc/media/msm_media_info.h>
 
-#define MAX_PENDING_WORK 14
+#define MAX_PENDING_WORK 12
 
 #define GST_CAT_DEFAULT gst_c2_venc_context_debug_category ()
 static GstDebugCategory *
