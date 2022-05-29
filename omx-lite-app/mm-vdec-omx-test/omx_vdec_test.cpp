@@ -1343,8 +1343,10 @@ int run_tests(bool secure)
   pthread_mutex_unlock(&eos_lock);
 
   // Wait till EOS is reached...
-  if(bOutputEosReached)
+  if(bOutputEosReached) {
+    printf("will call do_freeHandle_and_clean_up(%d)\n", currentStatus);
     do_freeHandle_and_clean_up(currentStatus == ERROR_STATE);
+  }
   return 0;
 }
 
@@ -2031,18 +2033,23 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
 {
   int bufCnt = 0;
   OMX_STATETYPE state = OMX_StateInvalid;
+  printf("Will call OMX_GetState in %s()\n", __func__);
   OMX_GetState(dec_handle, &state);
+  printf("OMX_GetState get state %d in %s()\n", state, __func__);
   if (state == OMX_StateExecuting || state == OMX_StatePause)
   {
     DEBUG_PRINT("Requesting transition to Idle");
     OMX_SendCommand(dec_handle, OMX_CommandStateSet, OMX_StateIdle, 0);
     wait_for_event();
   }
+  printf("Will call OMX_GetState 2nd in %s()\n", __func__);
   OMX_GetState(dec_handle, &state);
+  printf("OMX_GetState 2nd get state %d in %s()\n", state, __func__);
   if (state == OMX_StateIdle)
   {
-    DEBUG_PRINT("Requesting transition to Loaded");
+    DEBUG_PRINT("Requesting IL comp transition to Loaded");
     OMX_SendCommand(dec_handle, OMX_CommandStateSet, OMX_StateLoaded, 0);
+    printf("IL comp transition to loaded cmd finished\n");
     for(bufCnt=0; bufCnt < input_buf_cnt; ++bufCnt)
     {
       OMX_FreeBuffer(dec_handle, 0, pInputBufHdrs[bufCnt]);
@@ -2060,10 +2067,11 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
       pOutYUVBufHdrs = NULL;
     }
     free_gbm_buffers(&external_output_buffers);
+    printf("free some buffer finish\n");
     wait_for_event();
   }
 
-  DEBUG_PRINT("[OMX Vdec Test] - Free handle decoder\n");
+  printf("[OMX Vdec Test] - Free handle decoder\n");
   OMX_ERRORTYPE result = OMX_FreeHandle(dec_handle);
   if (result != OMX_ErrorNone)
   {
@@ -2072,9 +2080,9 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
   dec_handle = NULL;
 
   /* Deinit OpenMAX */
-  DEBUG_PRINT("[OMX Vdec Test] - De-initializing OMX ");
+  printf("[OMX Vdec Test] - De-initializing OMX\n");
   OMX_Deinit();
-
+  printf("[OMX Vdec Test] - De-init OMX finished\n");
   free_nonsecure_buffer(&input_nonsecure_buffer);
   free_nonsecure_buffer(&output_nonsecure_buffer);
 
