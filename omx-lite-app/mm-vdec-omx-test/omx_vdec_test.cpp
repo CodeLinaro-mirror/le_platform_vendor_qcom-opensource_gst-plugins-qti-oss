@@ -1115,6 +1115,7 @@ static void close_gbm_device()
 
 int main(int argc, char **argv)
 {
+  int main_rt = 0;
   int test_option = 0;
   int pic_order = 0;
   OMX_ERRORTYPE result;
@@ -1131,7 +1132,8 @@ int main(int argc, char **argv)
   if (argc < 8)
   {
     print_usage(argv);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
   else if(argc >= 8)
   {
@@ -1152,13 +1154,16 @@ int main(int argc, char **argv)
         atoi(argv[4]), test_option, num_frames_to_decode, atoi(argv[7]));
   }
 
-  if (parse_argv1_mode_and_infile(argv[1]))
-    return -1;
+  if (parse_argv1_mode_and_infile(argv[1])) {
+    main_rt = -1;
+    goto main_exit;
+  }
 
   if (secure_mode && COLOR_FMT_NV12_UBWC != venus_color_fmt)
   {
     printf("Secure mode only support UBWC output, not support linear output!\n");
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   if (file_type_option >= FILE_TYPE_COMMON_CODEC_MAX)
@@ -1176,7 +1181,8 @@ int main(int argc, char **argv)
         break;
       default:
         DEBUG_PRINT_ERROR("Error: Unknown code %d", codec_format_option);
-        return -1;
+        main_rt = -1;
+        goto main_exit;
     }
   }
 
@@ -1218,7 +1224,8 @@ int main(int argc, char **argv)
   if (ebd_queue == NULL)
   {
     DEBUG_PRINT_ERROR(" Error in Creating ebd_queue");
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   fbd_queue = alloc_queue();
@@ -1226,7 +1233,8 @@ int main(int argc, char **argv)
   {
     DEBUG_PRINT_ERROR(" Error in Creating fbd_queue");
     free_queue(ebd_queue);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   if(0 != pthread_create(&fbd_thread_id, NULL, fbd_thread, NULL))
@@ -1234,7 +1242,8 @@ int main(int argc, char **argv)
     DEBUG_PRINT_ERROR(" Error in Creating fbd_thread ");
     free_queue(ebd_queue);
     free_queue(fbd_queue);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
   pthread_setname_np(fbd_thread_id, "fbd_thread");
 
@@ -1258,7 +1267,9 @@ int main(int argc, char **argv)
   {
     DEBUG_PRINT_ERROR("Error - sem_destroy failed %d", errno);
   }
-  return 0;
+
+main_exit:
+  return main_rt;
 }
 
 int run_tests(bool secure)
