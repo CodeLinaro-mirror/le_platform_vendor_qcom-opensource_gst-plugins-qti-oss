@@ -2276,7 +2276,6 @@ void close_device ()
 
 int main(int argc, char** argv)
 {
-  int main_rt = 0;
   OMX_U8* pvirt = NULL;
   int result;
   float enc_time_sec=0.0,enc_time_usec=0.0;
@@ -2292,7 +2291,7 @@ int main(int argc, char** argv)
   if (parse_args(argc, argv) != 0) {
     E ("Invalid arguments");
     help();
-    goto main_exit;
+    return 0;
   }
 
   omx_debug_level_init();
@@ -2756,7 +2755,6 @@ int main(int argc, char** argv)
   printf("\nNumber of dropped frames during encoding:%d\n",m_ebd_cnt-m_fbd_cnt);
   /* End of Time Statistics Logging */
 
-main_exit:
   D("main has exited");
-  return main_rt;
+  return 0;
 }
