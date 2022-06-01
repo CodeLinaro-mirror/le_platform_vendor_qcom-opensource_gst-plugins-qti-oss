@@ -103,6 +103,7 @@ struct _Gstqticodec2venc
   guint32 blur_width;
   guint32 blur_height;
   gboolean is_ubwc;
+  GArray *roi_array;
 };
 
 /*
