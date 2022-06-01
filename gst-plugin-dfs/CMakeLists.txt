@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(GST_PLUGIN_QTI_OSS_OVERLAY
+project(GST_PLUGINS_QTI_OSS_DFS
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
 )
@@ -27,38 +27,39 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 add_definitions(-DHAVE_CONFIG_H)
 
 # Common compiler flags.
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
-# GStreamer plugin.
-set(GST_QTI_OVERLAY qtioverlay)
+# GStreamer DFS plugin.
+set(GST_DFS gstqtidfs)
 
-add_library(${GST_QTI_OVERLAY} SHARED
-  gstoverlay.cc
+add_library(${GST_DFS} SHARED
+  dfs.c
+  dfs-engine.cc
 )
 
-target_include_directories(${GST_QTI_OVERLAY} PUBLIC
+target_include_directories(${GST_DFS} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
-target_include_directories(${GST_QTI_OVERLAY} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include
+
+target_include_directories(${GST_DFS} PRIVATE
+  ${CMAKE_SOURCE_DIR}
 )
 
-target_link_libraries(${GST_QTI_OVERLAY} PRIVATE
-  overlay_lib
-  qtimlmeta
+target_link_libraries(${GST_DFS} PRIVATE
   ${GST_LIBRARIES}
+  ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
-  gstqticvpbase
+  gstqtivideobase
+  rv
+  fastcvopt
 )
 
 install(
-  TARGETS ${GST_QTI_OVERLAY}
+  TARGETS ${GST_DFS}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
 )
-
-add_subdirectory(overlay-lib)

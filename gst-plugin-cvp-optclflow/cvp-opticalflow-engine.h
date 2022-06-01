@@ -61,85 +61,102 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_QTI_ROIMUX_H__
-#define __GST_QTI_ROIMUX_H__
+#ifndef __GST_CVP_OPTCLFLOW_ENGINE_H__
+#define __GST_CVP_OPTCLFLOW_ENGINE_H__
 
 #include <gst/gst.h>
-#include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
-#include <gst/base/gstdataqueue.h>
-
-typedef enum {
-  GST_DATA_FORMAT_TEXT,
-} GstDataPadFormat;
+#include <gst/allocators/allocators.h>
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_ROIMUX \
-  (gst_roimux_get_type())
-#define GST_ROIMUX(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_ROIMUX,GstRoiMux))
-#define GST_ROIMUX_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_ROIMUX,GstRoiMuxClass))
-#define GST_IS_ROIMUX(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_ROIMUX))
-#define GST_IS_ROIMUX_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_ROIMUX))
-#define GST_ROIMUX_CAST(obj)       ((GstRoiMux *)(obj))
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH:
+ *
+ * #G_TYPE_UINT, video source width
+ * Default: 0
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH \
+    "GstCvpOptclFlowEngine.video-width"
 
-#define GST_ROIMUX_GET_LOCK(obj)   (&GST_ROIMUX(obj)->lock)
-#define GST_ROIMUX_LOCK(obj)       g_mutex_lock(GST_ROIMUX_GET_LOCK(obj))
-#define GST_ROIMUX_UNLOCK(obj)     g_mutex_unlock(GST_ROIMUX_GET_LOCK(obj))
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT:
+ *
+ * #G_TYPE_UINT, video source height
+ * Default: 0
+ *
+ * Not applicable for output
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT \
+    "GstCvpOptclFlowEngine.video-height"
 
-#define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-  ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-      : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-          : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-              : (state <= GST_STATE_NULL))))
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE:
+ *
+ * #G_TYPE_UINT, video source aligned width
+ * Default: 0
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE \
+    "GstCvpOptclFlowEngine.video-stride"
 
-typedef struct _GstRoiMux GstRoiMux;
-typedef struct _GstRoiMuxClass GstRoiMuxClass;
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE:
+ *
+ * #G_TYPE_UINT, video source aligned height
+ * Default: 0
+ *
+ * Not applicable for output
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE \
+    "GstCvpOptclFlowEngine.video-scanline"
 
-struct _GstRoiMux {
-  GstElement element;
-  /// Src pad
-  GstPad *srcpad;
-  /// Video sink pad
-  GstPad *vidsinkpad;
-  /// Data sink pad
-  GstPad *datasinkpad;
-  /// Video sink EOS flag
-  gboolean vidsink_eos;
-  /// Text sink EOS flag
-  gboolean datasink_eos;
-  /// Global mutex lock.
-  GMutex lock;
-  /// Incoming vcaps
-  GstVideoInfo  *vinfo;
-  /// Src segment
-  GstSegment segment;
-  /// ROI data list
-  GList *roi_data_list;
-  /// Incoming text
-  gchar *config_data;
-  /// Config roi size
-  gsize config_size;
-  /// Config parsed flag
-  gboolean is_config_parsed;
-  /// The format of the data pad
-  GstDataPadFormat datapad_format;
-  /// The input video buffer queue
-  GstDataQueue *vidpad_queue;
-  /// The input data buffer queue
-  GstDataQueue *datapad_queue;
-};
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT:
+ *
+ * #GST_TYPE_VIDEO_SOURCE_FORMAT, set the video source format
+ * Default: #GST_VIDEO_FORMAT_UNKNOWN.
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT \
+    "GstCvpOptclFlowEngine.video-format"
 
-struct _GstRoiMuxClass {
-  GstBaseTransformClass parent;
-};
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS:
+ *
+ * #G_TYPE_UINT, video source frame rate in frames per second
+ * Default: 0
+ *
+ * Not applicable for output
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS \
+    "GstCvpOptclFlowEngine.video-fps"
 
-G_GNUC_INTERNAL GType gst_roimux_get_type (void);
+/**
+ * GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS:
+ *
+ * #G_TYPE_BOOLEAN, Enable/disable additional motion vector statistics
+ * Default: TRUE
+ */
+#define GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS \
+    "GstCvpOptclFlowEngine.enable-stats"
+
+
+typedef struct _GstCvpOptclFlowEngine GstCvpOptclFlowEngine;
+
+GST_API GstCvpOptclFlowEngine *
+gst_cvp_optclflow_engine_new     (GstStructure * settings);
+
+GST_API void
+gst_cvp_optclflow_engine_free    (GstCvpOptclFlowEngine * engine);
+
+GST_API gboolean
+gst_cvp_optclflow_engine_sizes   (GstCvpOptclFlowEngine * engine,
+                                  guint * mvsize, guint * statsize);
+
+GST_API gboolean
+gst_cvp_optclflow_engine_execute (GstCvpOptclFlowEngine * engine,
+                                  const GstVideoFrame * inframes, guint n_inputs,
+                                  GstBuffer * outbuffer);
 
 G_END_DECLS
 
-#endif // __GST_QTI_ROIMUX_H__
+#endif /* __GST_CVP_OPTCLFLOW_ENGINE_H__ */

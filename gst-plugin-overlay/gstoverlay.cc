@@ -1,31 +1,65 @@
 /*
-* Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted provided that the following conditions are
-* met:
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*     * Neither the name of The Linux Foundation nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
-* ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
-* BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
-* BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
-* WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-* OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *     * Neither the name of The Linux Foundation nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -34,6 +68,7 @@
 #include <string.h>
 #include <gst/allocators/gstfdmemory.h>
 #include <ml-meta/ml_meta.h>
+#include <gst/cvp/gstcvpmeta.h>
 
 #include "gstoverlay.h"
 
@@ -245,6 +280,7 @@ gst_overlay_apply_item_list (GstOverlay *gst_overlay,
     GSList * meta_list, GstOverlayMetaApplyFunc apply_func, GSequence * ov_id)
 {
   gboolean res = TRUE;
+  GSList * iter = meta_list;
 
   guint meta_num = g_slist_length (meta_list);
   if (meta_num) {
@@ -254,15 +290,19 @@ gst_overlay_apply_item_list (GstOverlay *gst_overlay,
     }
 
     for (uint32_t i = 0; i < meta_num; i++) {
-      res = apply_func (gst_overlay, g_slist_nth_data (meta_list, 0),
+      res = apply_func (gst_overlay, g_slist_nth_data (iter, 0),
           (uint32_t *) g_sequence_get (g_sequence_get_iter_at_pos (ov_id, i)));
       if (!res) {
         GST_ERROR_OBJECT (gst_overlay, "Overlay create failed!");
-        return res;
+        g_slist_free (meta_list);
+        meta_num = i; // This will ensure proper cleanup of overlay instances
+        break;
       }
-      meta_list = meta_list->next;
+      iter = iter->next;
     }
+    g_slist_free (meta_list);
   }
+
   if ((guint) g_sequence_get_length (ov_id) > meta_num) {
     g_sequence_foreach_range (
         g_sequence_get_iter_at_pos (ov_id, meta_num),
@@ -273,7 +313,7 @@ gst_overlay_apply_item_list (GstOverlay *gst_overlay,
         g_sequence_get_end_iter (ov_id));
   }
 
-  return TRUE;
+  return res;
 }
 
 /**
@@ -982,14 +1022,19 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
     }
   }
 
-  GstCvpOpticalFlowMeta * meta = (GstCvpOpticalFlowMeta *) metadata;
+  GstCvpOptclFlowMeta *meta = (GstCvpOptclFlowMeta *) metadata;
+  g_return_val_if_fail (meta->n_vectors == meta->n_stats, FALSE);
+
   gint paxel_width = (gst_overlay->width / 8);
   gint arrows_cnt = 0;
 
   // Read each 4th mv in order to skip each 2nd paxel due arrows density
-  for (gint x = 0; x < meta->n_vectors; x+=4) {
-    gint mv_x = meta->mvectors[x].x;
-    gint mv_y = meta->mvectors[x].y;
+  for (guint x = 0; x < meta->n_vectors; x+=4) {
+    GstCvpMotionVector *mvector = &g_array_index (meta->mvectors, GstCvpMotionVector, x);
+    GstCvpOptclFlowStats *stats = &g_array_index (meta->stats, GstCvpOptclFlowStats, x);
+
+    gint mv_x = mvector->x;
+    gint mv_y = mvector->y;
 
     // Filter by motion vectors
     if (mv_x < (gint) gst_overlay->arrows_filter_mv &&
@@ -1000,12 +1045,12 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
     }
 
     // Filter by variance
-    if (meta->mvectors[x].variance < gst_overlay->arrows_filter_var) {
+    if (stats->variance < gst_overlay->arrows_filter_var) {
       continue;
     }
 
     // Filter by SAD
-    if (meta->mvectors[x].sad < gst_overlay->arrows_filter_sad) {
+    if (stats->sad < gst_overlay->arrows_filter_sad) {
       continue;
     }
 
@@ -1281,6 +1326,22 @@ gst_buffer_get_roi_meta (GstBuffer * buffer)
 
   while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
       GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE)) != NULL)
+    list = g_slist_prepend (list, meta);
+
+  return list;
+}
+
+static GSList *
+gst_buffer_get_optclflow_meta (GstBuffer * buffer)
+{
+  GSList *list = NULL;
+  GstMeta *meta = NULL;
+  gpointer state = NULL;
+
+  g_return_val_if_fail (buffer != NULL, NULL);
+
+  while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
+      GST_CVP_OPTCLFLOW_META_API_TYPE)) != NULL)
     list = g_slist_prepend (list, meta);
 
   return list;
@@ -2342,6 +2403,10 @@ gst_overlay_finalize (GObject * object)
         gst_overlay->overlay);
     g_sequence_free (gst_overlay->bbox_id);
 
+    g_sequence_foreach (gst_overlay->roi_id, gst_overlay_destroy_overlay_item,
+        gst_overlay->overlay);
+    g_sequence_free (gst_overlay->roi_id);
+
     g_sequence_foreach (gst_overlay->simg_id, gst_overlay_destroy_overlay_item,
         gst_overlay->overlay);
     g_sequence_free (gst_overlay->simg_id);
@@ -2472,7 +2537,7 @@ gst_overlay_transform_frame_ip (GstVideoFilter *filter, GstVideoFrame *frame)
   res = gst_overlay_apply_item_list (gst_overlay,
                             gst_buffer_get_roi_meta (frame->buffer),
                             gst_overlay_apply_roi_bbox_item,
-                            gst_overlay->bbox_id);
+                            gst_overlay->roi_id);
   if (!res) {
     GST_ERROR_OBJECT (gst_overlay, "Overlay apply bbox item list failed!");
     return GST_FLOW_ERROR;
@@ -2540,6 +2605,7 @@ gst_overlay_transform_frame_ip (GstVideoFilter *filter, GstVideoFrame *frame)
   g_mutex_unlock (&gst_overlay->lock);
 
   if (!g_sequence_is_empty (gst_overlay->bbox_id) ||
+      !g_sequence_is_empty (gst_overlay->roi_id) ||
       !g_sequence_is_empty (gst_overlay->simg_id) ||
       !g_sequence_is_empty (gst_overlay->text_id) ||
       !g_sequence_is_empty (gst_overlay->pose_id) ||
@@ -2635,6 +2701,7 @@ gst_overlay_init (GstOverlay * gst_overlay)
   gst_overlay->overlay = nullptr;
 
   gst_overlay->bbox_id = g_sequence_new (free);
+  gst_overlay->roi_id = g_sequence_new (free);
   gst_overlay->simg_id = g_sequence_new (free);
   gst_overlay->text_id = g_sequence_new (free);
   gst_overlay->pose_id = g_sequence_new (free);
