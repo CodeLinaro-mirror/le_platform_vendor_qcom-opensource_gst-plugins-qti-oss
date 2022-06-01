@@ -1058,8 +1058,10 @@ gst_video_split_srcpad_finalize (GObject * object)
 
   gst_object_unref (GST_OBJECT_CAST(pad->buffers));
 
-  if (pad->pool != NULL)
+  if (pad->pool != NULL) {
+    gst_buffer_pool_set_active (pad->pool, FALSE);
     gst_object_unref (pad->pool);
+  }
 
   if (pad->info != NULL)
     gst_video_info_free (pad->info);

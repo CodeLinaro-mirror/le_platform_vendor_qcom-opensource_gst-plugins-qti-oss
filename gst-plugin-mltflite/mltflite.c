@@ -261,8 +261,10 @@ gst_ml_tflite_decide_allocation (GstBaseTransform * base, GstQuery * query)
   }
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (tflite->outpool)
-    gst_object_unref (tflite->outpool);
+  if (tflite->outpool) {
+    gst_buffer_pool_set_active (tflite->outpool, FALSE);
+    g_clear_pointer (&(tflite)->outpool, gst_object_unref);
+  }
 
   // Create a new buffer pool.
   if ((pool = gst_ml_tflite_create_pool (tflite, caps)) == NULL) {
@@ -593,8 +595,10 @@ gst_ml_tflite_finalize (GObject * object)
 
   gst_ml_tflite_engine_free (tflite->engine);
 
-  if (tflite->outpool != NULL)
+  if (tflite->outpool != NULL) {
+    gst_buffer_pool_set_active (tflite->outpool, FALSE);
     gst_object_unref (tflite->outpool);
+  }
 
   g_free (tflite->model);
 

@@ -1596,8 +1596,10 @@ gst_video_composer_finalize (GObject * object)
     gst_object_unref (GST_OBJECT_CAST(vcomposer->requests));
   }
 
-  if (vcomposer->outpool != NULL)
+  if (vcomposer->outpool != NULL) {
+    gst_buffer_pool_set_active (vcomposer->outpool, FALSE);
     gst_object_unref (vcomposer->outpool);
+  }
 
   if (vcomposer->outinfo != NULL)
     gst_video_info_free (vcomposer->outinfo);

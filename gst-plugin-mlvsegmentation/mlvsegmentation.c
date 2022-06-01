@@ -334,8 +334,10 @@ gst_ml_video_segmentation_decide_allocation (GstBaseTransform * base,
   }
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (segmentation->outpool)
-    gst_object_unref (segmentation->outpool);
+  if (segmentation->outpool) {
+    gst_buffer_pool_set_active (segmentation->outpool, FALSE);
+    g_clear_pointer (&(segmentation)->outpool, gst_object_unref);
+  }
 
   // Create a new buffer pool.
   pool = gst_ml_video_segmentation_create_pool (segmentation, caps);
@@ -740,8 +742,10 @@ gst_ml_video_segmentation_finalize (GObject * object)
   if (segmentation->vinfo != NULL)
     gst_video_info_free (segmentation->vinfo);
 
-  if (segmentation->outpool != NULL)
+  if (segmentation->outpool != NULL) {
+    gst_buffer_pool_set_active (segmentation->outpool, FALSE);
     gst_object_unref (segmentation->outpool);
+  }
 
   g_free (segmentation->modname);
   g_free (segmentation->labels);

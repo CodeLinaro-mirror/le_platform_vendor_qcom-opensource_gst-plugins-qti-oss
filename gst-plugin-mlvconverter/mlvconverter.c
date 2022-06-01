@@ -853,8 +853,10 @@ gst_ml_video_converter_decide_allocation (GstBaseTransform * base,
     gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, NULL, NULL);
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (mlconverter->outpool)
-    gst_object_unref (mlconverter->outpool);
+  if (mlconverter->outpool) {
+    gst_buffer_pool_set_active (mlconverter->outpool, FALSE);
+    g_clear_pointer (&(mlconverter)->outpool, gst_object_unref);
+  }
 
   // Create a new pool in case none was proposed in the query.
   if (!pool && !(pool = gst_ml_video_converter_create_pool (mlconverter, caps))) {
@@ -1423,8 +1425,10 @@ gst_ml_video_converter_finalize (GObject * object)
   if (mlconverter->ininfo != NULL)
     gst_video_info_free (mlconverter->ininfo);
 
-  if (mlconverter->outpool != NULL)
+  if (mlconverter->outpool != NULL) {
+    gst_buffer_pool_set_active (mlconverter->outpool, FALSE);
     gst_object_unref (mlconverter->outpool);
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (mlconverter));
 }

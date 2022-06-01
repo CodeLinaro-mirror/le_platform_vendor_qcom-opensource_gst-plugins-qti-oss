@@ -1879,8 +1879,10 @@ gst_video_transform_finalize (GObject * object)
   if (vtrans->outinfo != NULL)
     gst_video_info_free (vtrans->outinfo);
 
-  if (vtrans->outpool != NULL)
+  if (vtrans->outpool != NULL) {
+    gst_buffer_pool_set_active (vtrans->outpool, FALSE);
     gst_object_unref (vtrans->outpool);
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (vtrans));
 }

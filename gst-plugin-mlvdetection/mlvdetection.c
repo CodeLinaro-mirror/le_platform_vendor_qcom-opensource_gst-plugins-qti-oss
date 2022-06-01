@@ -674,8 +674,10 @@ gst_ml_video_detection_decide_allocation (GstBaseTransform * base,
   }
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (detection->outpool)
-    gst_object_unref (detection->outpool);
+  if (detection->outpool) {
+    gst_buffer_pool_set_active (detection->outpool, FALSE);
+    g_clear_pointer (&(detection)->outpool, gst_object_unref);
+  }
 
   // Create a new buffer pool.
   if ((pool = gst_ml_video_detection_create_pool (detection, caps)) == NULL) {
@@ -1090,8 +1092,10 @@ gst_ml_video_detection_finalize (GObject * object)
   if (detection->mlinfo != NULL)
     gst_ml_info_free (detection->mlinfo);
 
-  if (detection->outpool != NULL)
+  if (detection->outpool != NULL) {
+    gst_buffer_pool_set_active (detection->outpool, FALSE);
     gst_object_unref (detection->outpool);
+  }
 
   g_free (detection->modname);
   g_free (detection->labels);

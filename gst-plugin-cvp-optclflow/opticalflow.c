@@ -543,8 +543,10 @@ gst_cvp_optclflow_finalize (GObject * object)
   if (optclflow->ininfo != NULL)
     gst_video_info_free (optclflow->ininfo);
 
-  if (optclflow->outpool != NULL)
+  if (optclflow->outpool != NULL) {
+    gst_buffer_pool_set_active (optclflow->outpool, FALSE);
     gst_object_unref (optclflow->outpool);
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (optclflow));
 }

@@ -635,8 +635,10 @@ gst_ml_video_classification_decide_allocation (GstBaseTransform * base,
   }
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (classification->outpool)
-    gst_object_unref (classification->outpool);
+  if (classification->outpool) {
+    gst_buffer_pool_set_active (classification->outpool, FALSE);
+    g_clear_pointer (&(classification)->outpool, gst_object_unref);
+  }
 
   // Create a new buffer pool.
   pool = gst_ml_video_classification_create_pool (classification, caps);
@@ -1050,8 +1052,10 @@ gst_ml_video_classification_finalize (GObject * object)
   if (classification->mlinfo != NULL)
     gst_ml_info_free (classification->mlinfo);
 
-  if (classification->outpool != NULL)
+  if (classification->outpool != NULL) {
+    gst_buffer_pool_set_active (classification->outpool, FALSE);
     gst_object_unref (classification->outpool);
+  }
 
   g_free (classification->modname);
   g_free (classification->labels);

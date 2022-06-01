@@ -260,8 +260,10 @@ gst_ml_snpe_decide_allocation (GstBaseTransform * base, GstQuery * query)
   }
 
   // Invalidate the cached pool if there is an allocation_query.
-  if (snpe->outpool)
-    gst_object_unref (snpe->outpool);
+  if (snpe->outpool) {
+    gst_buffer_pool_set_active (snpe->outpool, FALSE);
+    g_clear_pointer (&(snpe)->outpool, gst_object_unref);
+  }
 
   // Create a new buffer pool.
   if ((pool = gst_ml_snpe_create_pool (snpe, caps)) == NULL) {
@@ -634,8 +636,10 @@ gst_ml_snpe_finalize (GObject * object)
 
   gst_ml_snpe_engine_free (snpe->engine);
 
-  if (snpe->outpool != NULL)
+  if (snpe->outpool != NULL) {
+    gst_buffer_pool_set_active (snpe->outpool, FALSE);
     gst_object_unref (snpe->outpool);
+  }
 
   g_free (snpe->model);
 

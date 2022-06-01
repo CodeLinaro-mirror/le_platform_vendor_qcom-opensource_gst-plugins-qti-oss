@@ -56,8 +56,10 @@ gst_ml_aic_sinkpad_finalize (GObject * object)
   if (pad->bufpairs != NULL)
     g_hash_table_destroy(pad->bufpairs);
 
-  if (pad->pool != NULL)
+  if (pad->pool != NULL) {
+    gst_buffer_pool_set_active (pad->pool, FALSE);
     gst_object_unref (pad->pool);
+  }
 
   g_mutex_clear (&pad->lock);
 
