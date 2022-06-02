@@ -53,6 +53,8 @@ typedef struct _GstQcodec2BufferPool GstQcodec2BufferPool;
 typedef struct _GstQcodec2BufferPoolClass GstQcodec2BufferPoolClass;
 typedef struct _GstBufferPoolParam GstBufferPoolParam;
 
+#define GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META "GstVideoC2BufMeta"
+
 typedef enum
 {
   DMABUF_MODE = 0,
@@ -68,6 +70,7 @@ struct _GstBufferPoolParam
   GHashTable *buffer_table;
   gboolean is_ubwc;
   PoolMode mode;
+  gboolean add_c2buf_meta;
 };
 
 struct _GstQcodec2BufferPool
@@ -89,10 +92,35 @@ typedef struct GstBufferPoolAcquireParamsExt
   gint32 meta_fd;
   guint64 index;
   guint32 size;
+  void *c2_buf;
 } GstBufferPoolAcquireParamsExt;
 
 GType gst_qcodec2_buffer_pool_get_type (void);
 GstBufferPool *gst_qcodec2_buffer_pool_new (GstBufferPoolParam * param);
+
+#define GST_VIDEO_C2BUF_META_API_TYPE  (gst_video_c2buf_meta_api_get_type())
+#define GST_VIDEO_C2BUF_META_INFO  (gst_video_c2buf_meta_get_info())
+typedef struct _GstVideoC2BufMeta GstVideoC2BufMeta;
+
+/**
+ * GstVideoC2BufMeta:
+ * @meta: parent #GstMeta
+ * @c2_buf: associated pointer of C2 Buffer
+ *
+ * Extra buffer metadata describing associated pointer of C2 Buffer.
+ */
+struct _GstVideoC2BufMeta
+{
+  GstMeta meta;
+
+  void *c2_buf;
+};
+
+GType gst_video_c2buf_meta_api_get_type (void);
+const GstMetaInfo *gst_video_c2buf_meta_get_info (void);
+
+#define gst_buffer_get_video_c2buf_meta(b) ((GstVideoC2BufMeta*)gst_buffer_get_meta((b),GST_VIDEO_C2BUF_META_API_TYPE))
+#define gst_buffer_add_video_c2buf_meta(b) ((GstVideoC2BufMeta*)gst_buffer_add_meta((b),GST_VIDEO_C2BUF_META_INFO, NULL))
 
 G_END_DECLS
 #endif /* __GST_QCODEC2BUFFERPOOL_H__ */

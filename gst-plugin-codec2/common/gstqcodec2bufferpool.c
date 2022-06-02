@@ -56,6 +56,44 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * pool,
 static void
 _buffer_pool_release_buffer_wrap (GstBufferPool * bpool, GstBuffer * buffer);
 
+GType
+gst_video_c2buf_meta_api_get_type (void)
+{
+  static volatile GType type = 0;
+  static const gchar *tags[] = { GST_META_TAG_VIDEO_STR, NULL };
+
+  if (g_once_init_enter (&type)) {
+    GType _type = gst_meta_api_type_register ("GstVideoC2BufMetaAPI", tags);
+    g_once_init_leave (&type, _type);
+  }
+  return type;
+}
+
+static gboolean
+gst_video_c2buf_meta_init (GstMeta * meta, gpointer params, GstBuffer * buffer)
+{
+  GstVideoC2BufMeta *c2buf_meta = (GstVideoC2BufMeta *) meta;
+  c2buf_meta->c2_buf = NULL;
+
+  return TRUE;
+}
+
+const GstMetaInfo *
+gst_video_c2buf_meta_get_info (void)
+{
+  static const GstMetaInfo *video_c2buf_meta_info = NULL;
+
+  if (g_once_init_enter ((GstMetaInfo **) & video_c2buf_meta_info)) {
+    const GstMetaInfo *meta =
+        gst_meta_register (GST_VIDEO_C2BUF_META_API_TYPE, "GstVideoC2BufMeta",
+        sizeof (GstVideoC2BufMeta),
+        (GstMetaInitFunction) gst_video_c2buf_meta_init, NULL, NULL);
+    g_once_init_leave ((GstMetaInfo **) & video_c2buf_meta_info,
+        (GstMetaInfo *) meta);
+  }
+  return video_c2buf_meta_info;
+}
+
 static void
 print_gst_buf (gpointer key, gpointer value, gpointer data)
 {
@@ -269,6 +307,7 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
   GstVideoMeta *video_meta = NULL;
   g_value_init (&new_index, G_TYPE_UINT64);
   guint32 color_fmt = 0;
+  GstVideoC2BufMeta *video_c2buf_meta = NULL;
 
   gst_buf = (GstBuffer *) g_hash_table_lookup (buffer_table, &key);
   if (gst_buf) {
@@ -373,6 +412,16 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
     gst_mini_object_set_qdata (GST_MINI_OBJECT (gst_buf),
         qcodec2bufferpool_qdata_quark (), structure,
         (GDestroyNotify) gst_structure_free);
+  }
+
+  if (pool->param.add_c2buf_meta) {
+    video_c2buf_meta = gst_buffer_get_video_c2buf_meta (gst_buf);
+    if (video_c2buf_meta) {
+      gst_buffer_remove_meta (gst_buf, (GstMeta *) video_c2buf_meta);
+    }
+    video_c2buf_meta = gst_buffer_add_video_c2buf_meta (gst_buf);
+    video_c2buf_meta->c2_buf = param_ext->c2_buf;
+    GST_DEBUG_OBJECT (bpool, "attach c2buf meta, c2_buf:%p", param_ext->c2_buf);
   }
 
 done:
@@ -498,7 +547,7 @@ gst_qcodec2_buffer_pool_new (GstBufferPoolParam * param)
       pool->param.buffer_table = buffer_table;
       break;
     default:
-      GST_DEBUG_OBJECT (pool, "pool mode %d is not supported", param->mode);
+      GST_ERROR_OBJECT (pool, "pool mode %d is not supported", param->mode);
   }
 
   GST_INFO_OBJECT (pool,
