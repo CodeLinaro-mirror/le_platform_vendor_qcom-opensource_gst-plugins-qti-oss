@@ -107,7 +107,6 @@ G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
 
 /* Function will be named qticodec2venc_qdata_quark() */
 static G_DEFINE_QUARK (QtiCodec2EncoderQuark, qticodec2venc_qdata);
-static G_DEFINE_QUARK (QtiCodec2C2BufQuark, qticodec2_c2buf_qdata);
 
 enum
 {
@@ -778,7 +777,6 @@ gst_qticodec2venc_build_roi_array (GstVideoEncoder * encoder,
     xmlFreeDoc (doc);
     return;
   }
-
   // find session root
   cur = cur->xmlChildrenNode;
   while (cur) {
@@ -1306,6 +1304,8 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   GstVideoInfo info;
   GstAllocator *allocator = NULL;
   guint num_max_buffers = MAX_INPUT_BUFFERS;
+  GstBufferPoolParam param;
+  memset (&param, 0, sizeof (GstBufferPoolParam));
 
   gst_query_parse_allocation (query, &caps, NULL);
 
@@ -1323,9 +1323,11 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
 
   /* Propose GBM backed memory if upstream has dmabuf feature */
   if (gst_qticodec2_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
-    enc->pool =
-        gst_qticodec2_buffer_pool_new (enc->comp, BUFFER_POOL_BASIC_GRAPHIC,
-        num_max_buffers, caps, enc->is_ubwc);
+    param.is_ubwc = enc->is_ubwc;
+    param.c2_comp = enc->comp;
+    param.info = info;
+    param.mode = DMABUF_MODE;
+    enc->pool = gst_qcodec2_buffer_pool_new (&param);
 
     if (!enc->pool)
       goto cleanup;
@@ -1680,6 +1682,7 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   gboolean mem_mapped = FALSE;
   gboolean status = FALSE;
   GstFlowReturn ret = GST_FLOW_OK;
+  GstVideoC2BufMeta *video_c2buf_meta = NULL;
 
   GST_DEBUG_OBJECT (enc, "encode");
   if (!frame) {
@@ -1698,9 +1701,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     inBuf.fd = gst_dmabuf_memory_get_fd (mem);
     inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);
     inBuf.data = NULL;
-    inBuf.c2Buffer =
-        gst_mini_object_get_qdata (GST_MINI_OBJECT (buf),
-        qticodec2_c2buf_qdata_quark ());
+    video_c2buf_meta = gst_buffer_get_video_c2buf_meta (buf);
+    if (video_c2buf_meta) {
+      inBuf.c2Buffer = video_c2buf_meta->c2_buf;
+    }
     GST_DEBUG_OBJECT (enc, "input c2 buffer:%p fd:%d", inBuf.c2Buffer,
         inBuf.fd);
   } else {
