@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -32,53 +32,39 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-
-#ifndef __GST_QTICODEC2VDECBUFFERPOOL_H__
-#define __GST_QTICODEC2VDECBUFFERPOOL_H__
+#ifndef __GST_QCODEC2_VP9_DEC_H__
+#define __GST_QCODEC2_VP9_DEC_H__
 
 #include <gst/gst.h>
-#include <gst/video/video.h>
-#include <gst/video/gstvideodecoder.h>
-#include <gst/video/gstvideopool.h>
-#include <gst/allocators/allocators.h>
-#include <gst/allocators/gstdmabuf.h>
 #include "gstqticodec2vdec.h"
 
 G_BEGIN_DECLS
-/* buffer pool functions */
-#define GST_TYPE_QTICODEC2VDEC_BUFFER_POOL      (gst_qticodec2vdec_buffer_pool_get_type())
-#define GST_IS_QTICODEC2VDEC_BUFFER_POOL(obj)   (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL))
-#define GST_QTICODEC2VDEC_BUFFER_POOL(obj)      (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL, Gstqticodec2vdecBufferPool))
-#define GST_QTICODEC2VDEC_BUFFER_POOL_CAST(obj) ((Gstqticodec2vdecBufferPool*)(obj))
-typedef struct _Gstqticodec2vdecBufferPool Gstqticodec2vdecBufferPool;
-typedef struct _Gstqticodec2vdecBufferPoolClass Gstqticodec2vdecBufferPoolClass;
+#define GST_TYPE_QCODEC2_VP9_DEC \
+  (gst_qcodec2_vp9_dec_get_type())
+#define GST_QCODEC2_VP9_DEC(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QCODEC2_VP9_DEC,GstQcodec2VP9Dec))
+#define GST_QCODEC2_VP9_DEC_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QCODEC2_VP9_DEC,GstQcodec2VP9DecClass))
+#define GST_QCODEC2_VP9_DEC_GET_CLASS(obj) \
+  (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_QCODEC2_VP9_DEC,GstQcodec2VP9DecClass))
+#define GST_IS_QCODEC2_VP9_DEC(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QCODEC2_VP9_DEC))
+#define GST_IS_QCODEC2_VP9_DEC_CLASS(obj) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QCODEC2_VP9_DEC))
+typedef struct _GstQcodec2VP9Dec GstQcodec2VP9Dec;
+typedef struct _GstQcodec2VP9DecClass GstQcodec2VP9DecClass;
 
-struct _Gstqticodec2vdecBufferPool
+struct _GstQcodec2VP9Dec
 {
-  GstBufferPool bufferpool;
-  Gstqticodec2vdec *qticodec2vdec;
-  GstAllocator *allocator;
-  GHashTable *buffer_table;
-  gboolean use_dmabuf;
+  Gstqticodec2vdec parent;
 };
 
-struct _Gstqticodec2vdecBufferPoolClass
+struct _GstQcodec2VP9DecClass
 {
-  GstBufferPoolClass parent_class;
+  Gstqticodec2vdecClass parent_class;
 };
 
-typedef struct GstBufferPoolAcquireParamsExt
-{
-  GstBufferPoolAcquireParams params;
-  gint32 fd;
-  gint32 meta_fd;
-  guint64 index;
-  guint32 size;
-} GstBufferPoolAcquireParamsExt;
-
-GType gst_qticodec2vdec_buffer_pool_get_type (void);
-GstBufferPool *gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec *
-    qticodec2vdec, gboolean use_dmabuf);
+GType gst_qcodec2_vp9_dec_get_type (void);
 
 G_END_DECLS
-#endif /* __GST_QTICODEC2VDECBUFFERPOOL_H__ */
+#endif /* __GST_QCODEC2_VP9_DEC_H__ */

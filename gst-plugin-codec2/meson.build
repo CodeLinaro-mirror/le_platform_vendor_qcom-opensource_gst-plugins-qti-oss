@@ -32,10 +32,11 @@ gstallocators_dep = dependency('gstreamer-allocators-1.0',
   fallback : ['gst-plugins-base', 'allocators_dep'])
 glib_dep = dependency('glib-2.0', version: '>= 2.36', required: false)
 dl_dep = cxx.find_library('dl')
+gstcodecparsers_dep = dependency('gstreamer-codecparsers-1.0',
+  fallback : ['gst-plugins-bad', 'gstcodecparsers_dep'])
 
 configure_file(output : 'config.h', configuration : core_conf)
 
 subdir('wrapper')
-subdir('common')
 subdir('vdec')
 subdir('venc')

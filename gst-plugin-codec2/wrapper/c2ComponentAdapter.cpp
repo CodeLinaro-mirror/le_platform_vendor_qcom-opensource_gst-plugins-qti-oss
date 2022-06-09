@@ -68,9 +68,9 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mCallback = nullptr;
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
-    mMapBufferToCpu = false;
     mNumPendingWorks = 0;
-    mPendingTimeOut = 0;
+    mDataCopyFunc = nullptr;
+    mDataCopyFuncParam = nullptr;
 }
 
 C2ComponentAdapter::~C2ComponentAdapter()
@@ -84,6 +84,7 @@ C2ComponentAdapter::~C2ComponentAdapter()
     mCallback = nullptr;
     mInPendingBuffer.clear();
     mOutPendingBuffer.clear();
+    mTrackBuffers.clear();
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
 }
@@ -104,6 +105,15 @@ c2_status_t C2ComponentAdapter::setListenercallback(std::unique_ptr<EventCallbac
     if (result == C2_OK) {
         mCallback = std::move(callback);
     }
+
+    return result;
+}
+
+c2_status_t C2ComponentAdapter::setDataCopyFunc(void* func, void* param)
+{
+    c2_status_t result = C2_OK;
+    mDataCopyFunc = reinterpret_cast<fnDataCopy>(func);
+    mDataCopyFuncParam = param;
 
     return result;
 }
@@ -205,6 +215,9 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
         std::shared_ptr<C2Buffer> buf;
         c2_status_t err = C2_OK;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+        if (buffer->secure) {
+            usage = { C2MemoryUsage::READ_PROTECTED, 0 };
+        }
 
         if (poolType == C2BlockPool::BASIC_LINEAR) {
             allocSize = ALIGN(frameSize, 4096);
@@ -214,13 +227,32 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
                 return C2_NO_MEMORY;
             }
 
-            C2WriteView view = linear_block->map().get();
-            if (view.error() != C2_OK) {
-                LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
-                return C2_NO_MEMORY;
+            if (mDataCopyFunc) {
+                if (linear_block->handle()) {
+                    uint32_t dest_fd = linear_block->handle()->data[0];
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    if (ret) {
+                        LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+                } else {
+                    LOG_ERROR("invalid handle of linear block");
+                    return C2_CORRUPTED;
+                }
+            } else {
+                if (!buffer->secure) {
+                    C2WriteView view = linear_block->map().get();
+                    if (view.error() != C2_OK) {
+                        LOG_ERROR("C2LinearBlock::map() failed : %d", view.error());
+                        return C2_NO_MEMORY;
+                    }
+                    destBuffer = view.base();
+                    memcpy(destBuffer, rawBuffer, frameSize);
+                } else {
+                    LOG_ERROR("should not be here for secure mode");
+                    return C2_CORRUPTED;
+                }
             }
-            destBuffer = view.base();
-            memcpy(destBuffer, rawBuffer, frameSize);
             linear_block->mSize = frameSize;
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
@@ -263,11 +295,10 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
 }
 
 c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
-    uint32_t maxPendingWorks)
+    uint32_t maxPendingWorks, uint32_t timeoutMs)
 {
 
     std::unique_lock<std::mutex> ul(mLock);
-    uint32_t timeoutMs = mPendingTimeOut;
     LOG_MESSAGE("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
 
     while (mNumPendingWorks > maxPendingWorks) {
@@ -275,7 +306,6 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
             if (mCondition.wait_for(ul, timeoutMs * 1ms) == std::cv_status::timeout) {
                 LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
                     mNumPendingWorks);
-                mNumPendingWorks--;
                 return C2_TIMED_OUT;
             } else {
                 LOG_MESSAGE("wait done");
@@ -286,65 +316,155 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
         }
     }
 
-    /* In case notification is done immediately by ease pending,
-     * but it's meant to wait for another round by mPendingTimeOut ms.
-     * So continue to wait once more.
-     */
-    if (mPendingTimeOut > 0) {
-        timeoutMs = mPendingTimeOut;
-        LOG_WARNING("wait another round in case of timeout changed to %d ms",
-            timeoutMs);
-        mCondition.wait_for(ul, timeoutMs * 1ms);
+    return C2_OK;
+}
+
+void C2ComponentAdapter::registerTrackBuffer(const C2FrameData& input)
+{
+    uint64_t frameIndex = input.ordinal.frameIndex.peeku();
+
+    for (size_t i = 0; i < input.buffers.size(); ++i) {
+        TrackBuffer* trackbuf = new TrackBuffer(this, frameIndex, input.buffers[i]);
+        if (trackbuf != nullptr) {
+            c2_status_t status = input.buffers[i]->registerOnDestroyNotify(
+                onDestroyNotify, trackbuf);
+
+            if (status != C2_OK) {
+                LOG_ERROR("TrackBuffer registerOnDestroyNotify failed, buf idx:%zu", trackbuf->frameIndex);
+                delete trackbuf;
+            } else {
+                LOG_MESSAGE("emplace buf idx:%zu TrackBuffer %p to mTrackBuffers", trackbuf->frameIndex, trackbuf);
+                std::unique_lock<std::mutex> ul(mLock);
+                mTrackBuffers.emplace(trackbuf);
+            }
+        }
+    }
+}
+
+void C2ComponentAdapter::unregisterTrackBuffer(
+    std::list<std::unique_ptr<C2Work> >& workItems)
+{
+    // Unregister input buffers onDestroyNotify
+    for (const std::unique_ptr<C2Work>& work : workItems) {
+        if (work) {
+
+            uint64_t frameIndex = work->input.ordinal.frameIndex.peeku();
+
+            {
+                std::unique_lock<std::mutex> ul(mLock);
+                for (auto it = mTrackBuffers.begin();
+                     it != mTrackBuffers.end(); ++it) {
+                    if ((*it)->frameIndex == frameIndex) {
+                        if (auto buffer = (*it)->buffer.lock()) {
+                            buffer->unregisterOnDestroyNotify(
+                                onDestroyNotify, this);
+                        }
+
+                        LOG_MESSAGE("erase buf idx:%zu, TrackBuffer %p",
+                            frameIndex, (*it));
+                        mTrackBuffers.erase(it);
+                        delete (*it);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void C2ComponentAdapter::unregisterTrackBufferAll()
+{
+    LOG_MESSAGE("unregister all track buffers");
+
+    std::unique_lock<std::mutex> ul(mLock);
+
+    for (auto it = mTrackBuffers.begin(); it != mTrackBuffers.end(); ++it) {
+        if (auto buf = (*it)->buffer.lock()) {
+            LOG_MESSAGE("erase buf idx:%zu TrackBuffer %p", (*it)->frameIndex, (*it));
+            buf->unregisterOnDestroyNotify(onDestroyNotify, this);
+        }
+
+        mTrackBuffers.erase(it);
+        delete (*it);
+    }
+}
+
+void C2ComponentAdapter::onDestroyNotify(const C2Buffer* buf, void* arg)
+{
+    if (!buf || !arg) {
+        LOG_MESSAGE("no buf");
+        return;
     }
 
-    return C2_OK;
+    TrackBuffer* trackbuf = (TrackBuffer*)arg;
+    if (trackbuf->adapter) {
+        trackbuf->adapter->onBufferDestroyed(buf, arg);
+    }
+}
+
+void C2ComponentAdapter::onBufferDestroyed(const C2Buffer* buf, void* arg)
+{
+    std::unique_lock<std::mutex> ul(mLock);
+
+    LOG_MESSAGE("%s mNumPendingWorks %d", __func__, mNumPendingWorks);
+
+    TrackBuffer* trackbuf = (TrackBuffer*)arg;
+    if (!mTrackBuffers.empty()) {
+
+        auto buf = mTrackBuffers.find(trackbuf);
+        if (buf != mTrackBuffers.end()) {
+            LOG_MESSAGE("erase buf idx:%zu TrackBuffer %p", trackbuf->frameIndex, trackbuf);
+            mTrackBuffers.erase(buf);
+            delete trackbuf;
+        }
+
+        if (mNumPendingWorks > 0) {
+            mNumPendingWorks--;
+        }
+
+        mCondition.notify_one();
+    }
 }
 
 std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 {
     c2_status_t err = C2_OK;
     std::shared_ptr<C2Buffer> buf;
+    gint32 fd = -1;
+    guint32 size = 0;
 
     /* TODO: add support for linear buffer */
     if (buffer->pool_type == BUFFER_POOL_BASIC_GRAPHIC) {
-        std::shared_ptr<C2GraphicBlock> graphic_block;
+        std::shared_ptr<C2GraphicBlock> graphicBlock;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
             if (buffer->ubwc_flag) {
                 usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
             }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
-                gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
-            C2GraphicView view(graphic_block->map().get());
+                gst_to_c2_gbmformat(buffer->format), usage, &graphicBlock);
+            C2GraphicView view(graphicBlock->map().get());
             if (view.error() != C2_OK) {
                 LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
                 return NULL;
             }
-            buf = createGraphicBuffer(graphic_block);
+            buf = createGraphicBuffer(graphicBlock);
             if (err != C2_OK || buf == nullptr) {
                 LOG_ERROR("Graphic pool failed to allocate input buffer");
                 return NULL;
             } else {
-                const C2Handle* handle = graphic_block->handle();
+                const C2Handle* handle = graphicBlock->handle();
                 if (nullptr == handle) {
                     LOG_ERROR("C2GraphicBlock handle is null");
                     return NULL;
                 }
 
                 /* ref the buffer and store it. When the fd is queued,
-                 * we can find the C2buffer with the input fd
-                 * */
-                gint32 fd = handle->data[0];
-                mInPendingBuffer[fd] = buf;
+                 * we can find the graphic block with the input fd */
+                fd = handle->data[0];
+                mInPendingBuffer[fd] = graphicBlock;
                 buffer->fd = fd;
-                guint32 width = 0;
-                guint32 height = 0;
-                guint32 format = 0;
-                guint32 stride = 0;
-                guint64 usage = 0;
-                guint32 size = 0;
 
-                _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
+                _UnwrapNativeCodec2GBMMetadata(handle, nullptr, nullptr, nullptr, nullptr, nullptr, &size, nullptr);
                 buffer->capacity = size;
                 LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
             }
@@ -365,7 +485,7 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     uint8_t* inputBuffer = buffer->data;
     gint32 fd = buffer->fd;
     size_t inputBufferSize = buffer->size;
-    C2FrameData::flags_t inputFrameFlag = QTI::toC2Flag(buffer->flag);
+    C2FrameData::flags_t inputFrameFlag = toC2Flag(buffer->flag);
     uint64_t frame_index = buffer->index;
     uint64_t timestamp = buffer->timestamp;
     C2BlockPool::local_id_t poolType = toC2BufferPoolType(buffer->pool_type);
@@ -378,7 +498,7 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     c2_status_t result = C2_OK;
     std::list<std::unique_ptr<C2Work> > workList;
     std::unique_ptr<C2Work> work = std::make_unique<C2Work>();
-    std::shared_ptr<C2Buffer> c2_buf;
+    std::shared_ptr<C2Buffer> c2Buffer;
 
     work->input.flags = inputFrameFlag;
     work->input.ordinal.timestamp = timestamp;
@@ -389,25 +509,31 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
 
     /* check if input buffer contains fd/va and decide if we need to
      * allocate a new C2 buffer or not */
-    if (buffer->c2_buffer) {
+    if (buffer->c2Buffer) {
         /* Disable delete function for this shared_ptr to avoid double free issue
          * since it is created from raw pointer got from another shared_ptr. That
          * shared_ptr takes responsibility to call delete function.*/
-        std::shared_ptr<C2Buffer> c2_buf(static_cast<C2Buffer*>(buffer->c2_buffer), [](C2Buffer*) {});
-        work->input.buffers.emplace_back(c2_buf);
-        result = C2_OK;
+        std::shared_ptr<C2Buffer> c2Buffer(static_cast<C2Buffer*>(buffer->c2Buffer), [](C2Buffer*) {});
+        work->input.buffers.emplace_back(c2Buffer);
     } else if (fd > 0) {
-        std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
+        std::map<uint64_t, std::shared_ptr<C2GraphicBlock> >::iterator it;
+        std::shared_ptr<C2Buffer> buf = nullptr;
+        std::shared_ptr<C2GraphicBlock> graphicBlock = nullptr;
 
         /* Find the buffer with fd */
         it = mInPendingBuffer.find(fd);
         if (it != mInPendingBuffer.end()) {
-            std::shared_ptr<C2Buffer> buf = it->second;
-            work->input.buffers.emplace_back(buf);
-            result = C2_OK;
+            graphicBlock = it->second;
+            if (graphicBlock) {
+                buf = createGraphicBuffer(graphicBlock);
+                work->input.buffers.emplace_back(buf);
+            } else {
+                LOG_ERROR("invalid graphic block");
+                result = C2_NO_MEMORY;
+            }
         } else {
             LOG_ERROR("Buffer fd(%u) not found", fd);
-            return C2_NOT_FOUND;
+            result = C2_NOT_FOUND;
         }
     } else if (inputBuffer) {
         std::shared_ptr<C2Buffer> clientBuf;
@@ -417,45 +543,52 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
             work->input.buffers.emplace_back(clientBuf);
         } else {
             LOG_ERROR("Failed(%d) to allocate buffer", result);
-            return C2_BAD_VALUE;
+            result = C2_NO_MEMORY;
         }
     } else if (isEOSFrame) {
         LOG_MESSAGE("queue EOS frame");
     } else {
         LOG_ERROR("invalid buffer decriptor");
-        return C2_BAD_VALUE;
+        result = C2_BAD_VALUE;
     }
 
-    work->worklets.clear();
-    work->worklets.emplace_back(new C2Worklet);
-    workList.push_back(std::move(work));
+    if (result == C2_OK) {
+        registerTrackBuffer(work->input);
 
-    if (!isEOSFrame) {
-        waitForProgressOrStateChange(MAX_PENDING_WORK);
-    } else {
-        LOG_MESSAGE("EOS reached");
+        work->worklets.clear();
+        work->worklets.emplace_back(new C2Worklet);
+        workList.push_back(std::move(work));
+
+        if (!isEOSFrame) {
+            waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
+        } else {
+            LOG_MESSAGE("EOS reached");
+        }
+
+        result = mComp->queue_nb(&workList);
+        if (result != C2_OK) {
+            LOG_ERROR("Failed to queue work");
+        } else {
+            std::unique_lock<std::mutex> ul(mLock);
+            mNumPendingWorks++;
+        }
     }
-
-    result = mComp->queue_nb(&workList);
-    if (result != C2_OK) {
-        LOG_ERROR("Failed to queue work");
-    }
-
-    std::unique_lock<std::mutex> ul(mLock);
-    mNumPendingWorks++;
 
     return result;
 }
 
-c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode,
-    std::list<std::unique_ptr<C2Work> >* const flushedWork)
+c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode)
 {
-
-    LOG_MESSAGE("Component(%p) flushed", this);
-
     c2_status_t result = C2_OK;
-    UNUSED(mode);
-    UNUSED(flushedWork);
+    std::list<std::unique_ptr<C2Work> > flushedWork;
+
+    result = mComp->flush_sm(mode, &flushedWork);
+    if (result == C2_OK) {
+        LOG_MESSAGE("Component(%p) flushed work num:%zu", this, flushedWork.size());
+        unregisterTrackBuffer(flushedWork);
+    } else {
+        LOG_ERROR("Failed to flush work");
+    }
 
     return result;
 }
@@ -484,7 +617,11 @@ c2_status_t C2ComponentAdapter::stop()
 
     LOG_MESSAGE("Component(%p) stop", this);
 
-    return mComp->stop();
+    c2_status_t result = mComp->stop();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 c2_status_t C2ComponentAdapter::reset()
@@ -492,7 +629,11 @@ c2_status_t C2ComponentAdapter::reset()
 
     LOG_MESSAGE("Component(%p) reset", this);
 
-    return mComp->reset();
+    c2_status_t result = mComp->reset();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 c2_status_t C2ComponentAdapter::release()
@@ -500,7 +641,11 @@ c2_status_t C2ComponentAdapter::release()
 
     LOG_MESSAGE("Component(%p) release", this);
 
-    return mComp->release();
+    c2_status_t result = mComp->release();
+
+    unregisterTrackBufferAll();
+
+    return result;
 }
 
 C2ComponentInterfaceAdapter* C2ComponentAdapter::intf()
@@ -580,19 +725,13 @@ void C2ComponentAdapter::handleWorkDone(
         }
 
         if (work->worklets.empty()) {
-            LOG_MESSAGE("Component(%p) worklet empty", this);
+            LOG_DEBUG("Component(%p) worklet empty", this);
             continue;
         }
 
-        if (work->result == C2_NOT_FOUND) {
-            LOG_MESSAGE("No output for component(%p)", this);
-            break;
-        }
-
-        // Work failed to complete
         if (work->result != C2_OK) {
-            LOG_MESSAGE("Failed to generate output for component(%p)", this);
-            break;
+            LOG_DEBUG("No output for component(%p), ret:%d", this, work->result);
+            continue;
         }
 
         const std::unique_ptr<C2Worklet>& worklet = work->worklets.front();
@@ -600,7 +739,6 @@ void C2ComponentAdapter::handleWorkDone(
         uint64_t bufferIdx = 0;
         C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
         uint64_t timestamp = worklet->output.ordinal.timestamp.peeku();
-        bool ease_pending = false;
 
         while (!worklet->output.configUpdate.empty()) {
             std::unique_ptr<C2Param> param;
@@ -620,7 +758,7 @@ void C2ComponentAdapter::handleWorkDone(
                             LOG_ERROR("Failed to get allocator");
                             break;
                         }
-                        ease_pending = true;
+
                         std::shared_ptr<android::C2AllocatorGBM> allocatorGBM = std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
                         allocatorGBM->setMaxAllocationCount(outputDelay.value);
                     }
@@ -648,47 +786,20 @@ void C2ComponentAdapter::handleWorkDone(
             }
 
             mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
-            std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks--;
-            mPendingTimeOut = 0;
-            mCondition.notify_one();
         } else {
 
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
                 mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
-                LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple"
+                LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple "
                             "output frames, or codec config update event",
                     this);
-                /* If pending works reach maximums, waitForProgressOrStateChange
-                 * will wait and no more buffer to be queued to component.
-                 * In some cases component configure updates, output buffers
-                 * will be re-allocated in C2 and it needs more input for output.
-                 *
-                 * Refer to IComponentListener.hal#onInputBuffersReleased on LA,
-                 * try timeout-wait to wake up queue_nb again so as to ease pending works,
-                 * e.g., when the component needs more input before an output can be produced.
-                 *
-                 * Back to block-wait once a new onWorkDone arrival from C2.
-                 */
-                if (ease_pending) {
-                    LOG_MESSAGE("Component(%p) ease pending works", this);
-                    std::unique_lock<std::mutex> ul(mLock);
-                    mNumPendingWorks--;
-                    mPendingTimeOut = 30; // try to wait for 30ms timeout
-                    mCondition.notify_one();
-                    break;
-                } else {
-                    continue;
-                }
+                continue;
             } else {
-                LOG_ERROR("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
+                LOG_MESSAGE("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
             }
-            std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks--;
-            mPendingTimeOut = 0;
-            mCondition.notify_one();
+
             break;
         }
     }
@@ -747,27 +858,11 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
             result = C2_OK;
 
         } else {
-            LOG_MESSAGE("Buffer index(%lu) not found", bufferIdx);
+            LOG_ERROR("Buffer index(%lu) not found", bufferIdx);
         }
     }
 
     return result;
-}
-
-c2_status_t C2ComponentAdapter::setMapBufferToCpu(bool enable)
-{
-
-    c2_status_t c2Status = C2_NO_INIT;
-
-    mMapBufferToCpu = enable;
-
-    if (mCallback) {
-        mCallback->setMapBufferToCpu(mMapBufferToCpu);
-
-        c2Status = C2_OK;
-    }
-
-    return c2Status;
 }
 
 C2ComponentListenerAdapter::C2ComponentListenerAdapter(C2ComponentAdapter* comp)

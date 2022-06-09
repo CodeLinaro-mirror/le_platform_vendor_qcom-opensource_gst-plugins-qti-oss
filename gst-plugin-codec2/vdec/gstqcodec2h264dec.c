@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -32,53 +32,38 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-
-#ifndef __GST_QTICODEC2VDECBUFFERPOOL_H__
-#define __GST_QTICODEC2VDECBUFFERPOOL_H__
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 
 #include <gst/gst.h>
-#include <gst/video/video.h>
-#include <gst/video/gstvideodecoder.h>
-#include <gst/video/gstvideopool.h>
-#include <gst/allocators/allocators.h>
-#include <gst/allocators/gstdmabuf.h>
-#include "gstqticodec2vdec.h"
+#include "gstqcodec2h264dec.h"
 
-G_BEGIN_DECLS
-/* buffer pool functions */
-#define GST_TYPE_QTICODEC2VDEC_BUFFER_POOL      (gst_qticodec2vdec_buffer_pool_get_type())
-#define GST_IS_QTICODEC2VDEC_BUFFER_POOL(obj)   (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL))
-#define GST_QTICODEC2VDEC_BUFFER_POOL(obj)      (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QTICODEC2VDEC_BUFFER_POOL, Gstqticodec2vdecBufferPool))
-#define GST_QTICODEC2VDEC_BUFFER_POOL_CAST(obj) ((Gstqticodec2vdecBufferPool*)(obj))
-typedef struct _Gstqticodec2vdecBufferPool Gstqticodec2vdecBufferPool;
-typedef struct _Gstqticodec2vdecBufferPoolClass Gstqticodec2vdecBufferPoolClass;
+GST_DEBUG_CATEGORY_EXTERN (gst_qticodec2vdec_debug);
+#define GST_CAT_DEFAULT gst_qticodec2vdec_debug
 
-struct _Gstqticodec2vdecBufferPool
+/* class initialization */
+G_DEFINE_TYPE (GstQcodec2H264Dec, gst_qcodec2_h264_dec, GST_TYPE_QTICODEC2VDEC);
+
+static GstStaticPadTemplate gst_qcodec2_h264_dec_sink_template =
+GST_STATIC_PAD_TEMPLATE (GST_VIDEO_DECODER_SINK_NAME,
+    GST_PAD_SINK,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS (H264_CAPS));
+
+static void
+gst_qcodec2_h264_dec_class_init (GstQcodec2H264DecClass * klass)
 {
-  GstBufferPool bufferpool;
-  Gstqticodec2vdec *qticodec2vdec;
-  GstAllocator *allocator;
-  GHashTable *buffer_table;
-  gboolean use_dmabuf;
-};
+  GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&gst_qcodec2_h264_dec_sink_template));
 
-struct _Gstqticodec2vdecBufferPoolClass
+  gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
+      "Codec2 video H.264 decoder", "Decoder/Video",
+      "Video H.264 Decoder based on Codec2.0", "QTI");
+}
+
+static void
+gst_qcodec2_h264_dec_init (GstQcodec2H264Dec * self)
 {
-  GstBufferPoolClass parent_class;
-};
-
-typedef struct GstBufferPoolAcquireParamsExt
-{
-  GstBufferPoolAcquireParams params;
-  gint32 fd;
-  gint32 meta_fd;
-  guint64 index;
-  guint32 size;
-} GstBufferPoolAcquireParamsExt;
-
-GType gst_qticodec2vdec_buffer_pool_get_type (void);
-GstBufferPool *gst_qticodec2vdec_buffer_pool_new (Gstqticodec2vdec *
-    qticodec2vdec, gboolean use_dmabuf);
-
-G_END_DECLS
-#endif /* __GST_QTICODEC2VDECBUFFERPOOL_H__ */
+}

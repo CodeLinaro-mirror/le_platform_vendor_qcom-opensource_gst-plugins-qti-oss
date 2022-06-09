@@ -33,13 +33,11 @@
 
 #include "gst/gstinfo.h"
 #include "gst/gstbufferpool.h"
-#include "gstqticodec2bufferpool.h"
+#include "gstqticodec2vencbufferpool.h"
 #include <media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_qticodec2_debug);
 #define GST_CAT_DEFAULT gst_qticodec2_debug
-
-#define POOL_MIN_BUFFER_COUNT 6
 
 static GstMemory *
 _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
@@ -65,21 +63,19 @@ _gst_qticodec2_alloc_dmabuf (GstBufferPool * pool)
       info->size, gst_video_format_to_string (format), buffer.ubwc_flag,
       info->width, info->height);
 
-  /*TODO: add support for Linear buffer */
-  if (format == GST_VIDEO_FORMAT_NV12) {
-    buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
+  buffer.pool_type = BUFFER_POOL_BASIC_GRAPHIC;
 
-    if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
-      GST_ERROR_OBJECT (pool, "Failed to allocate graphic buffer");
-    } else {
-      GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d",
-          buffer.fd, buffer.capacity);
+  if (!c2component_alloc (self_pool->c2_comp, &buffer)) {
+    GST_ERROR_OBJECT (pool, "Failed to allocate graphic buffer, format: %u",
+        format);
+  } else {
+    GST_DEBUG_OBJECT (pool, "Allocated buffer fd: %d, size: %d format: %u",
+        buffer.fd, buffer.capacity, format);
 
-      /* use GstDmaBufAllocator to allocate GBM based fd memory */
-      mem =
-          gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
-          buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
-    }
+    /* use GstDmaBufAllocator to allocate GBM based fd memory */
+    mem =
+        gst_dmabuf_allocator_alloc_with_flags (alloc, buffer.fd,
+        buffer.capacity, GST_FD_MEMORY_FLAG_NONE);
   }
 
   return mem;
@@ -254,8 +250,7 @@ gst_qticodec2_buffer_pool_new (gpointer comp, BUFFER_POOL_TYPE pool_type,
   config = gst_buffer_pool_get_config (GST_BUFFER_POOL_CAST (pool));
 
   /* set pool params and options */
-  gst_buffer_pool_config_set_params (config, caps, info->size,
-      POOL_MIN_BUFFER_COUNT, num_buffers);
+  gst_buffer_pool_config_set_params (config, caps, info->size, 0, num_buffers);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
   gst_buffer_pool_config_add_option (config,
       GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);

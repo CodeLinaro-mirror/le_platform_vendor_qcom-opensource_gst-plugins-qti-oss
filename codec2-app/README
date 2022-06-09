@@ -1,0 +1,5 @@
+Some applications for Codec2
+
+1. codec2-caps. It's used for saving all codec2 caps into file Codec2Caps. Then
+other Codec2 applications can use this file for deserialization. It can reduce
+latency introduced by enumerating all codec2 caps on LV platform.
