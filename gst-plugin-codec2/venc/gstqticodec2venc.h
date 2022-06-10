@@ -82,6 +82,7 @@ struct _Gstqticodec2venc
   gint width;
   gint height;
   GstVideoFormat input_format;
+  GstVideoInfo input_info;
   guint64 frame_index;
   guint64 num_input_queued;
   guint64 num_output_done;

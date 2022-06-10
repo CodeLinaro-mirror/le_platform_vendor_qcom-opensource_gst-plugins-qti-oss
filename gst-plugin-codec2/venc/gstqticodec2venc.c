@@ -171,6 +171,10 @@ static void build_roi_meta (GstVideoEncoder * encoder,
 static void add_roi_to_frame (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame, GstStructure * roimeta);
 
+static gboolean
+gst_qticodec2venc_refresh_input_layout_info (GstVideoEncoder * encoder,
+    GstVideoCodecFrame * frame, BufferDescriptor * bufinfo);
+
 /* pad templates */
 #define GST_QC2VENC_CAPS_MAKE(format,min,max) \
     "video/x-raw, "                           \
@@ -1058,6 +1062,8 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   enc->is_ubwc = caps_has_compression (state->caps, "ubwc");
   GST_DEBUG_OBJECT (enc, "Fixed color format:%s, UBWC:%d", fmt, enc->is_ubwc);
 
+  gst_video_info_from_caps (&enc->input_info, state->caps);
+
   if (enc->input_setup) {
     /* Already setup, check to see if something has changed on input caps... */
     if ((enc->width == width) && (enc->height == height)) {
@@ -1669,6 +1675,47 @@ build_roi_meta (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 }
 
+static gboolean
+gst_qticodec2venc_refresh_input_layout_info (GstVideoEncoder * encoder,
+    GstVideoCodecFrame * frame, BufferDescriptor * bufinfo)
+{
+  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
+
+  bufinfo->stride[0] = GST_VIDEO_INFO_COMP_STRIDE (&enc->input_info, 0);
+  bufinfo->stride[1] = GST_VIDEO_INFO_COMP_STRIDE (&enc->input_info, 1);
+  bufinfo->offset[0] = GST_VIDEO_INFO_COMP_OFFSET (&enc->input_info, 0);
+  bufinfo->offset[1] = GST_VIDEO_INFO_COMP_OFFSET (&enc->input_info, 1);
+
+  GST_DEBUG_OBJECT (enc, "layout info width %u, height %u, "
+      "stride0 %d, stride1 %d, "
+      "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT,
+      bufinfo->width, bufinfo->height, bufinfo->stride[0],
+      bufinfo->stride[1], bufinfo->offset[0], bufinfo->offset[1]);
+
+  const GstVideoMeta *meta = gst_buffer_get_video_meta (frame->input_buffer);
+  if (meta) {
+    g_return_val_if_fail (meta->format == bufinfo->format, FALSE);
+    g_return_val_if_fail (meta->n_planes == 2, FALSE);
+    g_return_val_if_fail (meta->stride[0] > 0, FALSE);
+    g_return_val_if_fail (meta->stride[0] == meta->stride[1], FALSE);
+
+    GST_INFO_OBJECT (enc, "GstVideoMeta format %d, width %u, height %u, "
+        "stride0 %d, stride1 %d, "
+        "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT,
+        meta->format, meta->width, meta->height, meta->stride[0],
+        meta->stride[1], meta->offset[0], meta->offset[1]);
+
+    bufinfo->width = meta->width;
+    bufinfo->height = meta->height;
+    bufinfo->stride[0] = meta->stride[0];
+    bufinfo->stride[1] = meta->stride[1];
+    bufinfo->offset[0] = meta->offset[0];
+    bufinfo->offset[1] = meta->offset[1];
+  }
+
+  return TRUE;
+}
+
 /* Push frame to Codec2 */
 static GstFlowReturn
 gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
@@ -1725,9 +1772,14 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   gst_memory_unref (mem);
 
+  g_warn_if_fail (gst_qticodec2venc_refresh_input_layout_info (encoder, frame,
+          &inBuf) && "invalid input layout info");
+
   GST_DEBUG_OBJECT (enc,
-      "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld",
-      inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index);
+      "input buffer: fd: %d, va:%p, size: %d, timestamp: %lu, index: %ld, "
+      "stride %u, width %u, height %u",
+      inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index,
+      inBuf.stride[0], inBuf.width, inBuf.height);
 
   build_roi_meta (encoder, frame);
 
