@@ -1394,8 +1394,8 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   GstVideoInfo info;
   GstAllocator *allocator = NULL;
   guint num_max_buffers = MAX_INPUT_BUFFERS;
-  GstBufferPoolParam param;
-  memset (&param, 0, sizeof (GstBufferPoolParam));
+  GstBufferPoolInitParam param;
+  memset (&param, 0, sizeof (GstBufferPoolInitParam));
 
   gst_query_parse_allocation (query, &caps, NULL);
 
@@ -1442,6 +1442,10 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
       gst_query_add_allocation_pool (query, enc->pool,
           GST_VIDEO_INFO_SIZE (&info), 0, num_max_buffers);
       gst_object_unref (enc->pool);
+
+      /* add c2buf meta into allocation query */
+      gst_query_add_allocation_meta (query, GST_VIDEO_C2BUF_META_API_TYPE,
+          NULL);
     }
   } else {
     GST_INFO_OBJECT (enc,
