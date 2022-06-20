@@ -77,7 +77,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 
 #include "gstqticodec2vdec.h"
-#include "gstqticodec2vdecbufferpool.h"
+#include "gstqcodec2bufferpool.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
@@ -102,8 +102,6 @@ G_DEFINE_TYPE (Gstqticodec2vdec, gst_qticodec2vdec, GST_TYPE_VIDEO_DECODER);
 #define GST_QTI_CODEC2_SECURE_MODE_DEFAULT                      (FALSE)
 
 /* Function will be named qticodec2vdec_qdata_quark() */
-static G_DEFINE_QUARK (QtiCodec2DecoderQuark, qticodec2vdec_qdata);
-static G_DEFINE_QUARK (QtiCodec2C2BufQuark, qticodec2_c2buf_qdata);
 static G_DEFINE_QUARK (FBufModifierQuark, gst_fbuf_modifier_qdata);
 
 
@@ -891,6 +889,9 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
   gboolean use_peer_pool = FALSE;
   gboolean use_dmabuf = FALSE;
   GstBufferPool *out_port_pool = NULL;
+  GstBufferPoolParam param;
+  gboolean downstream_is_qcodec2_encoder = FALSE;
+  memset (&param, 0, sizeof (GstBufferPoolParam));
 
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
 
@@ -916,7 +917,11 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     update = TRUE;
     gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, &min, &max);
     if (pool) {
-      GST_DEBUG_OBJECT (dec, "discard buffer pool from downstream");
+      if (GST_IS_QCODEC2_BUFFER_POOL (pool)) {
+        downstream_is_qcodec2_encoder = TRUE;
+        GST_DEBUG_OBJECT (dec, "downstream buffer pool from qcodec2 encoder");
+      }
+      GST_DEBUG_OBJECT (dec, "ignore buffer pool from downstream");
       gst_object_unref (pool);
       pool = NULL;
     }
@@ -937,7 +942,13 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
       gst_object_unref (out_port_pool);
     }
 
-    pool = gst_qticodec2vdec_buffer_pool_new (dec, use_dmabuf);
+    param.is_ubwc = dec->is_ubwc;
+    param.info = dec->output_state->info;
+    param.c2_comp = dec->comp;
+    param.mode = use_dmabuf ? DMABUF_WRAP_MODE : FDBUF_WRAP_MODE;
+    param.add_c2buf_meta = (use_dmabuf
+        && downstream_is_qcodec2_encoder) ? TRUE : FALSE;
+    pool = gst_qcodec2_buffer_pool_new (&param);
 
     if (max)
       max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
@@ -1026,13 +1037,11 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
   param_ext.meta_fd = decode_buf->meta_fd;
   param_ext.index = decode_buf->index;
   param_ext.size = decode_buf->size;
+  param_ext.c2_buf = decode_buf->c2Buffer;
   gst_buffer_pool_acquire_buffer (dec->out_port_pool, &out_buf,
       (GstBufferPoolAcquireParams *) & param_ext);
 
-  if (out_buf) {
-    gst_mini_object_set_qdata (GST_MINI_OBJECT (out_buf),
-        qticodec2_c2buf_qdata_quark (), decode_buf->c2Buffer, NULL);
-  } else {
+  if (!out_buf) {
     GST_ERROR_OBJECT (dec, "Fail to allocate output gst buffer");
     goto fail;
   }
