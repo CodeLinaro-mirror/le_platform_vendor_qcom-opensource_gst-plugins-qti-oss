@@ -648,7 +648,7 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.meta_fd = -1;
         outBuf.size = 0;
         outBuf.capacity = 0;
-        outBuf.offset = 0;
+        outBuf.offset[0] = 0;
         outBuf.timestamp = 0;
         outBuf.index = 0;
         outBuf.flag = toWrapperFlag(flag);

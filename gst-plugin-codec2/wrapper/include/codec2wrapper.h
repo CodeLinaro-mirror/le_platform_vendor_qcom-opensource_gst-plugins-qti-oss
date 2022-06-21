@@ -272,11 +272,12 @@ typedef struct {
     gint32 meta_fd;
     guint32 size;
     guint32 capacity; ///< Total allocation size
-    guint32 offset;
     guint64 timestamp;
     guint64 index;
     guint32 width;
     guint32 height;
+    guint32 stride[2];
+    gsize offset[2];
     GstVideoFormat format;
     guint32 ubwc_flag;
     FLAG_TYPE flag;
