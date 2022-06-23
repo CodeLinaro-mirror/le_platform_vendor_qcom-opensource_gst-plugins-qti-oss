@@ -68,7 +68,6 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mCallback = nullptr;
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
-    mMapBufferToCpu = false;
     mNumPendingWorks = 0;
     mDataCopyFunc = nullptr;
     mDataCopyFuncParam = nullptr;
@@ -229,10 +228,15 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             }
 
             if (mDataCopyFunc) {
-                uint32_t dest_fd = linear_block->handle()->data[0];
-                int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
-                if (ret) {
-                    LOG_ERROR("data copy failed");
+                if (linear_block->handle()) {
+                    uint32_t dest_fd = linear_block->handle()->data[0];
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    if (ret) {
+                        LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+                } else {
+                    LOG_ERROR("invalid handle of linear block");
                     return C2_CORRUPTED;
                 }
             } else {
@@ -425,47 +429,42 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 {
     c2_status_t err = C2_OK;
     std::shared_ptr<C2Buffer> buf;
+    gint32 fd = -1;
+    guint32 size = 0;
 
     /* TODO: add support for linear buffer */
     if (buffer->pool_type == BUFFER_POOL_BASIC_GRAPHIC) {
-        std::shared_ptr<C2GraphicBlock> graphic_block;
+        std::shared_ptr<C2GraphicBlock> graphicBlock;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
         if (mGraphicPool) {
             if (buffer->ubwc_flag) {
                 usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
             }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
-                gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
-            C2GraphicView view(graphic_block->map().get());
+                gst_to_c2_gbmformat(buffer->format), usage, &graphicBlock);
+            C2GraphicView view(graphicBlock->map().get());
             if (view.error() != C2_OK) {
                 LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
                 return NULL;
             }
-            buf = createGraphicBuffer(graphic_block);
+            buf = createGraphicBuffer(graphicBlock);
             if (err != C2_OK || buf == nullptr) {
                 LOG_ERROR("Graphic pool failed to allocate input buffer");
                 return NULL;
             } else {
-                const C2Handle* handle = graphic_block->handle();
+                const C2Handle* handle = graphicBlock->handle();
                 if (nullptr == handle) {
                     LOG_ERROR("C2GraphicBlock handle is null");
                     return NULL;
                 }
 
                 /* ref the buffer and store it. When the fd is queued,
-                 * we can find the C2buffer with the input fd
-                 * */
-                gint32 fd = handle->data[0];
-                mInPendingBuffer[fd] = buf;
+                 * we can find the graphic block with the input fd */
+                fd = handle->data[0];
+                mInPendingBuffer[fd] = graphicBlock;
                 buffer->fd = fd;
-                guint32 width = 0;
-                guint32 height = 0;
-                guint32 format = 0;
-                guint32 stride = 0;
-                guint64 usage = 0;
-                guint32 size = 0;
 
-                _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, NULL);
+                _UnwrapNativeCodec2GBMMetadata(handle, nullptr, nullptr, nullptr, nullptr, nullptr, &size, nullptr);
                 buffer->capacity = size;
                 LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
             }
@@ -486,7 +485,7 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     uint8_t* inputBuffer = buffer->data;
     gint32 fd = buffer->fd;
     size_t inputBufferSize = buffer->size;
-    C2FrameData::flags_t inputFrameFlag = QTI::toC2Flag(buffer->flag);
+    C2FrameData::flags_t inputFrameFlag = toC2Flag(buffer->flag);
     uint64_t frame_index = buffer->index;
     uint64_t timestamp = buffer->timestamp;
     C2BlockPool::local_id_t poolType = toC2BufferPoolType(buffer->pool_type);
@@ -499,7 +498,7 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
     c2_status_t result = C2_OK;
     std::list<std::unique_ptr<C2Work> > workList;
     std::unique_ptr<C2Work> work = std::make_unique<C2Work>();
-    std::shared_ptr<C2Buffer> c2_buf;
+    std::shared_ptr<C2Buffer> c2Buffer;
 
     work->input.flags = inputFrameFlag;
     work->input.ordinal.timestamp = timestamp;
@@ -510,25 +509,31 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
 
     /* check if input buffer contains fd/va and decide if we need to
      * allocate a new C2 buffer or not */
-    if (buffer->c2_buffer) {
+    if (buffer->c2Buffer) {
         /* Disable delete function for this shared_ptr to avoid double free issue
          * since it is created from raw pointer got from another shared_ptr. That
          * shared_ptr takes responsibility to call delete function.*/
-        std::shared_ptr<C2Buffer> c2_buf(static_cast<C2Buffer*>(buffer->c2_buffer), [](C2Buffer*) {});
-        work->input.buffers.emplace_back(c2_buf);
-        result = C2_OK;
+        std::shared_ptr<C2Buffer> c2Buffer(static_cast<C2Buffer*>(buffer->c2Buffer), [](C2Buffer*) {});
+        work->input.buffers.emplace_back(c2Buffer);
     } else if (fd > 0) {
-        std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
+        std::map<uint64_t, std::shared_ptr<C2GraphicBlock> >::iterator it;
+        std::shared_ptr<C2Buffer> buf = nullptr;
+        std::shared_ptr<C2GraphicBlock> graphicBlock = nullptr;
 
         /* Find the buffer with fd */
         it = mInPendingBuffer.find(fd);
         if (it != mInPendingBuffer.end()) {
-            std::shared_ptr<C2Buffer> buf = it->second;
-            work->input.buffers.emplace_back(buf);
-            result = C2_OK;
+            graphicBlock = it->second;
+            if (graphicBlock) {
+                buf = createGraphicBuffer(graphicBlock);
+                work->input.buffers.emplace_back(buf);
+            } else {
+                LOG_ERROR("invalid graphic block");
+                result = C2_NO_MEMORY;
+            }
         } else {
             LOG_ERROR("Buffer fd(%u) not found", fd);
-            return C2_NOT_FOUND;
+            result = C2_NOT_FOUND;
         }
     } else if (inputBuffer) {
         std::shared_ptr<C2Buffer> clientBuf;
@@ -538,48 +543,52 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
             work->input.buffers.emplace_back(clientBuf);
         } else {
             LOG_ERROR("Failed(%d) to allocate buffer", result);
-            return C2_BAD_VALUE;
+            result = C2_NO_MEMORY;
         }
     } else if (isEOSFrame) {
         LOG_MESSAGE("queue EOS frame");
     } else {
         LOG_ERROR("invalid buffer decriptor");
-        return C2_BAD_VALUE;
+        result = C2_BAD_VALUE;
     }
 
-    registerTrackBuffer(work->input);
+    if (result == C2_OK) {
+        registerTrackBuffer(work->input);
 
-    work->worklets.clear();
-    work->worklets.emplace_back(new C2Worklet);
-    workList.push_back(std::move(work));
+        work->worklets.clear();
+        work->worklets.emplace_back(new C2Worklet);
+        workList.push_back(std::move(work));
 
-    if (!isEOSFrame) {
-        waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
-    } else {
-        LOG_MESSAGE("EOS reached");
-    }
+        if (!isEOSFrame) {
+            waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
+        } else {
+            LOG_MESSAGE("EOS reached");
+        }
 
-    result = mComp->queue_nb(&workList);
-    if (result != C2_OK) {
-        LOG_ERROR("Failed to queue work");
-    } else {
-        std::unique_lock<std::mutex> ul(mLock);
-        mNumPendingWorks++;
+        result = mComp->queue_nb(&workList);
+        if (result != C2_OK) {
+            LOG_ERROR("Failed to queue work");
+        } else {
+            std::unique_lock<std::mutex> ul(mLock);
+            mNumPendingWorks++;
+        }
     }
 
     return result;
 }
 
-c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode,
-    std::list<std::unique_ptr<C2Work> >* const flushedWork)
+c2_status_t C2ComponentAdapter::flush(C2Component::flush_mode_t mode)
 {
-
-    LOG_MESSAGE("Component(%p) flushed", this);
-
     c2_status_t result = C2_OK;
-    UNUSED(mode);
+    std::list<std::unique_ptr<C2Work> > flushedWork;
 
-    unregisterTrackBuffer(*flushedWork);
+    result = mComp->flush_sm(mode, &flushedWork);
+    if (result == C2_OK) {
+        LOG_MESSAGE("Component(%p) flushed work num:%zu", this, flushedWork.size());
+        unregisterTrackBuffer(flushedWork);
+    } else {
+        LOG_ERROR("Failed to flush work");
+    }
 
     return result;
 }
@@ -722,7 +731,7 @@ void C2ComponentAdapter::handleWorkDone(
 
         if (work->result != C2_OK) {
             LOG_DEBUG("No output for component(%p), ret:%d", this, work->result);
-            break;
+            continue;
         }
 
         const std::unique_ptr<C2Worklet>& worklet = work->worklets.front();
@@ -854,22 +863,6 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
     }
 
     return result;
-}
-
-c2_status_t C2ComponentAdapter::setMapBufferToCpu(bool enable)
-{
-
-    c2_status_t c2Status = C2_NO_INIT;
-
-    mMapBufferToCpu = enable;
-
-    if (mCallback) {
-        mCallback->setMapBufferToCpu(mMapBufferToCpu);
-
-        c2Status = C2_OK;
-    }
-
-    return c2Status;
 }
 
 C2ComponentListenerAdapter::C2ComponentListenerAdapter(C2ComponentAdapter* comp)

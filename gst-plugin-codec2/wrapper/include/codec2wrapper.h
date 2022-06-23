@@ -93,6 +93,7 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_SLICE_MODE "slice_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
+#define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
 
 #define C2_TICKS_PER_SECOND 1000000
 
@@ -282,7 +283,7 @@ typedef struct {
     BUFFER_POOL_TYPE pool_type;
     guint8* config_data; // codec config data
     guint32 config_size; // size of codec config data
-    void* c2_buffer;
+    void* c2Buffer;
     void* gbm_bo;
     gboolean secure;
 } BufferDescriptor;
@@ -327,6 +328,13 @@ typedef struct {
     } blur;
 
     struct {
+        int64_t timestampUs;
+        char type[128];
+        char rectPayload[128];
+        char rectPayloadExt[128];
+    } roiRegion;
+
+    struct {
         IR_MODE_TYPE type;
         float intra_refresh_mbs;
     } irMode;
@@ -360,7 +368,7 @@ gboolean c2componentStore_delete(void* comp_store);
 gboolean c2component_setListener(void* const comp, void* cb_context, listener_cb callback, BLOCK_MODE_TYPE block);
 gboolean c2component_alloc(void* const comp, BufferDescriptor* buffer);
 gboolean c2component_queue(void* const comp, BufferDescriptor* buffer);
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork);
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode);
 gboolean c2component_drain(void* const comp, DRAIN_MODE_TYPE mode);
 gboolean c2component_start(void* const comp);
 gboolean c2component_stop(void* const comp);
@@ -369,7 +377,6 @@ gboolean c2component_release(void* const comp);
 void* c2component_intf(void* const comp);
 gboolean c2component_createBlockpool(void* const comp, BUFFER_POOL_TYPE poolType);
 gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType);
-gboolean c2component_mapOutBuffer(void* const comp, gboolean map);
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId);
 gboolean c2component_delete(void* comp);
 
