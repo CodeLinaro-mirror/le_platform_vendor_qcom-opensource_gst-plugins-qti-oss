@@ -56,6 +56,7 @@ C2FrameData::flags_t toC2Flag(FLAG_TYPE flag);
 
 uint32_t toC2PixelFormat(PIXEL_FORMAT_TYPE pixel);
 guint32 gst_to_c2_gbmformat(GstVideoFormat format);
+guint32 gbmformat_to_colorformat(guint32 format, guint64 usage);
 C2Color::primaries_t toC2Primaries(COLOR_PRIMARIES pixel);
 C2Color::transfer_t toC2TransferChar(TRANSFER_CHAR transfer_char);
 C2Color::matrix_t toC2Matrix(MATRIX matrix);

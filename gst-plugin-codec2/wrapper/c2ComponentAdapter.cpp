@@ -472,9 +472,24 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
                 mInPendingBuffer[fd] = graphicBlock;
                 buffer->fd = fd;
 
-                _UnwrapNativeCodec2GBMMetadata(handle, nullptr, nullptr, nullptr, nullptr, nullptr, &size, nullptr);
+                guint32 stride = 0;
+                guint32 height = 0;
+                guint32 format = 0;
+                guint64 usage = 0;
+
+                _UnwrapNativeCodec2GBMMetadata(handle, nullptr,
+                    &height, &format, &usage, &stride, &size, nullptr);
                 buffer->capacity = size;
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
+                uint32_t y_scanlines = VENUS_Y_SCANLINES(
+                    gbmformat_to_colorformat(format, usage), height);
+                buffer->stride[0] = buffer->stride[1] = stride;
+                buffer->offset[0] = 0;
+                buffer->offset[1] = stride * y_scanlines;
+
+                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
+                        " stride %u, offset %" G_GSIZE_FORMAT,
+                        fd, buffer->capacity, buffer->ubwc_flag,
+                        stride, buffer->offset[1]);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
