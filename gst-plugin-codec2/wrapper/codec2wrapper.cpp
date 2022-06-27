@@ -323,12 +323,12 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
     android::ReflectedParamUpdater::Dict kvpairs;
     android::ReflectedParamUpdater::Value item;
 
-    if (config->SliceMode.type == SLICE_MODE_BYTES) {
+    if (config->sliceMode.type == SLICE_MODE_BYTES) {
         item.set((int32_t)config->val.u32);
         kvpairs.emplace("vendor.qti-ext-enc-error-correction.resync-marker-spacing-bits", item);
 
         sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
-    } else if (config->SliceMode.type == SLICE_MODE_MB) {
+    } else if (config->sliceMode.type == SLICE_MODE_MB) {
         item.set((int32_t)config->val.u32);
         kvpairs.emplace("vendor.qti-ext-enc-slice.spacing", item);
 
@@ -422,7 +422,6 @@ std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
 
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
 {
-
     if (param == NULL) {
         return nullptr;
     }
@@ -431,7 +430,7 @@ std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
 
     C2StreamIntraRefreshTuning::output intraRefreshMode;
     intraRefreshMode.mode = (C2Config::intra_refresh_mode_t)config->irMode.type;
-    intraRefreshMode.period = config->irMode.intra_refresh_mbs;
+    intraRefreshMode.period = (float)config->irMode.intra_refresh_mbs;
     return C2Param::Copy(intraRefreshMode);
 }
 

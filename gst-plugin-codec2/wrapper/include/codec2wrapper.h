@@ -293,61 +293,65 @@ typedef struct {
     const char* config_name;
     gboolean isInput;
     union {
-        guint32 u32;
-        guint64 u64;
-        gint32 i32;
-        gint64 i64;
-    } val;
+        guint output_picture_order_mode;
+        gboolean low_latency_mode;
+        gboolean color_space_conversion;
 
-    struct {
-        guint32 width;
-        guint32 height;
-    } resolution;
+        union {
+            guint32 u32;
+            guint64 u64;
+            gint32 i32;
+            gint64 i64;
+        } val;
 
-    union {
-        PIXEL_FORMAT_TYPE fmt;
-    } pixelFormat;
+        struct {
+            guint32 width;
+            guint32 height;
+        } resolution;
 
-    union {
-        INTERLACE_MODE_TYPE type;
-    } interlaceMode;
+        struct {
+            PIXEL_FORMAT_TYPE fmt;
+        } pixelFormat;
 
-    union {
-        MIRROR_TYPE type;
-    } mirror;
+        struct {
+            INTERLACE_MODE_TYPE type;
+        } interlaceMode;
 
-    union {
-        RC_MODE_TYPE type;
-    } rcMode;
+        struct {
+            MIRROR_TYPE type;
+        } mirror;
 
-    union {
-        SLICE_MODE type;
-    } SliceMode;
+        struct {
+            RC_MODE_TYPE type;
+        } rcMode;
 
-    union {
-        BLUR_MODE mode;
-    } blur;
+        struct {
+            SLICE_MODE type;
+        } sliceMode;
 
-    struct {
-        int64_t timestampUs;
-        char type[128];
-        char rectPayload[128];
-        char rectPayloadExt[128];
-    } roiRegion;
+        struct {
+            BLUR_MODE mode;
+        } blur;
 
-    struct {
-        IR_MODE_TYPE type;
-        float intra_refresh_mbs;
-    } irMode;
-    guint output_picture_order_mode;
-    gboolean low_latency_mode;
-    gboolean color_space_conversion;
-    struct {
-        COLOR_PRIMARIES primaries;
-        TRANSFER_CHAR transfer_char;
-        MATRIX matrix;
-        FULL_RANGE full_range;
-    } colorAspects;
+        struct {
+            int64_t timestampUs;
+            char* type;
+            char* rectPayload;
+            char* rectPayloadExt;
+        } roiRegion;
+
+        struct {
+            IR_MODE_TYPE type;
+            guint32 intra_refresh_mbs;
+        } irMode;
+
+        struct {
+            COLOR_PRIMARIES primaries;
+            TRANSFER_CHAR transfer_char;
+            MATRIX matrix;
+            FULL_RANGE full_range;
+        } colorAspects;
+    };
 } ConfigParams;
 
 typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);

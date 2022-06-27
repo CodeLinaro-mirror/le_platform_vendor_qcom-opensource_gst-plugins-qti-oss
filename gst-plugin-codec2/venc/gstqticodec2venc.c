@@ -104,6 +104,7 @@ G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
 #define NANO_TO_MILLI(x)  ((x) / 1000)
 #define EOS_WAITING_TIMEOUT 5
 #define MAX_INPUT_BUFFERS 32
+#define ROI_ARRAY_SIZE 128
 
 /* Function will be named qticodec2venc_qdata_quark() */
 static G_DEFINE_QUARK (QtiCodec2EncoderQuark, qticodec2venc_qdata);
@@ -164,7 +165,7 @@ static void gst_qticodec2venc_buffer_release (GstStructure * structure);
 
 static void gst_qticodec2venc_build_roi_array (GstVideoEncoder * encoder,
     const GValue * value);
-static void handle_dynamic_meta (GstVideoEncoder * encoder,
+static gboolean handle_dynamic_meta (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame);
 static void build_roi_meta (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame);
@@ -325,7 +326,7 @@ make_slicemode_param (guint32 size, SLICE_MODE mode)
 
   param.config_name = CONFIG_FUNCTION_KEY_SLICE_MODE;
   param.val.u32 = size;
-  param.SliceMode.type = mode;
+  param.sliceMode.type = mode;
 
   return param;
 }
@@ -369,7 +370,7 @@ make_intra_refresh_param (IR_MODE_TYPE mode, guint32 intra_refresh_mbs)
 
   param.config_name = CONFIG_FUNCTION_KEY_INTRAREFRESH;
   param.irMode.type = mode;
-  param.irMode.intra_refresh_mbs = (float) intra_refresh_mbs;
+  param.irMode.intra_refresh_mbs = intra_refresh_mbs;
 
   return param;
 }
@@ -404,14 +405,20 @@ make_blur_resolution_param (guint32 width, guint32 height, gboolean is_input)
 }
 
 static ConfigParams
-make_roi_param (const int64_t timestamp, const char *type,
-    const char *payload, const char *payloadExt)
+make_roi_param (Gstqticodec2venc * enc, const int64_t timestamp,
+    const char *type, const char *payload, const char *payloadExt)
 {
   ConfigParams param;
   memset (&param, 0, sizeof (ConfigParams));
+  memset (enc->roi_type, 0, sizeof (char) * ROI_ARRAY_SIZE);
+  memset (enc->roi_rect_payload, 0, sizeof (char) * ROI_ARRAY_SIZE);
+  memset (enc->roi_rect_payload_ext, 0, sizeof (char) * ROI_ARRAY_SIZE);
 
   param.config_name = CONFIG_FUNCTION_KEY_ROIREGION;
   param.roiRegion.timestampUs = timestamp;
+  param.roiRegion.type = enc->roi_type;
+  param.roiRegion.rectPayload = enc->roi_rect_payload;
+  param.roiRegion.rectPayloadExt = enc->roi_rect_payload_ext;
 
   memcpy (param.roiRegion.type, type, strlen (type));
   memcpy (param.roiRegion.rectPayload, payload, strlen (payload));
@@ -1511,11 +1518,12 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
       BufferDescriptor *outBuffer = (BufferDescriptor *) data;
 
       GST_DEBUG_OBJECT (enc,
-          "Event output done, va: %p, offset: %d, index: %lu, fd: %u,"
+          "Event output done, va: %p, offsets: %" G_GSIZE_FORMAT " %"
+          G_GSIZE_FORMAT ", index: %lu, fd: %u,"
           "filled len: %u, buffer size: %u, timestamp: %lu, flag: %x",
-          outBuffer->data, outBuffer->offset, outBuffer->index, outBuffer->fd,
-          outBuffer->size, outBuffer->capacity, outBuffer->timestamp,
-          outBuffer->flag);
+          outBuffer->data, outBuffer->offset[0], outBuffer->offset[1],
+          outBuffer->index, outBuffer->fd, outBuffer->size, outBuffer->capacity,
+          outBuffer->timestamp, outBuffer->flag);
 
       if (outBuffer->fd > 0 || outBuffer->size > 0) {
         ret = push_frame_downstream (encoder, outBuffer);
@@ -1548,16 +1556,57 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
 }
 
 static void
+_free_roi_struct (Gstqticodec2venc * enc)
+{
+  if (enc->roi_type) {
+    g_free (enc->roi_type);
+    enc->roi_type = NULL;
+  }
+  if (enc->roi_rect_payload) {
+    g_free (enc->roi_rect_payload);
+    enc->roi_rect_payload = NULL;
+  }
+  if (enc->roi_rect_payload_ext) {
+    g_free (enc->roi_rect_payload_ext);
+    enc->roi_rect_payload_ext = NULL;
+  }
+}
+
+static gboolean
+_allocate_roi_struct (Gstqticodec2venc * enc)
+{
+  gboolean ret = TRUE;
+
+  /* allocate these structures only once */
+  if (!enc->roi_type)
+    enc->roi_type = g_malloc (ROI_ARRAY_SIZE * sizeof (char));
+  if (!enc->roi_rect_payload)
+    enc->roi_rect_payload = g_malloc (ROI_ARRAY_SIZE * sizeof (char));
+  if (!enc->roi_rect_payload_ext)
+    enc->roi_rect_payload_ext = g_malloc (ROI_ARRAY_SIZE * sizeof (char));
+
+  if (!enc->roi_type || !enc->roi_rect_payload || !enc->roi_rect_payload_ext) {
+    _free_roi_struct (enc);
+    GST_ERROR_OBJECT (enc, "Failed to allocate ROI structure");
+    ret = FALSE;
+  }
+
+  return ret;
+}
+
+static gboolean
 handle_dynamic_meta (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
   GstMeta *meta = NULL;
   gpointer state = NULL;
+  gboolean result = TRUE;
+  GPtrArray *config = NULL;
 
-  gchar config_param[128];
-  gchar roi_type[128];
+  gchar roi_config_param[ROI_ARRAY_SIZE];
+  gchar roi_type[ROI_ARRAY_SIZE];
   gint config_param_len = 0;
-  memset (config_param, 0, sizeof (config_param));
+  memset (roi_config_param, 0, sizeof (roi_config_param));
   memset (roi_type, 0, sizeof (roi_type));
 
   while ((meta =
@@ -1573,13 +1622,13 @@ handle_dynamic_meta (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
       guint qp;
       gst_structure_get_uint (roimeta, "qp", &qp);
 
-      char rect_qp[128];
+      char rect_qp[ROI_ARRAY_SIZE];
       gint rect_qp_len =
           g_snprintf (rect_qp, sizeof (rect_qp), "%d,%d-%d,%d=%d;",
           roi->y, roi->x, bottom, right, qp);
-      if (config_param_len + rect_qp_len < sizeof (config_param)) {
+      if (config_param_len + rect_qp_len < sizeof (roi_config_param)) {
         config_param_len =
-            g_strlcat (config_param, rect_qp, sizeof (config_param));
+            g_strlcat (roi_config_param, rect_qp, sizeof (roi_config_param));
       } else {
         GST_WARNING_OBJECT (enc, "failed to append roi for frame[%lu:%d]=%s, "
             "will ignore subsequent roi parameters", enc->frame_index, roi->id,
@@ -1594,25 +1643,31 @@ handle_dynamic_meta (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 
   if (config_param_len > 0) {
-    GPtrArray *config = NULL;
     config = g_ptr_array_new ();
     if (config) {
       ConfigParams roiRegion;
-      roiRegion = make_roi_param (NANO_TO_MILLI (frame->pts),
-          roi_type, config_param, config_param);
+      if (_allocate_roi_struct (enc) == FALSE) {
+        result = FALSE;
+        goto out;
+      }
+      roiRegion = make_roi_param (enc, NANO_TO_MILLI (frame->pts),
+          roi_type, roi_config_param, roi_config_param);
 
       GST_INFO_OBJECT (enc, "frame[%lu]: roi_type %s, %s",
-          enc->frame_index, roi_type, config_param);
+          enc->frame_index, roi_type, roi_config_param);
       g_ptr_array_add (config, &roiRegion);
 
       if (!c2componentInterface_config (enc->comp_intf,
               config, BLOCK_MODE_MAY_BLOCK)) {
         GST_WARNING_OBJECT (enc, "Failed to set encoder config for ROI");
       }
-
-      g_ptr_array_free (config, TRUE);
     }
   }
+
+out:
+  if (config)
+    g_ptr_array_free (config, TRUE);
+  return result;
 }
 
 static void
@@ -1783,7 +1838,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   build_roi_meta (encoder, frame);
 
-  handle_dynamic_meta (encoder, frame);
+  if (handle_dynamic_meta (encoder, frame) == FALSE) {
+    ret = GST_FLOW_ERROR;
+    goto out;
+  }
 
   /* Keep track of queued frame */
   enc->queued_frame[(enc->frame_index) % MAX_QUEUED_FRAME] =
@@ -1791,10 +1849,6 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   /* Queue buffer to Codec2 */
   status = c2component_queue (enc->comp, &inBuf);
-  /* unmap the gstbuffer if it's mapped */
-  if (mem_mapped) {
-    gst_buffer_unmap (buf, &mapinfo);
-  }
 
   if (!status) {
     GST_ERROR_OBJECT (enc, "failed to queue input frame to Codec2");
@@ -1814,6 +1868,10 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 
 out:
+  /* unmap the gstbuffer if it's mapped */
+  if (mem_mapped) {
+    gst_buffer_unmap (buf, &mapinfo);
+  }
   GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
   return ret;
@@ -2015,6 +2073,8 @@ gst_qticodec2venc_finalize (GObject * object)
     g_array_free (enc->roi_array, TRUE);
     enc->roi_array = NULL;
   }
+
+  _free_roi_struct (enc);
 
   /* Lastly chain up to the parent class */
   G_OBJECT_CLASS (parent_class)->finalize (object);
@@ -2245,6 +2305,9 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->blur_height = 0;
   enc->is_ubwc = FALSE;
   enc->roi_array = NULL;
+  enc->roi_type = NULL;
+  enc->roi_rect_payload = NULL;
+  enc->roi_rect_payload_ext = NULL;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 
