@@ -87,6 +87,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 GST_DEBUG_CATEGORY (gst_qticodec2venc_debug);
 #define GST_CAT_DEFAULT gst_qticodec2venc_debug
 #define GST_QTI_CODEC2_ENC_COLOR_SPACE_CONVERSION             (FALSE)
+#define GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT        (0xffffffff)
 
 /* class initialization */
 G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
@@ -100,6 +101,8 @@ G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_TYPE_CODEC2_ENC_INTRA_REFRESH_MODE (gst_qticodec2venc_intra_refresh_mode_get_type ())
 #define GST_TYPE_CODEC2_ENC_SLICE_MODE (gst_qticodec2venc_slice_mode_get_type ())
 #define GST_TYPE_CODEC2_ENC_BLUR_MODE (gst_qticodec2venc_blur_mode_get_type ())
+#define GST_TYPE_CODEC2_ENC_BITRATE_SAVING_MODE (gst_qticodec2venc_bitrate_saving_mode_get_type ())
+
 #define parent_class gst_qticodec2venc_parent_class
 #define NANO_TO_MILLI(x)  ((x) / 1000)
 #define EOS_WAITING_TIMEOUT 5
@@ -132,6 +135,7 @@ enum
   PROP_BLUR_WIDTH,
   PROP_BLUR_HEIGHT,
   PROP_ROI,
+  PROP_BITRATE_SAVING_MODE,
 };
 
 /* GstVideoEncoder base class method */
@@ -427,6 +431,20 @@ make_roi_param (Gstqticodec2venc * enc, const int64_t timestamp,
   return param;
 }
 
+static ConfigParams
+make_bitrate_saving_mode (BITRATE_SAVING_MODE mode, gboolean isInput)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE;
+  param.isInput = isInput;
+  param.bitrate_saving_mode.saving_mode = mode;
+
+  return param;
+}
+
 static gchar *
 get_c2_comp_name (GstStructure * structure)
 {
@@ -671,6 +689,26 @@ gst_qticodec2venc_intra_refresh_mode_get_type (void)
     };
 
     qtype = g_enum_register_static ("GstCodec2VencIntraRefreshMode", values);
+  }
+  return qtype;
+}
+
+static GType
+gst_qticodec2venc_bitrate_saving_mode_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {BITRATE_SAVING_MODE_DISABLE_ALL, "Bitrate saving mode disable", "disable"},
+      {BITRATE_SAVING_MODE_ENABLE_8BIT, "8bit bitrate saving Mode enable", "8bit"},
+      {BITRATE_SAVING_MODE_ENABLE_10BIT, "10bit bitrate saving Mode enable", "10bit"},
+      {BITRATE_SAVING_MODE_ENABLE_ALL, "All bitrate saving mode enable", "all"},
+      {0xffffffff, "Component Default", "default"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstCodec2VencBitrateSavingMode", values);
   }
   return qtype;
 }
@@ -1047,6 +1085,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   ConfigParams bitrate;
   ConfigParams slice_mode;
   ConfigParams blur_info;
+  ConfigParams bitrate_saving_mode;
 
   GST_DEBUG_OBJECT (enc, "set_format");
 
@@ -1123,6 +1162,11 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     bitrate = make_bitrate_param (enc->target_bitrate, FALSE);
     g_ptr_array_add (config, &bitrate);
     GST_DEBUG_OBJECT (enc, "set target bitrate:%u", enc->target_bitrate);
+  }
+
+  if (enc->bitrate_saving_mode != GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT) {
+    bitrate_saving_mode = make_bitrate_saving_mode(enc->bitrate_saving_mode, FALSE);
+    g_ptr_array_add (config, &bitrate_saving_mode);
   }
 
   resolution = make_resolution_param (width, height, TRUE);
@@ -1960,6 +2004,9 @@ gst_qticodec2venc_set_property (GObject * object, guint prop_id,
 
       gst_qticodec2venc_build_roi_array ((GstVideoEncoder *) object, value);
       break;
+    case PROP_BITRATE_SAVING_MODE:
+      enc->bitrate_saving_mode = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2032,6 +2079,9 @@ gst_qticodec2venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_SLICE_MODE:
       g_value_set_enum (value, enc->slice_mode);
+      break;
+    case PROP_BITRATE_SAVING_MODE:
+      g_value_set_enum (value, enc->bitrate_saving_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2258,6 +2308,14 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
           "roi xml config file path", NULL,
           G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_BITRATE_SAVING_MODE,
+      g_param_spec_enum ("bitrate-saving-mode", "bitrate saving mode",
+          "Bitrate saving mode (0xffffffff=component default)",
+          GST_TYPE_CODEC2_ENC_BITRATE_SAVING_MODE,
+          GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   video_encoder_class->stop = GST_DEBUG_FUNCPTR (gst_qticodec2venc_stop);
   video_encoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2venc_set_format);
@@ -2308,6 +2366,7 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->roi_type = NULL;
   enc->roi_rect_payload = NULL;
   enc->roi_rect_payload_ext = NULL;
+  enc->bitrate_saving_mode = GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 
