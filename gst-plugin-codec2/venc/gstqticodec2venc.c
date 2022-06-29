@@ -175,6 +175,7 @@ static void build_roi_meta (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame);
 static void add_roi_to_frame (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame, GstStructure * roimeta);
+static void gst_qticodec2venc_release_frames (GstVideoEncoder * encoder);
 
 static gboolean
 gst_qticodec2venc_refresh_input_layout_info (GstVideoEncoder * encoder,
@@ -895,6 +896,7 @@ gst_qticodec2venc_destroy_component (GstVideoEncoder * encoder)
 
   if (enc->comp) {
     c2component_delete (enc->comp);
+    enc->comp = NULL;
   }
 
   return ret;
@@ -985,11 +987,15 @@ gst_qticodec2venc_stop (GstVideoEncoder * encoder)
   gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (enc, "stop");
+  enc->input_setup = FALSE;
+  enc->output_setup = FALSE;
 
   /* Stop the component */
   if (enc->comp) {
     ret = c2component_stop (enc->comp);
   }
+
+  gst_qticodec2venc_release_frames (encoder);
 
   return ret;
 }
@@ -1257,6 +1263,8 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     goto error_config;
   }
 
+  GST_DEBUG_OBJECT (enc, "c2 component started");
+
 done:
   enc->input_setup = TRUE;
   return TRUE;
@@ -1287,6 +1295,24 @@ error_config:
   return TRUE;
 }
 
+static void
+gst_qticodec2venc_release_frames (GstVideoEncoder * encoder)
+{
+  GstVideoCodecFrame *frame = NULL;
+  GList *frames, *l;
+
+  GST_DEBUG_OBJECT (encoder, "release remain frames");
+  frames = gst_video_encoder_get_frames (encoder);
+  /* First unref is used for decreasing ref_count since gst_video_encoder_get_frames.
+   * Second one is used for decreasing ref_count for remain frames which
+   * have not released. Since c2 component has been stoped by accident, e.g.
+   * element state change to NULL. It leads to C2 listener closed. Further,
+   * function gst_video_encoder_finish_frame in function handle_video_event
+   * will not be called. */
+  g_list_foreach (frames, (GFunc) gst_video_codec_frame_unref, NULL);
+  g_list_free_full (frames, (GDestroyNotify) gst_video_codec_frame_unref);
+}
+
 /* Called when the element changes to GST_STATE_READY */
 static gboolean
 gst_qticodec2venc_open (GstVideoEncoder * encoder)
@@ -1309,6 +1335,13 @@ gst_qticodec2venc_close (GstVideoEncoder * encoder)
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
 
   GST_DEBUG_OBJECT (enc, "qticodec2venc_close");
+
+  gst_qticodec2venc_destroy_component (GST_VIDEO_ENCODER (enc));
+
+  if (enc->comp_store) {
+    c2componentStore_delete (enc->comp_store);
+    enc->comp_store = NULL;
+  }
 
   if (enc->input_state) {
     gst_video_codec_state_unref (enc->input_state);
@@ -1439,7 +1472,7 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
   GstVideoInfo *vinfo = NULL;
   GstStructure *structure = NULL;
 
-  GST_DEBUG_OBJECT (enc, "push_frame_downstream");
+  GST_DEBUG_OBJECT (enc, "push frame downstream");
 
   state = gst_video_encoder_get_output_state (encoder);
   if (state) {
@@ -1455,14 +1488,6 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
         "Error in gst_video_encoder_get_frame, frame number: %lu",
         encode_buf->index);
     goto out;
-  }
-
-  /* If using our own buffer pool, unref the corresponding input buffer
-   * so that it can be returned into the pool
-   * */
-  if (enc->pool) {
-    GST_DEBUG_OBJECT (enc, "unref input buffer: %p", frame->input_buffer);
-    gst_buffer_unref (frame->input_buffer);
   }
 
   if (encode_buf->flag & FLAG_TYPE_CODEC_CONFIG) {
@@ -1507,7 +1532,9 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
     frame->output_buffer = outbuf;
     gst_video_codec_frame_unref (frame);
     ret = gst_video_encoder_finish_frame (encoder, frame);
-    if (ret != GST_FLOW_OK) {
+    if (ret == GST_FLOW_FLUSHING) {
+      GST_WARNING_OBJECT (enc, "downstream is flushing");
+    } else if (ret != GST_FLOW_OK) {
       GST_ERROR_OBJECT (enc, "Failed to finish frame, outbuf: %p", outbuf);
       goto out;
     }
@@ -1571,7 +1598,7 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
 
       if (outBuffer->fd > 0 || outBuffer->size > 0) {
         ret = push_frame_downstream (encoder, outBuffer);
-        if (ret != GST_FLOW_OK) {
+        if (ret != GST_FLOW_FLUSHING && ret != GST_FLOW_OK) {
           GST_ERROR_OBJECT (enc, "Failed to push frame downstream");
         }
       } else if (outBuffer->flag & FLAG_TYPE_END_OF_STREAM) {
@@ -1905,12 +1932,6 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   enc->num_input_queued++;
   g_mutex_unlock (&(enc->pending_lock));
 
-  /* ref the buffer so that the it will not be returned to the pool */
-  if (enc->pool) {
-    GST_DEBUG_OBJECT (enc, "ref input buffer: %p", frame->input_buffer);
-    gst_buffer_ref (frame->input_buffer);
-  }
-
 out:
   /* unmap the gstbuffer if it's mapped */
   if (mem_mapped) {
@@ -2104,12 +2125,6 @@ gst_qticodec2venc_finalize (GObject * object)
 
   if (enc->comp_name) {
     enc->comp_name = NULL;
-  }
-
-  gst_qticodec2venc_destroy_component (GST_VIDEO_ENCODER (enc));
-
-  if (enc->comp_store) {
-    c2componentStore_delete (enc->comp_store);
   }
 
   if (enc->roi_array) {

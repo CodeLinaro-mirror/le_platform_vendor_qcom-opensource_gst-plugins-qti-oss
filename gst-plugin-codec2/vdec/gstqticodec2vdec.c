@@ -413,6 +413,7 @@ gst_qticodec2vdec_destroy_component (GstVideoDecoder * decoder)
 
   if (dec->comp) {
     c2component_delete (dec->comp);
+    dec->comp = NULL;
   }
 
   return ret;
@@ -815,6 +816,15 @@ gst_qticodec2vdec_close (GstVideoDecoder * decoder)
   gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (dec, "close");
+
+  if (!gst_qticodec2vdec_destroy_component (decoder)) {
+    GST_ERROR_OBJECT (dec, "Failed to delete component");
+  }
+
+  if (dec->comp_store) {
+    c2componentStore_delete (dec->comp_store);
+    dec->comp_store = NULL;
+  }
 
   if (dec->input_state) {
     gst_video_codec_state_unref (dec->input_state);
@@ -1488,14 +1498,6 @@ gst_qticodec2vdec_finalize (GObject * object)
     GST_DEBUG_OBJECT (dec, "pool ref cnt:%d",
         GST_OBJECT_REFCOUNT (dec->out_port_pool));
     gst_object_unref (dec->out_port_pool);
-  }
-
-  if (!gst_qticodec2vdec_destroy_component (GST_VIDEO_DECODER (object))) {
-    GST_ERROR_OBJECT (dec, "Failed to delete component");
-  }
-
-  if (dec->comp_store) {
-    c2componentStore_delete (dec->comp_store);
   }
 
   if (dec->gbm_lib) {
