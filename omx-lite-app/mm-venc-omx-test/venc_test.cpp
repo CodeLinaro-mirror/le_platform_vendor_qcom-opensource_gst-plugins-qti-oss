@@ -2014,7 +2014,7 @@ void help()
 {
   printf("\n\n");
   printf("=============================\n");
-  printf("mm-venc-omx-test args... \n");
+  printf("mm-venc-omx-test-lite args... \n");
   printf("=============================\n\n");
   printf("      -m mode (live, file). Only support file mode now\n");
   printf("      -t encode type (mpeg4, h263, h264, vp8, hevc). h264 and hevc are verified\n");
