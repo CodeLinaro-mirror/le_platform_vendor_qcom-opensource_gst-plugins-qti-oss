@@ -51,7 +51,7 @@ G_BEGIN_DECLS
 #define GST_QCODEC2_BUFFER_POOL_CAST(obj) ((GstQcodec2BufferPool*)(obj))
 typedef struct _GstQcodec2BufferPool GstQcodec2BufferPool;
 typedef struct _GstQcodec2BufferPoolClass GstQcodec2BufferPoolClass;
-typedef struct _GstBufferPoolParam GstBufferPoolParam;
+typedef struct _GstBufferPoolInitParam GstBufferPoolInitParam;
 
 #define GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META "GstVideoC2BufMeta"
 
@@ -63,21 +63,21 @@ typedef enum
   FDBUF_WRAP_MODE
 } PoolMode;
 
-struct _GstBufferPoolParam
+struct _GstBufferPoolInitParam
 {
   GstVideoInfo info;
   void *c2_comp;
   GHashTable *buffer_table;
   gboolean is_ubwc;
   PoolMode mode;
-  gboolean add_c2buf_meta;
 };
 
 struct _GstQcodec2BufferPool
 {
   GstBufferPool bufferpool;
   GstAllocator *allocator;
-  GstBufferPoolParam param;
+  GstBufferPoolInitParam param;
+  gboolean add_c2bufmeta;
 };
 
 struct _GstQcodec2BufferPoolClass
@@ -96,7 +96,7 @@ typedef struct GstBufferPoolAcquireParamsExt
 } GstBufferPoolAcquireParamsExt;
 
 GType gst_qcodec2_buffer_pool_get_type (void);
-GstBufferPool *gst_qcodec2_buffer_pool_new (GstBufferPoolParam * param);
+GstBufferPool *gst_qcodec2_buffer_pool_new (GstBufferPoolInitParam * param);
 
 #define GST_VIDEO_C2BUF_META_API_TYPE  (gst_video_c2buf_meta_api_get_type())
 #define GST_VIDEO_C2BUF_META_INFO  (gst_video_c2buf_meta_get_info())
