@@ -228,6 +228,28 @@ _gst_qcodec2_alloc_buf (GstBufferPool * bpool)
     if (mem) {
       gst_buf = gst_buffer_new ();
       if (gst_buf) {
+        if (buffer.stride[0] > 0 || buffer.stride[1] > 0) {
+          info->stride[0] = buffer.stride[0];
+          info->stride[1] = buffer.stride[1];
+        }
+
+        if (buffer.offset[0] > 0 || buffer.offset[1] > 0) {
+          info->offset[0] = buffer.offset[0];
+          info->offset[1] = buffer.offset[1];
+        }
+
+        GstVideoMeta *meta =
+            gst_buffer_add_video_meta_full (gst_buf, GST_VIDEO_FRAME_FLAG_NONE,
+            GST_VIDEO_INFO_FORMAT (info), GST_VIDEO_INFO_WIDTH (info),
+            GST_VIDEO_INFO_HEIGHT (info), GST_VIDEO_INFO_N_PLANES (info),
+            info->offset, info->stride);
+        if (meta) {
+          GST_INFO_OBJECT (bpool, "format %s, %ux%u, stride0 %u, "
+              "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT,
+              gst_video_format_to_string (meta->format), meta->width,
+              meta->height, meta->stride[0], meta->offset[0], meta->offset[1]);
+        }
+
         gst_buffer_prepend_memory (gst_buf, mem);
         GST_DEBUG_OBJECT (bpool, "allocated gst buffer: %p, memory: %p",
             gst_buf, mem);
