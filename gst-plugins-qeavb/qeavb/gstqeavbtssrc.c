@@ -302,19 +302,24 @@ gst_qeavb_ts_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
   guint32 payload_size = 0;
   char tips[64];
 
-  if(qeavbtssrc->stream_info.wakeup_period_us != 0)
+  if (qeavbtssrc->stream_info.wakeup_period_us != 0) {
     sleep_us = qeavbtssrc->stream_info.wakeup_period_us;
+  }
+  if (sleep_us < MIN_SLEEP_US) {
+    sleep_us = MIN_SLEEP_US;
+  }
 
   payload_size = qeavbtssrc->stream_info.max_buffer_size * qeavbtssrc->stream_info.pkts_per_wake;
 
   GST_DEBUG_OBJECT (qeavbtssrc, "pkts_per_wake %d, payload_size %u, wakeup_period_us %d", qeavbtssrc->stream_info.pkts_per_wake, payload_size, qeavbtssrc->stream_info.wakeup_period_us);
 
   if (qeavbtssrc->is_first_tspacket) {
-    kpi_place_marker("M - qeavbtssrc begin recv 1st pkt.");
+    snprintf(tips, sizeof(tips), "M - qeavbtssrc begin recv 1st pkt. w_p_us %d", qeavbtssrc->stream_info.wakeup_period_us);
+    kpi_place_marker(tips);
   }
 
 retry:
-#define TSSRC_RETRY_KPILOG_SUPPRESS 50  //Every TSSRC_RETRY_KPILOG_SUPPRESS, will print one KPI log
+#define TSSRC_RETRY_KPILOG_SUPPRESS 300  //Every TSSRC_RETRY_KPILOG_SUPPRESS, will print one KPI log
   g_mutex_lock(&qeavbtssrc->lock);
   if (qeavbtssrc->started) {
     memset(&qavb_buffer, 0, sizeof(eavb_ioctl_buf_data_t));

@@ -42,6 +42,7 @@
 #define QEAVB_PCM_DEFAULT_BLOCKSIZE 1500
 #define QEAVB_TS_DEFAULT_BLOCKSIZE 1500
 #define DEFALUT_SLEEP_US 10000
+#define MIN_SLEEP_US 2000
 #define RETRY_COUNT 100000
 
 int qeavb_create_stream_remote(int eavb_fd, char* file_path, eavb_ioctl_hdr_t* hdr);
