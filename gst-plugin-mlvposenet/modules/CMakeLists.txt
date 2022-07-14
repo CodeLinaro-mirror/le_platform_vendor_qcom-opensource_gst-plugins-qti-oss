@@ -1,8 +1,8 @@
-# GStreamer ML video classification plugin modules.
-set(GST_QTI_ML_MODULE ml-vclassification-mobilenet)
+# GStreamer ML video posenet plugin modules.
+set(GST_QTI_ML_MODULE ssd-posenet-tflite)
 
 add_library(${GST_QTI_ML_MODULE} SHARED
-  ml-vclassification-mobilenet.c
+  ssd-posenet-tflite.c
 )
 
 target_include_directories(${GST_QTI_ML_MODULE} PUBLIC
