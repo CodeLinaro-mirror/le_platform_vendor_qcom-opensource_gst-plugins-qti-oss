@@ -1,12 +1,10 @@
 cmake_minimum_required(VERSION 3.8.2)
 project(GST_PLUGIN_QTI_OSS_BATCH
-  VERSION ${GST_PLUGINS_QTI_OSS_VERSION} LANGUAGES C
+  VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
+  LANGUAGES C CXX
 )
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
 
 find_package(PkgConfig)
 
