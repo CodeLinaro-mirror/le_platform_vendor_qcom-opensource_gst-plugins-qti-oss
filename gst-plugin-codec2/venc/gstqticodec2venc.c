@@ -2328,7 +2328,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
           G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (gobject_class, PROP_BITRATE_SAVING_MODE,
-      g_param_spec_enum ("bitrate-saving-mode", "bitrate saving mode",
+      g_param_spec_enum ("bps-saving-mode", "Bps saving mode",
           "Bitrate saving mode (0xffffffff=component default)",
           GST_TYPE_CODEC2_ENC_BITRATE_SAVING_MODE,
           GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT,
