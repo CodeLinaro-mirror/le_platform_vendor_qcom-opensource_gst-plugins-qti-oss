@@ -82,6 +82,7 @@ struct _Gstqticodec2venc
   gint width;
   gint height;
   GstVideoFormat input_format;
+  GstVideoInfo input_info;
   guint64 frame_index;
   guint64 num_input_queued;
   guint64 num_output_done;
@@ -110,6 +111,10 @@ struct _Gstqticodec2venc
   guint32 blur_height;
   gboolean is_ubwc;
   GArray *roi_array;
+  char *roi_type;
+  char *roi_rect_payload;
+  char *roi_rect_payload_ext;
+  BITRATE_SAVING_MODE bitrate_saving_mode;
 };
 
 /*

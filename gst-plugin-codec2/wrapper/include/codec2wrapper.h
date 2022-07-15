@@ -94,7 +94,7 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
 #define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
-
+#define CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE "bitrate_saving_mode"
 #define C2_TICKS_PER_SECOND 1000000
 
 typedef struct comp_cb {
@@ -266,17 +266,25 @@ typedef enum {
     IR_RANDOM,
 } IR_MODE_TYPE;
 
+typedef enum {
+    BITRATE_SAVING_MODE_DISABLE_ALL = 0,
+    BITRATE_SAVING_MODE_ENABLE_8BIT,
+    BITRATE_SAVING_MODE_ENABLE_10BIT,
+    BITRATE_SAVING_MODE_ENABLE_ALL,
+} BITRATE_SAVING_MODE;
+
 typedef struct {
     guint8* data;
     gint32 fd;
     gint32 meta_fd;
     guint32 size;
     guint32 capacity; ///< Total allocation size
-    guint32 offset;
     guint64 timestamp;
     guint64 index;
     guint32 width;
     guint32 height;
+    guint32 stride[2];
+    gsize offset[2];
     GstVideoFormat format;
     guint32 ubwc_flag;
     FLAG_TYPE flag;
@@ -292,61 +300,69 @@ typedef struct {
     const char* config_name;
     gboolean isInput;
     union {
-        guint32 u32;
-        guint64 u64;
-        gint32 i32;
-        gint64 i64;
-    } val;
+        guint output_picture_order_mode;
+        gboolean low_latency_mode;
+        gboolean color_space_conversion;
 
-    struct {
-        guint32 width;
-        guint32 height;
-    } resolution;
+        union {
+            guint32 u32;
+            guint64 u64;
+            gint32 i32;
+            gint64 i64;
+        } val;
 
-    union {
-        PIXEL_FORMAT_TYPE fmt;
-    } pixelFormat;
+        struct {
+            guint32 width;
+            guint32 height;
+        } resolution;
 
-    union {
-        INTERLACE_MODE_TYPE type;
-    } interlaceMode;
+        struct {
+            PIXEL_FORMAT_TYPE fmt;
+        } pixelFormat;
 
-    union {
-        MIRROR_TYPE type;
-    } mirror;
+        struct {
+            INTERLACE_MODE_TYPE type;
+        } interlaceMode;
 
-    union {
-        RC_MODE_TYPE type;
-    } rcMode;
+        struct {
+            MIRROR_TYPE type;
+        } mirror;
 
-    union {
-        SLICE_MODE type;
-    } SliceMode;
+        struct {
+            RC_MODE_TYPE type;
+        } rcMode;
 
-    union {
-        BLUR_MODE mode;
-    } blur;
+        struct {
+            SLICE_MODE type;
+        } sliceMode;
 
-    struct {
-        int64_t timestampUs;
-        char type[128];
-        char rectPayload[128];
-        char rectPayloadExt[128];
-    } roiRegion;
+        struct {
+            BLUR_MODE mode;
+        } blur;
 
-    struct {
-        IR_MODE_TYPE type;
-        float intra_refresh_mbs;
-    } irMode;
-    guint output_picture_order_mode;
-    gboolean low_latency_mode;
-    gboolean color_space_conversion;
-    struct {
-        COLOR_PRIMARIES primaries;
-        TRANSFER_CHAR transfer_char;
-        MATRIX matrix;
-        FULL_RANGE full_range;
-    } colorAspects;
+        struct {
+            int64_t timestampUs;
+            char* type;
+            char* rectPayload;
+            char* rectPayloadExt;
+        } roiRegion;
+
+        struct {
+            IR_MODE_TYPE type;
+            guint32 intra_refresh_mbs;
+        } irMode;
+
+        struct {
+            COLOR_PRIMARIES primaries;
+            TRANSFER_CHAR transfer_char;
+            MATRIX matrix;
+            FULL_RANGE full_range;
+        } colorAspects;
+
+        struct {
+            BITRATE_SAVING_MODE saving_mode;
+        } bitrate_saving_mode;
+    };
 } ConfigParams;
 
 typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);
