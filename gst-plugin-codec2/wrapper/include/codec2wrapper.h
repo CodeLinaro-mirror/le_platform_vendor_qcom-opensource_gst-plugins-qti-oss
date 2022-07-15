@@ -364,6 +364,7 @@ typedef struct {
     void* gbm_bo;
     gboolean secure;
     guint32 interlaceMode;
+    guint32 max_buf_cnt;
 } BufferDescriptor;
 
 typedef struct {
@@ -476,6 +477,8 @@ gboolean c2component_createBlockpool(void* const comp, BUFFER_POOL_TYPE poolType
 gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType);
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId);
 gboolean c2component_delete(void* comp);
+gboolean c2component_attachExternalFd(void* comp, int fd);
+gboolean c2component_setUseExternalBuffer(void* comp, gboolean useExternal);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ComponentInterface API

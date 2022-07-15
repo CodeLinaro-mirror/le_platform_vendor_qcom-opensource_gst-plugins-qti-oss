@@ -93,6 +93,7 @@ public:
         uint64_t index,
         uint64_t timestamp,
         uint32_t interlace,
+        uint32_t outputDelay,
         C2FrameData::flags_t flag)
         = 0;
 

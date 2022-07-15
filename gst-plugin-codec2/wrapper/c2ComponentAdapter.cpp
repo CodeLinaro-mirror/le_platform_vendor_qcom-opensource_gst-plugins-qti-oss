@@ -71,6 +71,7 @@ C2ComponentAdapter::C2ComponentAdapter(std::shared_ptr<C2Component> comp)
     mNumPendingWorks = 0;
     mDataCopyFunc = nullptr;
     mDataCopyFuncParam = nullptr;
+    mC2Allocator = nullptr;
 }
 
 C2ComponentAdapter::~C2ComponentAdapter()
@@ -87,6 +88,7 @@ C2ComponentAdapter::~C2ComponentAdapter()
     mTrackBuffers.clear();
     mLinearPool = nullptr;
     mGraphicPool = nullptr;
+    mC2Allocator = nullptr;
 }
 
 c2_status_t C2ComponentAdapter::setListenercallback(std::unique_ptr<EventCallback> callback,
@@ -716,6 +718,16 @@ c2_status_t C2ComponentAdapter::createBlockpool(C2BlockPool::local_id_t poolType
         if (ret != C2_OK || mGraphicPool == nullptr) {
             return ret;
         }
+        std::shared_ptr<C2BlockPool> pool;
+        std::shared_ptr<C2Allocator> allocator;
+        uint64_t local_id = mGraphicPool->getLocalId();
+        android::GetCodec2BlockPoolWithAllocator(local_id, mComp, &pool, &allocator);
+        if (allocator == nullptr) {
+            LOG_ERROR("Failed to get allocator");
+            ret = C2_NOT_FOUND;
+        } else {
+            mC2Allocator = allocator;
+        }
     }
 
     if (ret != C2_OK) {
@@ -805,19 +817,18 @@ void C2ComponentAdapter::handleWorkDone(
             case C2PortActualDelayTuning::CORE_INDEX: {
                 if (param->forOutput()) {
                     C2PortActualDelayTuning::output outputDelay;
-                    std::shared_ptr<C2BlockPool> pool;
-                    std::shared_ptr<C2Allocator> allocator;
                     if (outputDelay.updateFrom(*param)) {
-                        uint64_t local_id = mGraphicPool->getLocalId();
-                        LOG_MESSAGE("onWorkDone: updating output delay:%u local_id:%lu", outputDelay.value, local_id);
-                        android::GetCodec2BlockPoolWithAllocator(local_id, mComp, &pool, &allocator);
-                        if (allocator == nullptr) {
-                            LOG_ERROR("Failed to get allocator");
-                            break;
+                        auto allocatorGBM =
+                            std::dynamic_pointer_cast<android::C2AllocatorGBM>(mC2Allocator);
+                        if (allocatorGBM) {
+                            LOG_MESSAGE("onWorkDone: updating output delay:%u local_id:%lu",
+                                        outputDelay.value, mGraphicPool->getLocalId());
+                            allocatorGBM->setMaxAllocationCount(outputDelay.value);
+                            /* Update the max acquirable buffer count for external buffer pool */
+                            mCallback->onOutputBufferAvailable(nullptr, 0, 0, 0, outputDelay.value, outputFrameFlag);
+                        } else {
+                            LOG_ERROR("allocatorGBM is NULL");
                         }
-
-                        std::shared_ptr<android::C2AllocatorGBM> allocatorGBM = std::dynamic_pointer_cast<android::C2AllocatorGBM>(allocator);
-                        allocatorGBM->setMaxAllocationCount(outputDelay.value);
                     }
                 }
             } break;
@@ -842,12 +853,11 @@ void C2ComponentAdapter::handleWorkDone(
                 mOutPendingBuffer[bufferIdx] = buffer;
             }
 
-            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, interlace, outputFrameFlag);
+            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, interlace, 0, outputFrameFlag);
         } else {
-
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
-                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, interlace, outputFrameFlag);
+                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, interlace, 0, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
                 LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple "
                             "output frames, or codec config update event",
@@ -917,6 +927,45 @@ c2_status_t C2ComponentAdapter::freeOutputBuffer(uint64_t bufferIdx)
         } else {
             LOG_ERROR("Buffer index(%lu) not found", bufferIdx);
         }
+    }
+
+    return result;
+}
+
+c2_status_t C2ComponentAdapter::attachExternalFd(int fd)
+{
+    c2_status_t result = C2_NO_INIT;
+    LOG_MESSAGE("Component(%p) attach external fd: %d", this, fd);
+
+    auto allocatorGBM =
+        std::dynamic_pointer_cast<android::C2AllocatorGBM>(mC2Allocator);
+    if (allocatorGBM) {
+        result = allocatorGBM->attachExternalFd(fd);
+    } else {
+        LOG_ERROR("allocatorGBM is NULL");
+        result = C2_BAD_VALUE;
+    }
+
+    if (C2_OK != result) {
+        LOG_ERROR("Failed to attach external fd with result=%d", result);
+    }
+
+    return result;
+}
+
+c2_status_t C2ComponentAdapter::setUseExternalBuffer(bool useExternal)
+{
+    c2_status_t result = C2_NO_INIT;
+    LOG_MESSAGE("Component(%p) set to use external buffer: %s",
+                this, useExternal ? "TRUE" : "FALSE");
+
+    auto allocatorGBM =
+        std::dynamic_pointer_cast<android::C2AllocatorGBM>(mC2Allocator);
+    if (allocatorGBM) {
+        result = allocatorGBM->setUseExternalBuffer(useExternal);
+    } else {
+        LOG_ERROR("allocatorGBM is NULL");
+        result = C2_BAD_VALUE;
     }
 
     return result;

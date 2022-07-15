@@ -623,6 +623,7 @@ public:
         uint64_t index,
         uint64_t timestamp,
         uint32_t interlace,
+        uint32_t outputDelay,
         C2FrameData::flags_t flag) override;
     void onTripped(uint32_t errorCode) override;
     void onError(uint32_t errorCode) override;
@@ -652,6 +653,7 @@ void CodecCallback::onOutputBufferAvailable(
     uint64_t index,
     uint64_t timestamp,
     uint32_t interlace,
+    uint32_t outputDelay,
     C2FrameData::flags_t flag)
 {
 
@@ -755,6 +757,10 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.index = 0;
         outBuf.flag = toWrapperFlag(flag);
 
+        mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);
+    } else if (outputDelay) {
+        LOG_MESSAGE("Update max buffer count to %u", outputDelay);
+        outBuf.max_buf_cnt = outputDelay;
         mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);
     } else {
         LOG_MESSAGE("Buffer is null");
@@ -1253,6 +1259,44 @@ gboolean c2component_delete(void* comp)
         C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
         delete comp_wrapper;
         ret = TRUE;
+    }
+    return ret;
+}
+
+gboolean c2component_attachExternalFd(void* comp, int fd)
+{
+    LOG_MESSAGE("Attach external fd: %d", fd);
+
+    gboolean ret = FALSE;
+    c2_status_t c2Status = C2_NO_INIT;
+
+    if (comp) {
+        C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
+        c2Status = comp_wrapper->attachExternalFd(fd);
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_ERROR("Failed(%d) to attach external fd: %d", c2Status, fd);
+        }
+    }
+    return ret;
+}
+
+gboolean c2component_setUseExternalBuffer(void* comp, gboolean useExternal)
+{
+    LOG_MESSAGE("Set to use external buffer: %s", useExternal ? "TRUE" : "FALSE");
+
+    gboolean ret = FALSE;
+    c2_status_t c2Status = C2_NO_INIT;
+
+    if (comp) {
+        C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
+        c2Status = comp_wrapper->setUseExternalBuffer(useExternal);
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_ERROR("Failed(%d) to set using external buffer", c2Status);
+        }
     }
     return ret;
 }

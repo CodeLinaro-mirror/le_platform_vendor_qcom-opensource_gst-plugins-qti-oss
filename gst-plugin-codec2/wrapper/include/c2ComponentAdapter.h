@@ -104,6 +104,8 @@ public:
     c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
+    c2_status_t attachExternalFd(int fd);
+    c2_status_t setUseExternalBuffer(bool useExternal);
 
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);
@@ -142,6 +144,7 @@ private:
     std::map<uint64_t, std::shared_ptr<C2GraphicBlock> > mInPendingBuffer;
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
     std::set<TrackBuffer*> mTrackBuffers;
+    std::shared_ptr<C2Allocator> mC2Allocator;
 
     uint32_t mNumPendingWorks;
     std::mutex mLock;

@@ -1657,7 +1657,7 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
         enc->eos_reached = TRUE;
         g_cond_signal (&enc->pending_cond);
         g_mutex_unlock (&enc->pending_lock);
-      } else {
+      } else if (0 == outBuffer->max_buf_cnt) {
         GST_ERROR_OBJECT (enc, "Invalid output buffer");
       }
       break;

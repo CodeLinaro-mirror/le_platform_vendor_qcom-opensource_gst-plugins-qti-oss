@@ -139,6 +139,13 @@ struct _Gstqticodec2vdec
   gboolean delay_start;
   comp_cb cb;
   gboolean deinterlace;
+
+  gboolean use_external_buf;
+  GHashTable *buffer_table;
+  guint max_external_buf_cnt;
+  guint acquired_external_buf;
+  GMutex external_buf_lock;
+  GCond external_buf_cond;
 };
 
 /* Param function */
