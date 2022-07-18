@@ -413,6 +413,7 @@ gst_qticodec2vdec_destroy_component (GstVideoDecoder * decoder)
 
   if (dec->comp) {
     c2component_delete (dec->comp);
+    dec->comp = NULL;
   }
 
   return ret;
@@ -816,6 +817,15 @@ gst_qticodec2vdec_close (GstVideoDecoder * decoder)
 
   GST_DEBUG_OBJECT (dec, "close");
 
+  if (!gst_qticodec2vdec_destroy_component (decoder)) {
+    GST_ERROR_OBJECT (dec, "Failed to delete component");
+  }
+
+  if (dec->comp_store) {
+    c2componentStore_delete (dec->comp_store);
+    dec->comp_store = NULL;
+  }
+
   if (dec->input_state) {
     gst_video_codec_state_unref (dec->input_state);
     dec->input_state = NULL;
@@ -886,12 +896,10 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
   GstStructure *config;
   guint size, min, max;
   gboolean update = FALSE;
-  gboolean use_peer_pool = FALSE;
   gboolean use_dmabuf = FALSE;
   GstBufferPool *out_port_pool = NULL;
-  GstBufferPoolParam param;
-  gboolean downstream_is_qcodec2_encoder = FALSE;
-  memset (&param, 0, sizeof (GstBufferPoolParam));
+  GstBufferPoolInitParam param;
+  memset (&param, 0, sizeof (GstBufferPoolInitParam));
 
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
 
@@ -917,10 +925,6 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     update = TRUE;
     gst_query_parse_nth_allocation_pool (query, 0, &pool, NULL, &min, &max);
     if (pool) {
-      if (GST_IS_QCODEC2_BUFFER_POOL (pool)) {
-        downstream_is_qcodec2_encoder = TRUE;
-        GST_DEBUG_OBJECT (dec, "downstream buffer pool from qcodec2 encoder");
-      }
       GST_DEBUG_OBJECT (dec, "ignore buffer pool from downstream");
       gst_object_unref (pool);
       pool = NULL;
@@ -937,49 +941,50 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
     use_dmabuf = FALSE;
   }
 
-  if (!use_peer_pool) {
-    if (out_port_pool) {
-      gst_object_unref (out_port_pool);
-    }
-
-    param.is_ubwc = dec->is_ubwc;
-    param.info = dec->output_state->info;
-    param.c2_comp = dec->comp;
-    param.mode = use_dmabuf ? DMABUF_WRAP_MODE : FDBUF_WRAP_MODE;
-    param.add_c2buf_meta = (use_dmabuf
-        && downstream_is_qcodec2_encoder) ? TRUE : FALSE;
-    pool = gst_qcodec2_buffer_pool_new (&param);
-
-    if (max)
-      max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
-
-    min = MAX (min, QCODEC2_MIN_OUTBUFFERS);
-    /* disable gst buffer pool's allocator, since actual buffer(underlying DMA/ION buffer)
-     * is allocated inside of C2 allocator */
-    size = 0;
-
-    config = gst_buffer_pool_get_config (pool);
-
-    GST_DEBUG_OBJECT (dec, "allocation: size:%u min:%u max:%u pool:%"
-        GST_PTR_FORMAT, size, min, max, pool);
-
-    gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
-
-    GST_DEBUG_OBJECT (dec, "setting own pool config to %"
-        GST_PTR_FORMAT, config);
-
-    /* configure own pool */
-    if (!gst_buffer_pool_set_config (pool, config)) {
-      GST_ERROR_OBJECT (dec, "configure our own buffer pool failed");
-      goto cleanup;
-    }
-
-    /* For simplicity, simply read back the active configuration, so our base
-     * class get the right information */
-    config = gst_buffer_pool_get_config (pool);
-    gst_buffer_pool_config_get_params (config, NULL, &size, &min, &max);
-    gst_structure_free (config);
+  if (out_port_pool) {
+    gst_object_unref (out_port_pool);
   }
+
+  param.is_ubwc = dec->is_ubwc;
+  param.info = dec->output_state->info;
+  param.c2_comp = dec->comp;
+  param.mode = use_dmabuf ? DMABUF_WRAP_MODE : FDBUF_WRAP_MODE;
+  pool = gst_qcodec2_buffer_pool_new (&param);
+
+  if (max)
+    max = MAX (MAX (min, max), QCODEC2_MIN_OUTBUFFERS);
+
+  min = MAX (min, QCODEC2_MIN_OUTBUFFERS);
+  /* disable gst buffer pool's allocator, since actual buffer(underlying DMA/ION buffer)
+   * is allocated inside of C2 allocator */
+  size = 0;
+
+  config = gst_buffer_pool_get_config (pool);
+  if (gst_query_find_allocation_meta (query, GST_VIDEO_C2BUF_META_API_TYPE,
+          NULL)) {
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META);
+    GST_DEBUG_OBJECT (dec, "add option video C2 buf meta");
+  }
+
+  GST_DEBUG_OBJECT (dec, "allocation: size:%u min:%u max:%u pool:%"
+      GST_PTR_FORMAT, size, min, max, pool);
+
+  gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
+
+  GST_DEBUG_OBJECT (dec, "setting own pool config to %" GST_PTR_FORMAT, config);
+
+  /* configure own pool */
+  if (!gst_buffer_pool_set_config (pool, config)) {
+    GST_ERROR_OBJECT (dec, "configure our own buffer pool failed");
+    goto cleanup;
+  }
+
+  /* For simplicity, simply read back the active configuration, so our base
+   * class get the right information */
+  config = gst_buffer_pool_get_config (pool);
+  gst_buffer_pool_config_get_params (config, NULL, &size, &min, &max);
+  gst_structure_free (config);
 
   GST_DEBUG_OBJECT (dec, "setting pool with size: %d, min: %d, max: %d",
       size, min, max);
@@ -1488,14 +1493,6 @@ gst_qticodec2vdec_finalize (GObject * object)
     GST_DEBUG_OBJECT (dec, "pool ref cnt:%d",
         GST_OBJECT_REFCOUNT (dec->out_port_pool));
     gst_object_unref (dec->out_port_pool);
-  }
-
-  if (!gst_qticodec2vdec_destroy_component (GST_VIDEO_DECODER (object))) {
-    GST_ERROR_OBJECT (dec, "Failed to delete component");
-  }
-
-  if (dec->comp_store) {
-    c2componentStore_delete (dec->comp_store);
   }
 
   if (dec->gbm_lib) {

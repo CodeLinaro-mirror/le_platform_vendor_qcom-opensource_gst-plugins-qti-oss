@@ -107,6 +107,16 @@ gst_qcodec2_buffer_pool_init (GstQcodec2BufferPool * pool)
       "qcodec2pool", 0, "QTI GST codec2.0 decoder buffer pool");
 }
 
+static const gchar **
+gst_qcodec2_buffer_pool_get_options (GstBufferPool * pool)
+{
+  static const gchar *options[] = { GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META,
+    NULL
+  };
+
+  return options;
+}
+
 static gboolean
 gst_qcodec2_buffer_pool_set_config (GstBufferPool * bpool,
     GstStructure * config)
@@ -129,6 +139,10 @@ gst_qcodec2_buffer_pool_set_config (GstBufferPool * bpool,
     GST_WARNING_OBJECT (bpool, "no caps in config, ignore this config");
     return FALSE;
   }
+
+  pool->add_c2bufmeta =
+      gst_buffer_pool_config_has_option (config,
+      GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META);
 
   return GST_BUFFER_POOL_CLASS (parent_class)->set_config (bpool, config);
 }
@@ -228,6 +242,28 @@ _gst_qcodec2_alloc_buf (GstBufferPool * bpool)
     if (mem) {
       gst_buf = gst_buffer_new ();
       if (gst_buf) {
+        if (buffer.stride[0] > 0 || buffer.stride[1] > 0) {
+          info->stride[0] = buffer.stride[0];
+          info->stride[1] = buffer.stride[1];
+        }
+
+        if (buffer.offset[0] > 0 || buffer.offset[1] > 0) {
+          info->offset[0] = buffer.offset[0];
+          info->offset[1] = buffer.offset[1];
+        }
+
+        GstVideoMeta *meta =
+            gst_buffer_add_video_meta_full (gst_buf, GST_VIDEO_FRAME_FLAG_NONE,
+            GST_VIDEO_INFO_FORMAT (info), GST_VIDEO_INFO_WIDTH (info),
+            GST_VIDEO_INFO_HEIGHT (info), GST_VIDEO_INFO_N_PLANES (info),
+            info->offset, info->stride);
+        if (meta) {
+          GST_INFO_OBJECT (bpool, "format %s, %ux%u, stride0 %u, "
+              "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT,
+              gst_video_format_to_string (meta->format), meta->width,
+              meta->height, meta->stride[0], meta->offset[0], meta->offset[1]);
+        }
+
         gst_buffer_prepend_memory (gst_buf, mem);
         GST_DEBUG_OBJECT (bpool, "allocated gst buffer: %p, memory: %p",
             gst_buf, mem);
@@ -414,7 +450,7 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
         (GDestroyNotify) gst_structure_free);
   }
 
-  if (pool->param.add_c2buf_meta) {
+  if (pool->add_c2bufmeta) {
     video_c2buf_meta = gst_buffer_get_video_c2buf_meta (gst_buf);
     if (video_c2buf_meta) {
       gst_buffer_remove_meta (gst_buf, (GstMeta *) video_c2buf_meta);
@@ -497,6 +533,7 @@ gst_qcodec2_buffer_pool_class_init (GstQcodec2BufferPoolClass * klass)
 
   gobj_class->finalize = gst_qcodec2_buffer_pool_finalize;
 
+  bp_class->get_options = gst_qcodec2_buffer_pool_get_options;
   bp_class->set_config = gst_qcodec2_buffer_pool_set_config;
   bp_class->alloc_buffer = gst_qcodec2_buffer_pool_alloc_buffer;
   bp_class->acquire_buffer = gst_qcodec2_buffer_pool_acquire_buffer;
@@ -504,7 +541,7 @@ gst_qcodec2_buffer_pool_class_init (GstQcodec2BufferPoolClass * klass)
 }
 
 GstBufferPool *
-gst_qcodec2_buffer_pool_new (GstBufferPoolParam * param)
+gst_qcodec2_buffer_pool_new (GstBufferPoolInitParam * param)
 {
   GstQcodec2BufferPool *pool = NULL;
   GHashTable *buffer_table = NULL;

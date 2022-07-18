@@ -116,6 +116,7 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -139,6 +140,7 @@ static configFunctionForVendorParamsMap sConfigFunctionForVendorParamsMap = {
     { CONFIG_FUNCTION_KEY_BLUR_MODE, setBlurMode },
     { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
     { CONFIG_FUNCTION_KEY_ROIREGION, setRoiRegion },
+    { CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE, setBitrateSavingMode },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -323,12 +325,12 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
     android::ReflectedParamUpdater::Dict kvpairs;
     android::ReflectedParamUpdater::Value item;
 
-    if (config->SliceMode.type == SLICE_MODE_BYTES) {
+    if (config->sliceMode.type == SLICE_MODE_BYTES) {
         item.set((int32_t)config->val.u32);
         kvpairs.emplace("vendor.qti-ext-enc-error-correction.resync-marker-spacing-bits", item);
 
         sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
-    } else if (config->SliceMode.type == SLICE_MODE_MB) {
+    } else if (config->sliceMode.type == SLICE_MODE_MB) {
         item.set((int32_t)config->val.u32);
         kvpairs.emplace("vendor.qti-ext-enc-slice.spacing", item);
 
@@ -422,7 +424,6 @@ std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
 
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
 {
-
     if (param == NULL) {
         return nullptr;
     }
@@ -431,7 +432,7 @@ std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
 
     C2StreamIntraRefreshTuning::output intraRefreshMode;
     intraRefreshMode.mode = (C2Config::intra_refresh_mode_t)config->irMode.type;
-    intraRefreshMode.period = config->irMode.intra_refresh_mbs;
+    intraRefreshMode.period = (float)config->irMode.intra_refresh_mbs;
     return C2Param::Copy(intraRefreshMode);
 }
 
@@ -514,6 +515,30 @@ std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf)
     roi = intf_wrapper->updateParamFromConfig(kvpairs);
 
     return std::move(roi);
+}
+
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+    if (config->isInput) {
+        LOG_WARNING("setVideoBitrateSavingMode input not implemented");
+
+    } else {
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> bitrateSavingMode;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        item.set((int32_t)config->bitrate_saving_mode.saving_mode);
+        kvpairs.emplace("vendor.qti-ext-enc-content-adaptive-mode.value", item);
+
+        bitrateSavingMode = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(bitrateSavingMode);
+    }
+    return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -648,7 +673,7 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.meta_fd = -1;
         outBuf.size = 0;
         outBuf.capacity = 0;
-        outBuf.offset = 0;
+        outBuf.offset[0] = 0;
         outBuf.timestamp = 0;
         outBuf.index = 0;
         outBuf.flag = toWrapperFlag(flag);
