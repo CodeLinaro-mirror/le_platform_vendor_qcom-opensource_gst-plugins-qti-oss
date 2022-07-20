@@ -88,6 +88,7 @@ GST_DEBUG_CATEGORY (gst_qticodec2venc_debug);
 #define GST_CAT_DEFAULT gst_qticodec2venc_debug
 #define GST_QTI_CODEC2_ENC_COLOR_SPACE_CONVERSION             (FALSE)
 #define GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT        (0xffffffff)
+#define GST_QTI_CODEC2_ENC_BLUR_MODE_DEFAULT                  (0xffffffff)
 
 /* class initialization */
 G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
@@ -545,6 +546,7 @@ gst_qticodec2venc_blur_mode_get_type (void)
       {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
             "Blur is applied when valid resolution is set.", "manual"},
       {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
+      {0xffffffff, "Component Default", "default"},
       {0, NULL, NULL}
     };
 
@@ -1228,15 +1230,16 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     g_ptr_array_add (config, &intra_refresh);
   }
 
-  if ((enc->blur_mode == BLUR_MANUAL) &&
-      (enc->blur_width != 0) && (enc->blur_height != 0)) {
-    blur_info =
-        make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
-  } else {
-    blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+  if (enc->blur_mode != GST_QTI_CODEC2_ENC_BLUR_MODE_DEFAULT) {
+    if ((enc->blur_mode == BLUR_MANUAL) &&
+        (enc->blur_width != 0) && (enc->blur_height != 0)) {
+      blur_info =
+          make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
+    } else {
+      blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+    }
+    g_ptr_array_add (config, &blur_info);
   }
-  g_ptr_array_add (config, &blur_info);
-
   /* Create component */
   if (!gst_qticodec2venc_create_component (encoder)) {
     GST_ERROR_OBJECT (enc, "Failed to create component");
@@ -2218,7 +2221,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_enum ("blur-mode", "Blur Mode",
           "Specify the blur mode",
           GST_TYPE_CODEC2_ENC_BLUR_MODE,
-          BLUR_DISABLE,
+          GST_QTI_CODEC2_ENC_BLUR_MODE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -2377,7 +2380,7 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->downscale_width = 0;
   enc->downscale_height = 0;
   enc->target_bitrate = 0;
-  enc->blur_mode = BLUR_DISABLE;
+  enc->blur_mode = GST_QTI_CODEC2_ENC_BLUR_MODE_DEFAULT;
   enc->blur_width = 0;
   enc->blur_height = 0;
   enc->is_ubwc = FALSE;
