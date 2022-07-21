@@ -254,24 +254,6 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
   return result;
 }
 
-
-c2_status_t C2ComponentWrapper::waitForProgressOrStateChange(
-    uint32_t maxPendingWorks,
-    uint32_t timeoutMs)
-{
-  std::unique_lock<std::mutex> ul(mLock);
-  GST_INFO ("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
-
-  while (mNumPendingWorks > maxPendingWorks) {
-    if (timeoutMs > 0) {
-    } else if (timeoutMs == 0) {
-      mCondition.wait(ul);
-    }
-  }
-
-  return C2_OK;
-}
-
 bool
 C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 {
@@ -362,10 +344,6 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
       GST_INFO ("EOS reached");
     }
 
-    //Decoder specific
-    if (poolType == C2BlockPool::BASIC_LINEAR)
-      waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
-
     if (C2_OK != component_->queue_nb (&workList)) {
       GST_ERROR ("Failed to queue work");
     } else {
@@ -388,6 +366,8 @@ bool
 C2ComponentWrapper::FreeOutputBuffer(uint64_t bufferIdx)
 {
   std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
+
+  std::unique_lock<std::mutex> ul (out_pending_buffer_lock_);
   it = out_pending_buffers_.find (bufferIdx);
   if (it != out_pending_buffers_.end ()) {
     out_pending_buffers_.erase (it);
@@ -521,7 +501,10 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
           bufferIdx, worklet->output.ordinal.timestamp.peeku (), outputFrameFlag);
 
       // ref count ++
-      component_wrapper->out_pending_buffers_[bufferIdx] = buffer;
+      {
+        std::unique_lock<std::mutex> ul (component_wrapper->out_pending_buffer_lock_);
+        component_wrapper->out_pending_buffers_[bufferIdx] = buffer;
+      }
 
       if (callback_) {
         callback_->onOutputBufferAvailable (buffer, bufferIdx, timestamp,
