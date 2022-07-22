@@ -74,6 +74,7 @@ extern "C" {
 #include <gmodule.h>
 #include <dlfcn.h>
 #include <gst/video/video.h>
+#include <stdint.h>
 
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
 
@@ -102,7 +103,7 @@ typedef struct comp_cb {
     gpointer data_copy_func_param;
 } comp_cb;
 
-typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, int datalen, void* param);
+typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, uint32_t* pdatalen, void* param);
 
 typedef enum {
     BUFFER_POOL_BASIC_LINEAR = 0,

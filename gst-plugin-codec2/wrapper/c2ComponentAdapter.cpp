@@ -237,9 +237,22 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             if (mDataCopyFunc) {
                 if (linear_block->handle()) {
                     uint32_t dest_fd = linear_block->handle()->data[0];
-                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    /* That data length is from upstream gst plugin pushed down gstbuffer.
+                     * In the DataCopyFunc callback function, it may reduce the data length
+                     * to its actual length accordingly, but couldn’t increase the length
+                     * as the dst buffer is already allocated according to that datalength.
+                     * Hence, pass the data length pointer as parameter to DataCopyFunc
+                     * so as to get the actual data length in return.
+                     */
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, &frameSize, mDataCopyFuncParam);
                     if (ret) {
                         LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+
+                    if (frameSize > buffer->size) {
+                        LOG_ERROR("frameSize exceeds, previous: %u current: %u",
+                            buffer->size, frameSize);
                         return C2_CORRUPTED;
                     }
                 } else {
