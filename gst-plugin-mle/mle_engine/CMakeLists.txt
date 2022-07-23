@@ -46,6 +46,13 @@ if (TFLITE_ENABLE)
   target_link_libraries(${GST_MLE_LIBRARY} PRIVATE ${TFLITE_LIBRARIES})
 endif()
 
+if (${TFLITE_VERSION} VERSION_LESS_EQUAL "2.2.0")
+  if (DELEGATE_SUPPORT)
+    target_link_libraries(${GST_MLE_LIBRARY} PRIVATE gpu_delegate)
+    target_link_libraries(${GST_MLE_LIBRARY} PRIVATE xnnpack_delegate)
+  endif()
+endif()
+
 
 install(
   TARGETS ${GST_MLE_LIBRARY}

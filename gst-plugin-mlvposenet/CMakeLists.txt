@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(GST_PLUGIN_QTI_OSS_ML_VIDEO_CLASSIFICATION
+project(GST_PLUGIN_QTI_OSS_ML_VIDEO_POSENET
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C
 )
@@ -28,38 +28,29 @@ pkg_check_modules(CAIRO REQUIRED cairo)
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-# Check whether DMA header is present.
-include(CheckIncludeFile)
-check_include_file("linux/dma-buf.h" HAVE_LINUX_DMA_BUF_H)
-
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
 
 # Common compiler flags.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
 # GStreamer ML video categorization plugin.
-set(GST_QTI_ML_VIDEO_CLASSIFICATION gstqtimlvclassification)
+set(GST_QTI_ML_VIDEO_POSENET gstqtimlvposenet)
 
-add_library(${GST_QTI_ML_VIDEO_CLASSIFICATION} SHARED
-  mlvclassification.c
+add_library(${GST_QTI_ML_VIDEO_POSENET} SHARED
+  mlvposenet.c
 )
 
-set_target_properties(${GST_QTI_ML_VIDEO_CLASSIFICATION} PROPERTIES PUBLIC_HEADER
-  "modules/ml-video-classification-module.h"
+set_target_properties(${GST_QTI_ML_VIDEO_POSENET} PROPERTIES PUBLIC_HEADER
+  "modules/ml-video-posenet-module.h"
 )
 
-target_compile_definitions(${GST_QTI_ML_VIDEO_CLASSIFICATION} PRIVATE
-  $<$<BOOL:${HAVE_LINUX_DMA_BUF_H}>:HAVE_LINUX_DMA_BUF_H>
-)
-
-target_include_directories(${GST_QTI_ML_VIDEO_CLASSIFICATION} PUBLIC
+target_include_directories(${GST_QTI_ML_VIDEO_POSENET} PUBLIC
   ${GST_INCLUDE_DIRS}
-  ${KERNEL_BUILDDIR}/usr/include
 )
 
-target_link_libraries(${GST_QTI_ML_VIDEO_CLASSIFICATION} PRIVATE
+target_link_libraries(${GST_QTI_ML_VIDEO_POSENET} PRIVATE
   ${GST_LIBRARIES}
   ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
@@ -70,7 +61,7 @@ target_link_libraries(${GST_QTI_ML_VIDEO_CLASSIFICATION} PRIVATE
 )
 
 install(
-  TARGETS ${GST_QTI_ML_VIDEO_CLASSIFICATION}
+  TARGETS ${GST_QTI_ML_VIDEO_POSENET}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
