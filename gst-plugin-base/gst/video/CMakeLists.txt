@@ -1,16 +1,15 @@
 # GStreamer QTI Video base library.
 set(GST_QTI_VIDEO_BASE gstqtivideobase)
 
+find_package(OpenCV REQUIRED)
 add_library(${GST_QTI_VIDEO_BASE} SHARED
   gstimagepool.c
-  $<$<BOOL:${GST_C2D_CONVERTER}>:c2d-video-converter.c>
-  $<$<BOOL:${GST_GLES_CONVERTER}>:gles-video-converter.cc>
+  cv-video-converter.cc
 )
 
 set(GST_QTI_VIDEO_BASE_HEADERS
   gstimagepool.h
-  $<$<BOOL:${GST_C2D_CONVERTER}>:${CMAKE_CURRENT_SOURCE_DIR}/c2d-video-converter.h>
-  $<$<BOOL:${GST_GLES_CONVERTER}>:${CMAKE_CURRENT_SOURCE_DIR}/gles-video-converter.h>
+  cv-video-converter.h
 )
 
 set_target_properties(${GST_QTI_VIDEO_BASE} PROPERTIES PUBLIC_HEADER
@@ -22,20 +21,11 @@ target_include_directories(${GST_QTI_VIDEO_BASE} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_include_directories(${GST_QTI_VIDEO_BASE} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include
-)
-
-# Headers path for msm-5.4 media on qrbx210 targets.
-target_include_directories(${GST_QTI_VIDEO_BASE} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include/vidc
-)
-
 target_link_libraries(${GST_QTI_VIDEO_BASE} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
-  $<$<BOOL:${GST_GLES_CONVERTER}>:QImgConv>
+  ${OpenCV_LIBS}
 )
 
 install(
@@ -44,5 +34,5 @@ install(
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
-  PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/video/
+  PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/video
 )

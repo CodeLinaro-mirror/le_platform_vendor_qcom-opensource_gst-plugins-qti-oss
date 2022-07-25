@@ -68,21 +68,15 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 
-#include <linux/ion.h>
-#include <linux/msm_ion.h>
-
 #include "gstmlmeta.h"
 
+#define ml_unused(name) (void)name;
 
 GST_DEBUG_CATEGORY_STATIC (gst_ml_pool_debug);
 #define GST_CAT_DEFAULT gst_ml_pool_debug
 
-#define GST_IS_ION_MEMORY_TYPE(type) \
-    (type == g_quark_from_static_string (GST_ML_BUFFER_POOL_TYPE_ION))
 #define GST_IS_SYSTEM_MEMORY_TYPE(type) \
     (type == g_quark_from_static_string (GST_ML_BUFFER_POOL_TYPE_SYSTEM))
-
-#define DEFAULT_ION_ALIGNMENT 4096
 
 struct _GstMLBufferPoolPrivate
 {
@@ -95,126 +89,11 @@ struct _GstMLBufferPoolPrivate
 
   gboolean addmeta;
   gboolean continuous;
-
-  // ION device FD.
-  gint devfd;
-
-#ifndef TARGET_ION_ABI_VERSION
-  // Map of data FDs and ION handles on case ION memory is used.
-  GHashTable *datamap;
-#endif
 };
 
 #define gst_ml_buffer_pool_parent_class parent_class
 G_DEFINE_TYPE_WITH_PRIVATE (GstMLBufferPool, gst_ml_buffer_pool,
     GST_TYPE_BUFFER_POOL);
-
-static gboolean
-open_ion_device (GstMLBufferPool * mlpool)
-{
-  GstMLBufferPoolPrivate *priv = mlpool->priv;
-
-  if (priv->devfd >= 0) {
-    GST_DEBUG_OBJECT (mlpool, "ION device already opened");
-    return TRUE;
-  }
-
-  priv->devfd = open ("/dev/ion", O_RDWR);
-  if (priv->devfd < 0) {
-    GST_ERROR_OBJECT (mlpool, "Failed to open ION device FD!");
-    return FALSE;
-  }
-
-#ifndef TARGET_ION_ABI_VERSION
-  priv->datamap = g_hash_table_new (NULL, NULL);
-#endif
-
-  GST_INFO_OBJECT (mlpool, "Opened ION device FD %d", priv->devfd);
-  return TRUE;
-}
-
-static void
-close_ion_device (GstMLBufferPool * mlpool)
-{
-  GstMLBufferPoolPrivate *priv = mlpool->priv;
-
-  if (priv->devfd >= 0) {
-    GST_INFO_OBJECT (mlpool, "Closing ION device FD %d", priv->devfd);
-    close (priv->devfd);
-  }
-
-#ifndef TARGET_ION_ABI_VERSION
-  g_hash_table_destroy (priv->datamap);
-#endif
-}
-
-static GstMemory *
-ion_device_alloc (GstMLBufferPool * mlpool, gsize size)
-{
-  GstMLBufferPoolPrivate *priv = mlpool->priv;
-  gint result = 0, fd = -1;
-
-#ifndef TARGET_ION_ABI_VERSION
-  struct ion_fd_data fd_data;
-#endif
-  struct ion_allocation_data alloc_data;
-
-  alloc_data.len = size;
-#ifndef TARGET_ION_ABI_VERSION
-  alloc_data.align = DEFAULT_ION_ALIGNMENT;
-#endif
-  alloc_data.heap_id_mask = ION_HEAP(ION_SYSTEM_HEAP_ID);
-  alloc_data.flags = ION_FLAG_CACHED;
-
-  result = ioctl (priv->devfd, ION_IOC_ALLOC, &alloc_data);
-  if (result != 0) {
-    GST_ERROR_OBJECT (mlpool, "Failed to allocate ION memory!");
-    return NULL;
-  }
-
-#ifndef TARGET_ION_ABI_VERSION
-  fd_data.handle = alloc_data.handle;
-
-  result = ioctl (priv->devfd, ION_IOC_MAP, &fd_data);
-  if (result != 0) {
-    GST_ERROR_OBJECT (mlpool, "Failed to map memory to FD!");
-    ioctl (priv->devfd, ION_IOC_FREE, &alloc_data.handle);
-    return NULL;
-  }
-
-  fd = fd_data.fd;
-
-  g_hash_table_insert (priv->datamap, GINT_TO_POINTER (fd),
-      GINT_TO_POINTER (alloc_data.handle));
-#else
-  fd = alloc_data.fd;
-#endif
-
-  GST_DEBUG_OBJECT (mlpool, "Allocated ION memory FD %d", fd);
-
-  // Wrap the allocated FD in FD backed allocator.
-  return gst_fd_allocator_alloc (priv->allocator, fd, size,
-      GST_FD_MEMORY_FLAG_DONT_CLOSE);
-}
-
-static void
-ion_device_free (GstMLBufferPool * mlpool, gint fd)
-{
-  GST_DEBUG_OBJECT (mlpool, "Closing ION memory FD %d", fd);
-
-#ifndef TARGET_ION_ABI_VERSION
-  ion_user_handle_t handle = GPOINTER_TO_INT (
-      g_hash_table_lookup (mlpool->priv->datamap, GINT_TO_POINTER (fd)));
-
-  if (ioctl (mlpool->priv->devfd, ION_IOC_FREE, &handle) < 0) {
-    GST_ERROR_OBJECT (mlpool, "Failed to free handle for memory FD %d!", fd);
-  }
-
-  g_hash_table_remove (mlpool->priv->datamap, GINT_TO_POINTER (fd));
-#endif
-
-  close (fd);
-}
 
 static const gchar **
 gst_ml_buffer_pool_get_options (GstBufferPool * pool)
@@ -264,10 +143,6 @@ gst_ml_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
 
   if (!gst_buffer_pool_config_get_allocator (config, &allocator, &params)) {
     GST_ERROR_OBJECT (mlpool, "Allocator missing from configuration");
-    return FALSE;
-  } else if (GST_IS_ION_MEMORY_TYPE (priv->memtype) &&
-      !GST_IS_FD_ALLOCATOR (allocator)) {
-    GST_ERROR_OBJECT (mlpool, "Allocator %p is not FD backed!", allocator);
     return FALSE;
   } else if (GST_IS_SYSTEM_MEMORY_TYPE (priv->memtype) &&
       GST_IS_FD_ALLOCATOR (allocator)) {
@@ -321,8 +196,6 @@ gst_ml_buffer_pool_alloc (GstBufferPool * pool, GstBuffer ** buffer,
 
     if (GST_IS_SYSTEM_MEMORY_TYPE (priv->memtype))
       mem = gst_allocator_alloc (priv->allocator, size, NULL);
-    else if (GST_IS_ION_MEMORY_TYPE (priv->memtype))
-      mem = ion_device_alloc (mlpool, size);
 
     if (NULL == mem) {
       GST_WARNING_OBJECT (mlpool, "Failed to allocate memory!");
@@ -358,16 +231,7 @@ static void
 gst_ml_buffer_pool_free (GstBufferPool * pool, GstBuffer * buffer)
 {
   GstMLBufferPool *mlpool = GST_ML_POOL (pool);
-  guint idx = 0;
-
-  for (idx = 0; idx < gst_buffer_n_memory (buffer); idx++) {
-    if (GST_IS_ION_MEMORY_TYPE (mlpool->priv->memtype)) {
-      gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, idx));
-      ion_device_free (mlpool, fd);
-    } else if (GST_IS_SYSTEM_MEMORY_TYPE (mlpool->priv->memtype)) {
-      // No additional handling is needed.
-    }
-  }
+  ml_unused(mlpool);
 
   gst_buffer_unref (buffer);
 }
@@ -384,10 +248,6 @@ gst_ml_buffer_pool_finalize (GObject * object)
     GST_INFO_OBJECT (mlpool, "Free buffer pool allocator %p", priv->allocator);
     gst_object_unref (priv->allocator);
   }
-
-  if (GST_IS_ION_MEMORY_TYPE (priv->memtype))
-    close_ion_device (mlpool);
-
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -424,17 +284,14 @@ gst_ml_buffer_pool_new (const gchar * memtype)
   mlpool = g_object_new (GST_TYPE_ML_POOL, NULL);
 
   mlpool->priv->memtype = g_quark_from_static_string (memtype);
-  mlpool->priv->devfd = -1;
   mlpool->priv->addmeta = FALSE;
   mlpool->priv->continuous = FALSE;
 
-  if (GST_IS_ION_MEMORY_TYPE (mlpool->priv->memtype)) {
-    GST_INFO_OBJECT (mlpool, "Using ION memory");
-    success = open_ion_device (mlpool);
-  } else if (GST_IS_SYSTEM_MEMORY_TYPE (mlpool->priv->memtype)) {
+  if (GST_IS_SYSTEM_MEMORY_TYPE (mlpool->priv->memtype)) {
     GST_INFO_OBJECT (mlpool, "Using SYSTEM memory");
     success = TRUE;
-  } else {
+  }
+  else {
     GST_ERROR_OBJECT (mlpool, "Invalid memory type %s!",
         g_quark_to_string (mlpool->priv->memtype));
     success = FALSE;

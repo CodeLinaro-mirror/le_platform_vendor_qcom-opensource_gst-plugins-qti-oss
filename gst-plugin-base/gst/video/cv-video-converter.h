@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -32,247 +32,252 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef __GST_GLES_VIDEO_CONVERTER_H__
-#define __GST_GLES_VIDEO_CONVERTER_H__
+#ifndef __GST_CV_VIDEO_CONVERTER_H__
+#define __GST_CV_VIDEO_CONVERTER_H__
 
 #include <gst/video/video.h>
 #include <gst/allocators/allocators.h>
 
 G_BEGIN_DECLS
 
-typedef struct _GstGlesConverter GstGlesConverter;
+typedef struct _GstCVConverter GstCVConverter;
+typedef struct _GstCVEngineData GstCVEngineData;
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_SRC_RECTANGLES
+ * GST_CV_VIDEO_CONVERTER_OPT_SRC_RECTANGLES
  *
  * #GST_TYPE_ARRAY: Array of source rectangles.
  * Default: NULL
  *
  * Not applicable for output.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_SRC_RECTANGLES \
-    "GstGlesVideoConverter.source-rectangles"
+#define GST_CV_VIDEO_CONVERTER_OPT_SRC_RECTANGLES \
+    "GstCVVideoConverter.source-rectangles"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_DEST_RECTANGLES
+ * GST_CV_VIDEO_CONVERTER_OPT_DEST_RECTANGLES
  *
  * #GST_TYPE_ARRAY: Array of destination rectangles.
  * Default: NULL
  *
  * Not applicable for output.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_DEST_RECTANGLES \
-    "GstGlesVideoConverter.destination-rectangles"
+#define GST_CV_VIDEO_CONVERTER_OPT_DEST_RECTANGLES \
+    "GstCVVideoConverter.destination-rectangles"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH
+ * GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH
  *
  * #G_TYPE_UINT, Output width.
  * Default: 0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH \
-    "GstGlesVideoConverter.output-width"
+#define GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH \
+    "GstCVVideoConverter.output-width"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT
+ * GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT
  *
  * #G_TYPE_UINT, Output height.
  * Default: 0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT \
-    "GstGlesVideoConverter.output-height"
+#define GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT \
+    "GstCVVideoConverter.output-height"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_BACKGROUND:
- *
- * #G_TYPE_UINT, background color
- * Default: 0x00000000
- *
- * Not applicable for input.
- */
-#define GST_GLES_VIDEO_CONVERTER_OPT_BACKGROUND \
-    "GstGlesVideoConverter.background"
-
-/**
- * GST_GLES_VIDEO_CONVERTER_OPT_RSCALE:
+ * GST_CV_VIDEO_CONVERTER_OPT_RSCALE:
  *
  * #G_TYPE_FLOAT, Red color channel scale factor, used in normalize operation.
  * Default: 128.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_RSCALE \
-    "GstGlesVideoConverter.rscale"
+#define GST_CV_VIDEO_CONVERTER_OPT_RSCALE \
+    "GstCVVideoConverter.rscale"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_GSCALE:
+ * GST_CV_VIDEO_CONVERTER_OPT_GSCALE:
  *
  * #G_TYPE_FLOAT, Green color channel scale factor, used in normalize operation.
  * Default: 128.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_GSCALE \
-    "GstGlesVideoConverter.gscale"
+#define GST_CV_VIDEO_CONVERTER_OPT_GSCALE \
+    "GstCVVideoConverter.gscale"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_BSCALE
+ * GST_CV_VIDEO_CONVERTER_OPT_BSCALE
  *
  * #G_TYPE_FLOAT, Blue color channel scale factor, used in normalize operation.
  * Default: 128.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_BSCALE \
-    "GstGlesVideoConverter.bscale"
+#define GST_CV_VIDEO_CONVERTER_OPT_BSCALE \
+    "GstCVVideoConverter.bscale"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_ASCALE:
+ * GST_CV_VIDEO_CONVERTER_OPT_ASCALE:
  *
  * #G_TYPE_FLOAT, Alpha channel scale factor, used in normalize operation.
  * Default: 128.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_ASCALE \
-    "GstGlesVideoConverter.ascale"
+#define GST_CV_VIDEO_CONVERTER_OPT_ASCALE \
+    "GstCVVideoConverter.ascale"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_QSCALE:
- *
- * #G_TYPE_FLOAT, Quantization scale factor, used in quantize operation.
- * Default: 128.0
- *
- * Not applicable for input.
- */
-#define GST_GLES_VIDEO_CONVERTER_OPT_QSCALE \
-    "GstGlesVideoConverter.qscale"
-
-/**
- * GST_GLES_VIDEO_CONVERTER_OPT_ROFFSET
+ * GST_CV_VIDEO_CONVERTER_OPT_ROFFSET
  *
  * #G_TYPE_FLOAT, Red channel offset, used in normalize operation.
  * Default: 0.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_ROFFSET \
-    "GstGlesVideoConverter.roffset"
+#define GST_CV_VIDEO_CONVERTER_OPT_ROFFSET \
+    "GstCVVideoConverter.roffset"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_GOFFSET
+ * GST_CV_VIDEO_CONVERTER_OPT_GOFFSET
  *
  * #G_TYPE_FLOAT, Green channel offset, used in normalize operation.
  * Default: 0.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_GOFFSET \
-    "GstGlesVideoConverter.goffset"
+#define GST_CV_VIDEO_CONVERTER_OPT_GOFFSET \
+    "GstCVVideoConverter.goffset"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_BOFFSET
+ * GST_CV_VIDEO_CONVERTER_OPT_BOFFSET
  *
  * #G_TYPE_FLOAT, Blue channel offset, used in normalize operation.
  * Default: 0.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_BOFFSET \
-    "GstGlesVideoConverter.boffset"
+#define GST_CV_VIDEO_CONVERTER_OPT_BOFFSET \
+    "GstCVVideoConverter.boffset"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_AOFFSET
+ * GST_CV_VIDEO_CONVERTER_OPT_AOFFSET
  *
  * #G_TYPE_FLOAT, Alpha channel offset, used in normalize operation.
  * Default: 0.0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_AOFFSET \
-    "GstGlesVideoConverter.ascale"
+#define GST_CV_VIDEO_CONVERTER_OPT_AOFFSET \
+    "GstCVVideoConverter.ascale"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_QOFFSET
+ * GST_CV_VIDEO_CONVERTER_OPT_QOFFSET
  *
  * #G_TYPE_FLOAT, Quantization offset, used in quantize operation.
  * Default: 0
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_QOFFSET \
-    "GstGlesVideoConverter.qoffset"
+#define GST_CV_VIDEO_CONVERTER_OPT_QOFFSET \
+    "GstCVVideoConverter.qoffset"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_NORMALIZE
+ * GST_CV_VIDEO_CONVERTER_OPT_NORMALIZE
  *
  * #G_TYPE_BOOLEAN: Engine operation normalizing input data to FLOAT.
  * Default: FALSE
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_NORMALIZE \
-    "GstGlesVideoConverter.normalize"
+#define GST_CV_VIDEO_CONVERTER_OPT_NORMALIZE \
+    "GstCVVideoConverter.normalize"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_QUANTIZE
+ * GST_CV_VIDEO_CONVERTER_OPT_CONVERT_NETWORK_TYPE
  *
- * #G_TYPE_BOOLEAN: Engine operation for quantizing the input data.
+ * #G_TYPE_UINT: Engine operation to convert input data to 8 bit INT,
+ *                  8 bit UINT, 16 bit float, 32 bit float.
+ * Default: 0
+ *
+ * Not applicable for input.
+ */
+#define GST_CV_VIDEO_CONVERTER_OPT_CONVERT_NETWORK_TYPE \
+    "GstCVVideoConverter.convert-network-type"
+
+/**
+ * GST_CV_VIDEO_CONVERTER_OPT_CONVERT
+ *
+ * #G_TYPE_BOOLEAN: .
  * Default: FALSE
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_QUANTIZE \
-    "GstGlesVideoConverter.quantize"
+#define GST_CV_VIDEO_CONVERTER_OPT_CONVERT \
+    "GstCVVideoConverter.convert-convert"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_CONVERT_TO_UINT8
+ * GST_CV_VIDEO_CONVERTER_OPT_RESIZE
  *
- * #G_TYPE_BOOLEAN: Engine operation to convert input data to 8 bit UINT.
+ * #G_TYPE_BOOLEAN: .
  * Default: FALSE
  *
  * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_CONVERT_TO_UINT8 \
-    "GstGlesVideoConverter.convert-to-uint8"
+#define GST_CV_VIDEO_CONVERTER_OPT_RESIZE \
+    "GstCVVideoConverter.convert-resize"
 
 /**
- * GST_GLES_VIDEO_CONVERTER_OPT_UBWC_FORMAT:
+ * GST_CV_VIDEO_CONVERTER_OPT_TRANSPOSE
  *
- * #G_TYPE_BOOLEAN, whether buffers have UBWC (Universal Bandwidth Compression)
- * Default: FALSE
+ * #G_TYPE_UINT: .
+ * Default: 0
+ *
+ * Not applicable for input.
  */
-#define GST_GLES_VIDEO_CONVERTER_OPT_UBWC_FORMAT \
-    "GstGlesVideoConverter.ubwc-format"
+#define GST_CV_VIDEO_CONVERTER_OPT_TRANSPOSE \
+    "GstCVVideoConverter.convert-transpose"
 
 /**
- * gst_gles_video_converter_new:
+ * @brief enum image buffer out type
  *
- * Initialize instance of GLES converter module.
- *
- * return: pointer to GLES converter on success or NULL on failure
  */
-GST_VIDEO_API GstGlesConverter *
-gst_gles_video_converter_new     (void);
+enum
+{
+  GST_CV_UINT8,
+  GST_CV_INT8,
+  GST_CV_FLOAT16,
+  GST_CV_FLOAT32,
+};
 
 /**
- * gst_gles_video_converter_free:
- * @convert: Pointer to GLES converter module
+ * gst_cv_video_converter_new:
  *
- * Deinitialise the GLES converter instance.
+ * Initialize instance of opencv converter module.
+ *
+ * return: pointer to opencv converter on success or NULL on failure
+ */
+GST_VIDEO_API GstCVConverter *
+gst_cv_video_converter_new     (void);
+
+/**
+ * gst_cv_video_converter_free:
+ * @convert: Pointer to opencv converter module
+ *
+ * Deinitialise the opencv converter instance.
  *
  * return: NONE
  */
 GST_VIDEO_API void
-gst_gles_video_converter_free    (GstGlesConverter * convert);
+gst_cv_video_converter_free    (GstCVConverter * convert);
 
 /**
- * gst_gles_video_converter_set_input_opts:
- * @convert: Pointer to GLES converter instance
+ * gst_cv_video_converter_set_input_opts:
+ * @convert: Pointer to opencv converter instance
  * @index: Input frame index
  * @opts: Pointer to structure containing options
  *
@@ -282,12 +287,12 @@ gst_gles_video_converter_free    (GstGlesConverter * convert);
  * return: TRUE on success or FALSE on failure
  */
 GST_VIDEO_API gboolean
-gst_gles_video_converter_set_input_opts (GstGlesConverter * convert,
+gst_cv_video_converter_set_input_opts (GstCVConverter * convert,
                                          guint index, GstStructure * opts);
 
 /**
- * gst_gles_video_converter_set_process_opts:
- * @convert: Pointer to GLES converter instance
+ * gst_cv_video_converter_set_process_opts:
+ * @convert: Pointer to opencv converter instance
  * @opts: Pointer to structure containing options
  *
  * Configure the set of operations that will be performed on the input frames.
@@ -295,12 +300,12 @@ gst_gles_video_converter_set_input_opts (GstGlesConverter * convert,
  * return: TRUE on success or FALSE on failure
  */
 GST_VIDEO_API gboolean
-gst_gles_video_converter_set_output_opts (GstGlesConverter * convert,
+gst_cv_video_converter_set_output_opts (GstCVConverter * convert,
                                           GstStructure * opts);
 
 /**
- * gst_gles_video_converter_process:
- * @convert: pointer to GLES converter instance
+ * gst_cv_video_converter_process:
+ * @convert: pointer to opencv converter instance
  * @inframes: Array of input video frames
  * @n_inputs: Number of input frames
  * @outframes: Array of output video frames
@@ -312,7 +317,7 @@ gst_gles_video_converter_set_output_opts (GstGlesConverter * convert,
  * return: TRUE on success or FALSE on failure
  */
 GST_VIDEO_API gboolean
-gst_gles_video_converter_process (GstGlesConverter * convert,
+gst_cv_video_converter_process (GstCVConverter * convert,
                                   GstVideoFrame * inframes, guint n_inputs,
                                   GstVideoFrame * outframes, guint n_outputs);
 
