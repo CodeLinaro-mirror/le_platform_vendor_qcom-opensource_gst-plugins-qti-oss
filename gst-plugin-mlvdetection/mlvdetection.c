@@ -75,11 +75,6 @@
 #include <gst/video/gstimagepool.h>
 #include <cairo/cairo.h>
 
-#ifdef HAVE_LINUX_DMA_BUF_H
-#include <sys/ioctl.h>
-#include <linux/dma-buf.h>
-#endif // HAVE_LINUX_DMA_BUF_H
-
 #define GST_CAT_DEFAULT gst_ml_video_detection_debug
 GST_DEBUG_CATEGORY_STATIC (gst_ml_video_detection_debug);
 
@@ -89,10 +84,6 @@ G_DEFINE_TYPE (GstMLVideoDetection, gst_ml_video_detection,
 
 #define GST_TYPE_ML_MODULES (gst_ml_modules_get_type())
 
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
-
 #define GST_ML_VIDEO_DETECTION_VIDEO_FORMATS \
     "{ BGRA, BGRx, BGR16 }"
 
@@ -101,8 +92,6 @@ G_DEFINE_TYPE (GstMLVideoDetection, gst_ml_video_detection,
 
 #define GST_ML_VIDEO_DETECTION_SRC_CAPS                            \
     "video/x-raw, "                                                \
-    "format = (string) " GST_ML_VIDEO_DETECTION_VIDEO_FORMATS "; " \
-    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "               \
     "format = (string) " GST_ML_VIDEO_DETECTION_VIDEO_FORMATS "; " \
     "text/x-raw, "                                                 \
     "format = (string) " GST_ML_VIDEO_DETECTION_TEXT_FORMATS
@@ -211,24 +200,6 @@ gst_ml_prediction_free (GstMLPrediction * prediction)
     g_free (prediction->label);
 }
 
-static gboolean
-caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint idx = 0;
-
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    // Skip ANY caps and return immediately if feature is present.
-    if (!gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
-  }
-  return FALSE;
-}
-
 static GstBufferPool *
 gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
     GstCaps * caps)
@@ -245,14 +216,8 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
       return NULL;
     }
 
-    // If downstream allocation query supports GBM, allocate gbm memory.
-    if (caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-      GST_INFO_OBJECT (detection, "Uses GBM memory");
-      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
-    } else {
-      GST_INFO_OBJECT (detection, "Uses ION memory");
-      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
-    }
+    // If downstream allocation query supports SYSTEM, allocate system memory.
+   pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_SYS);
 
     if (NULL == pool) {
       GST_ERROR_OBJECT (detection, "Failed to create buffer pool!");
@@ -276,7 +241,7 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
       DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
 
   if (GST_IS_IMAGE_BUFFER_POOL (pool)) {
-    GstAllocator *allocator = gst_fd_allocator_new ();
+    GstAllocator *allocator = gst_allocator_find (NULL);
 
     gst_buffer_pool_config_set_allocator (structure, allocator, NULL);
     g_object_unref (allocator);
@@ -334,18 +299,6 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
     GST_ERROR_OBJECT (detection, "Failed to map buffer memory block!");
     return FALSE;
   }
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (detection, "DMA IOCTL SYNC START failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   surface = cairo_image_surface_create_for_data (memmap.data, format,
       vmeta->width, vmeta->height, vmeta->stride[0]);
@@ -450,18 +403,6 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
 
   cairo_destroy (context);
   cairo_surface_destroy (surface);
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (detection, "DMA IOCTL SYNC END failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   // Unmap buffer memory blocks.
   gst_buffer_unmap (buffer, &memmap);
