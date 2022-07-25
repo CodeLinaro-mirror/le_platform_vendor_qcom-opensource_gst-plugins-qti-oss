@@ -1,17 +1,12 @@
 cmake_minimum_required(VERSION 3.8.2)
 project(GST_PLUGIN_QTI_OSS_ML_VIDEO_CLASSIFICATION
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
-  LANGUAGES C
+  LANGUAGES C CXX
 )
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
-
-set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:${SYSROOT_LIBDIR}/pkgconfig")
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
@@ -27,10 +22,6 @@ pkg_check_modules(CAIRO REQUIRED cairo)
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
-
-# Check whether DMA header is present.
-include(CheckIncludeFile)
-check_include_file("linux/dma-buf.h" HAVE_LINUX_DMA_BUF_H)
 
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
@@ -48,10 +39,6 @@ add_library(${GST_QTI_ML_VIDEO_CLASSIFICATION} SHARED
 
 set_target_properties(${GST_QTI_ML_VIDEO_CLASSIFICATION} PROPERTIES PUBLIC_HEADER
   "modules/ml-video-classification-module.h"
-)
-
-target_compile_definitions(${GST_QTI_ML_VIDEO_CLASSIFICATION} PRIVATE
-  $<$<BOOL:${HAVE_LINUX_DMA_BUF_H}>:HAVE_LINUX_DMA_BUF_H>
 )
 
 target_include_directories(${GST_QTI_ML_VIDEO_CLASSIFICATION} PUBLIC
