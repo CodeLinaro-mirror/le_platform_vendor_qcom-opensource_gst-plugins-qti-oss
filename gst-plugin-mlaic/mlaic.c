@@ -54,11 +54,16 @@ G_DEFINE_TYPE (GstMLAic, gst_ml_aic, GST_TYPE_ELEMENT);
 #define DEFAULT_PROP_MIN_BUFFERS   48
 #define DEFAULT_PROP_MAX_BUFFERS   48
 
-#define GST_ML_AIC_TENSOR_TYPES "{ UINT8, INT32, FLOAT32 }"
+#define GST_ML_AIC_SINK_TENSOR_TYPES "{ INT8, FLOAT16, FLOAT32 }"
+#define GST_ML_AIC_SRC_TENSOR_TYPES "{ INT8, FLOAT32 }"
 
-#define GST_ML_AIC_CAPS                        \
+#define GST_ML_AIC_SINK_CAPS                   \
     "neural-network/tensors, "                 \
-    "type = (string) " GST_ML_AIC_TENSOR_TYPES
+    "type = (string) " GST_ML_AIC_SINK_TENSOR_TYPES
+
+#define GST_ML_AIC_SRC_CAPS                    \
+    "neural-network/tensors, "                 \
+    "type = (string) " GST_ML_AIC_SRC_TENSOR_TYPES
 
 static GType gst_engine_request_get_type(void);
 #define GST_TYPE_ENGINE_REQUEST  (gst_engine_request_get_type())
@@ -141,8 +146,11 @@ gst_ml_aic_free_queue_item (gpointer data)
   g_slice_free (GstDataQueueItem, item);
 }
 
-static GstStaticCaps gst_ml_aic_static_caps =
-    GST_STATIC_CAPS (GST_ML_AIC_CAPS);
+static GstStaticCaps gst_ml_aic_sink_static_caps =
+    GST_STATIC_CAPS (GST_ML_AIC_SINK_CAPS);
+
+static GstStaticCaps gst_ml_aic_src_static_caps =
+    GST_STATIC_CAPS (GST_ML_AIC_SRC_CAPS);
 
 static GstCaps *
 gst_ml_aic_src_caps (void)
@@ -151,7 +159,7 @@ gst_ml_aic_src_caps (void)
   static volatile gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
-    caps = gst_static_caps_get (&gst_ml_aic_static_caps);
+    caps = gst_static_caps_get (&gst_ml_aic_src_static_caps);
     g_once_init_leave (&inited, 1);
   }
   return caps;
@@ -164,7 +172,7 @@ gst_ml_aic_sink_caps (void)
   static volatile gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
-    caps = gst_static_caps_get (&gst_ml_aic_static_caps);
+    caps = gst_static_caps_get (&gst_ml_aic_sink_static_caps);
     g_once_init_leave (&inited, 1);
   }
   return caps;
@@ -236,14 +244,14 @@ gst_ml_aic_create_pool (GstPad * pad, GstCaps * caps)
     return NULL;
   }
 
-   GST_INFO_OBJECT (pad, "Uses ION memory");
-   pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_ION);
+   GST_INFO_OBJECT (pad, "Uses System memory");
+   pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_SYSTEM);
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, gst_ml_info_size (&info),
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
+  allocator = gst_allocator_find (NULL);
 
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (

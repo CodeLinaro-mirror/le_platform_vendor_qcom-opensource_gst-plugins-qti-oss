@@ -102,13 +102,13 @@ struct _GstMLAicEngine
 
   GstStructure *settings;
 
-  // List containing the order in which in/out buffers need to be filled.
-  std::vector<::aicapi::bufferIoDirectionEnum> buforder;
-
   // AIC100 Primary object that links all other core objects.
   ::qaic::rt::shContext context;
   // AIC100 Program Container object containing the loaded model.
   ::qaic::rt::shQpc qpc;
+
+  ::qaic::rt::BufferMappings bufferMappings;
+  std::vector<uint32_t> bufferOffset;
 
   // List of programs on a AIC100 device.
   std::map<::qaic::rt::shProgram, uint32_t> programs;
@@ -175,6 +175,8 @@ gst_ml_aic_to_ml_type (::aicapi::bufferIoDataTypeEnum type)
   switch (type) {
     case ::aicapi::FLOAT_TYPE:
       return GST_ML_TYPE_FLOAT32;
+    case ::aicapi::FLOAT_16_TYPE:
+      return GST_ML_TYPE_FLOAT16;
     case ::aicapi::INT8_Q_TYPE:
       return GST_ML_TYPE_INT8;
     case ::aicapi::UINT8_Q_TYPE:
@@ -193,26 +195,15 @@ gst_ml_aic_populate_info (GstMLAicEngine * engine, gint idx,
 {
   GstMLInfo *mlinfo = NULL;
   const ::aicapi::IoBinding *binding = NULL;
-  const ::aicapi::DmaBufInfo *info = NULL, *previnfo = NULL;
-  gboolean input = FALSE;
   gint num = 0, dim = 0;
 
   binding = &ioset.bindings(idx);
 
   if (::aicapi::BUFFER_IO_TYPE_INPUT == binding->dir()) {
     mlinfo = engine->ininfo;
-    input = TRUE;
   } else if (::aicapi::BUFFER_IO_TYPE_OUTPUT == binding->dir()) {
     mlinfo = engine->outinfo;
-    input = FALSE;
   }
-
-  info = &binding->dma_buf_info(0);
-
-  GST_INFO ("%s tensor at index %u, name: %s, size %u, DMA index: %u, DMA "
-      "offset: %u and DMA size: %u", input ? "Input" : "Output",
-      binding->index(), binding->name().c_str(), binding->size(),
-      info->dma_buf_index(), info->dma_offset(), info->dma_size());
 
   // Fill information about current tensor.
   num = mlinfo->n_tensors;
@@ -223,53 +214,6 @@ gst_ml_aic_populate_info (GstMLAicEngine * engine, gint idx,
 
   mlinfo->type = gst_ml_aic_to_ml_type (binding->type());
   mlinfo->n_tensors++;
-
-  // Reorder tensors in case they are not sorted by DMA offset values.
-  while (--idx >= 0) {
-    binding = &ioset.bindings(idx);
-    previnfo = &binding->dma_buf_info(0);
-
-    if (previnfo->dma_buf_index() == info->dma_buf_index() &&
-        previnfo->dma_offset() > info->dma_offset()) {
-      gint n_dimensions, dimensions[GST_ML_TENSOR_MAX_DIMS];
-
-      n_dimensions = mlinfo->n_dimensions[num];
-      mlinfo->n_dimensions[num] = mlinfo->n_dimensions[num - 1];
-      mlinfo->n_dimensions[num - 1] = n_dimensions;
-
-      for (dim = 0; dim < n_dimensions; ++dim)
-        dimensions[dim] = mlinfo->tensors[num][dim];
-
-      for (dim = 0; dim < (gint) mlinfo->n_dimensions[num]; ++dim)
-        mlinfo->tensors[num][dim] = mlinfo->tensors[num - 1][dim];
-
-      for (dim = 0; dim < (gint) mlinfo->n_dimensions[num - 1]; ++dim)
-        mlinfo->tensors[num - 1][dim] = dimensions[dim];
-    }
-
-    if ((input && (::aicapi::BUFFER_IO_TYPE_INPUT == binding->dir())) ||
-        (!input && (::aicapi::BUFFER_IO_TYPE_OUTPUT == binding->dir())))
-      num--;
-
-    info = previnfo;
-  }
-}
-
-static gboolean
-gst_ml_aic_set_qbuffer (const GstMLFrame * frame, guint idx, QBuffer& qbuffer)
-{
-  GstMemory *memory = gst_buffer_peek_memory (frame->buffer, idx);
-
-  g_return_val_if_fail (gst_is_fd_memory (memory), FALSE);
-
-  qbuffer.type = QBUFFER_TYPE_DMABUF;
-  qbuffer.buf = GST_ML_FRAME_BLOCK_DATA (frame, idx);
-  qbuffer.size = GST_ML_FRAME_BLOCK_SIZE (frame, idx);
-
-  qbuffer.handle = gst_fd_memory_get_fd (memory);
-  qbuffer.offset = memory->offset;
-
-  return TRUE;
 }
 
 static ::qaic::rt::shExecObj
@@ -289,7 +233,7 @@ gst_ml_aic_retrieve_execution_object (GstMLAicEngine * engine,
       continue;
 
     for (uint32_t idx = 0; idx < buffers.size(); idx++)
-      match &= (buffers[idx].handle == qbuffers[idx].handle) ? true : false;
+      match &= (buffers[idx].buf == qbuffers[idx].buf) ? true : false;
 
     if (!match) continue;
 
@@ -326,7 +270,7 @@ gst_ml_aic_retrieve_execution_object (GstMLAicEngine * engine,
   GST_AIC_UNLOCK (engine);
 
   try {
-    object = ::qaic::rt::ExecObj::Factory(engine->context, program, qbuffers);
+    object = ::qaic::rt::ExecObj::Factory(engine->context, program);
 
     GST_AIC_LOCK (engine);
     engine->objects.emplace(object, nullptr);
@@ -529,6 +473,17 @@ gst_ml_aic_engine_new (GstStructure * settings)
       engine->queues.emplace(queue, 0);
     }
 
+    engine->bufferMappings = engine->qpc->getBufferMappings();
+    size_t offset = 0;
+    for (auto const &m : engine->bufferMappings) {
+        if (m.ioType == ::QAicBufferIoTypeEnum_t::BUFFER_IO_TYPE_INPUT) {
+            engine->bufferOffset.push_back(0);
+        } else {
+            engine->bufferOffset.push_back(offset);
+            offset += m.size;
+        }
+    }
+
     QData iodata = {0, nullptr};
 
     // Retrieve IO descriptor using 1st activation.
@@ -547,23 +502,12 @@ gst_ml_aic_engine_new (GstStructure * settings)
       gst_ml_aic_engine_free (engine);
       return NULL;
     }
-
-    // Find the 'default' IO set which contains information about the tensors.
-    auto it = std::find_if(iodesc->io_sets().begin(), iodesc->io_sets().end(),
-        [] (const ::aicapi::IoSet& set) { return set.name() == "dma"; } );
-
-    GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (it != iodesc->io_sets().end(), NULL,
-        gst_ml_aic_engine_free (engine), "Failed to find 'default' IO set!");
-
-    const ::aicapi::IoSet &ioset = *it;
+    const ::aicapi::IoSet &ioset = iodesc->selected_set();
 
     // Iterate through all bindings and populate input and output ML info.
     for (idx = 0; idx < (guint) ioset.bindings_size(); idx++)
       gst_ml_aic_populate_info (engine, idx, ioset);
 
-    // Fill the order (in/out) in which the buffers are expected to be set.
-    for (idx = 0; idx < (guint) iodesc->dma_buf_size(); idx++)
-      engine->buforder.push_back(iodesc->dma_buf(idx).dir());
 
   } catch (const ::qaic::rt::CoreExceptionInit &e) {
     GST_ERROR ("Caught exception during initialization: %s", e.what());
@@ -638,27 +582,27 @@ gint
 gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
     GstMLFrame * inframe, GstMLFrame * outframe)
 {
-  guint idx = 0, num = 0;
-
   g_return_val_if_fail (engine != NULL, GST_ML_AIC_INVALID_ID);
   g_return_val_if_fail (inframe != NULL, GST_ML_AIC_INVALID_ID);
   g_return_val_if_fail (outframe != NULL, GST_ML_AIC_INVALID_ID);
 
   // Set of both input and output buffers used in the AIC ExecObj.
   std::vector<QBuffer> qbuffers;
-
-  for (auto const& direction : engine->buforder) {
-    gboolean success = FALSE;
-
-    qbuffers.emplace_back();
-
-    if (::aicapi::BUFFER_IO_TYPE_INPUT == direction)
-      success = gst_ml_aic_set_qbuffer (inframe, idx++, qbuffers.back());
-    else // (::aicapi::BUFFER_IO_TYPE_OUTPUT == direction)
-      success = gst_ml_aic_set_qbuffer (outframe, num++, qbuffers.back());
-
-    GST_ML_RETURN_VAL_IF_FAIL (success, GST_ML_AIC_INVALID_ID,
-        "Failed to fill QBuffer!");
+  gint offset_index = 0;
+  for (auto const &m : engine->bufferMappings) {
+    QBuffer qbuf;
+    qbuf.type = QBUFFER_TYPE_HEAP;
+    qbuf.offset = 0;
+    qbuf.handle = 0;
+    if (m.ioType == ::QAicBufferIoTypeEnum_t::BUFFER_IO_TYPE_INPUT) {
+      qbuf.size = m.size;
+      qbuf.buf = GST_ML_FRAME_BLOCK_DATA(inframe, 0);
+    } else {
+      qbuf.buf = GST_ML_FRAME_BLOCK_DATA(outframe, 0) + engine->bufferOffset[offset_index];
+      qbuf.size = m.size;
+    }
+    offset_index++;
+    qbuffers.push_back(qbuf);
   }
 
   ::qaic::rt::shExecObj object =
@@ -667,6 +611,7 @@ gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
   GST_ML_RETURN_VAL_IF_FAIL (object, GST_ML_AIC_INVALID_ID,
       "Failed to retrieve ExecObj!");
 
+  object->setData(qbuffers);
   GST_AIC_LOCK (engine);
 
   // Initialize the usage and queus with the 1st activation before search.
