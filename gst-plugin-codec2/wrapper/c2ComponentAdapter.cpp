@@ -500,9 +500,9 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
                 buffer->offset[1] = stride * y_scanlines;
 
                 LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
-                        " stride %u, offset %" G_GSIZE_FORMAT,
-                        fd, buffer->capacity, buffer->ubwc_flag,
-                        stride, buffer->offset[1]);
+                            " stride %u, offset %" G_GSIZE_FORMAT,
+                    fd, buffer->capacity, buffer->ubwc_flag,
+                    stride, buffer->offset[1]);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");

@@ -97,9 +97,9 @@ G_DEFINE_TYPE (Gstqticodec2vdec, gst_qticodec2vdec, GST_TYPE_VIDEO_DECODER);
 #define EOS_WAITING_TIMEOUT 5
 #define QCODEC2_MIN_OUTBUFFERS 6
 
-#define GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
-#define GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT             (FALSE)
-#define GST_QTI_CODEC2_SECURE_MODE_DEFAULT                      (FALSE)
+#define DEFAULT_OUTPUT_PICTURE_ORDER_MODE    (0xffffffff)
+#define DEFAULT_LOW_LATENCY_MODE             (FALSE)
+#define DEFAULT_SECURE_MODE                  (FALSE)
 
 /* Function will be named qticodec2vdec_qdata_quark() */
 static G_DEFINE_QUARK (FBufModifierQuark, gst_fbuf_modifier_qdata);
@@ -707,8 +707,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   interlace = make_interlace_param (c2interlace_mode, FALSE);
   g_ptr_array_add (config, &interlace);
 
-  if (dec->output_picture_order_mode !=
-      GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT) {
+  if (dec->output_picture_order_mode != DEFAULT_OUTPUT_PICTURE_ORDER_MODE) {
     output_picture_order_mode =
         make_output_picture_order_param (dec->output_picture_order_mode);
     g_ptr_array_add (config, &output_picture_order_mode);
@@ -784,6 +783,24 @@ gst_qticodec2vdec_open (GstVideoDecoder * decoder)
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   gboolean ret = TRUE;
 
+  dec->input_setup = FALSE;
+  dec->output_setup = FALSE;
+  dec->eos_reached = FALSE;
+  dec->frame_index = 0;
+  dec->num_input_queued = 0;
+  dec->num_output_done = 0;
+  dec->downstream_supports_dma = FALSE;
+  dec->comp = NULL;
+  dec->comp_intf = NULL;
+  dec->out_port_pool = NULL;
+  dec->is_10bit = FALSE;
+  dec->check_vp9_10bit = FALSE;
+
+  memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
+  memset (&dec->start_time, 0, sizeof (struct timeval));
+  memset (&dec->first_frame_time, 0, sizeof (struct timeval));
+  gettimeofday (&dec->start_time, NULL);
+
   GST_DEBUG_OBJECT (dec, "open");
 
   /* Create component store */
@@ -817,8 +834,19 @@ gst_qticodec2vdec_close (GstVideoDecoder * decoder)
 
   GST_DEBUG_OBJECT (dec, "close");
 
+  if (dec->out_port_pool) {
+    GST_DEBUG_OBJECT (dec, "pool ref cnt:%d",
+        GST_OBJECT_REFCOUNT (dec->out_port_pool));
+    gst_object_unref (dec->out_port_pool);
+  }
+
   if (!gst_qticodec2vdec_destroy_component (decoder)) {
     GST_ERROR_OBJECT (dec, "Failed to delete component");
+  }
+
+  if (dec->comp_name) {
+    g_free (dec->comp_name);
+    dec->comp_name = NULL;
   }
 
   if (dec->comp_store) {
@@ -1484,17 +1512,6 @@ gst_qticodec2vdec_finalize (GObject * object)
   g_mutex_clear (&dec->pending_lock);
   g_cond_clear (&dec->pending_cond);
 
-  if (dec->comp_name) {
-    g_free (dec->comp_name);
-    dec->comp_name = NULL;
-  }
-
-  if (dec->out_port_pool) {
-    GST_DEBUG_OBJECT (dec, "pool ref cnt:%d",
-        GST_OBJECT_REFCOUNT (dec->out_port_pool));
-    gst_object_unref (dec->out_port_pool);
-  }
-
   if (dec->gbm_lib) {
     GST_INFO_OBJECT (dec, "dlclose gbm lib:%p", dec->gbm_lib);
     dlclose (dec->gbm_lib);
@@ -1563,14 +1580,14 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
       PROP_OUTPUT_PICTURE_ORDER, g_param_spec_uint ("output-picture-order-mode",
           "output picture order mode",
           "output picture order (0xffffffff=component default, 1: display order, 2: decoder order)",
-          0, G_MAXUINT, GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT,
+          0, G_MAXUINT, DEFAULT_OUTPUT_PICTURE_ORDER_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_LOW_LATENCY,
       g_param_spec_boolean ("low-latency-mode", "Low latency mode",
           "If enabled, decoder should be in low latency mode",
-          GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT,
+          DEFAULT_LOW_LATENCY_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -1578,7 +1595,7 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
       g_param_spec_boolean ("secure", "secure mode",
           "If enabled, decoder should be in secure mode. Secure mode only support UBWC output "
           "For any secure cases, output is forced to set UBWC",
-          GST_QTI_CODEC2_SECURE_MODE_DEFAULT,
+          DEFAULT_SECURE_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -1619,7 +1636,9 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
       "Video Decoder based on Codec2.0", "QTI");
 }
 
-/* Invoked during object instantiation (equivalent C++ constructor). */
+/* Invoked during object instantiation (equivalent C++ constructor).
+ * Initialize only those variables that do not change during state change.
+ * For other variables, place initialization into function open.*/
 static void
 gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
 {
@@ -1627,29 +1646,10 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
 
   gst_video_decoder_set_packetized (decoder, TRUE);
 
-  dec->input_setup = FALSE;
-  dec->output_setup = FALSE;
-  dec->eos_reached = FALSE;
-  dec->frame_index = 0;
-  dec->num_input_queued = 0;
-  dec->num_output_done = 0;
-  dec->downstream_supports_dma = FALSE;
-  dec->comp_store = NULL;
-  dec->comp = NULL;
-  dec->comp_intf = NULL;
-  dec->output_picture_order_mode =
-      GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
-  dec->low_latency_mode = GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT;
-  dec->out_port_pool = NULL;
-  dec->is_10bit = FALSE;
-  dec->check_vp9_10bit = FALSE;
+  dec->output_picture_order_mode = DEFAULT_OUTPUT_PICTURE_ORDER_MODE;
+  dec->low_latency_mode = DEFAULT_LOW_LATENCY_MODE;
   dec->cb.data_copy_func = NULL;
   dec->cb.data_copy_func_param = NULL;
-
-  memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
-  memset (&dec->start_time, 0, sizeof (struct timeval));
-  memset (&dec->first_frame_time, 0, sizeof (struct timeval));
-  gettimeofday (&dec->start_time, NULL);
 
   g_cond_init (&dec->pending_cond);
   g_mutex_init (&dec->pending_lock);
