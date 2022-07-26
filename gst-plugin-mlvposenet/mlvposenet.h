@@ -26,9 +26,9 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
+ * ​​​​​Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,65 +61,63 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_QTI_ML_VIDEO_DETECTION_H__
-#define __GST_QTI_ML_VIDEO_DETECTION_H__
+#ifndef __GST_QTI_ML_VIDEO_POSENET_H__
+#define __GST_QTI_ML_VIDEO_POSENET_H__
 
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/ml/ml-info.h>
 #include <gst/video/video.h>
 
-#include "modules/ml-video-detection-module.h"
-
 G_BEGIN_DECLS
+#define GST_TYPE_ML_VIDEO_POSENET (gst_ml_video_posenet_get_type())
+#define GST_ML_VIDEO_POSENET(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_ML_VIDEO_POSENET, \
+                              GstMLVideoPosenet))
+#define GST_ML_VIDEO_POSENET_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_ML_VIDEO_POSENET, \
+                           GstMLVideoPosenetClass))
+#define GST_IS_ML_VIDEO_POSENET(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_ML_VIDEO_POSENET))
+#define GST_IS_ML_VIDEO_POSENET_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_ML_VIDEO_POSENET))
+#define GST_ML_VIDEO_POSENET_CAST(obj) ((GstMLVideoPosenet *)(obj))
+typedef struct _GstMLModule GstMLModule;
+typedef struct _GstMLVideoPosenet GstMLVideoPosenet;
+typedef struct _GstMLVideoPosenetClass GstMLVideoPosenetClass;
 
-#define GST_TYPE_ML_VIDEO_DETECTION (gst_ml_video_detection_get_type())
-#define GST_ML_VIDEO_DETECTION(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_ML_VIDEO_DETECTION, \
-                              GstMLVideoDetection))
-#define GST_ML_VIDEO_DETECTION_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_ML_VIDEO_DETECTION, \
-                           GstMLVideoDetectionClass))
-#define GST_IS_ML_VIDEO_DETECTION(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_ML_VIDEO_DETECTION))
-#define GST_IS_ML_VIDEO_DETECTION_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_ML_VIDEO_DETECTION))
-#define GST_ML_VIDEO_DETECTION_CAST(obj) ((GstMLVideoDetection *)(obj))
+struct _GstMLVideoPosenet
+{
+  GstBaseTransform parent;
 
-typedef struct _GstMLVideoDetection GstMLVideoDetection;
-typedef struct _GstMLVideoDetectionClass GstMLVideoDetectionClass;
+  GstMLInfo *mlinfo;
 
-struct _GstMLVideoDetection {
-  GstBaseTransform  parent;
-
-  GstMLInfo         *mlinfo;
-
-  /// Output mode (video or text)
-  guint             mode;
+  /// Source aspect ratio, extracted from input caps.
+  gint sar_n;
+  gint sar_d;
 
   /// Buffer pools.
-  GstBufferPool     *outpool;
+  GstBufferPool *outpool;
 
   /// Tensor deciphering module.
-  GstMLModule       *module;
+  GstMLModule *module;
 
   /// Cairo surfaces and contexts mapped for each buffer.
-  GHashTable        *surfaces;
-  GHashTable        *contexts;
+  GHashTable *surfaces;
+  GHashTable *contexts;
 
   /// Properties.
-  gint              mdlenum;
-  gchar             *labels;
-  guint             n_results;
-  gdouble           threshold;
+  gchar *modname;
+  guint n_results;
+  gdouble threshold;
 };
 
-struct _GstMLVideoDetectionClass {
+struct _GstMLVideoPosenetClass
+{
   GstBaseTransformClass parent;
 };
 
-G_GNUC_INTERNAL GType gst_ml_video_detection_get_type (void);
+G_GNUC_INTERNAL GType gst_ml_video_posenet_get_type (void);
 
 G_END_DECLS
-
-#endif // __GST_QTI_ML_VIDEO_DETECTION_H__
+#endif // __GST_QTI_ML_VIDEO_POSENET_H__

@@ -65,6 +65,8 @@ static gboolean gst_c2vdec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state);
 static GstFlowReturn gst_c2vdec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
+static GstFlowReturn gst_c2vdec_finish (GstVideoDecoder * decoder);
+static void gst_c2vdec_finalize (GObject * object);
 
 enum
 {
@@ -78,6 +80,9 @@ enum
 #define GST_QTI_CODEC2_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_QTI_CODEC2_DEC_LOW_LATENCY_MODE_DEFAULT             (FALSE)
 #define GST_QTI_CODEC2_DEC_MAP_OUTBUF_DEFAULT                   (0xffffffff)
+
+#define gst_c2vdec_parent_class parent_class
+G_DEFINE_TYPE (GstC2vdec, gst_c2vdec, GST_TYPE_VIDEO_DECODER);
 
 /* pad templates */
 
@@ -104,7 +109,7 @@ GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (
-        "video/x-raw, "
+        "video/x-raw(ANY), "
         "format = (string) NV12, "
         "width  = (int) [ 32, 8192 ], "
         "height = (int) [ 32, 8192 ]"
@@ -120,9 +125,6 @@ static G_DEFINE_QUARK (QtiCodec2EncoderQuark, gst_c2_venc_qdata);
 
 /* class initialization */
 
-G_DEFINE_TYPE_WITH_CODE (GstC2vdec, gst_c2vdec, GST_TYPE_VIDEO_DECODER,
-  GST_DEBUG_CATEGORY_INIT (gst_c2vdec_debug_category, "c2vdec", 0,
-  "debug category for c2vdec element"));
 
 static config_params_t
 make_resolution_param (guint32 width, guint32 height, gboolean isInput)
@@ -200,7 +202,7 @@ gst_c2_buffer_release (GstStructure * structure)
   guint64 index = 0;
   gst_structure_get (structure, "decoder", G_TYPE_POINTER, &decoder, NULL);
   gst_structure_get_uint64 (structure, "index", &index);
-   GST_ERROR_OBJECT (decoder, "gst_c2_buffer_release index %d", index);
+  GST_DEBUG_OBJECT (decoder, "gst_c2_buffer_release index %d", index);
   GstC2vdec *dec = GST_C2VDEC (decoder);
   if (decoder) {
     if (!gst_c2_vdec_wrapper_free_output_buffer (dec->wrapper, index)) {
@@ -532,7 +534,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   inBuf.timestamp = NANO_TO_MILLI (frame->pts);
   inBuf.index = frame->system_frame_number;
-  GST_WARNING_OBJECT (dec," frame index = %d",inBuf.index);
+  GST_DEBUG_OBJECT (dec," frame index = %d",inBuf.index);
 
   /* Queue buffer to Codec2 */
   if (!gst_c2_vdec_wrapper_component_queue (dec->wrapper, &inBuf)) {
@@ -578,7 +580,7 @@ handle_video_event (EVENT_TYPE type, void *userdata, void *userdata2)
           GST_ERROR_OBJECT (c2vdec, "Failed to push frame downstream");
         }
       } else if (outBuffer->flag & FLAG_TYPE_END_OF_STREAM) {
-        GST_INFO_OBJECT (c2vdec, "Encoder reached EOS");
+        GST_INFO_OBJECT (c2vdec, "Decoder reached EOS");
         g_mutex_lock (&c2vdec->pending_lock);
         c2vdec->eos_reached = TRUE;
         g_cond_signal (&c2vdec->pending_cond);
@@ -620,12 +622,13 @@ gst_c2vdec_class_init (GstC2vdecClass * klass)
 
   gobject_class->set_property = gst_c2vdec_set_property;
   gobject_class->get_property = gst_c2vdec_get_property;
+  gobject_class->finalize = gst_c2vdec_finalize;
   video_decoder_class->open = GST_DEBUG_FUNCPTR (gst_c2vdec_open);
   video_decoder_class->close = GST_DEBUG_FUNCPTR (gst_c2vdec_close);
   video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_c2vdec_stop);
   video_decoder_class->set_format = GST_DEBUG_FUNCPTR (gst_c2vdec_set_format);
   video_decoder_class->handle_frame = GST_DEBUG_FUNCPTR (gst_c2vdec_handle_frame);
-
+  video_decoder_class->finish = GST_DEBUG_FUNCPTR (gst_c2vdec_finish);
 }
 
 static void
@@ -650,6 +653,8 @@ gst_c2vdec_init (GstC2vdec *c2vdec)
   c2vdec->wrapper = gst_c2_wrapper_new ();
   g_return_if_fail (c2vdec->wrapper != NULL);
 
+  GST_DEBUG_CATEGORY_INIT (gst_c2vdec_debug_category, "c2vdec", 0,
+  "debug category for c2vdec element");
 }
 
 void
@@ -852,6 +857,73 @@ error_set_format:
   return TRUE;
 }
 
+static GstFlowReturn gst_c2vdec_finish (GstVideoDecoder * decoder)
+{
+  GstC2vdec *c2vdec = GST_C2VDEC (decoder);
+  gint64 timeout;
+  BufferDescriptor inBuf;
+
+  GST_DEBUG_OBJECT (c2vdec, "gst_c2vdec_finish");
+
+  memset (&inBuf, 0, sizeof (BufferDescriptor));
+  inBuf.fd = -1;
+  inBuf.data = NULL;
+  inBuf.size = 0;
+  inBuf.timestamp = 0;
+  inBuf.index = c2vdec->frame_index;
+  inBuf.flag = FLAG_TYPE_END_OF_STREAM;
+  inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
+
+  // Setup EOS work
+  if (!gst_c2_vdec_wrapper_component_queue (c2vdec->wrapper, &inBuf)) {
+    GST_ERROR_OBJECT(c2vdec, "failed to queue input frame to Codec2");
+    return GST_FLOW_ERROR;
+  }
+
+  GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+  g_mutex_lock (&c2vdec->pending_lock);
+  if (!c2vdec->eos_reached) {
+    GST_DEBUG_OBJECT (c2vdec, "wait until EOS signal is triggered");
+
+    timeout =
+        g_get_monotonic_time () + (EOS_WAITING_TIMEOUT * G_TIME_SPAN_SECOND);
+    if (!g_cond_wait_until (&c2vdec->pending_cond, &c2vdec->pending_lock, timeout)) {
+      GST_ERROR_OBJECT (c2vdec, "Timed out on wait, exiting!");
+    }
+  } else {
+    GST_DEBUG_OBJECT (c2vdec, "EOS reached on output, finish the decoding");
+  }
+
+  g_mutex_unlock (&c2vdec->pending_lock);
+  GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+
+  return GST_FLOW_OK;
+}
+
+static void
+gst_c2vdec_finalize (GObject * object)
+{
+  GstC2vdec *c2vdec = GST_C2VDEC (object);
+
+  GST_DEBUG_OBJECT (c2vdec, "finalize");
+
+  g_mutex_clear (&c2vdec->pending_lock);
+  g_cond_clear (&c2vdec->pending_cond);
+
+  if (c2vdec->comp_name) {
+    g_free (c2vdec->comp_name);
+    c2vdec->comp_name = NULL;
+  }
+
+  gst_c2_vdec_wrapper_delete_component (c2vdec->wrapper);
+
+  if (c2vdec->wrapper != NULL) {
+    gst_c2_wrapper_free (c2vdec->wrapper);
+    c2vdec->wrapper = NULL;
+  }
+
+  G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (c2vdec));
+}
 
 static GstFlowReturn
 gst_c2vdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
