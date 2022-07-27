@@ -81,7 +81,6 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_PIXELFORMAT "pixelformat"
 #define CONFIG_FUNCTION_KEY_RESOLUTION "resolution"
 #define CONFIG_FUNCTION_KEY_BITRATE "bitrate"
-#define CONFIG_FUNCTION_KEY_INTERLACE "interlace"
 #define CONFIG_FUNCTION_KEY_MIRROR "mirror"
 #define CONFIG_FUNCTION_KEY_ROTATION "rotation"
 #define CONFIG_FUNCTION_KEY_RATECONTROL "ratecontrol"
@@ -97,6 +96,8 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
 #define CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE "bitrate_saving_mode"
 #define CONFIG_FUNCTION_KEY_PROFILE_LEVEL "profile_level"
+#define CONFIG_FUNCTION_KEY_INTERLACE_INFO "interlace_info"
+#define CONFIG_FUNCTION_KEY_DEINTERLACE "deinterlace"
 
 #define C2_TICKS_PER_SECOND 1000000
 
@@ -362,6 +363,7 @@ typedef struct {
     void* c2Buffer;
     void* gbm_bo;
     gboolean secure;
+    guint32 interlaceMode;
 } BufferDescriptor;
 
 typedef struct {
@@ -371,6 +373,7 @@ typedef struct {
         guint output_picture_order_mode;
         gboolean low_latency_mode;
         gboolean color_space_conversion;
+        gboolean deinterlace;
 
         union {
             guint32 u32;
