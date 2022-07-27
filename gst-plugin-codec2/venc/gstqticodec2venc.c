@@ -89,7 +89,7 @@ GST_DEBUG_CATEGORY (gst_qticodec2venc_debug);
 
 #define DEFAULT_COLOR_SPACE_CONVERSION            (FALSE)
 #define DEFAULT_BITRATE_SAVING_MODE               (0xffffffff)
-#define DEFAULT_BLUE_MODE                         (0xffffffff)
+#define DEFAULT_BLUR_MODE                         (0xffffffff)
 
 /* class initialization */
 G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
@@ -262,7 +262,7 @@ make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 
   memset (&param, 0, sizeof (ConfigParams));
 
-  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
+  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE_INFO;
   param.isInput = is_input;
   param.interlaceMode.type = mode;
 
@@ -1250,7 +1250,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     g_ptr_array_add (config, &intra_refresh);
   }
 
-  if (enc->blur_mode != DEFAULT_BLUE_MODE) {
+  if (enc->blur_mode != DEFAULT_BLUR_MODE) {
     if ((enc->blur_mode == BLUR_MANUAL) &&
         (enc->blur_width != 0) && (enc->blur_height != 0)) {
       blur_info =
@@ -2264,7 +2264,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_enum ("blur-mode", "Blur Mode",
           "Specify the blur mode",
           GST_TYPE_CODEC2_ENC_BLUR_MODE,
-          DEFAULT_BLUE_MODE,
+          DEFAULT_BLUR_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -2409,7 +2409,7 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->downscale_width = 0;
   enc->downscale_height = 0;
   enc->target_bitrate = 0;
-  enc->blur_mode = DEFAULT_BLUE_MODE;
+  enc->blur_mode = DEFAULT_BLUR_MODE;
   enc->blur_width = 0;
   enc->blur_height = 0;
   enc->is_ubwc = FALSE;
