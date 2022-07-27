@@ -106,6 +106,7 @@ std::unique_ptr<C2Param> setRateControl(gpointer param);
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param);
 std::unique_ptr<C2Param> setDecLowLatency(gpointer param);
 std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
+std::unique_ptr<C2Param> setVideoProfileLevel(gpointer param);
 
 std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf);
@@ -127,6 +128,7 @@ static configFunctionMap sConfigFunctionMap = {
     { CONFIG_FUNCTION_KEY_DEC_LOW_LATENCY, setDecLowLatency },
     { CONFIG_FUNCTION_KEY_COLOR_ASPECTS_INFO, setColorAspectsInfo },
     { CONFIG_FUNCTION_KEY_INTRAREFRESH, setIntraRefresh },
+    { CONFIG_FUNCTION_KEY_PROFILE_LEVEL, setVideoProfileLevel },
 };
 
 // Function map for vendor parameter configuration
@@ -538,6 +540,26 @@ std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_i
 
         return std::move(bitrateSavingMode);
     }
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setVideoProfileLevel(gpointer param)
+{
+    if (param == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput) {
+        LOG_WARNING("setVideoProfileLevel input not implemented");
+    } else {
+        C2StreamProfileLevelInfo::output profileAndLevel;
+        profileAndLevel.profile = toC2Profile(config->profileAndLevel.profile);
+        profileAndLevel.level = toC2Level(config->profileAndLevel.level);
+
+        return C2Param::Copy(profileAndLevel);
+    }
+
     return nullptr;
 }
 
