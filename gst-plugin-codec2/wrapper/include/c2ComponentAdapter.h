@@ -39,6 +39,7 @@
 #include <C2Component.h>
 #include <mutex>
 #include <map>
+#include <set>
 #include <condition_variable>
 #include <C2Buffer.h>
 
@@ -81,7 +82,7 @@ public:
         uint64_t timestamp,
         C2BlockPool::local_id_t poolType);
 
-    c2_status_t flush(C2Component::flush_mode_t mode, std::list<std::unique_ptr<C2Work> >* const flushedWork);
+    c2_status_t flush(C2Component::flush_mode_t mode);
     c2_status_t drain(C2Component::drain_mode_t mode);
     c2_status_t start();
     c2_status_t stop();
@@ -101,27 +102,46 @@ public:
     c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
-    c2_status_t setMapBufferToCpu(bool enable);
 
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);
     c2_status_t writePlane(uint8_t* dest, BufferDescriptor* buffer_info);
-    c2_status_t waitForProgressOrStateChange(uint32_t numPendingWorks);
+    c2_status_t waitForProgressOrStateChange(
+        uint32_t numPendingWorks,
+        uint32_t timeoutMs);
+    void registerTrackBuffer(const C2FrameData& input);
+    void unregisterTrackBuffer(std::list<std::unique_ptr<C2Work> >& workItems);
+    void unregisterTrackBufferAll();
+    void onBufferDestroyed(const C2Buffer* buf, void* arg);
+    static void onDestroyNotify(const C2Buffer* buf, void* arg);
 
     std::weak_ptr<C2ComponentStore> mStore;
     std::shared_ptr<C2Component> mComp;
     std::shared_ptr<C2ComponentInterfaceAdapter> mIntf;
     std::shared_ptr<C2Component::Listener> mListener;
     std::unique_ptr<EventCallback> mCallback;
-    bool mMapBufferToCpu;
+
+    struct TrackBuffer {
+        C2ComponentAdapter* adapter;
+        uint64_t frameIndex;
+        std::weak_ptr<C2Buffer> buffer;
+        TrackBuffer(C2ComponentAdapter* adapter,
+            uint64_t frameIndex,
+            const std::shared_ptr<C2Buffer>& buffer)
+            : adapter(adapter)
+            , frameIndex(frameIndex)
+            , buffer(buffer)
+        {
+        }
+    };
 
     std::shared_ptr<C2BlockPool> mLinearPool; // C2PlatformLinearBlockPool
     std::shared_ptr<C2BlockPool> mGraphicPool; // C2PlatformGraphicBlockPool
-    std::map<uint64_t, std::shared_ptr<C2Buffer> > mInPendingBuffer;
+    std::map<uint64_t, std::shared_ptr<C2GraphicBlock> > mInPendingBuffer;
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
+    std::set<TrackBuffer*> mTrackBuffers;
 
     uint32_t mNumPendingWorks;
-    uint32_t mPendingTimeOut;
     std::mutex mLock;
     std::mutex mLockOut;
     std::condition_variable mCondition;

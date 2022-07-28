@@ -34,6 +34,7 @@
 #include <types.h>
 #include <C2Config.h>
 #include <codec2wrapper.h>
+#include <media/msm_media_info.h>
 
 namespace QTI {
 
@@ -291,13 +292,40 @@ gst_to_c2_gbmformat(GstVideoFormat format)
         result = GBM_FORMAT_NV12;
         break;
     case GST_VIDEO_FORMAT_P010_10LE:
-        result = GBM_FORMAT_YCbCr_420_P010_VENUS;
+        result = GBM_FORMAT_P010;
         break;
     case GST_VIDEO_FORMAT_NV12_10LE32:
         result = GBM_FORMAT_YCbCr_420_TP10_UBWC;
         break;
     default:
         LOG_WARNING("unsupported video format:%s", gst_video_format_to_string(format));
+        break;
+    }
+
+    return result;
+}
+
+guint32
+gbmformat_to_colorformat(guint32 format, guint64 usage)
+{
+    guint32 result = 0;
+
+    switch (format) {
+    case GBM_FORMAT_NV12:
+        if (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI) {
+            result = COLOR_FMT_NV12_UBWC;
+        } else {
+            result = COLOR_FMT_NV12;
+        }
+        break;
+    case GBM_FORMAT_P010:
+        result = COLOR_FMT_P010;
+        break;
+    case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+        result = COLOR_FMT_NV12_BPP10_UBWC;
+        break;
+    default:
+        LOG_WARNING("unsupported video format:%d", format);
         break;
     }
 

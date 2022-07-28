@@ -39,11 +39,11 @@
 #define strlcpy g_strlcpy
 Crypto* crypto = NULL;
 
-int secure_copy (int dstbuf_fd, void* srcbuf, int datalen, void* param) {
-  SecureCopyResult ret = crypto_copy (crypto, SECURE_COPY_NONSECURE_TO_SECURE, srcbuf, dstbuf_fd, datalen);
+int secure_copy (int dstbuf_fd, void* srcbuf, uint32_t* pdatalen, void* param) {
+  SecureCopyResult ret = crypto_copy (crypto, SECURE_COPY_NONSECURE_TO_SECURE, srcbuf, dstbuf_fd, pdatalen);
   if (ret != SECURE_COPY_SUCCESS) {
     g_error ("secure copy failed, ret:%d dstbuf_fd:%d srcbuf:%p datalen:%d param:%p",
-             ret, dstbuf_fd, srcbuf, datalen, param);
+             ret, dstbuf_fd, srcbuf, *pdatalen, param);
   }
 
   return 0;
@@ -52,7 +52,7 @@ int secure_copy (int dstbuf_fd, void* srcbuf, int datalen, void* param) {
 static void
 element_setup (GstElement * playbin, GstElement * element, GQueue * elts)
 {
-  if (strstr(GST_OBJECT_NAME (element), "qticodec2vdec")) {
+  if (strstr(GST_OBJECT_NAME (element), "qcodec2")) {
     g_debug ("found QTI codec2 vdec element");
     g_object_set (element, "secure", 1, NULL);
     g_object_set (element, "data-copy-func", (void*)&secure_copy, NULL);

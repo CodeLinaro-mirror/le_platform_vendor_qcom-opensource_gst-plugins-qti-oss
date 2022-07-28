@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include "c2ComponentStoreAdapter.h"
 #include "c2ComponentAdapter.h"
 #include "c2ComponentInterfaceAdapter.h"
@@ -39,14 +75,18 @@
 #include <C2Buffer.h>
 #include <gst/gst.h>
 #include <C2AllocatorGBM.h>
-// config for some vendor parameters
-#include "QC2V4L2Config.h"
+#include <ReflectedParamUpdater.h>
 #include <media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY(gst_qticodec2wrapper_debug);
 #define GST_CAT_DEFAULT gst_qticodec2wrapper_debug
 
 using namespace QTI;
+
+typedef struct {
+    std::list<std::unique_ptr<C2Param> > settings;
+    void* comp_intf;
+} SettingsAndIntf;
 
 struct char_cmp {
     bool operator()(const char* a, const char* b) const
@@ -57,40 +97,50 @@ struct char_cmp {
 
 // Give a comparison functor to the map to avoid comparing the pointer
 typedef std::map<const char*, configFunction, char_cmp> configFunctionMap;
+typedef std::map<const char*, configFunctionForVendorParams, char_cmp> configFunctionForVendorParamsMap;
 
 std::unique_ptr<C2Param> setVideoPixelformat(gpointer param);
 std::unique_ptr<C2Param> setVideoResolution(gpointer param);
 std::unique_ptr<C2Param> setVideoBitrate(gpointer param);
-std::unique_ptr<C2Param> setRotation(gpointer param);
-std::unique_ptr<C2Param> setMirrorType(gpointer param);
 std::unique_ptr<C2Param> setRateControl(gpointer param);
-std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param);
-std::unique_ptr<C2Param> setDecLowLatency(gpointer param);
-std::unique_ptr<C2Param> setDownscale(gpointer param);
-std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param);
-std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param);
-std::unique_ptr<C2Param> setSliceMode(gpointer param);
-std::unique_ptr<C2Param> setBlurMode(gpointer param);
-std::unique_ptr<C2Param> setBlurResolution(gpointer param);
+std::unique_ptr<C2Param> setDecLowLatency(gpointer param);
+std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
+
+std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setDownscale(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
     { CONFIG_FUNCTION_KEY_PIXELFORMAT, setVideoPixelformat },
     { CONFIG_FUNCTION_KEY_RESOLUTION, setVideoResolution },
     { CONFIG_FUNCTION_KEY_BITRATE, setVideoBitrate },
-    { CONFIG_FUNCTION_KEY_ROTATION, setRotation },
-    { CONFIG_FUNCTION_KEY_MIRROR, setMirrorType },
     { CONFIG_FUNCTION_KEY_RATECONTROL, setRateControl },
-    { CONFIG_FUNCTION_KEY_OUTPUT_PICTURE_ORDER_MODE, setOutputPictureOrderMode },
     { CONFIG_FUNCTION_KEY_DEC_LOW_LATENCY, setDecLowLatency },
-    { CONFIG_FUNCTION_KEY_DOWNSCALE, setDownscale },
-    { CONFIG_FUNCTION_KEY_ENC_CSC, setEncColorSpaceConv },
     { CONFIG_FUNCTION_KEY_COLOR_ASPECTS_INFO, setColorAspectsInfo },
     { CONFIG_FUNCTION_KEY_INTRAREFRESH, setIntraRefresh },
+};
+
+// Function map for vendor parameter configuration
+static configFunctionForVendorParamsMap sConfigFunctionForVendorParamsMap = {
+    { CONFIG_FUNCTION_KEY_ROTATION, setRotation },
+    { CONFIG_FUNCTION_KEY_MIRROR, setMirrorType },
+    { CONFIG_FUNCTION_KEY_OUTPUT_PICTURE_ORDER_MODE, setOutputPictureOrderMode },
+    { CONFIG_FUNCTION_KEY_DOWNSCALE, setDownscale },
+    { CONFIG_FUNCTION_KEY_ENC_CSC, setEncColorSpaceConv },
     { CONFIG_FUNCTION_KEY_SLICE_MODE, setSliceMode },
     { CONFIG_FUNCTION_KEY_BLUR_MODE, setBlurMode },
     { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
+    { CONFIG_FUNCTION_KEY_ROIREGION, setRoiRegion },
+    { CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE, setBitrateSavingMode },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -169,46 +219,66 @@ std::unique_ptr<C2Param> setVideoBitrate(gpointer param)
     return nullptr;
 }
 
-std::unique_ptr<C2Param> setMirrorType(gpointer param)
+std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf)
 {
-    if (param == NULL)
+
+    if (param == NULL || comp_intf == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
     if (config->isInput) {
-        qc2::C2VideoMirrorTuning::input mirror;
-        mirror.mirrorType = qc2::QCMirrorType(config->mirror.type);
-        return C2Param::Copy(mirror);
-    } else {
-        LOG_WARNING("setMirrorType output not implemented");
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        std::unique_ptr<C2Param> mirror;
+
+        item.set((int32_t)config->mirror.type);
+        kvpairs.emplace("vendor.qti-ext-enc-preprocess-mirror.flip", item);
+
+        mirror = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(mirror);
     }
+    LOG_WARNING("setMirrorType output not implemented");
 
     return nullptr;
 }
 
-std::unique_ptr<C2Param> setRotation(gpointer param)
+std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf)
 {
-    if (param == NULL)
+
+    if (param == NULL || comp_intf == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
     if (config->isInput) {
-        qc2::C2VideoRotation::input rotation;
-        rotation.angle = config->val.u32;
-        return C2Param::Copy(rotation);
-    } else {
-        LOG_WARNING("setRotation output not implemented");
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        std::unique_ptr<C2Param> rotation;
+
+        item.set((int32_t)config->val.u32);
+        kvpairs.emplace("vendor.qti-ext-enc-preprocess-rotate.angle", item);
+
+        rotation = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(rotation);
     }
+    LOG_WARNING("setRotation output not implemented");
 
     return nullptr;
 }
 
 std::unique_ptr<C2Param> setRateControl(gpointer param)
 {
-    if (param == NULL)
+
+    if (param == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
@@ -217,42 +287,65 @@ std::unique_ptr<C2Param> setRateControl(gpointer param)
     return C2Param::Copy(bitrateMode);
 }
 
-std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param)
+std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param, void* const comp_intf)
 {
-    if (param == NULL)
-        return nullptr;
 
-    ConfigParams* config = (ConfigParams*)param;
-
-    qc2::C2VideoPictureOrder::output outputPictureOrderMode;
-    if (config->output_picture_order_mode == DECODER_ORDER)
-        outputPictureOrderMode.enable = C2_TRUE;
-    return C2Param::Copy(outputPictureOrderMode);
-}
-
-std::unique_ptr<C2Param> setSliceMode(gpointer param)
-{
-    if (param == NULL)
-        return nullptr;
-
-    ConfigParams* config = (ConfigParams*)param;
-    if (config->SliceMode.type == SLICE_MODE_BYTES) {
-        qc2::C2VideoSliceSizeBytes::output SliceModeBytes;
-        SliceModeBytes.value = config->val.u32;
-        return C2Param::Copy(SliceModeBytes);
-    } else if (config->SliceMode.type == SLICE_MODE_MB) {
-        qc2::C2VideoSliceSizeMBCount::output SliceModeMb;
-        SliceModeMb.value = config->val.u32;
-        return C2Param::Copy(SliceModeMb);
-    } else {
+    if (param == NULL || comp_intf == NULL) {
         return nullptr;
     }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> outputPictureOrderMode;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value item;
+
+    if (config->output_picture_order_mode == DECODER_ORDER) {
+        item.set((int32_t)C2_TRUE);
+    } else {
+        item.set((int32_t)C2_FALSE);
+    }
+
+    kvpairs.emplace("vendor.qti-ext-dec-picture-order.enable", item);
+    outputPictureOrderMode = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(outputPictureOrderMode);
+}
+
+std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
+{
+
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> sliceModeBytesOrMb = nullptr;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value item;
+
+    if (config->sliceMode.type == SLICE_MODE_BYTES) {
+        item.set((int32_t)config->val.u32);
+        kvpairs.emplace("vendor.qti-ext-enc-error-correction.resync-marker-spacing-bits", item);
+
+        sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
+    } else if (config->sliceMode.type == SLICE_MODE_MB) {
+        item.set((int32_t)config->val.u32);
+        kvpairs.emplace("vendor.qti-ext-enc-slice.spacing", item);
+
+        sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
+    }
+
+    return std::move(sliceModeBytesOrMb);
 }
 
 std::unique_ptr<C2Param> setDecLowLatency(gpointer param)
 {
-    if (param == NULL)
+
+    if (param == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
@@ -262,45 +355,62 @@ std::unique_ptr<C2Param> setDecLowLatency(gpointer param)
     return C2Param::Copy(lowLatencyMode);
 }
 
-std::unique_ptr<C2Param> setDownscale(gpointer param)
+std::unique_ptr<C2Param> setDownscale(gpointer param, void* const comp_intf)
+{
+
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput == FALSE) {
+
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> scale;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item1, item2;
+
+        item1.set((int32_t)config->resolution.width);
+        item2.set((int32_t)config->resolution.height);
+        kvpairs.emplace("vendor.qti-ext-down-scalar.output-width", item1);
+        kvpairs.emplace("vendor.qti-ext-down-scalar.output-height", item2);
+
+        scale = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(scale);
+    }
+    LOG_WARNING("setDownscale input not implemented");
+
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param, void* const comp_intf)
+{
+
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> colorSpaceConv;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value item;
+    item.set((int32_t)config->color_space_conversion);
+    kvpairs.emplace("vendor.qti-ext-enc-colorspace-conversion.enable", item);
+
+    colorSpaceConv = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(colorSpaceConv);
+}
+
+std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
 {
 
     if (param == NULL) {
         return nullptr;
     }
-
-    ConfigParams* config = (ConfigParams*)param;
-
-    if (config->isInput) {
-        LOG_WARNING("setDownscale input not implemented");
-    } else {
-        qc2::C2VideoDownScalarSetting::output scale;
-
-        scale.width = config->resolution.width;
-        scale.height = config->resolution.height;
-
-        return C2Param::Copy(scale);
-    }
-
-    return nullptr;
-}
-
-std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param)
-{
-    if (param == NULL)
-        return nullptr;
-
-    ConfigParams* config = (ConfigParams*)param;
-
-    qc2::C2VideoCSC::input colorSpaceConv;
-    colorSpaceConv.value = config->color_space_conversion;
-    return C2Param::Copy(colorSpaceConv);
-}
-
-std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
-{
-    if (param == NULL)
-        return nullptr;
 
     ConfigParams* config = (ConfigParams*)param;
 
@@ -314,50 +424,120 @@ std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
 
 std::unique_ptr<C2Param> setIntraRefresh(gpointer param)
 {
-    if (param == NULL)
+    if (param == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
     C2StreamIntraRefreshTuning::output intraRefreshMode;
     intraRefreshMode.mode = (C2Config::intra_refresh_mode_t)config->irMode.type;
-    intraRefreshMode.period = config->irMode.intra_refresh_mbs;
+    intraRefreshMode.period = (float)config->irMode.intra_refresh_mbs;
     return C2Param::Copy(intraRefreshMode);
 }
 
-std::unique_ptr<C2Param> setBlurMode(gpointer param)
+std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf)
 {
-    if (param == NULL)
+
+    if (param == NULL || comp_intf == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
     if (config->isInput) {
-        qc2::C2VideoBlurInfo::input blur;
-        blur.info = qc2::QCBlurMode(config->blur.mode);
-        return C2Param::Copy(blur);
-    } else {
-        LOG_WARNING("setBlurMode output not implemented");
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> blur;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        item.set((int32_t)config->blur.mode);
+        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info", item);
+
+        blur = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(blur);
     }
+    LOG_WARNING("setBlurMode output not implemented");
 
     return nullptr;
 }
 
-std::unique_ptr<C2Param> setBlurResolution(gpointer param)
+std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf)
 {
-    if (param == NULL)
+
+    if (param == NULL || comp_intf == NULL) {
         return nullptr;
+    }
 
     ConfigParams* config = (ConfigParams*)param;
 
     if (config->isInput) {
-        qc2::C2VideoBlurInfo::input blur;
-        blur.info = ((config->resolution.width << 16) | (config->resolution.height & 0xFFFF));
-        return C2Param::Copy(blur);
-    } else {
-        LOG_WARNING("setBlurResolution output not implemented");
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> blur;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+
+        guint32 info = ((config->resolution.width << 16) | (config->resolution.height & 0xFFFF));
+        item.set((int32_t)info);
+        kvpairs.emplace("vendor.qti-ext-enc-blurinfo.info", item);
+
+        blur = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(blur);
+    }
+    LOG_WARNING("setBlurResolution output not implemented");
+
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
     }
 
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> roi = nullptr;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value timestamp, type, payload, payloadext;
+
+    timestamp.set((int64_t)config->roiRegion.timestampUs);
+    type.set((android::AString)config->roiRegion.type);
+    payload.set((android::AString)config->roiRegion.rectPayload);
+    payloadext.set((android::AString)config->roiRegion.rectPayloadExt);
+
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.timestamp", timestamp);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.type", type);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.rect-payload", payload);
+    kvpairs.emplace("vendor.qti-ext-enc-roiinfo.rect-payload-ext", payloadext);
+
+    roi = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(roi);
+}
+
+std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL)
+        return nullptr;
+
+    ConfigParams* config = (ConfigParams*)param;
+    if (config->isInput) {
+        LOG_WARNING("setVideoBitrateSavingMode input not implemented");
+
+    } else {
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+        std::unique_ptr<C2Param> bitrateSavingMode;
+        android::ReflectedParamUpdater::Dict kvpairs;
+        android::ReflectedParamUpdater::Value item;
+        item.set((int32_t)config->bitrate_saving_mode.saving_mode);
+        kvpairs.emplace("vendor.qti-ext-enc-content-adaptive-mode.value", item);
+
+        bitrateSavingMode = intf_wrapper->updateParamFromConfig(kvpairs);
+
+        return std::move(bitrateSavingMode);
+    }
     return nullptr;
 }
 
@@ -376,12 +556,10 @@ public:
         C2FrameData::flags_t flag) override;
     void onTripped(uint32_t errorCode) override;
     void onError(uint32_t errorCode) override;
-    void setMapBufferToCpu(bool enable) override;
 
 private:
     listener_cb mCallback;
     const void* mHandle;
-    bool mMapBufferToCpu;
 };
 
 CodecCallback::CodecCallback(const void* handle, listener_cb cb)
@@ -391,7 +569,6 @@ CodecCallback::CodecCallback(const void* handle, listener_cb cb)
 
     mCallback = cb;
     mHandle = handle;
-    mMapBufferToCpu = false;
 }
 
 CodecCallback::~CodecCallback()
@@ -430,7 +607,7 @@ void CodecCallback::onOutputBufferAvailable(
             }
             outBuf.fd = handle->data[0];
             outBuf.meta_fd = handle->data[1];
-            outBuf.c2_buffer = static_cast<void*>(buffer.get());
+            outBuf.c2Buffer = static_cast<void*>(buffer.get());
             guint32 stride = 0;
             guint64 usage = 0;
             guint32 size = 0;
@@ -451,18 +628,15 @@ void CodecCallback::onOutputBufferAvailable(
             LOG_INFO("get crop info (%d,%d) [%dx%d] bo:%p", crop.left, crop.top, crop.width, crop.height, outBuf.gbm_bo);
             outBuf.width = crop.width;
             outBuf.height = crop.height;
-            if (mMapBufferToCpu) {
-                /* get valid size for NV12_UBWC format */
-                if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
-                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
-                } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-                } else if (format == GBM_FORMAT_YCbCr_420_P010_VENUS) {
-                    outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
-                }
-                outBuf.data = (guint8*)view.data()[0];
-            } else {
-                outBuf.data = NULL;
+            /* get valid size for NV12_UBWC format */
+            if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
+                outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
+            } else if (format == GBM_FORMAT_NV12) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
+            } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
+            } else if (format == GBM_FORMAT_P010) {
+                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
             }
 
             /* graphic_block unmapped once out of scope. */
@@ -499,7 +673,7 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.meta_fd = -1;
         outBuf.size = 0;
         outBuf.capacity = 0;
-        outBuf.offset = 0;
+        outBuf.offset[0] = 0;
         outBuf.timestamp = 0;
         outBuf.index = 0;
         outBuf.flag = toWrapperFlag(flag);
@@ -530,12 +704,6 @@ void CodecCallback::onError(uint32_t errorCode)
     }
 
     mCallback(mHandle, EVENT_ERROR, &errorCode);
-}
-
-void CodecCallback::setMapBufferToCpu(bool enable)
-{
-
-    mMapBufferToCpu = enable;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -774,9 +942,8 @@ gboolean c2component_queue(void* const comp, BufferDescriptor* buffer)
     return ret;
 }
 
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork)
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode)
 {
-
     LOG_MESSAGE("Flushing work");
 
     gboolean ret = FALSE;
@@ -784,8 +951,14 @@ gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const f
 
     if (comp) {
         C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
-        LOG_MESSAGE("Not implemented");
+        c2Status = comp_wrapper->flush(toC2FlushMode(mode));
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_ERROR("Failed to flush work (%d)", c2Status);
+        }
+    } else {
+        LOG_ERROR("Component is null");
     }
 
     return ret;
@@ -970,24 +1143,6 @@ gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType)
     return ret;
 }
 
-gboolean c2component_mapOutBuffer(void* const comp, gboolean map)
-{
-
-    gboolean ret = FALSE;
-    c2_status_t c2Status = C2_NO_INIT;
-
-    if (comp) {
-        C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
-        c2Status = comp_wrapper->setMapBufferToCpu((map == TRUE) ? true : false);
-        if (c2Status == C2_OK) {
-            ret = TRUE;
-        }
-    }
-
-    return ret;
-}
-
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId)
 {
 
@@ -1057,14 +1212,49 @@ const gint c2componentInterface_getId(void* const comp_intf)
 
 void _push_to_settings(gpointer data, gpointer user_data)
 {
-    std::list<std::unique_ptr<C2Param> >* settings = (std::list<std::unique_ptr<C2Param> >*)user_data;
+    SettingsAndIntf* settings_intf = (SettingsAndIntf*)user_data;
     ConfigParams* conf_param = (ConfigParams*)data;
 
     auto iter = sConfigFunctionMap.find(conf_param->config_name);
     if (iter != sConfigFunctionMap.end()) {
         auto param = (*iter->second)(conf_param);
-        settings->push_back(C2Param::Copy(*param));
+        settings_intf->settings.push_back(C2Param::Copy(*param));
     }
+
+    /* Iterator for vendor paramters */
+    auto iterVendor = sConfigFunctionForVendorParamsMap.find(conf_param->config_name);
+    if (iterVendor != sConfigFunctionForVendorParamsMap.end()) {
+        auto param = (*iterVendor->second)(conf_param, settings_intf->comp_intf);
+        settings_intf->settings.push_back(C2Param::Copy(*param));
+    }
+}
+
+gboolean c2componentInterface_initReflectedParamUpdater(void* const comp_store,
+    void* const comp_intf)
+{
+
+    LOG_MESSAGE("Init ReflectedParamUpdater");
+
+    gboolean ret = FALSE;
+
+    if (comp_store && comp_intf) {
+        std::shared_ptr<C2ParamReflector> reflector;
+        c2_status_t c2Status = C2_NO_INIT;
+
+        C2ComponentStoreAdapter* store_Wrapper = (C2ComponentStoreAdapter*)comp_store;
+        C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+
+        reflector = store_Wrapper->getParamReflector();
+
+        c2Status = intf_wrapper->initReflectedParamUpdater(reflector);
+        if (c2Status == C2_OK) {
+            ret = TRUE;
+        } else {
+            LOG_WARNING("Failed(%d) to initReflectedParamUpdater", c2Status);
+        }
+    }
+
+    return ret;
 }
 
 gboolean c2componentInterface_config(void* const comp_intf, GPtrArray* config, BLOCK_MODE_TYPE block)
@@ -1077,12 +1267,13 @@ gboolean c2componentInterface_config(void* const comp_intf, GPtrArray* config, B
     if (comp_intf && config) {
         C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
         std::vector<C2Param*> stackParams;
-        std::list<std::unique_ptr<C2Param> > settings;
+        SettingsAndIntf settings_intf;
+        settings_intf.comp_intf = comp_intf;
         c2_status_t c2Status = C2_NO_INIT;
 
-        g_ptr_array_foreach(config, _push_to_settings, &settings);
+        g_ptr_array_foreach(config, _push_to_settings, &settings_intf);
 
-        for (auto& item : settings) {
+        for (auto& item : settings_intf.settings) {
             stackParams.push_back(item.get());
         }
 

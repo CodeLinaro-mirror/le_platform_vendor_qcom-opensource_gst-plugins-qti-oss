@@ -232,7 +232,7 @@ RETRY:
 #ifdef SECURE_PLAYBACK
   if (ret > 0) {
     SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
-        data, free_sec_ion_buf->data_fd, length);
+        data, free_sec_ion_buf->data_fd, &length);
 
     g_free (data);
     if (ret1 != SECURE_COPY_SUCCESS) {
@@ -442,6 +442,7 @@ int main(int argc, char **argv)
     free_ion_memory (st_vdec_ion+i);
   }
   g_free (st_vdec_ion);
-  fclose(fp);
+  if (fp)
+    fclose(fp);
   return 0;
 }

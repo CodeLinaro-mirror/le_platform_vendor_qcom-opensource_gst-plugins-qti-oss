@@ -27,6 +27,42 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+Changes from Qualcomm Innovation Center are provided under the following license:
+
+Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted (subject to the limitations in the
+disclaimer below) provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifndef __CODEC2WRAPPER_H__
 #define __CODEC2WRAPPER_H__
 
@@ -38,6 +74,7 @@ extern "C" {
 #include <gmodule.h>
 #include <dlfcn.h>
 #include <gst/video/video.h>
+#include <stdint.h>
 
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
 
@@ -57,7 +94,8 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_SLICE_MODE "slice_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_MODE "blur_mode"
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
-
+#define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
+#define CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE "bitrate_saving_mode"
 #define C2_TICKS_PER_SECOND 1000000
 
 typedef struct comp_cb {
@@ -65,7 +103,7 @@ typedef struct comp_cb {
     gpointer data_copy_func_param;
 } comp_cb;
 
-typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, int datalen, void* param);
+typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, uint32_t* pdatalen, void* param);
 
 typedef enum {
     BUFFER_POOL_BASIC_LINEAR = 0,
@@ -229,24 +267,32 @@ typedef enum {
     IR_RANDOM,
 } IR_MODE_TYPE;
 
+typedef enum {
+    BITRATE_SAVING_MODE_DISABLE_ALL = 0,
+    BITRATE_SAVING_MODE_ENABLE_8BIT,
+    BITRATE_SAVING_MODE_ENABLE_10BIT,
+    BITRATE_SAVING_MODE_ENABLE_ALL,
+} BITRATE_SAVING_MODE;
+
 typedef struct {
     guint8* data;
     gint32 fd;
     gint32 meta_fd;
     guint32 size;
     guint32 capacity; ///< Total allocation size
-    guint32 offset;
     guint64 timestamp;
     guint64 index;
     guint32 width;
     guint32 height;
+    guint32 stride[2];
+    gsize offset[2];
     GstVideoFormat format;
     guint32 ubwc_flag;
     FLAG_TYPE flag;
     BUFFER_POOL_TYPE pool_type;
     guint8* config_data; // codec config data
     guint32 config_size; // size of codec config data
-    void* c2_buffer;
+    void* c2Buffer;
     void* gbm_bo;
     gboolean secure;
 } BufferDescriptor;
@@ -255,54 +301,69 @@ typedef struct {
     const char* config_name;
     gboolean isInput;
     union {
-        guint32 u32;
-        guint64 u64;
-        gint32 i32;
-        gint64 i64;
-    } val;
+        guint output_picture_order_mode;
+        gboolean low_latency_mode;
+        gboolean color_space_conversion;
 
-    struct {
-        guint32 width;
-        guint32 height;
-    } resolution;
+        union {
+            guint32 u32;
+            guint64 u64;
+            gint32 i32;
+            gint64 i64;
+        } val;
 
-    union {
-        PIXEL_FORMAT_TYPE fmt;
-    } pixelFormat;
+        struct {
+            guint32 width;
+            guint32 height;
+        } resolution;
 
-    union {
-        INTERLACE_MODE_TYPE type;
-    } interlaceMode;
+        struct {
+            PIXEL_FORMAT_TYPE fmt;
+        } pixelFormat;
 
-    union {
-        MIRROR_TYPE type;
-    } mirror;
+        struct {
+            INTERLACE_MODE_TYPE type;
+        } interlaceMode;
 
-    union {
-        RC_MODE_TYPE type;
-    } rcMode;
+        struct {
+            MIRROR_TYPE type;
+        } mirror;
 
-    union {
-        SLICE_MODE type;
-    } SliceMode;
+        struct {
+            RC_MODE_TYPE type;
+        } rcMode;
 
-    union {
-        BLUR_MODE mode;
-    } blur;
+        struct {
+            SLICE_MODE type;
+        } sliceMode;
 
-    struct {
-        IR_MODE_TYPE type;
-        float intra_refresh_mbs;
-    } irMode;
-    guint output_picture_order_mode;
-    gboolean low_latency_mode;
-    gboolean color_space_conversion;
-    struct {
-        COLOR_PRIMARIES primaries;
-        TRANSFER_CHAR transfer_char;
-        MATRIX matrix;
-        FULL_RANGE full_range;
-    } colorAspects;
+        struct {
+            BLUR_MODE mode;
+        } blur;
+
+        struct {
+            int64_t timestampUs;
+            char* type;
+            char* rectPayload;
+            char* rectPayloadExt;
+        } roiRegion;
+
+        struct {
+            IR_MODE_TYPE type;
+            guint32 intra_refresh_mbs;
+        } irMode;
+
+        struct {
+            COLOR_PRIMARIES primaries;
+            TRANSFER_CHAR transfer_char;
+            MATRIX matrix;
+            FULL_RANGE full_range;
+        } colorAspects;
+
+        struct {
+            BITRATE_SAVING_MODE saving_mode;
+        } bitrate_saving_mode;
+    };
 } ConfigParams;
 
 typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);
@@ -324,7 +385,7 @@ gboolean c2componentStore_delete(void* comp_store);
 gboolean c2component_setListener(void* const comp, void* cb_context, listener_cb callback, BLOCK_MODE_TYPE block);
 gboolean c2component_alloc(void* const comp, BufferDescriptor* buffer);
 gboolean c2component_queue(void* const comp, BufferDescriptor* buffer);
-gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode, void* const flushedWork);
+gboolean c2component_flush(void* const comp, FLUSH_MODE_TYPE mode);
 gboolean c2component_drain(void* const comp, DRAIN_MODE_TYPE mode);
 gboolean c2component_start(void* const comp);
 gboolean c2component_stop(void* const comp);
@@ -333,7 +394,6 @@ gboolean c2component_release(void* const comp);
 void* c2component_intf(void* const comp);
 gboolean c2component_createBlockpool(void* const comp, BUFFER_POOL_TYPE poolType);
 gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType);
-gboolean c2component_mapOutBuffer(void* const comp, gboolean map);
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId);
 gboolean c2component_delete(void* comp);
 
@@ -342,6 +402,7 @@ gboolean c2component_delete(void* comp);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const gchar* c2componentInterface_getName(void* const comp_intf);
 const gint c2componentInterface_getId(void* const comp_intf);
+gboolean c2componentInterface_initReflectedParamUpdater(void* const comp_store, void* const comp_intf);
 gboolean c2componentInterface_config(void* const comp_intf, GPtrArray* config, BLOCK_MODE_TYPE block);
 
 #ifdef __cplusplus
