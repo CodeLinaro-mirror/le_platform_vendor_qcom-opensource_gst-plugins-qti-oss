@@ -261,7 +261,7 @@ do_dmabuf_alloc (GstAllocator * allocator, GstBuffer * buffer,
   gboolean ret = FALSE;
   GstMemory *mem;
   gint fd = -1;
-  gsize size = 0;
+  gsize size = 0, info_size = 0;
 
   if (!qvdein_dmabuf_alloc (desc, info, ubwc)) {
     GST_ERROR_OBJECT (allocator, "alloc error");
@@ -270,7 +270,12 @@ do_dmabuf_alloc (GstAllocator * allocator, GstBuffer * buffer,
 
   fd = qvdein_dmabuf_get_fd (*desc);
   size = qvdein_dmabuf_get_size (*desc);
-  mem = gst_dmabuf_allocator_alloc_with_flags (allocator, fd, size,
+  info_size = GST_VIDEO_INFO_SIZE (info);
+  /* Have to pass in video info size for allocation to fill GST buffer size.
+   * Otherwise, gstbufferpool.c:default_release_buffer() would find size is
+   * not equal to the pool saved size set during _decide_allocation(), then
+   * discard and free the buffer. */
+  mem = gst_dmabuf_allocator_alloc_with_flags (allocator, fd, info_size,
       GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
   if (mem) {
     GST_DEBUG_OBJECT (allocator, "dmabuf mem %p", mem);
@@ -282,7 +287,8 @@ do_dmabuf_alloc (GstAllocator * allocator, GstBuffer * buffer,
   }
 
 out:
-  GST_DEBUG_OBJECT (allocator, "fd %d, size %" G_GSIZE_FORMAT, fd, size);
+  GST_DEBUG_OBJECT (allocator, "info size %" G_GSIZE_FORMAT
+      ", allocated fd %d size %" G_GSIZE_FORMAT, info_size, fd, size);
 
   return ret;
 }
