@@ -64,9 +64,15 @@
 #include <vector>
 #include <string>
 
+#include <tensorflow/lite/version.h>
+
 #ifdef DELEGATE_SUPPORT
 #include <tensorflow/lite/delegates/nnapi/nnapi_delegate.h>
+#if TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION <= 2
+#include <tensorflow/lite/experimental/delegates/hexagon/hexagon_delegate.h>
+#else
 #include <tensorflow/lite/delegates/hexagon/hexagon_delegate.h>
+#endif
 #include <tensorflow/lite/delegates/gpu/delegate.h>
 #include <tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h>
 #endif
@@ -74,7 +80,6 @@
 #include <tensorflow/lite/examples/label_image/get_top_n.h>
 #include <tensorflow/lite/examples/label_image/get_top_n_impl.h>
 #include <tensorflow/lite/kernels/register.h>
-#include <tensorflow/core/public/version.h>
 #include "tflite_base.h"
 #include "common_utils.h"
 
@@ -572,11 +577,12 @@ int32_t TFLBase::PostProcess(GstBuffer* buffer) {
     return MLE_OK;
   }
 
+#if !(TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION < 6)
   int input = tflite_params_.interpreter->inputs()[0];
 
   // Check for input tensor type
   TfLiteType input_type = tflite_params_.interpreter->tensor(input)->type;
-
+#endif
 
   // For MobileNet model, return only top most confident object info
   int output = tflite_params_.interpreter->outputs()[0];
@@ -598,7 +604,11 @@ int32_t TFLBase::PostProcess(GstBuffer* buffer) {
       tflite::label_image::get_top_n<float>(
                   tflite_params_.interpreter->typed_output_tensor<float>(0),
                   tflite_params_.num_predictions, top_results_count,
+#if TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION < 6
+                  config_.conf_threshold, &top_results, true);
+#else
                   config_.conf_threshold, &top_results, input_type);
+#endif
       break;
     case kTfLiteUInt8:
       if (verbose) {
@@ -611,7 +621,11 @@ int32_t TFLBase::PostProcess(GstBuffer* buffer) {
       tflite::label_image::get_top_n<uint8_t>(
                   tflite_params_.interpreter->typed_output_tensor<uint8_t>(0),
                   tflite_params_.num_predictions, top_results_count,
+#if TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION < 6
+                  config_.conf_threshold, &top_results, false);
+#else
                   config_.conf_threshold, &top_results, input_type);
+#endif
       break;
     default:
       MLE_LOGE("%s: Invalid output tensor type %d", __func__,
