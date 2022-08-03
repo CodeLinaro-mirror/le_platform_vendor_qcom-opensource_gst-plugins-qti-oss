@@ -90,6 +90,7 @@ public:
 
     // Update C2Params from configuration map
     std::unique_ptr<C2Param> updateParamFromConfig(const android::ReflectedParamUpdater::Dict& kvpairs);
+    android::ReflectedParamUpdater::Dict getParams(const std::vector<std::unique_ptr<C2Param> >& params);
 
 private:
     // Set underlying Component

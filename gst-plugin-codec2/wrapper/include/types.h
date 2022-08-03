@@ -92,6 +92,7 @@ public:
         const std::shared_ptr<C2Buffer>& buffer,
         uint64_t index,
         uint64_t timestamp,
+        uint32_t interlace,
         C2FrameData::flags_t flag)
         = 0;
 
