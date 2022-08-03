@@ -236,7 +236,7 @@ make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 
   memset (&param, 0, sizeof (ConfigParams));
 
-  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
+  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE_INFO;
   param.isInput = is_input;
   param.interlaceMode.type = mode;
 
@@ -265,6 +265,19 @@ make_low_latency_param (gboolean low_latency_mode)
 
   param.config_name = CONFIG_FUNCTION_KEY_DEC_LOW_LATENCY;
   param.low_latency_mode = low_latency_mode;
+
+  return param;
+}
+
+ConfigParams
+make_deinterlace_param (gboolean deinterlace)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_DEINTERLACE;
+  param.deinterlace = deinterlace;
 
   return param;
 }
@@ -516,7 +529,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
       output_format = GST_VIDEO_FORMAT_P010_10LE;
   }
 
-  dec->outPixelfmt = output_format;
+  dec->output_format = output_format;
 
   GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d",
       dec->width, dec->height, output_format);
@@ -615,6 +628,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  Gstqticodec2vdecClass *dec_class = GST_QTICODEC2VDEC_GET_CLASS (decoder);
   GstStructure *structure;
   const gchar *mode;
   gint retval = 0;
@@ -631,7 +645,7 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   ConfigParams low_latency_mode;
   const gchar *profile_string = NULL;
 
-  GST_DEBUG_OBJECT (dec, "set_format");
+  GST_DEBUG_OBJECT (dec, "set format caps:%" GST_PTR_FORMAT, state->caps);
 
   structure = gst_caps_get_structure (state->caps, 0);
   comp_name = get_c2_comp_name (decoder, structure, dec->low_latency_mode);
@@ -735,6 +749,14 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   }
 
   g_ptr_array_free (config, TRUE);
+
+  if (dec_class->set_format) {
+    GST_DEBUG_OBJECT (dec, "Subclass set format");
+    if (!dec_class->set_format (dec, state)) {
+      GST_ERROR_OBJECT (dec, "Subclass failed to set format");
+      return FALSE;
+    }
+  }
 
   /* Start decoder */
   if (!c2component_start (dec->comp)) {
@@ -1161,6 +1183,15 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
         gst_util_uint64_scale (decode_buf->timestamp, GST_SECOND,
         C2_TICKS_PER_SECOND);
 
+    if (decode_buf->interlaceMode == INTERLACE_MODE_FIELD_TOP_FIRST) {
+      GST_BUFFER_FLAG_SET (outbuf, GST_VIDEO_BUFFER_FLAG_INTERLACED);
+      GST_BUFFER_FLAG_SET (outbuf, GST_VIDEO_BUFFER_FLAG_TFF);
+      GST_DEBUG_OBJECT (dec, "interlaced top field");
+    } else if (decode_buf->interlaceMode == INTERLACE_MODE_FIELD_BOTTOM_FIRST) {
+      GST_BUFFER_FLAG_SET (outbuf, GST_VIDEO_BUFFER_FLAG_INTERLACED);
+      GST_DEBUG_OBJECT (dec, "interlaced bottom field");
+    }
+
     if (state->info.fps_d != 0 && state->info.fps_n != 0) {
       GST_BUFFER_DURATION (outbuf) = gst_util_uint64_scale (GST_SECOND,
           vinfo->fps_d, vinfo->fps_n);
@@ -1168,9 +1199,9 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
     frame->output_buffer = outbuf;
 
     GST_DEBUG_OBJECT (dec,
-        "out buffer: PTS: %lu, duration: %lu, fps_d: %d, fps_n: %d",
+        "out buffer: PTS: %lu, duration: %lu, fps_d: %d, fps_n: %d interlace:%d",
         GST_BUFFER_PTS (outbuf), GST_BUFFER_DURATION (outbuf), vinfo->fps_d,
-        vinfo->fps_n);
+        vinfo->fps_n, decode_buf->interlaceMode);
   }
 
   /* Decrease the refcount of the frame so that the frame is released by the
@@ -1194,7 +1225,6 @@ out:
 static void
 handle_video_event (const void *handle, EVENT_TYPE type, void *data)
 {
-
   GstVideoDecoder *decoder = (GstVideoDecoder *) handle;
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   GstFlowReturn ret = GST_FLOW_OK;
@@ -1203,35 +1233,61 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
 
   switch (type) {
     case EVENT_OUTPUTS_DONE:{
-      BufferDescriptor *outBuffer = (BufferDescriptor *) data;
-      if (!(outBuffer->flag & FLAG_TYPE_END_OF_STREAM)) {
-        if (!dec->output_setup || dec->width != outBuffer->width
-            || dec->height != outBuffer->height) {
+      BufferDescriptor *out_buf = (BufferDescriptor *) data;
+      GstVideoCodecState *output_state = NULL;
+      gboolean deinterlace = dec->deinterlace;
+      GstVideoInterlaceMode interlace_mode =
+          GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
+
+      if (!(out_buf->flag & FLAG_TYPE_END_OF_STREAM)) {
+        if (!dec->output_setup || dec->width != out_buf->width
+            || dec->height != out_buf->height) {
           if (dec->output_setup) {
             GST_DEBUG_OBJECT (dec,
                 "resolution change, width height:%d %d -> %u %u", dec->width,
-                dec->height, outBuffer->width, outBuffer->height);
+                dec->height, out_buf->width, out_buf->height);
           }
 
-          dec->width = outBuffer->width;
-          dec->height = outBuffer->height;
-          GstCaps *new_caps = gst_caps_copy (dec->output_state->caps);
-          dec->output_state =
-              gst_video_decoder_set_output_state (decoder, dec->outPixelfmt,
-              dec->width, dec->height, dec->input_state);
+          dec->width = out_buf->width;
+          dec->height = out_buf->height;
+          if (deinterlace == TRUE) {
+            interlace_mode = GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
+          } else {
+            if (GST_IS_QCODEC2_MPEG2_DEC (dec)) {
+              if (dec->interlace_mode == GST_VIDEO_INTERLACE_MODE_PROGRESSIVE)
+                interlace_mode = GST_VIDEO_INTERLACE_MODE_INTERLEAVED;
+              else
+                interlace_mode = GST_VIDEO_INTERLACE_MODE_MIXED;
+            } else if (GST_IS_QCODEC2_H264_DEC (dec)) {
+              if (out_buf->interlaceMode != INTERLACE_MODE_PROGRESSIVE)
+                interlace_mode = GST_VIDEO_INTERLACE_MODE_MIXED;
+            }
+          }
 
-          GValue new_width = { 0, };
-          GValue new_height = { 0, };
-          g_value_init (&new_width, G_TYPE_INT);
-          g_value_set_int (&new_width, dec->width);
+          output_state =
+              gst_video_decoder_set_interlaced_output_state (decoder,
+              dec->output_format, interlace_mode, dec->width, dec->height,
+              dec->input_state);
+          output_state->caps = gst_video_info_to_caps (&output_state->info);
 
-          g_value_init (&new_height, G_TYPE_INT);
-          g_value_set_int (&new_height, dec->height);
+          GST_DEBUG_OBJECT (dec, "set interlace mode %s in caps",
+              gst_video_interlace_mode_to_string (interlace_mode));
 
-          gst_caps_set_value (new_caps, "width", &new_width);
-          gst_caps_set_value (new_caps, "height", &new_height);
-          dec->output_state->caps = new_caps;
-
+          if (dec->downstream_supports_dma) {
+            gst_caps_set_features (output_state->caps, 0,
+                gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
+            GST_DEBUG_OBJECT (dec, "set DMA feature in Caps");
+          }
+          if (dec->is_ubwc) {
+            gst_caps_set_simple (output_state->caps, "compression",
+                G_TYPE_STRING, "ubwc", NULL);
+          } else {
+            gst_caps_set_simple (output_state->caps, "compression",
+                G_TYPE_STRING, "linear", NULL);
+          }
+          GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
+              output_state->caps);
+          dec->output_state = output_state;
           if (!gst_video_decoder_negotiate (decoder)) {
             gst_video_codec_state_unref (dec->output_state);
             GST_ERROR_OBJECT (dec, "Failed to negotiate");
@@ -1242,7 +1298,8 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
           dec->output_setup = TRUE;
         }
       }
-      if (outBuffer->size) {
+
+      if (out_buf->size) {
         if (!dec->first_frame_time.tv_sec && !dec->first_frame_time.tv_usec) {
           gettimeofday (&dec->first_frame_time, NULL);
           int time_1st_cost_us =
@@ -1254,14 +1311,14 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
         dec->num_output_done++;
         GST_DEBUG_OBJECT (dec, "output done, count: %lu", dec->num_output_done);
 
-        ret = push_frame_downstream (decoder, outBuffer);
+        ret = push_frame_downstream (decoder, out_buf);
         if (ret == GST_FLOW_FLUSHING) {
           GST_DEBUG_OBJECT (dec,
               "seek: it's a successful case since of downstream flushing");
         } else if (ret != GST_FLOW_OK) {
           GST_ERROR_OBJECT (dec, "Failed to push frame downstream");
         }
-      } else if (outBuffer->flag & FLAG_TYPE_END_OF_STREAM) {
+      } else if (out_buf->flag & FLAG_TYPE_END_OF_STREAM) {
         GST_INFO_OBJECT (dec, "Decoder reached EOS");
         g_mutex_lock (&dec->pending_lock);
         dec->eos_reached = TRUE;
@@ -1343,7 +1400,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       else
         output_format = GST_VIDEO_FORMAT_P010_10LE;
 
-      dec->outPixelfmt = output_format;
+      dec->output_format = output_format;
       GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d for VP9",
           dec->width, dec->height, output_format);
 
@@ -1650,6 +1707,7 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->low_latency_mode = DEFAULT_LOW_LATENCY_MODE;
   dec->cb.data_copy_func = NULL;
   dec->cb.data_copy_func_param = NULL;
+  dec->deinterlace = DEFAULT_DEINTERLACE;
 
   g_cond_init (&dec->pending_cond);
   g_mutex_init (&dec->pending_lock);

@@ -99,6 +99,7 @@ struct char_cmp {
 typedef std::map<const char*, configFunction, char_cmp> configFunctionMap;
 typedef std::map<const char*, configFunctionForVendorParams, char_cmp> configFunctionForVendorParamsMap;
 
+// Function for C2 parameter configuration
 std::unique_ptr<C2Param> setVideoPixelformat(gpointer param);
 std::unique_ptr<C2Param> setVideoResolution(gpointer param);
 std::unique_ptr<C2Param> setVideoBitrate(gpointer param);
@@ -108,6 +109,7 @@ std::unique_ptr<C2Param> setDecLowLatency(gpointer param);
 std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
 std::unique_ptr<C2Param> setVideoProfileLevel(gpointer param);
 
+// Function for vendor parameter configuration
 std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param, void* const comp_intf);
@@ -118,6 +120,8 @@ std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf);
 std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setInterlaceInfo(gpointer param, void* const comp_intf);
+std::unique_ptr<C2Param> setDeInterlace(gpointer param, void* const comp_intf);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -143,6 +147,8 @@ static configFunctionForVendorParamsMap sConfigFunctionForVendorParamsMap = {
     { CONFIG_FUNCTION_KEY_BLUR_RESOLUTION, setBlurResolution },
     { CONFIG_FUNCTION_KEY_ROIREGION, setRoiRegion },
     { CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE, setBitrateSavingMode },
+    { CONFIG_FUNCTION_KEY_INTERLACE_INFO, setInterlaceInfo },
+    { CONFIG_FUNCTION_KEY_DEINTERLACE, setDeInterlace },
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -563,6 +569,47 @@ std::unique_ptr<C2Param> setVideoProfileLevel(gpointer param)
     return nullptr;
 }
 
+std::unique_ptr<C2Param> setInterlaceInfo(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> interlaceInfo;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value item;
+
+    item.set((int32_t)config->interlaceMode.type);
+    kvpairs.emplace("vendor.qti-ext-dec-info-interlace.format", item);
+
+    interlaceInfo = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(interlaceInfo);
+}
+
+std::unique_ptr<C2Param> setDeInterlace(gpointer param, void* const comp_intf)
+{
+    if (param == NULL || comp_intf == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+    C2ComponentInterfaceAdapter* intf_wrapper = (C2ComponentInterfaceAdapter*)comp_intf;
+    std::unique_ptr<C2Param> deinterlace;
+    android::ReflectedParamUpdater::Dict kvpairs;
+    android::ReflectedParamUpdater::Value item;
+
+    item.set((int32_t)config->deinterlace);
+    kvpairs.emplace("vendor.qti-ext-dec-deinterlace.enable", item);
+    LOG_DEBUG("enable deinterlace:%d", config->deinterlace);
+
+    deinterlace = intf_wrapper->updateParamFromConfig(kvpairs);
+
+    return std::move(deinterlace);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // CodecCallback API handling
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -575,6 +622,7 @@ public:
         const std::shared_ptr<C2Buffer>& buffer,
         uint64_t index,
         uint64_t timestamp,
+        uint32_t interlace,
         C2FrameData::flags_t flag) override;
     void onTripped(uint32_t errorCode) override;
     void onError(uint32_t errorCode) override;
@@ -603,6 +651,7 @@ void CodecCallback::onOutputBufferAvailable(
     const std::shared_ptr<C2Buffer>& buffer,
     uint64_t index,
     uint64_t timestamp,
+    uint32_t interlace,
     C2FrameData::flags_t flag)
 {
 
@@ -619,6 +668,7 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.timestamp = timestamp;
         outBuf.index = index;
         outBuf.flag = toWrapperFlag(flag);
+        outBuf.interlaceMode = interlace;
 
         if (buf_type == C2BufferData::GRAPHIC) {
             const C2ConstGraphicBlock graphic_block = buffer->data().graphicBlocks().front();
@@ -652,7 +702,12 @@ void CodecCallback::onOutputBufferAvailable(
             outBuf.height = crop.height;
             /* get valid size for NV12_UBWC format */
             if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
-                outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
+                if (interlace != INTERLACE_MODE_PROGRESSIVE) {
+                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 1);
+                    LOG_DEBUG("output format is NV12_UBWC interlaced");
+                } else {
+                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
+                }
             } else if (format == GBM_FORMAT_NV12) {
                 outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
             } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
@@ -1238,6 +1293,7 @@ void _push_to_settings(gpointer data, gpointer user_data)
     ConfigParams* conf_param = (ConfigParams*)data;
 
     auto iter = sConfigFunctionMap.find(conf_param->config_name);
+    LOG_DEBUG("C2 config name:%s", conf_param->config_name);
     if (iter != sConfigFunctionMap.end()) {
         auto param = (*iter->second)(conf_param);
         settings_intf->settings.push_back(C2Param::Copy(*param));
@@ -1245,6 +1301,7 @@ void _push_to_settings(gpointer data, gpointer user_data)
 
     /* Iterator for vendor paramters */
     auto iterVendor = sConfigFunctionForVendorParamsMap.find(conf_param->config_name);
+    LOG_DEBUG("vendor config name:%s", conf_param->config_name);
     if (iterVendor != sConfigFunctionForVendorParamsMap.end()) {
         auto param = (*iterVendor->second)(conf_param, settings_intf->comp_intf);
         settings_intf->settings.push_back(C2Param::Copy(*param));

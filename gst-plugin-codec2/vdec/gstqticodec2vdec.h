@@ -79,6 +79,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
+#define GST_QTICODEC2VDEC_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
 #define GST_IS_QTICODEC2VDEC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VDEC))
 #define GST_IS_QTICODEC2VDEC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VDEC))
 typedef struct _Gstqticodec2vdec Gstqticodec2vdec;
@@ -88,6 +89,7 @@ typedef guint64 (*f_get_modifier) (void *bo);
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  64
+#define DEFAULT_DEINTERLACE TRUE
 
 struct _Gstqticodec2vdec
 {
@@ -115,7 +117,7 @@ struct _Gstqticodec2vdec
   gint height;
   guint64 frame_index;
   GstVideoInterlaceMode interlace_mode;
-  GstVideoFormat outPixelfmt;
+  GstVideoFormat output_format;
   guint64 num_input_queued;
   guint64 num_output_done;
   gboolean downstream_supports_dma;
@@ -134,7 +136,11 @@ struct _Gstqticodec2vdec
   gboolean check_vp9_10bit;
   gboolean secure;
   comp_cb cb;
+  gboolean deinterlace;
 };
+
+/* Param function */
+ConfigParams make_deinterlace_param (gboolean deinterlace);
 
 /*
   Class structure should always contain the class structure for the type you're inheriting from.
@@ -142,6 +148,9 @@ struct _Gstqticodec2vdec
 struct _Gstqticodec2vdecClass
 {
   GstVideoDecoderClass parent_class;
+
+    gboolean (*set_format) (Gstqticodec2vdec * decoder,
+      GstVideoCodecState * state);
 };
 
 GType gst_qticodec2vdec_get_type (void);
