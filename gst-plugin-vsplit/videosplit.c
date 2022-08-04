@@ -53,10 +53,6 @@ G_DEFINE_TYPE (GstVideoSplit, gst_video_split, GST_TYPE_ELEMENT);
 
 #define DEFAULT_PROP_MODE           GST_VIDEO_SPLIT_MODE_NORMAL
 
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
-
 #undef GST_VIDEO_SIZE_RANGE
 #define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
 
@@ -64,7 +60,7 @@ G_DEFINE_TYPE (GstVideoSplit, gst_video_split, GST_TYPE_ELEMENT);
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_VIDEO_FORMATS \
-  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
+  "{ RGB, BGR }"
 
 #define GST_CONVERTER_REQUEST(obj) ((GstConverterRequest *) obj)
 
@@ -78,16 +74,14 @@ static GstStaticPadTemplate gst_video_split_sink_template =
     GST_STATIC_PAD_TEMPLATE("sink",
         GST_PAD_SINK,
         GST_PAD_ALWAYS,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
+        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS))
     );
 
 static GstStaticPadTemplate gst_video_split_src_template =
     GST_STATIC_PAD_TEMPLATE("src_%u",
         GST_PAD_SRC,
         GST_PAD_REQUEST,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
+        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS))
     );
 
 
@@ -187,19 +181,6 @@ gst_data_queue_free_item (gpointer userdata)
  GstDataQueueItem *item = userdata;
  gst_buffer_unref (GST_BUFFER (item->object));
  g_slice_free (GstDataQueueItem, item);
-}
-
-static gboolean
-gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
-{
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
-
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
 }
 
 static gboolean
@@ -422,23 +403,12 @@ gst_video_split_update_params (GstVideoSplit * vsplit,
 
   structure = gst_structure_new_empty ("options");
 
-#ifdef USE_C2D_CONVERTER
   gst_structure_set_value (structure,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &srcrects);
+      GST_CV_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &srcrects);
   gst_structure_set_value (structure,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &dstrects);
+      GST_CV_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &dstrects);
 
-  gst_c2d_video_converter_set_input_opts (vsplit->c2dconvert, 0, structure);
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
-  gst_structure_set_value (structure,
-      GST_GLES_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &srcrects);
-  gst_structure_set_value (structure,
-      GST_GLES_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &dstrects);
-
-  gst_gles_video_converter_set_input_opts (vsplit->glesconvert, 0, structure);
-#endif // USE_GLES_CONVERTER
+  gst_cv_video_converter_set_input_opts (vsplit->cvconvert, 0, structure);
 
   g_value_unset (&value);
   g_value_unset (&entry);
@@ -474,7 +444,7 @@ static GstFlowReturn
 gst_video_split_sinkpad_chain (GstPad * pad, GstObject * parent,
     GstBuffer * inbuffer)
 {
-  GstVideoSplit *vsplit = GST_VIDEO_SPLIT (parent);
+   GstVideoSplit *vsplit = GST_VIDEO_SPLIT (parent);
   GstConverterRequest *request = NULL;
   gboolean success = FALSE;
   guint n_entries = 0;
@@ -526,39 +496,13 @@ gst_video_split_sinkpad_chain (GstPad * pad, GstObject * parent,
     return success ? GST_FLOW_OK : GST_FLOW_ERROR;
   }
 
-#ifdef USE_C2D_CONVERTER
-  {
-    gpointer *request_ids = g_new0 (gpointer, request->n_outputs);
-    guint idx = 0;
-
-    // Submit each output frame as seperate c2d converter request.
-    for (idx = 0; idx < request->n_outputs; idx++) {
-      // Update source/destination rectangles and output buffers flags/meta.
-      gst_video_split_update_params (vsplit, &(request)->inframes[0],
-          &(request)->outframes[idx], 1);
-
-      request_ids[idx] = gst_c2d_video_converter_submit_request (vsplit->c2dconvert,
-              request->inframes, request->n_inputs, &(request)->outframes[idx]);
-    }
-
-    // Wait for all c2d converter requests to complete.
-    for (idx = 0; idx < request->n_outputs; idx++)
-      success &= gst_c2d_video_converter_wait_request (vsplit->c2dconvert,
-          request_ids[idx]);
-
-    g_free (request_ids);
-  }
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
   // Update source/destination rectangles and output buffers flags/meta.
   gst_video_split_update_params (vsplit, &(request)->inframes[0],
       request->outframes, request->n_outputs);
 
-  success = gst_gles_video_converter_process (vsplit->glesconvert,
+  success = gst_cv_video_converter_process (vsplit->cvconvert,
       request->inframes, request->n_inputs, request->outframes,
       request->n_outputs);
-#endif // USE_GLES_CONVERTER
 
   // Get time difference between current time and start.
   request->time = GST_CLOCK_DIFF (request->time, gst_util_get_timestamp ());
@@ -650,31 +594,14 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 
   opts = gst_structure_new_empty ("options");
 
-#ifdef USE_C2D_CONVERTER
-  gst_structure_set (opts,
-      GST_C2D_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
-          gst_caps_has_compression (caps, "ubwc"),
-      NULL);
+  // TODO Workaround due to single thread limitation in opencv.
+  if (vsplit->cvconvert != NULL)
+    gst_cv_video_converter_free (vsplit->cvconvert);
 
-  // Configure the input parameters of the GLES converter.
-  gst_c2d_video_converter_set_input_opts (vsplit->c2dconvert, 0, opts);
-#endif // USE_C2D_CONVERTER
+  vsplit->cvconvert = gst_cv_video_converter_new ();
 
-#ifdef USE_GLES_CONVERTER
-  // TODO Workaround due to single thread limitation in GLES.
-  if (vsplit->glesconvert != NULL)
-    gst_gles_video_converter_free (vsplit->glesconvert);
-
-  vsplit->glesconvert = gst_gles_video_converter_new ();
-
-  gst_structure_set (opts,
-      GST_GLES_VIDEO_CONVERTER_OPT_UBWC_FORMAT, G_TYPE_BOOLEAN,
-          gst_caps_has_compression (caps, "ubwc"),
-      NULL);
-
-  // Configure the input parameters of the GLES converter.
-  gst_gles_video_converter_set_input_opts (vsplit->glesconvert, 0, opts);
-#endif // USE_GLES_CONVERTER
+  // Configure the input parameters of the opencv converter.
+  gst_cv_video_converter_set_input_opts (vsplit->cvconvert, 0, opts);
 
   GST_VIDEO_SPLIT_LOCK (vsplit);
 
@@ -699,15 +626,25 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 
   GST_VIDEO_SPLIT_UNLOCK (vsplit);
 
-#ifdef USE_GLES_CONVERTER
-  opts = gst_structure_new ("options",
-      GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH, G_TYPE_UINT, maxwidth,
-      GST_GLES_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT, G_TYPE_UINT, maxheight,
+  opts = gst_structure_new_empty ("options");
+
+  gst_structure_set (opts,
+      GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_WIDTH, G_TYPE_UINT,
+          maxwidth,
+      GST_CV_VIDEO_CONVERTER_OPT_OUTPUT_HEIGHT, G_TYPE_UINT,
+          maxheight,
+      GST_CV_VIDEO_CONVERTER_OPT_CONVERT_NETWORK_TYPE, G_TYPE_UINT,
+          GST_CV_UINT8,
+      GST_CV_VIDEO_CONVERTER_OPT_CONVERT, G_TYPE_BOOLEAN,
+          TRUE,
+      GST_CV_VIDEO_CONVERTER_OPT_RESIZE, G_TYPE_BOOLEAN,
+          TRUE,
+      GST_CV_VIDEO_CONVERTER_OPT_TRANSPOSE, G_TYPE_UINT,
+          0,
       NULL);
 
-  // Configure the processing pipeline of the GLES converter.
-  gst_gles_video_converter_set_output_opts (vsplit->glesconvert, opts);
-#endif // USE_GLES_CONVERTER
+  // Configure the processing pipeline of the opencv converter.
+  gst_cv_video_converter_set_output_opts (vsplit->cvconvert, opts);
 
   return TRUE;
 }
@@ -1062,15 +999,8 @@ gst_video_split_finalize (GObject * object)
 {
   GstVideoSplit *vsplit = GST_VIDEO_SPLIT (object);
 
-#ifdef USE_C2D_CONVERTER
-  if (vsplit->c2dconvert != NULL)
-    gst_c2d_video_converter_free (vsplit->c2dconvert);
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
-  if (vsplit->glesconvert != NULL)
-    gst_gles_video_converter_free (vsplit->glesconvert);
-#endif // USE_GLES_CONVERTER
+  if (vsplit->cvconvert != NULL)
+    gst_cv_video_converter_free (vsplit->cvconvert);
 
   if (vsplit->srcpads != NULL)
     g_list_free (vsplit->srcpads);
@@ -1126,13 +1056,7 @@ gst_video_split_init (GstVideoSplit * vsplit)
   vsplit->nextidx = 0;
   vsplit->srcpads = NULL;
 
-#ifdef USE_C2D_CONVERTER
-  vsplit->c2dconvert = gst_c2d_video_converter_new ();
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
-  vsplit->glesconvert = NULL;
-#endif // USE_GLES_CONVERTER
+  vsplit->cvconvert = NULL;
 
   template = gst_static_pad_template_get (&gst_video_split_sink_template);
   vsplit->sinkpad = g_object_new (GST_TYPE_VIDEO_SPLIT_SINKPAD, "name", "sink",
