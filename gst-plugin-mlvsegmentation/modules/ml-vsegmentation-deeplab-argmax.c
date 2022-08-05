@@ -74,12 +74,16 @@
 
 #define GFLOAT_PTR_CAST(data)       ((gfloat*)data)
 #define GINT32_PTR_CAST(data)       ((gint32*)data)
+#define GINT8_PTR_CAST(data)        ((gint8*)data)
 #define GST_ML_SUB_MODULE_CAST(obj) ((GstMLSubModule*)(obj))
 
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
     "type = (string) { INT32, FLOAT32 }, " \
-    "dimensions = (int) < < 1, 513, 513 > >"
+    "dimensions = (int) < < 1, 513, 513 > >; " \
+    "neural-network/tensors, " \
+    "type = (string) { INT8, FLOAT32 }, " \
+    "dimensions = (int) < < 1, 513, 513, 21 > >"
 
 // Module caps instance
 static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
@@ -155,7 +159,7 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   GstProtectionMeta *pmeta = NULL;
   guint8 *indata = NULL, *outdata = NULL;
   guint idx = 0, id = 0, bpp = 0, padding = 0, color = 0;
-  gint row = 0, column = 0, inwidth = 0, inheight = 0;
+  gint row = 0, column = 0, inwidth = 0, inheight = 0, category = 0;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
@@ -169,9 +173,10 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   padding = GST_VIDEO_FRAME_PLANE_STRIDE (vframe, 0) -
       (GST_VIDEO_FRAME_WIDTH (vframe) * bpp);
 
-  // Set the initial width and height of the source mask.
+  // Set the initial width and height of the source mask and number of categories.
   inwidth = GST_ML_FRAME_DIM (mlframe, 0, 2);
   inheight = GST_ML_FRAME_DIM (mlframe, 0, 1);
+  category = GST_ML_FRAME_DIM (mlframe, 0, 3);
 
   indata = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
   outdata = GST_VIDEO_FRAME_PLANE_DATA (vframe, 0);
@@ -201,10 +206,27 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
       idx += gst_util_uint64_scale_int (column, inwidth,
           GST_VIDEO_FRAME_WIDTH (vframe));
 
-      if (GST_ML_FRAME_TYPE (mlframe) == GST_ML_TYPE_FLOAT32)
-        id = GFLOAT_PTR_CAST (indata)[idx];
+      if (GST_ML_FRAME_TYPE (mlframe) == GST_ML_TYPE_FLOAT32) {
+        if (category > 1) {
+          idx = idx * category;
+          guint  max = idx;
+          for (guint k = idx + 1; k < idx + category; k++) {
+            max = (GFLOAT_PTR_CAST (indata)[max] > GFLOAT_PTR_CAST (indata)[k]) ? max : k;
+          }
+          id = max - idx;
+        } else
+          id = GFLOAT_PTR_CAST (indata)[idx];
+      }
       else if (GST_ML_FRAME_TYPE (mlframe) == GST_ML_TYPE_INT32)
         id = GINT32_PTR_CAST (indata)[idx];
+      else if (GST_ML_FRAME_TYPE (mlframe) == GST_ML_TYPE_INT8) {
+        idx = idx * category;
+        guint  max = idx;
+        for (guint k = idx + 1; k < idx + category; k++) {
+          max = (GINT8_PTR_CAST (indata)[max] > GINT8_PTR_CAST (indata)[k]) ? max : k;
+        }
+        id = max - idx;
+      }
 
       label = g_hash_table_lookup (submodule->labels, GUINT_TO_POINTER (id));
       color = (label != NULL) ? label->color : 0x000000FF;
