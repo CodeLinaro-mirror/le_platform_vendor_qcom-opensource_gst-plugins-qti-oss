@@ -89,7 +89,14 @@ main (int argc, char *argv[])
     goto CLEAN;
   }
 
-  g_signal_connect (pipeline, "element-setup", G_CALLBACK (element_setup), NULL);
+  /* if last argv equals to non-secure, run in non-secure mode,
+   * otherwise, run in secure mode.
+   */
+  if (g_strcmp0 (argv[argc -  1], "non-secure") == 0) {
+    g_warning ("Pipeline in non-source mode");
+  } else {
+    g_signal_connect (pipeline, "element-setup", G_CALLBACK (element_setup), NULL);
+  }
 
   /* Start playing */
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
