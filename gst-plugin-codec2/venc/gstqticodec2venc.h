@@ -26,6 +26,12 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
 
 #ifndef __GST_QTICODEC2VENC_H__
 #define __GST_QTICODEC2VENC_H__
@@ -35,7 +41,7 @@
 #include <gst/video/gstvideoencoder.h>
 #include <gst/video/gstvideopool.h>
 #include <gst/allocators/allocators.h>
-#include "gstqticodec2bufferpool.h"
+#include "gstqcodec2bufferpool.h"
 
 #include "codec2wrapper.h"
 
@@ -43,6 +49,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QTICODEC2VENC          (gst_qticodec2venc_get_type())
 #define GST_QTICODEC2VENC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VENC,Gstqticodec2venc))
 #define GST_QTICODEC2VENC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VENC,Gstqticodec2vencClass))
+#define GST_QTICODEC2VENC_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_QTICODEC2VENC,Gstqticodec2vencClass))
 #define GST_IS_QTICODEC2VENC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VENC))
 #define GST_IS_QTICODEC2VENC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VENC))
 typedef struct _Gstqticodec2venc Gstqticodec2venc;
@@ -50,6 +57,18 @@ typedef struct _Gstqticodec2vencClass Gstqticodec2vencClass;
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  32
+
+typedef struct
+{
+  const gchar *profile;
+  C2W_PROFILE_T e;
+} ProfileMapping;
+
+typedef struct
+{
+  const gchar *level;
+  C2W_LEVEL_T e;
+} LevelMapping;
 
 struct _Gstqticodec2venc
 {
@@ -76,6 +95,7 @@ struct _Gstqticodec2venc
   gint width;
   gint height;
   GstVideoFormat input_format;
+  GstVideoInfo input_info;
   guint64 frame_index;
   guint64 num_input_queued;
   guint64 num_output_done;
@@ -103,6 +123,11 @@ struct _Gstqticodec2venc
   guint32 blur_width;
   guint32 blur_height;
   gboolean is_ubwc;
+  GArray *roi_array;
+  char *roi_type;
+  char *roi_rect_payload;
+  char *roi_rect_payload_ext;
+  BITRATE_SAVING_MODE bitrate_saving_mode;
 };
 
 /*
@@ -111,9 +136,14 @@ struct _Gstqticodec2venc
 struct _Gstqticodec2vencClass
 {
   GstVideoEncoderClass parent_class;
+
+    gboolean (*set_format) (Gstqticodec2venc * encoder,
+      GstVideoCodecState * state);
 };
 
 GType gst_qticodec2venc_get_type (void);
+
+ConfigParams make_profile_level_param (C2W_PROFILE_T profile, C2W_LEVEL_T level);
 
 G_END_DECLS
 #endif /* __GST_QTICODEC2VENC_H__ */

@@ -129,62 +129,69 @@ c2_status_t C2ComponentAdapter::writePlane(uint8_t* dest, BufferDescriptor* buff
         return C2_BAD_VALUE;
     }
 
+    uint32_t width = buffer_info->width;
+    uint32_t height = buffer_info->height;
+    uint32_t stride = buffer_info->stride[0];
+
+    LOG_MESSAGE("format %d, %ux%u, stride %u, "
+                "offset %" G_GSIZE_FORMAT "-%" G_GSIZE_FORMAT,
+        buffer_info->format, width, height, stride,
+        buffer_info->offset[0], buffer_info->offset[1]);
+
     /*TODO: add support for other color formats */
     if (buffer_info->format == GST_VIDEO_FORMAT_NV12) {
-        uint32_t width = buffer_info->width;
-        uint32_t height = buffer_info->height;
         if (buffer_info->ubwc_flag) {
-            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
-                width, height, 0);
-            memcpy(dst, src, buf_size);
+            memcpy(dst, src, buffer_info->size);
         } else {
             uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
             uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
             uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
 
+            src += buffer_info->offset[0];
             for (int i = 0; i < height; i++) {
                 memcpy(dst, src, width);
                 dst += y_stride;
-                src += width;
+                src += stride;
             }
 
             uint32_t offset = y_stride * y_scanlines;
             dst = dest + offset;
+            if (buffer_info->offset[1] > 0) {
+                src = buffer_info->data + buffer_info->offset[1];
+            }
 
             for (int i = 0; i < height / 2; i++) {
                 memcpy(dst, src, width);
                 dst += uv_stride;
-                src += width;
+                src += stride;
             }
         }
     } else if (buffer_info->format == GST_VIDEO_FORMAT_P010_10LE) {
-        uint32_t width = buffer_info->width;
-        uint32_t height = buffer_info->height;
         uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_P010, width);
         uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_P010, width);
         uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_P010, height);
 
+        src += buffer_info->offset[0];
         for (int i = 0; i < height; i++) {
-            memcpy(dst, src, width * 2);
+            memcpy(dst, src, stride);
             dst += y_stride;
-            src += width * 2;
+            src += stride;
         }
 
         uint32_t offset = y_stride * y_scanlines;
         dst = dest + offset;
+        if (buffer_info->offset[1] > 0) {
+            src = buffer_info->data + buffer_info->offset[1];
+        }
 
         for (int i = 0; i < height / 2; i++) {
-            memcpy(dst, src, width * 2);
+            memcpy(dst, src, stride);
             dst += uv_stride;
-            src += width * 2;
+            src += stride;
         }
     } else if (buffer_info->format == GST_VIDEO_FORMAT_NV12_10LE32) {
-        uint32_t width = buffer_info->width;
-        uint32_t height = buffer_info->height;
         if (buffer_info->ubwc_flag) {
-            uint32_t buf_size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC,
-                width, height);
-            memcpy(dst, src, buf_size);
+            memcpy(dst, src, buffer_info->size);
         } else {
             LOG_ERROR("Non UBWC NV12_10LE32 not supported yet");
             result = C2_BAD_VALUE;
@@ -230,9 +237,22 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             if (mDataCopyFunc) {
                 if (linear_block->handle()) {
                     uint32_t dest_fd = linear_block->handle()->data[0];
-                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    /* That data length is from upstream gst plugin pushed down gstbuffer.
+                     * In the DataCopyFunc callback function, it may reduce the data length
+                     * to its actual length accordingly, but couldn’t increase the length
+                     * as the dst buffer is already allocated according to that data length.
+                     * Hence, pass the data length pointer as parameter to DataCopyFunc
+                     * so as to get the actual data length in return.
+                     */
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, &frameSize, mDataCopyFuncParam);
                     if (ret) {
                         LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+
+                    if (frameSize > buffer->size) {
+                        LOG_ERROR("frameSize exceeds, previous: %u current: %u",
+                            buffer->size, frameSize);
                         return C2_CORRUPTED;
                     }
                 } else {
@@ -265,6 +285,7 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
                         C2MemoryUsage::CPU_WRITE
                     };
                 }
+
                 err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                     gst_to_c2_gbmformat(buffer->format), usage, &graphic_block);
                 C2GraphicView view(graphic_block->map().get());
@@ -464,9 +485,24 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
                 mInPendingBuffer[fd] = graphicBlock;
                 buffer->fd = fd;
 
-                _UnwrapNativeCodec2GBMMetadata(handle, nullptr, nullptr, nullptr, nullptr, nullptr, &size, nullptr);
+                guint32 stride = 0;
+                guint32 height = 0;
+                guint32 format = 0;
+                guint64 usage = 0;
+
+                _UnwrapNativeCodec2GBMMetadata(handle, nullptr,
+                    &height, &format, &usage, &stride, &size, nullptr);
                 buffer->capacity = size;
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d", fd, buffer->capacity, buffer->ubwc_flag);
+                uint32_t y_scanlines = VENUS_Y_SCANLINES(
+                    gbmformat_to_colorformat(format, usage), height);
+                buffer->stride[0] = buffer->stride[1] = stride;
+                buffer->offset[0] = 0;
+                buffer->offset[1] = stride * y_scanlines;
+
+                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
+                            " stride %u, offset %" G_GSIZE_FORMAT,
+                    fd, buffer->capacity, buffer->ubwc_flag,
+                    stride, buffer->offset[1]);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
@@ -709,6 +745,26 @@ c2_status_t C2ComponentAdapter::configBlockPool(C2BlockPool::local_id_t poolType
     return ret;
 }
 
+uint32_t C2ComponentAdapter::getInterlaceMode(std::vector<std::unique_ptr<C2Param> >& configUpdate)
+{
+    uint32_t interlace = INTERLACE_MODE_PROGRESSIVE;
+    android::ReflectedParamUpdater::Dict paramsMap;
+    android::ReflectedParamUpdater::Value paramVal;
+    C2Value c2Value;
+
+    paramsMap = mIntf->getParams(configUpdate);
+    if (paramsMap.find("vendor.qti-ext-dec-info-interlace.format") != paramsMap.end()) {
+        paramVal = paramsMap["vendor.qti-ext-dec-info-interlace.format"];
+        if (paramVal.find(&c2Value)) {
+            if (c2Value.get(&interlace)) {
+                LOG_DEBUG("interlace type:%u", interlace);
+            }
+        }
+    }
+
+    return interlace;
+}
+
 void C2ComponentAdapter::handleWorkDone(
     std::weak_ptr<C2Component> component,
     std::list<std::unique_ptr<C2Work> > workItems)
@@ -739,6 +795,7 @@ void C2ComponentAdapter::handleWorkDone(
         uint64_t bufferIdx = 0;
         C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
         uint64_t timestamp = worklet->output.ordinal.timestamp.peeku();
+        uint32_t interlace = getInterlaceMode(worklet->output.configUpdate);
 
         while (!worklet->output.configUpdate.empty()) {
             std::unique_ptr<C2Param> param;
@@ -785,12 +842,12 @@ void C2ComponentAdapter::handleWorkDone(
                 mOutPendingBuffer[bufferIdx] = buffer;
             }
 
-            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
+            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, interlace, outputFrameFlag);
         } else {
 
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
-                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, outputFrameFlag);
+                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, interlace, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
                 LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple "
                             "output frames, or codec config update event",

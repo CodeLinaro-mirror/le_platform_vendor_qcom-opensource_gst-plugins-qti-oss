@@ -43,7 +43,8 @@
 #define QEAVB_TS_DEFAULT_BLOCKSIZE 1500
 #define DEFALUT_SLEEP_US 10000
 #define MIN_SLEEP_US 2000
-#define RETRY_COUNT 100000
+#define MIN_RETRY_TOTALTIME_US  25000000
+#define RETRY_COUNT (MIN_RETRY_TOTALTIME_US/MIN_SLEEP_US)  //When retry sleep time equal to MIN_SLEEP_US, total retry time equal to MIN_RETRY_TOTALTIME_US
 
 int qeavb_create_stream_remote(int eavb_fd, char* file_path, eavb_ioctl_hdr_t* hdr);
 int qeavb_get_stream_info(int eavb_fd, eavb_ioctl_hdr_t* hdr, eavb_ioctl_stream_info_t* info);

@@ -273,7 +273,7 @@ typedef enum {
 
   FILE_TYPE_START_OF_VP8_SPECIFIC = 60,
   FILE_TYPE_VP8_START_CODE = FILE_TYPE_START_OF_VP8_SPECIFIC,
-  FILE_TYPE_VP8,
+  FILE_TYPE_VP8,    //both vp8 and vp9 ivf, just use this format
 
   FILE_TYPE_START_OF_H265_SPECIFIC = 70,
   FILE_TYPE_265_NAL_SIZE_LENGTH = FILE_TYPE_START_OF_H265_SPECIFIC,
@@ -350,6 +350,9 @@ int bOutputEosReached = 0;
 char in_filename[512];
 unsigned etb_count = 0;
 
+OMX_S64 timeStamp_fromIVF = -1;
+unsigned int ts_scaler_fromIVF_d = 0;
+unsigned int ts_scaler_fromIVF_n = 0;
 OMX_S64 timeStampLfile = 0;
 int fps = 30;
 unsigned int timestampInterval = 33333;
@@ -389,6 +392,7 @@ static int open_video_file ();
 static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_Size_Nal(uint8_t *data);
+static int Read_Buffer_From_Ivf_File(uint8_t *data);
 
 static int fill_omx_input_buffer(OMX_BUFFERHEADERTYPE *omx_buf, bool secure);
 
@@ -677,7 +681,7 @@ void* fbd_thread(void* pArg)
         printf("====>The first decoder output frame costs %d.%06d sec.\n",time_1st_cost_us/1000000,time_1st_cost_us%1000000);
       }
       fbd_cnt++;
-      DEBUG_PRINT_ERROR("fbd_cnt=%d pBuffer=%p Timestamp=%lld", fbd_cnt, pBuffer, pBuffer->nTimeStamp);
+      DEBUG_PRINT_ERROR("fbd_cnt=%d pBuffer=%p Timestamp=%lld us", fbd_cnt, pBuffer, pBuffer->nTimeStamp);
 
       if (!output_dynamic_meta_mode && fbd_cnt <= 32) {
         //This code is just to show how to get some gbm related info. from
@@ -1043,8 +1047,8 @@ static void parse_argv4_output_option(const char *argv4)
 static void print_usage(char **argv)
 {
   printf("%s <infile_path> <codec_type> <file_type> <output_op> <test_op> <num_frames> <output_buf>\n", argv[0]);
-  printf("<codec_type>\t1:h264, 9:h265\n");
-  printf("<file_type>\t4:byte-stream without container\n");
+  printf("<codec_type>\t1:h264, 9:h265, 8:vp9\n");
+  printf("<file_type>\t4:byte-stream without container or ivf format\n");
   printf("<output_op>\t"
     "0: decoded as linear yuv but no output, 2: decoded as linear yuv but dump frames to yuvframes.yuv file under current dir\n\t\t"
     "8: decoded as UBWC yuv but no output,  10: decoded as UBWC yuv but dump frames to yuvframes.yuv file under current dir\n");
@@ -1054,12 +1058,15 @@ static void print_usage(char **argv)
          "0:OMX_AllocateBuffer() allocates buffers for OMX output port\n\t\t"
          "1:OMX_UseBuffer() with dynamic meta mode for OMX output port\n\n");
 
-  printf("Usage example(only verified h264 and h265):\n");
+  printf("Usage example(only verified h264, h265 and vp9):\n");
   printf("For h264: %s xxx.h264 1 4 2 1 0 0\n", argv[0]);
   printf("For h265: %s xxx.h265 9 4 2 1 0 0\n", argv[0]);
+  printf("For vp9: %s xxx.ivf 8 4 2 1 0 0\n", argv[0]);
+
   printf("Above cmd will output NV12 file as yuvframes.yuv under current directory.\n\n");
   printf("For h264: %s xxx.h264 1 4 0 1 0 0\n", argv[0]);
   printf("For h265: %s xxx.h265 9 4 8 1 0 0\n", argv[0]);
+  printf("For vp9: %s xxx.ivf 8 4 8 1 0 0\n", argv[0]);
   printf("Above cmd will decode video as NV12 or NV12_UBWC, but no yuvframes.yuv generated.\n\n");
 
   printf("For kpi mode, add %s before input file without blank\n", KPI_INDICATOR_STR);
@@ -1108,6 +1115,7 @@ static void close_gbm_device()
 
 int main(int argc, char **argv)
 {
+  int main_rt = 0;
   int test_option = 0;
   int pic_order = 0;
   OMX_ERRORTYPE result;
@@ -1124,7 +1132,8 @@ int main(int argc, char **argv)
   if (argc < 8)
   {
     print_usage(argv);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
   else if(argc >= 8)
   {
@@ -1145,13 +1154,16 @@ int main(int argc, char **argv)
         atoi(argv[4]), test_option, num_frames_to_decode, atoi(argv[7]));
   }
 
-  if (parse_argv1_mode_and_infile(argv[1]))
-    return -1;
+  if (parse_argv1_mode_and_infile(argv[1])) {
+    main_rt = -1;
+    goto main_exit;
+  }
 
   if (secure_mode && COLOR_FMT_NV12_UBWC != venus_color_fmt)
   {
     printf("Secure mode only support UBWC output, not support linear output!\n");
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   if (file_type_option >= FILE_TYPE_COMMON_CODEC_MAX)
@@ -1164,9 +1176,13 @@ int main(int argc, char **argv)
       case CODEC_FORMAT_HEVC:
         file_type_option = (file_type)(FILE_TYPE_START_OF_H265_SPECIFIC + file_type_option - FILE_TYPE_COMMON_CODEC_MAX);
         break;
+      case CODEC_FORMAT_VP9:
+        file_type_option = (file_type)(FILE_TYPE_START_OF_VP8_SPECIFIC + file_type_option - FILE_TYPE_COMMON_CODEC_MAX);
+        break;
       default:
         DEBUG_PRINT_ERROR("Error: Unknown code %d", codec_format_option);
-        return -1;
+        main_rt = -1;
+        goto main_exit;
     }
   }
 
@@ -1208,7 +1224,8 @@ int main(int argc, char **argv)
   if (ebd_queue == NULL)
   {
     DEBUG_PRINT_ERROR(" Error in Creating ebd_queue");
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   fbd_queue = alloc_queue();
@@ -1216,7 +1233,8 @@ int main(int argc, char **argv)
   {
     DEBUG_PRINT_ERROR(" Error in Creating fbd_queue");
     free_queue(ebd_queue);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
 
   if(0 != pthread_create(&fbd_thread_id, NULL, fbd_thread, NULL))
@@ -1224,7 +1242,8 @@ int main(int argc, char **argv)
     DEBUG_PRINT_ERROR(" Error in Creating fbd_thread ");
     free_queue(ebd_queue);
     free_queue(fbd_queue);
-    return -1;
+    main_rt = -1;
+    goto main_exit;
   }
   pthread_setname_np(fbd_thread_id, "fbd_thread");
 
@@ -1248,7 +1267,9 @@ int main(int argc, char **argv)
   {
     DEBUG_PRINT_ERROR("Error - sem_destroy failed %d", errno);
   }
-  return 0;
+
+main_exit:
+  return main_rt;
 }
 
 int run_tests(bool secure)
@@ -1275,6 +1296,14 @@ int run_tests(bool secure)
       return -1;
     }
   }
+  else if(codec_format_option == CODEC_FORMAT_VP9) {
+    if (file_type_option == FILE_TYPE_VP8) {
+      Read_Buffer = Read_Buffer_From_Ivf_File;
+    }else{
+      DEBUG_PRINT_ERROR("Invalid file_type_option(%d) for VP9", file_type_option);
+      return -1;
+    }
+  }
 
   DEBUG_PRINT("file_type_option %d!", file_type_option);
 
@@ -1283,6 +1312,7 @@ int run_tests(bool secure)
     case FILE_TYPE_264_START_CODE_BASED:
     case FILE_TYPE_264_NAL_SIZE_LENGTH:
     case FILE_TYPE_265_START_CODE_BASED:
+    case FILE_TYPE_VP8:
       if(Init_Decoder(secure) != 0x00)
       {
         DEBUG_PRINT_ERROR("Error - Decoder Init failed");
@@ -1313,8 +1343,10 @@ int run_tests(bool secure)
   pthread_mutex_unlock(&eos_lock);
 
   // Wait till EOS is reached...
-  if(bOutputEosReached)
+  if(bOutputEosReached) {
+    printf("will call do_freeHandle_and_clean_up(%d)\n", currentStatus);
     do_freeHandle_and_clean_up(currentStatus == ERROR_STATE);
+  }
   return 0;
 }
 
@@ -1353,6 +1385,14 @@ static int fill_omx_input_buffer(OMX_BUFFERHEADERTYPE *omx_buf, bool secure)
 
   omx_buf->nTimeStamp = timeStampLfile;
   timeStampLfile += timestampInterval;
+  if (Read_Buffer == Read_Buffer_From_Ivf_File) {
+    //For IVF file, use TS from that file
+    if (timeStamp_fromIVF >= 0) {
+      omx_buf->nTimeStamp = timeStamp_fromIVF;
+    }else{
+      DEBUG_PRINT_ERROR("TS from IVF has eror %lld", timeStamp_fromIVF);
+    }
+  }
 
   if (secure) {
     int sec_buf_fd = (int)(long)(omx_buf->pBuffer);
@@ -1374,6 +1414,9 @@ static bool get_omx_component_name(char *name, size_t size, bool secure)
     break;
   case CODEC_FORMAT_HEVC:
     cname = "OMX.qcom.video.decoder.hevc";
+    break;
+  case CODEC_FORMAT_VP9:
+    cname = "OMX.qcom.video.decoder.vp9";
     break;
   default:
     DEBUG_PRINT_ERROR("Unsupported codec %d", codec_format_option);
@@ -1502,7 +1545,11 @@ int Init_Decoder(bool secure)
   }
   else if (codec_format_option == CODEC_FORMAT_HEVC)
   {
-    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)QOMX_VIDEO_CodingHevc;
+    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingHEVC;
+  }
+  else if (codec_format_option == CODEC_FORMAT_VP9)
+  {
+    portFmt.format.video.eCompressionFormat = (OMX_VIDEO_CODINGTYPE)OMX_VIDEO_CodingVP9;
   }
   else
   {
@@ -1527,6 +1574,20 @@ int Play_Decoder(bool secure)
     DEBUG_PRINT_ERROR("Error in opening video file");
     return -1;
   }
+  if (Read_Buffer == Read_Buffer_From_Ivf_File) {
+    unsigned char ivfheader[32] = {0};
+    int ivfheaderlen = read(inputBufferFileFd, ivfheader, 32);
+    if(ivfheaderlen != 32 || !(ivfheader[0] == 'D' && ivfheader[1] == 'K' && ivfheader[2] == 'I' && ivfheader[3] == 'F')) {
+      DEBUG_PRINT_ERROR("IVF file not begin with \"DKIF\", it's corrupted IVF file");
+      return -1;
+    }
+    width = ivfheader[12] + ((unsigned int)ivfheader[13] << 8);
+    height = ivfheader[14] + ((unsigned int)ivfheader[15] << 8);
+    printf("Parsed from IVF file header, W x H is %d x %d\n", width, height);
+    ts_scaler_fromIVF_d = ivfheader[16] + ((unsigned int)ivfheader[17]<<8) + ((unsigned int)ivfheader[18]<<16) + ((unsigned int)ivfheader[19]<<24);
+    ts_scaler_fromIVF_n = ivfheader[20] + ((unsigned int)ivfheader[21]<<8) + ((unsigned int)ivfheader[22]<<16) + ((unsigned int)ivfheader[23]<<24);
+    printf("Parsed from IVF file header, time base denominator %d, time base numerator %d\n", ts_scaler_fromIVF_d, ts_scaler_fromIVF_n);
+  }
 
   OMX_QCOM_PARAM_PORTDEFINITIONTYPE inputPortFmt;
   memset(&inputPortFmt, 0, sizeof(OMX_QCOM_PARAM_PORTDEFINITIONTYPE));
@@ -1536,6 +1597,7 @@ int Play_Decoder(bool secure)
   {
     case FILE_TYPE_264_START_CODE_BASED:
     case FILE_TYPE_265_START_CODE_BASED:
+    case FILE_TYPE_VP8:
     {
       inputPortFmt.nFramePackingFormat = OMX_QCOM_FramePacking_OnlyOneCompleteFrame;
       break;
@@ -1572,7 +1634,8 @@ int Play_Decoder(bool secure)
   bufCnt = 0;
   portFmt.format.video.nFrameHeight = height;
   portFmt.format.video.nFrameWidth  = width;
-  portFmt.format.video.xFramerate = fps;
+  portFmt.format.video.xFramerate = fps << 16;//xFramerate is Q16 format
+  printf("SetParameter for input port fmt: portidx %d, w %u, h %u, xFramerate %u(%d fps)\n", portFmt.nPortIndex, portFmt.format.video.nFrameWidth, portFmt.format.video.nFrameHeight, portFmt.format.video.xFramerate, fps);
   OMX_SetParameter(dec_handle,OMX_IndexParamPortDefinition, (OMX_PTR)&portFmt);
   OMX_GetParameter(dec_handle,OMX_IndexParamPortDefinition, &portFmt);
   DEBUG_PRINT("Dec: New Min Buffer Count %d", portFmt.nBufferCountMin);
@@ -1787,9 +1850,6 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
    * frame buffer correctly. This is just an example for getting GBM modifier. */
   DEBUG_PRINT("GBM buffer modifier=0x%llx", modifier);
 
-  /* Undefine below check code for it depends on libgbm change of adding
-   * GBM_FORMAT_MOD_QTI_SECURE to avoid compilation error. */
-#if 0
   if (!secure) {
     DEBUG_PRINT("User not need secure buffer, so no secure modifier");
   } else {
@@ -1802,12 +1862,11 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
   if (!ubwc) {
     DEBUG_PRINT("User not need UBWC buffer, so no UBWC modifier");
   } else {
-    if ((modifier & GBM_FORMAT_MOD_QTI_COMPRESSED) == GBM_FORMAT_MOD_QTI_COMPRESSED)
+    if ((modifier & DRM_FORMAT_MOD_QCOM_COMPRESSED) == DRM_FORMAT_MOD_QCOM_COMPRESSED)
       DEBUG_PRINT("GBM buffer has compressed UBWC modifier");
     else
       DEBUG_PRINT_ERROR("GBM buffer should have compressed UBWC modifier!");
   }
-#endif
 }
 
 /* This is just an example for getting GBM modifier from the GBM output buffer
@@ -1975,18 +2034,23 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
 {
   int bufCnt = 0;
   OMX_STATETYPE state = OMX_StateInvalid;
+  printf("Will call OMX_GetState in %s()\n", __func__);
   OMX_GetState(dec_handle, &state);
+  printf("OMX_GetState get state %d in %s()\n", state, __func__);
   if (state == OMX_StateExecuting || state == OMX_StatePause)
   {
     DEBUG_PRINT("Requesting transition to Idle");
     OMX_SendCommand(dec_handle, OMX_CommandStateSet, OMX_StateIdle, 0);
     wait_for_event();
   }
+  printf("Will call OMX_GetState 2nd in %s()\n", __func__);
   OMX_GetState(dec_handle, &state);
+  printf("OMX_GetState 2nd get state %d in %s()\n", state, __func__);
   if (state == OMX_StateIdle)
   {
-    DEBUG_PRINT("Requesting transition to Loaded");
+    DEBUG_PRINT("Requesting IL comp transition to Loaded");
     OMX_SendCommand(dec_handle, OMX_CommandStateSet, OMX_StateLoaded, 0);
+    printf("IL comp transition to loaded cmd finished\n");
     for(bufCnt=0; bufCnt < input_buf_cnt; ++bufCnt)
     {
       OMX_FreeBuffer(dec_handle, 0, pInputBufHdrs[bufCnt]);
@@ -2004,10 +2068,11 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
       pOutYUVBufHdrs = NULL;
     }
     free_gbm_buffers(&external_output_buffers);
+    printf("free some buffer finish\n");
     wait_for_event();
   }
 
-  DEBUG_PRINT("[OMX Vdec Test] - Free handle decoder\n");
+  printf("[OMX Vdec Test] - Free handle decoder\n");
   OMX_ERRORTYPE result = OMX_FreeHandle(dec_handle);
   if (result != OMX_ErrorNone)
   {
@@ -2016,9 +2081,9 @@ static void do_freeHandle_and_clean_up(bool isDueToError)
   dec_handle = NULL;
 
   /* Deinit OpenMAX */
-  DEBUG_PRINT("[OMX Vdec Test] - De-initializing OMX ");
+  printf("[OMX Vdec Test] - De-initializing OMX\n");
   OMX_Deinit();
-
+  printf("[OMX Vdec Test] - De-init OMX finished\n");
   free_nonsecure_buffer(&input_nonsecure_buffer);
   free_nonsecure_buffer(&output_nonsecure_buffer);
 
@@ -2255,6 +2320,39 @@ static int Read_Buffer_From_Size_Nal(uint8_t *data)
   }
 
   return bytes_read + nalSize;
+}
+
+
+static int Read_Buffer_From_Ivf_File(uint8_t *data)
+{
+  unsigned int frame_sz = 0;
+  unsigned long long frame_ts = 0;
+  int bytes_read = 0;
+
+  DEBUG_PRINT("Inside %s", __FUNCTION__);
+  bytes_read = read(inputBufferFileFd, &frame_sz, 4);
+  if ( bytes_read > 0 && bytes_read < 4) {
+    DEBUG_PRINT_ERROR("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
+    return 0;
+  }else if ( 0 == bytes_read ) {
+    printf("0 bytes read from IVF file, really meet EOF\n");
+    return 0;
+  }
+  bytes_read = read(inputBufferFileFd, &frame_ts, 8);
+  if ( 8 != bytes_read ) {
+    DEBUG_PRINT_ERROR("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
+    return 0;
+  }
+  bytes_read = read(inputBufferFileFd, data, frame_sz);
+  if (bytes_read != frame_sz) {
+    DEBUG_PRINT_ERROR("Reading IVF frame data, %d bytes read, not equal to %d bytes, treat as EOF", bytes_read, frame_sz);
+    return 0;
+  }
+  if (ts_scaler_fromIVF_d != 0 && ts_scaler_fromIVF_n != 0) {
+    timeStamp_fromIVF = frame_ts * 1000000 * ts_scaler_fromIVF_n / ts_scaler_fromIVF_d;
+  }
+
+  return bytes_read;
 }
 
 static int open_video_file ()

@@ -34,6 +34,7 @@
 #include <types.h>
 #include <C2Config.h>
 #include <codec2wrapper.h>
+#include <media/msm_media_info.h>
 
 namespace QTI {
 
@@ -304,6 +305,33 @@ gst_to_c2_gbmformat(GstVideoFormat format)
     return result;
 }
 
+guint32
+gbmformat_to_colorformat(guint32 format, guint64 usage)
+{
+    guint32 result = 0;
+
+    switch (format) {
+    case GBM_FORMAT_NV12:
+        if (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI) {
+            result = COLOR_FMT_NV12_UBWC;
+        } else {
+            result = COLOR_FMT_NV12;
+        }
+        break;
+    case GBM_FORMAT_P010:
+        result = COLOR_FMT_P010;
+        break;
+    case GBM_FORMAT_YCbCr_420_TP10_UBWC:
+        result = COLOR_FMT_NV12_BPP10_UBWC;
+        break;
+    default:
+        LOG_WARNING("unsupported video format:%d", format);
+        break;
+    }
+
+    return result;
+}
+
 C2Color::primaries_t toC2Primaries(COLOR_PRIMARIES pixel)
 {
     C2Color::primaries_t ret = C2Color::PRIMARIES_UNSPECIFIED;
@@ -427,6 +455,175 @@ C2Color::range_t toC2FullRange(FULL_RANGE full_range)
         break;
     default:
         ret = C2Color::RANGE_UNSPECIFIED;
+        break;
+    }
+    return ret;
+}
+
+C2Config::profile_t toC2Profile(C2W_PROFILE_T profile)
+{
+    C2Config::profile_t ret = C2Config::profile_t::PROFILE_UNUSED;
+    switch (profile) {
+    case C2W_AVC_PROFILE_BASELINE:
+        ret = C2Config::profile_t::PROFILE_AVC_BASELINE;
+        break;
+    case C2W_AVC_PROFILE_CONSTRAINT_BASELINE:
+        ret = C2Config::profile_t::PROFILE_AVC_CONSTRAINED_BASELINE;
+        break;
+    case C2W_AVC_PROFILE_MAIN:
+        ret = C2Config::profile_t::PROFILE_AVC_MAIN;
+        break;
+    case C2W_AVC_PROFILE_HIGH:
+        ret = C2Config::profile_t::PROFILE_AVC_HIGH;
+        break;
+    case C2W_AVC_PROFILE_CONSTRAINT_HIGH:
+        ret = C2Config::profile_t::PROFILE_AVC_CONSTRAINED_HIGH;
+        break;
+    case C2W_HEVC_PROFILE_MAIN:
+        ret = C2Config::profile_t::PROFILE_HEVC_MAIN;
+        break;
+    case C2W_HEVC_PROFILE_MAIN10:
+        ret = C2Config::profile_t::PROFILE_HEVC_MAIN_10;
+        break;
+    case C2W_HEVC_PROFILE_MAIN_STILL_PIC:
+        ret = C2Config::profile_t::PROFILE_HEVC_MAIN_STILL;
+        break;
+    default:
+        LOG_WARNING("Unsupported profile %d!", profile);
+        break;
+    }
+    return ret;
+}
+
+C2Config::level_t toC2Level(C2W_LEVEL_T level)
+{
+    C2Config::level_t ret = C2Config::level_t::LEVEL_UNUSED;
+    switch (level) {
+    case C2W_AVC_LEVEL_1:
+        ret = C2Config::level_t::LEVEL_AVC_1;
+        break;
+    case C2W_AVC_LEVEL_1b:
+        ret = C2Config::level_t::LEVEL_AVC_1B;
+        break;
+    case C2W_AVC_LEVEL_11:
+        ret = C2Config::level_t::LEVEL_AVC_1_1;
+        break;
+    case C2W_AVC_LEVEL_12:
+        ret = C2Config::level_t::LEVEL_AVC_1_2;
+        break;
+    case C2W_AVC_LEVEL_13:
+        ret = C2Config::level_t::LEVEL_AVC_1_3;
+        break;
+    case C2W_AVC_LEVEL_2:
+        ret = C2Config::level_t::LEVEL_AVC_2;
+        break;
+    case C2W_AVC_LEVEL_21:
+        ret = C2Config::level_t::LEVEL_AVC_2_1;
+        break;
+    case C2W_AVC_LEVEL_22:
+        ret = C2Config::level_t::LEVEL_AVC_2_2;
+        break;
+    case C2W_AVC_LEVEL_3:
+        ret = C2Config::level_t::LEVEL_AVC_3;
+        break;
+    case C2W_AVC_LEVEL_31:
+        ret = C2Config::level_t::LEVEL_AVC_3_1;
+        break;
+    case C2W_AVC_LEVEL_32:
+        ret = C2Config::level_t::LEVEL_AVC_3_2;
+        break;
+    case C2W_AVC_LEVEL_4:
+        ret = C2Config::level_t::LEVEL_AVC_4;
+        break;
+    case C2W_AVC_LEVEL_41:
+        ret = C2Config::level_t::LEVEL_AVC_4_1;
+        break;
+    case C2W_AVC_LEVEL_42:
+        ret = C2Config::level_t::LEVEL_AVC_4_2;
+        break;
+    case C2W_AVC_LEVEL_5:
+        ret = C2Config::level_t::LEVEL_AVC_5;
+        break;
+    case C2W_AVC_LEVEL_51:
+        ret = C2Config::level_t::LEVEL_AVC_5_1;
+        break;
+    case C2W_AVC_LEVEL_52:
+        ret = C2Config::level_t::LEVEL_AVC_5_2;
+        break;
+    case C2W_AVC_LEVEL_6:
+        ret = C2Config::level_t::LEVEL_AVC_6;
+        break;
+    case C2W_AVC_LEVEL_61:
+        ret = C2Config::level_t::LEVEL_AVC_6_1;
+        break;
+    case C2W_AVC_LEVEL_62:
+        ret = C2Config::level_t::LEVEL_AVC_6_2;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL1:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL2:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_2;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL21:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_2_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL3:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_3;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL31:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_3_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL4:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_4;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL41:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_4_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL5:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_5;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL51:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_5_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL52:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_5_2;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL6:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_6;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL61:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_6_1;
+        break;
+    case C2W_HEVC_LEVEL_MAIN_TIER_LEVEL62:
+        ret = C2Config::level_t::LEVEL_HEVC_MAIN_6_2;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL4:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_4;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL41:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_4_1;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL5:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_5;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL51:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_5_1;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL52:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_5_2;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL6:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_6;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL61:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_6_1;
+        break;
+    case C2W_HEVC_LEVEL_HIGH_TIER_LEVEL62:
+        ret = C2Config::level_t::LEVEL_HEVC_HIGH_6_2;
+        break;
+    default:
+        LOG_WARNING("Unsupported level %d!", level);
         break;
     }
     return ret;
