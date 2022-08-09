@@ -86,8 +86,10 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 GST_DEBUG_CATEGORY (gst_qticodec2venc_debug);
 #define GST_CAT_DEFAULT gst_qticodec2venc_debug
-#define GST_QTI_CODEC2_ENC_COLOR_SPACE_CONVERSION             (FALSE)
-#define GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT        (0xffffffff)
+
+#define DEFAULT_COLOR_SPACE_CONVERSION            (FALSE)
+#define DEFAULT_BITRATE_SAVING_MODE               (0xffffffff)
+#define DEFAULT_BLUR_MODE                         (0xffffffff)
 
 /* class initialization */
 G_DEFINE_TYPE (Gstqticodec2venc, gst_qticodec2venc, GST_TYPE_VIDEO_ENCODER);
@@ -260,7 +262,7 @@ make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
 
   memset (&param, 0, sizeof (ConfigParams));
 
-  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE;
+  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE_INFO;
   param.isInput = is_input;
   param.interlaceMode.type = mode;
 
@@ -446,6 +448,20 @@ make_bitrate_saving_mode (BITRATE_SAVING_MODE mode, gboolean isInput)
   return param;
 }
 
+ConfigParams
+make_profile_level_param (C2W_PROFILE_T profile, C2W_LEVEL_T level)
+{
+  ConfigParams param;
+
+  memset (&param, 0, sizeof (ConfigParams));
+
+  param.config_name = CONFIG_FUNCTION_KEY_PROFILE_LEVEL;
+  param.profileAndLevel.profile = profile;
+  param.profileAndLevel.level = level;
+
+  return param;
+}
+
 static gchar *
 get_c2_comp_name (GstStructure * structure)
 {
@@ -545,6 +561,7 @@ gst_qticodec2venc_blur_mode_get_type (void)
       {BLUR_MANUAL, "External Dynamic Blur Enable. Must be set before start. "
             "Blur is applied when valid resolution is set.", "manual"},
       {BLUR_DISABLE, "Disable External and Internal Blur.", "disable"},
+      {0xffffffff, "Component Default", "default"},
       {0, NULL, NULL}
     };
 
@@ -701,9 +718,12 @@ gst_qticodec2venc_bitrate_saving_mode_get_type (void)
 
   if (qtype == 0) {
     static const GEnumValue values[] = {
-      {BITRATE_SAVING_MODE_DISABLE_ALL, "Bitrate saving mode disable", "disable"},
-      {BITRATE_SAVING_MODE_ENABLE_8BIT, "8bit bitrate saving Mode enable", "8bit"},
-      {BITRATE_SAVING_MODE_ENABLE_10BIT, "10bit bitrate saving Mode enable", "10bit"},
+      {BITRATE_SAVING_MODE_DISABLE_ALL, "Bitrate saving mode disable",
+          "disable"},
+      {BITRATE_SAVING_MODE_ENABLE_8BIT, "8bit bitrate saving Mode enable",
+          "8bit"},
+      {BITRATE_SAVING_MODE_ENABLE_10BIT, "10bit bitrate saving Mode enable",
+          "10bit"},
       {BITRATE_SAVING_MODE_ENABLE_ALL, "All bitrate saving mode enable", "all"},
       {0xffffffff, "Component Default", "default"},
       {0, NULL, NULL}
@@ -1068,6 +1088,7 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GstVideoCodecState * state)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
+  Gstqticodec2vencClass *enc_class = GST_QTICODEC2VENC_GET_CLASS (encoder);
   GstStructure *structure;
   const gchar *mode;
   const gchar *fmt;
@@ -1170,8 +1191,9 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     GST_DEBUG_OBJECT (enc, "set target bitrate:%u", enc->target_bitrate);
   }
 
-  if (enc->bitrate_saving_mode != GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT) {
-    bitrate_saving_mode = make_bitrate_saving_mode(enc->bitrate_saving_mode, FALSE);
+  if (enc->bitrate_saving_mode != DEFAULT_BITRATE_SAVING_MODE) {
+    bitrate_saving_mode =
+        make_bitrate_saving_mode (enc->bitrate_saving_mode, FALSE);
     g_ptr_array_add (config, &bitrate_saving_mode);
   }
 
@@ -1228,15 +1250,16 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
     g_ptr_array_add (config, &intra_refresh);
   }
 
-  if ((enc->blur_mode == BLUR_MANUAL) &&
-      (enc->blur_width != 0) && (enc->blur_height != 0)) {
-    blur_info =
-        make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
-  } else {
-    blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+  if (enc->blur_mode != DEFAULT_BLUR_MODE) {
+    if ((enc->blur_mode == BLUR_MANUAL) &&
+        (enc->blur_width != 0) && (enc->blur_height != 0)) {
+      blur_info =
+          make_blur_resolution_param (enc->blur_width, enc->blur_height, TRUE);
+    } else {
+      blur_info = make_blur_mode_param (enc->blur_mode, TRUE);
+    }
+    g_ptr_array_add (config, &blur_info);
   }
-  g_ptr_array_add (config, &blur_info);
-
   /* Create component */
   if (!gst_qticodec2venc_create_component (encoder)) {
     GST_ERROR_OBJECT (enc, "Failed to create component");
@@ -1257,6 +1280,13 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   }
 
   g_ptr_array_free (config, TRUE);
+
+  if (enc_class->set_format) {
+    if (!enc_class->set_format (enc, state)) {
+      GST_ERROR_OBJECT (enc, "Subclass failed to set the new format");
+      return FALSE;
+    }
+  }
 
   if (!c2component_start (enc->comp)) {
     GST_DEBUG_OBJECT (enc, "Failed to start component");
@@ -1321,6 +1351,22 @@ gst_qticodec2venc_open (GstVideoEncoder * encoder)
   gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (enc, "open");
+
+  enc->comp = NULL;
+  enc->comp_intf = NULL;
+  enc->input_setup = FALSE;
+  enc->output_setup = FALSE;
+  enc->eos_reached = FALSE;
+  enc->input_state = NULL;
+  enc->output_state = NULL;
+  enc->pool = NULL;
+  enc->width = 0;
+  enc->height = 0;
+  enc->frame_index = 0;
+  enc->num_input_queued = 0;
+  enc->num_output_done = 0;
+
+  memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 
   /* Create component store */
   enc->comp_store = c2componentStore_create ();
@@ -2218,7 +2264,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_enum ("blur-mode", "Blur Mode",
           "Specify the blur mode",
           GST_TYPE_CODEC2_ENC_BLUR_MODE,
-          BLUR_DISABLE,
+          DEFAULT_BLUR_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -2281,7 +2327,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       PROP_COLOR_SPACE_CONVERSION,
       g_param_spec_boolean ("color-space-conversion", "Color space conversion",
           "If enabled, should be in color space conversion mode",
-          GST_QTI_CODEC2_ENC_COLOR_SPACE_CONVERSION,
+          DEFAULT_COLOR_SPACE_CONVERSION,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -2331,7 +2377,7 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       g_param_spec_enum ("bps-saving-mode", "Bps saving mode",
           "Bitrate saving mode (0xffffffff=component default)",
           GST_TYPE_CODEC2_ENC_BITRATE_SAVING_MODE,
-          GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT,
+          DEFAULT_BITRATE_SAVING_MODE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -2351,33 +2397,19 @@ gst_qticodec2venc_class_init (Gstqticodec2vencClass * klass)
       "Video Encoder based on Codec2.0", "QTI");
 }
 
-/* Invoked during object instantiation (equivalent C++ constructor). */
+/* Invoked during object instantiation (equivalent C++ constructor).
+ * Initialize only those variables that do not change during state change.
+ * For other variables, place initialization into function open.*/
 static void
 gst_qticodec2venc_init (Gstqticodec2venc * enc)
 {
-  GstVideoEncoder *encoder = (GstVideoEncoder *) enc;
-
-  enc->comp_store = NULL;
-  enc->comp = NULL;
-  enc->comp_intf = NULL;
-  enc->input_setup = FALSE;
-  enc->output_setup = FALSE;
-  enc->eos_reached = FALSE;
-  enc->input_state = NULL;
-  enc->output_state = NULL;
-  enc->pool = NULL;
-  enc->width = 0;
-  enc->height = 0;
-  enc->frame_index = 0;
-  enc->num_input_queued = 0;
-  enc->num_output_done = 0;
   enc->rcMode = RC_OFF;
   enc->mirror = MIRROR_NONE;
   enc->rotation = 0;
   enc->downscale_width = 0;
   enc->downscale_height = 0;
   enc->target_bitrate = 0;
-  enc->blur_mode = BLUR_DISABLE;
+  enc->blur_mode = DEFAULT_BLUR_MODE;
   enc->blur_width = 0;
   enc->blur_height = 0;
   enc->is_ubwc = FALSE;
@@ -2385,14 +2417,11 @@ gst_qticodec2venc_init (Gstqticodec2venc * enc)
   enc->roi_type = NULL;
   enc->roi_rect_payload = NULL;
   enc->roi_rect_payload_ext = NULL;
-  enc->bitrate_saving_mode = GST_QTI_CODEC2_ENC_BITRATE_SAVING_MODE_DEFAULT;
-
-  memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
+  enc->bitrate_saving_mode = DEFAULT_BITRATE_SAVING_MODE;
+  enc->silent = FALSE;
 
   g_cond_init (&enc->pending_cond);
   g_mutex_init (&enc->pending_lock);
-
-  enc->silent = FALSE;
 }
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,

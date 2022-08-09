@@ -9,12 +9,9 @@
 #include <gst/video/gstvideofilter.h>
 
 G_BEGIN_DECLS
-
 #define GST_TYPE_QVDEINTERLACE (gst_qvdeinterlace_get_type())
 G_DECLARE_FINAL_TYPE (GstQvdeinterlace, gst_qvdeinterlace,
     GST, QVDEINTERLACE, GstVideoFilter)
-
-GST_ELEMENT_REGISTER_DECLARE (qvdeinterlace)
 
 //#define GST_IS_QVDEINTERLACE_CLASS(klass)      (G_TYPE_CHECK_CLASS_TYPE ((klass), GST_TYPE_QVDEINTERLACE))
 //#define GST_QVDEINTERLACE_GET_CLASS(obj)       (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_QVDEINTERLACE, GstQvdeinterlaceClass))
@@ -25,7 +22,7 @@ struct _GstQvdeinterlace {
 
   /* gstbasetransform manages lifecycle of buffer pool totally.
    * use pool's aligned info to set up gpudi. */
-  //GstBufferPool *pool; // seems not need this
+  //GstBufferPool *pool; // not need this for it's stored in GstBaseTransform
 
   /* here are aligned info, info of caps are in GstVideoFilter */
   GstVideoInfo in_info;
@@ -47,5 +44,4 @@ struct _GstQvdeinterlace {
 };
 
 G_END_DECLS
-
 #endif /* __GST_QVDEINTERLACE_H__ */

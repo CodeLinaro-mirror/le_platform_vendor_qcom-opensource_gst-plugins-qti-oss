@@ -79,10 +79,11 @@ OMX_ERRORTYPE crypto_deinit(Crypto *crypto) {
 }
 
 OMX_ERRORTYPE crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
-        OMX_U8 *pBuffer, unsigned long nBufferFd, OMX_U32 nBufferSize) {
+        OMX_U8 *pBuffer, unsigned long nBufferFd, OMX_U32 *pBufferSize) {
 
     SecureCopyResult result = SECURE_COPY_SUCCESS;
     uint32 nBytesCopied = 0;
+    uint32 nBufferSize = *pBufferSize;
 
     if (crypto->m_crypto_copy == NULL) {
         GST_ERROR("Invalid method handle to OEMCryptoCopy");
@@ -94,12 +95,15 @@ OMX_ERRORTYPE crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
     result = crypto->m_crypto_copy(crypto->m_secure_handle, pBuffer, nBufferSize,
             nBufferFd, 0, &nBytesCopied, eCopyDir);
 
-    if ((result != SECURE_COPY_SUCCESS) || (nBytesCopied != nBufferSize)) {
+    if (result != SECURE_COPY_SUCCESS) {
         GST_ERROR(
             "Error in CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d result:%d",
             (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir, result);
         return OMX_ErrorBadParameter;
     }
+
+    *pBufferSize = nBytesCopied;
+
     return OMX_ErrorNone;
 }
 

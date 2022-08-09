@@ -237,9 +237,22 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             if (mDataCopyFunc) {
                 if (linear_block->handle()) {
                     uint32_t dest_fd = linear_block->handle()->data[0];
-                    int ret = mDataCopyFunc(dest_fd, rawBuffer, frameSize, mDataCopyFuncParam);
+                    /* That data length is from upstream gst plugin pushed down gstbuffer.
+                     * In the DataCopyFunc callback function, it may reduce the data length
+                     * to its actual length accordingly, but couldn’t increase the length
+                     * as the dst buffer is already allocated according to that data length.
+                     * Hence, pass the data length pointer as parameter to DataCopyFunc
+                     * so as to get the actual data length in return.
+                     */
+                    int ret = mDataCopyFunc(dest_fd, rawBuffer, &frameSize, mDataCopyFuncParam);
                     if (ret) {
                         LOG_ERROR("data copy failed");
+                        return C2_CORRUPTED;
+                    }
+
+                    if (frameSize > buffer->size) {
+                        LOG_ERROR("frameSize exceeds, previous: %u current: %u",
+                            buffer->size, frameSize);
                         return C2_CORRUPTED;
                     }
                 } else {
@@ -487,9 +500,9 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
                 buffer->offset[1] = stride * y_scanlines;
 
                 LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
-                        " stride %u, offset %" G_GSIZE_FORMAT,
-                        fd, buffer->capacity, buffer->ubwc_flag,
-                        stride, buffer->offset[1]);
+                            " stride %u, offset %" G_GSIZE_FORMAT,
+                    fd, buffer->capacity, buffer->ubwc_flag,
+                    stride, buffer->offset[1]);
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
@@ -732,6 +745,26 @@ c2_status_t C2ComponentAdapter::configBlockPool(C2BlockPool::local_id_t poolType
     return ret;
 }
 
+uint32_t C2ComponentAdapter::getInterlaceMode(std::vector<std::unique_ptr<C2Param> >& configUpdate)
+{
+    uint32_t interlace = INTERLACE_MODE_PROGRESSIVE;
+    android::ReflectedParamUpdater::Dict paramsMap;
+    android::ReflectedParamUpdater::Value paramVal;
+    C2Value c2Value;
+
+    paramsMap = mIntf->getParams(configUpdate);
+    if (paramsMap.find("vendor.qti-ext-dec-info-interlace.format") != paramsMap.end()) {
+        paramVal = paramsMap["vendor.qti-ext-dec-info-interlace.format"];
+        if (paramVal.find(&c2Value)) {
+            if (c2Value.get(&interlace)) {
+                LOG_DEBUG("interlace type:%u", interlace);
+            }
+        }
+    }
+
+    return interlace;
+}
+
 void C2ComponentAdapter::handleWorkDone(
     std::weak_ptr<C2Component> component,
     std::list<std::unique_ptr<C2Work> > workItems)
@@ -762,6 +795,7 @@ void C2ComponentAdapter::handleWorkDone(
         uint64_t bufferIdx = 0;
         C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
         uint64_t timestamp = worklet->output.ordinal.timestamp.peeku();
+        uint32_t interlace = getInterlaceMode(worklet->output.configUpdate);
 
         while (!worklet->output.configUpdate.empty()) {
             std::unique_ptr<C2Param> param;
@@ -808,12 +842,12 @@ void C2ComponentAdapter::handleWorkDone(
                 mOutPendingBuffer[bufferIdx] = buffer;
             }
 
-            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, outputFrameFlag);
+            mCallback->onOutputBufferAvailable(buffer, bufferIdx, timestamp, interlace, outputFrameFlag);
         } else {
 
             if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
                 LOG_MESSAGE("Component(%p) reached EOS on output", this);
-                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, outputFrameFlag);
+                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, interlace, outputFrameFlag);
             } else if (outputFrameFlag & C2FrameData::FLAG_INCOMPLETE) {
                 LOG_MESSAGE("Component(%p) work incomplete, means an input frame results in multiple "
                             "output frames, or codec config update event",

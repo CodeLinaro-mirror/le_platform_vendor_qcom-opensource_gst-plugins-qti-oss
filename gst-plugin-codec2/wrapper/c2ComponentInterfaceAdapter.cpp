@@ -147,6 +147,16 @@ std::unique_ptr<C2Param> C2ComponentInterfaceAdapter::updateParamFromConfig(
     return nullptr;
 }
 
+android::ReflectedParamUpdater::Dict C2ComponentInterfaceAdapter::getParams(
+    const std::vector<std::unique_ptr<C2Param> >& params)
+{
+    android::ReflectedParamUpdater::Dict dict;
+    if (mParamUpdater == nullptr)
+        return dict;
+
+    return mParamUpdater->getParams(params);
+}
+
 c2_status_t C2ComponentInterfaceAdapter::config(const std::vector<C2Param*>& stackParams, c2_blocking_t mayBlock)
 {
 
