@@ -1196,8 +1196,9 @@ int main(int argc, char **argv)
   if (kpi_mode) {
     // For early kpi mode, wait to ensure all is ready during board bootup.
     // Otherwise, opening dec node probably cost much time and fail.
+    // 2022.08, basically solved this dependency, then, disable usleep currently.
     kpi_place_marker("M - Video Decoding before preparing");
-    usleep(30000);
+    //usleep(30000);
   }
 
   printf("*******************************************************\n");
