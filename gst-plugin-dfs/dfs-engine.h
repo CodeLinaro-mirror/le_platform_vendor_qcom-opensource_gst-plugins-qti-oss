@@ -44,17 +44,17 @@ G_BEGIN_DECLS
 typedef struct _GstDfsEngine GstDfsEngine;
 typedef struct _DfsInitSettings DfsInitSettings;
 
-enum {
-  OUTPUT_MODE_VIDEO
-};
+typedef enum {
+  OUTPUT_MODE_VIDEO,
+  OUTPUT_MODE_DISPARITY,
+  OUTPUT_MODE_POINT_CLOUD,
+} OutputMode;
 
 typedef enum {
   MODE_CVP = 0,         //CVP hardware mode
-  MODE_SPEED_CPU,       //CPU solution, speed mode
-  MODE_SPEED_GPU,       //OpenCL solution, speed mode, fastest mode
-  MODE_ACCURACY_CPU,    //CPU solution, accuracy mode
-  MODE_COVERAGE_CPU,    //CPU solution, coverage mode
-  MODE_COVERAGE_GPU,    //OpenCL solution, coverage mode
+  MODE_COVERAGE,        //CPU solution, speed mode
+  MODE_SPEED,           //OpenCL solution, speed mode, fastest mode
+  MODE_ACCURACY,        //CPU solution, accuracy mode
 } DFSMode;
 
 typedef struct{
@@ -83,6 +83,7 @@ struct _DfsInitSettings {
   guint                 stereo_frame_height;
   guint                 stride;
   GstVideoFormat        format;
+  gint                  mode;
   DFSMode               dfs_mode;
   gint                  min_disparity;
   guint                 num_disparity_levels;
