@@ -97,6 +97,8 @@ public:
     void handleTripped(std::weak_ptr<C2Component> component, std::vector<std::shared_ptr<C2SettingResult> > settingResult);
     void handleError(std::weak_ptr<C2Component> component, uint32_t errorCode);
 
+    uint32_t getInterlaceMode(std::vector<std::unique_ptr<C2Param> >& configUpdate);
+
     /* This class methods */
     c2_status_t setListenercallback(std::unique_ptr<EventCallback> callback, c2_blocking_t mayBlock);
     c2_status_t setDataCopyFunc(void* func, void* param);

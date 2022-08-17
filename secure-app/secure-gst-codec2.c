@@ -39,11 +39,11 @@
 #define strlcpy g_strlcpy
 Crypto* crypto = NULL;
 
-int secure_copy (int dstbuf_fd, void* srcbuf, int datalen, void* param) {
-  SecureCopyResult ret = crypto_copy (crypto, SECURE_COPY_NONSECURE_TO_SECURE, srcbuf, dstbuf_fd, datalen);
+int secure_copy (int dstbuf_fd, void* srcbuf, uint32_t* pdatalen, void* param) {
+  SecureCopyResult ret = crypto_copy (crypto, SECURE_COPY_NONSECURE_TO_SECURE, srcbuf, dstbuf_fd, pdatalen);
   if (ret != SECURE_COPY_SUCCESS) {
     g_error ("secure copy failed, ret:%d dstbuf_fd:%d srcbuf:%p datalen:%d param:%p",
-             ret, dstbuf_fd, srcbuf, datalen, param);
+             ret, dstbuf_fd, srcbuf, *pdatalen, param);
   }
 
   return 0;
@@ -89,7 +89,14 @@ main (int argc, char *argv[])
     goto CLEAN;
   }
 
-  g_signal_connect (pipeline, "element-setup", G_CALLBACK (element_setup), NULL);
+  /* if last argv equals to non-secure, run in non-secure mode,
+   * otherwise, run in secure mode.
+   */
+  if (g_strcmp0 (argv[argc -  1], "non-secure") == 0) {
+    g_warning ("Pipeline in non-source mode");
+  } else {
+    g_signal_connect (pipeline, "element-setup", G_CALLBACK (element_setup), NULL);
+  }
 
   /* Start playing */
   gst_element_set_state (pipeline, GST_STATE_PLAYING);

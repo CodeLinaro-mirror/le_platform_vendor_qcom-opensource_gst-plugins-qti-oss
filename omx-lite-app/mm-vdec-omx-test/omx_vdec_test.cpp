@@ -1196,8 +1196,9 @@ int main(int argc, char **argv)
   if (kpi_mode) {
     // For early kpi mode, wait to ensure all is ready during board bootup.
     // Otherwise, opening dec node probably cost much time and fail.
+    // 2022.08, basically solved this dependency, then, disable usleep currently.
     kpi_place_marker("M - Video Decoding before preparing");
-    usleep(30000);
+    //usleep(30000);
   }
 
   printf("*******************************************************\n");
@@ -1634,7 +1635,8 @@ int Play_Decoder(bool secure)
   bufCnt = 0;
   portFmt.format.video.nFrameHeight = height;
   portFmt.format.video.nFrameWidth  = width;
-  portFmt.format.video.xFramerate = fps;
+  portFmt.format.video.xFramerate = fps << 16;//xFramerate is Q16 format
+  printf("SetParameter for input port fmt: portidx %d, w %u, h %u, xFramerate %u(%d fps)\n", portFmt.nPortIndex, portFmt.format.video.nFrameWidth, portFmt.format.video.nFrameHeight, portFmt.format.video.xFramerate, fps);
   OMX_SetParameter(dec_handle,OMX_IndexParamPortDefinition, (OMX_PTR)&portFmt);
   OMX_GetParameter(dec_handle,OMX_IndexParamPortDefinition, &portFmt);
   DEBUG_PRINT("Dec: New Min Buffer Count %d", portFmt.nBufferCountMin);

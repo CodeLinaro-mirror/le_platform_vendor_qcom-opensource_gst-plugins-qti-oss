@@ -52,7 +52,6 @@ static int dev_fd = -1;
 
 #ifdef USE_GBM
 #define GBM_RENDER_DEVICE_NAME "/dev/dri/renderD128"
-//#define GBM_RENDER_DEVICE_NAME "/dev/dri/card0"
 static struct gbm_device *gbm_dev = NULL;
 #else
 #define LINUX_DMABUF_DEVICE_NAME "/dev/dma_heap/system"
@@ -199,17 +198,17 @@ gbm_dmabuf_alloc (DmaBufDesc * desc)
 
 #ifdef QTI_PLATFORM
   {
-    uint32_t size = 0;
+    size_t size = 0;
 
     gbm_perform (GBM_PERFORM_GET_METADATA_ION_FD, bo, &desc->meta_fd);
 
     gbm_perform (GBM_PERFORM_GET_BO_SIZE, bo, &size);
     if ((gsize) size < desc->size)
-      GST_WARNING ("gbm bo size %u should >= requested size", size);
+      GST_WARNING ("gbm bo size %lu should >= requested size", size);
 
     desc->size = (gsize) size;
 
-    GST_DEBUG ("created gbm bo meta_fd %d, size %u", desc->meta_fd, size);
+    GST_DEBUG ("created gbm bo meta_fd %d, size %lu", desc->meta_fd, size);
   }
 #endif
 
@@ -491,10 +490,9 @@ qvdein_dmabuf_get_modifier (const DmaBufDesc * desc)
 {
   uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
 
-  if (desc) {
+  if (desc && desc->bo) {
 #ifdef USE_GBM
-    if (desc->bo)
-      modifier = gbm_bo_get_modifier (desc->bo);
+    modifier = gbm_bo_get_modifier (desc->bo);
 #else
     /* NOT implemented for Linux dmabuf heaps. */
 #endif
@@ -509,18 +507,20 @@ qvdein_dmabuf_get_modifier (const DmaBufDesc * desc)
 void
 qvdein_dmabuf_align_info (const DmaBufDesc * desc, GstVideoInfo * info)
 {
-  GST_DEBUG ("desc %p, info=%p", desc, info);
-  if (!desc || !info)
-    return;
+  GST_DEBUG ("desc %p, info %p", desc, info);
+  g_return_if_fail (desc != NULL && desc->bo != NULL);
+  g_return_if_fail (info != NULL);
 
 #ifdef USE_GBM
   GST_VIDEO_INFO_PLANE_STRIDE (info, 0) = desc->stride;
-  /* FIXME: stride0 == stride1 is true for NV12, may be not true for others */
+  /* FIXME: stride0 == stride1 is true for NV12, maybe not true for others */
   GST_VIDEO_INFO_PLANE_STRIDE (info, 1) = desc->stride;
+  GST_VIDEO_INFO_PLANE_OFFSET (info, 0) = gbm_bo_get_offset (desc->bo, 0);
   GST_VIDEO_INFO_PLANE_OFFSET (info, 1) = gbm_bo_get_offset (desc->bo, 1);
   GST_VIDEO_INFO_SIZE (info) = desc->size;
 
-  GST_DEBUG ("aligned info stride %u, offset1 %u, size %lu", desc->stride,
+  GST_DEBUG ("aligned info stride=%u, offset0=%u, offset1=%u, size=%"
+      G_GSIZE_FORMAT, desc->stride, gbm_bo_get_offset (desc->bo, 0),
       gbm_bo_get_offset (desc->bo, 1), desc->size);
 #endif /* USE_GBM */
 }
