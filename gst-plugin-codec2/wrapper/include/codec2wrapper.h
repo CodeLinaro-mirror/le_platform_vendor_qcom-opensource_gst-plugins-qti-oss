@@ -369,6 +369,10 @@ typedef struct {
 typedef struct {
     const char* config_name;
     gboolean isInput;
+    // Each parameter should only use one member of union. For example,
+    // member val and sliceMode can not be used at the same time.
+    // Otherwise, date overlapped since members in union shares the
+    // same address.
     union {
         guint output_picture_order_mode;
         gboolean low_latency_mode;
@@ -404,6 +408,7 @@ typedef struct {
         } rcMode;
 
         struct {
+            guint32    slice_size;
             SLICE_MODE type;
         } sliceMode;
 
