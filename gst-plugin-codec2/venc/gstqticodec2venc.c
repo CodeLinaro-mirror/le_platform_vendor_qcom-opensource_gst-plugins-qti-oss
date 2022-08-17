@@ -332,7 +332,7 @@ make_slicemode_param (guint32 size, SLICE_MODE mode)
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_SLICE_MODE;
-  param.val.u32 = size;
+  param.sliceMode.slice_size = size;
   param.sliceMode.type = mode;
 
   return param;
