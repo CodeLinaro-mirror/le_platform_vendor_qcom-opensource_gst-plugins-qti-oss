@@ -9,10 +9,92 @@
 
 #include <gst/gstinfo.h>
 
+#include <dlfcn.h>
 #include <drm/drm_fourcc.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_qvdeinterlace_debug);
 #define GST_CAT_DEFAULT gst_qvdeinterlace_debug
+
+/* Dynamically load libgpudi by dlopen. */
+#define ADRENO_GPUDI_LIB_NAME "libgpudi.so.1"
+
+static const char *adreno_gpudi_lib_name  = ADRENO_GPUDI_LIB_NAME;
+
+/* Adreno GPUDI APIs */
+static GpuDeinterlaceContext* (*_GpuDeinterlaceInit) ();
+static int (*_GpuDeinterlaceGetCapability) (GpuDeinterlace_Caps *caps);
+static int (*_GpuDeinterlaceGetInputFormats) (unsigned int *count,
+    unsigned int **formats);
+static int (*_GpuDeinterlaceGetOutputFormats) (unsigned int *count,
+    unsigned int **formats);
+static int (*_GpuDeinterlaceBlt) (GpuDeinterlaceContext* context,
+    GpuDeinterlace_BufferDesc* output_buf,
+    GpuDeinterlace_BufferDesc* input_buf,
+    GpuDeinterlace_BltOption option);
+static int (*_GpuDeinterlaceReset) (GpuDeinterlaceContext* context);
+static int (*_GpuDeinterlaceRelease) (GpuDeinterlaceContext* context);
+
+#define LOAD_SYMBOL(lib, sym) do {                        \
+      dlerror (); /* clear any existing error */          \
+      *(void **) & (_ ## sym) = dlsym (lib, #sym);        \
+      const char *dlerr = dlerror ();                     \
+      if (NULL != dlerr) {                                \
+        GST_ERROR ("dlsym error: %s", dlerr);             \
+        goto error;                                       \
+      }                                                   \
+      GST_DEBUG ("loaded symbol %s", #sym);               \
+    } while (0)
+
+static gpointer _gpudi_load_lib_symbols (gpointer data)
+{
+  gpointer ret = NULL;
+  void *handle_gpudi;
+
+  GST_INFO ("data %p", data);
+
+  handle_gpudi = dlopen (adreno_gpudi_lib_name, RTLD_NOW);
+  if (NULL == handle_gpudi) {
+    const char *dlerr = dlerror();
+    if (NULL == dlerr)
+        dlerr = "NULL";
+    GST_ERROR ("dlopen %s error: %s", adreno_gpudi_lib_name, dlerr);
+    goto error;
+  }
+
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceInit);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceGetCapability);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceGetInputFormats);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceGetOutputFormats);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceBlt);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceReset);
+  LOAD_SYMBOL (handle_gpudi, GpuDeinterlaceRelease);
+
+  ret = (gpointer) -1; /* load all okay */
+
+error:
+  GST_INFO ("ret %p", ret);
+  return ret;
+}
+
+/* Load libs only once in multi-threaded usage. */
+gboolean gpu_deinterlace_load_libs_once (void)
+{
+  static GOnce once = G_ONCE_INIT;
+
+  g_once (&once, _gpudi_load_lib_symbols, NULL);
+  GST_INFO ("GOnce retval %p status %d", once.retval, once.status);
+
+  return once.retval != NULL ? TRUE : FALSE;
+}
+
+#define GpuDeinterlaceInit _GpuDeinterlaceInit
+#define GpuDeinterlaceGetCapability _GpuDeinterlaceGetCapability
+#define GpuDeinterlaceGetInputFormats _GpuDeinterlaceGetInputFormats
+#define GpuDeinterlaceGetOutputFormats _GpuDeinterlaceGetOutputFormats
+#define GpuDeinterlaceBlt _GpuDeinterlaceBlt
+#define GpuDeinterlaceReset _GpuDeinterlaceReset
+#define GpuDeinterlaceRelease _GpuDeinterlaceRelease
+
 
 #ifdef USE_GPU_DEINTERLACE
 #define MAX_GPUDI_INSTANCE 2
