@@ -27,6 +27,9 @@ typedef GpuDeinterlace_BufferDesc GpudiBufDesc;
 typedef gint GpudiBufDesc;
 #endif /* USE_GPU_DEINTERLACE */
 
+gboolean
+gpu_deinterlace_load_libs_once (void);
+
 void
 gpu_deinterlace_fill_desc (GpudiBufDesc * desc, const GstVideoInfo * info,
     gint fd, gboolean ubwc, GpudiScanMethod scan);
