@@ -809,13 +809,30 @@ gst_qvdeinterlace_class_init (GstQvdeinterlaceClass * klass)
   trans_class->stop = GST_DEBUG_FUNCPTR (gst_qvdeinterlace_stop);
 }
 
+static gboolean
+gst_qvdeinterlace_load_libs (void)
+{
+  extern gboolean qvdein_dmabuf_load_libs_once (void);
+  gboolean ret = TRUE;
+
+  if (!qvdein_dmabuf_load_libs_once () ||
+      !gpu_deinterlace_load_libs_once ()) {
+    GST_ERROR ("failed to load libs");
+    ret = FALSE;
+  }
+
+  return ret;
+}
+
 /* initialize the new element
  * initialize instance structure
  */
 static void
 gst_qvdeinterlace_init (GstQvdeinterlace * self)
 {
-  //self->pool = NULL;
+  if (!gst_qvdeinterlace_load_libs ())
+    return;
+
   gst_video_info_init (&self->in_info);
   gst_video_info_init (&self->out_info);
   self->gpudi_handle = -1;
