@@ -322,7 +322,7 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
     std::unique_lock<std::mutex> ul(mLock);
     LOG_MESSAGE("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
 
-    while (mNumPendingWorks > maxPendingWorks) {
+    if (mNumPendingWorks >= maxPendingWorks) {
         if (timeoutMs > 0) {
             if (mCondition.wait_for(ul, timeoutMs * 1ms) == std::cv_status::timeout) {
                 LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
@@ -330,7 +330,6 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
                 return C2_TIMED_OUT;
             } else {
                 LOG_MESSAGE("wait done");
-                break;
             }
         } else if (timeoutMs == 0) {
             mCondition.wait(ul);
@@ -378,7 +377,7 @@ void C2ComponentAdapter::unregisterTrackBuffer(
                     if ((*it)->frameIndex == frameIndex) {
                         if (auto buffer = (*it)->buffer.lock()) {
                             buffer->unregisterOnDestroyNotify(
-                                onDestroyNotify, this);
+                                onDestroyNotify, *it);
                         }
 
                         LOG_MESSAGE("erase buf idx:%zu, TrackBuffer %p",
@@ -401,12 +400,12 @@ void C2ComponentAdapter::unregisterTrackBufferAll()
     for (auto it = mTrackBuffers.begin(); it != mTrackBuffers.end(); ++it) {
         if (auto buf = (*it)->buffer.lock()) {
             LOG_MESSAGE("erase buf idx:%zu TrackBuffer %p", (*it)->frameIndex, (*it));
-            buf->unregisterOnDestroyNotify(onDestroyNotify, this);
+            buf->unregisterOnDestroyNotify(onDestroyNotify, *it);
         }
-
-        mTrackBuffers.erase(it);
         delete (*it);
     }
+
+    mTrackBuffers.clear();
 }
 
 void C2ComponentAdapter::onDestroyNotify(const C2Buffer* buf, void* arg)
@@ -520,13 +519,9 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
 {
     uint8_t* inputBuffer = buffer->data;
     gint32 fd = buffer->fd;
-    size_t inputBufferSize = buffer->size;
     C2FrameData::flags_t inputFrameFlag = toC2Flag(buffer->flag);
     uint64_t frame_index = buffer->index;
     uint64_t timestamp = buffer->timestamp;
-    C2BlockPool::local_id_t poolType = toC2BufferPoolType(buffer->pool_type);
-    gint width = buffer->width;
-    gint height = buffer->height;
 
     LOG_MESSAGE("Component(%p) work queued, Frame index : %lu, Timestamp : %lu",
         this, frame_index, timestamp);
@@ -826,7 +821,6 @@ void C2ComponentAdapter::handleWorkDone(
 
         // Expected only one output stream.
         if (worklet->output.buffers.size() == 1u) {
-
             buffer = worklet->output.buffers[0];
             bufferIdx = worklet->output.ordinal.frameIndex.peeku();
             if (!buffer) {
@@ -878,11 +872,9 @@ void C2ComponentAdapter::handleTripped(
 
 void C2ComponentAdapter::handleError(std::weak_ptr<C2Component> component, uint32_t errorCode)
 {
-
-    LOG_MESSAGE("Component(%p) work failed", this);
+    LOG_MESSAGE("Component(%p) posts an error", this);
 
     UNUSED(component);
-
     mCallback->onError(errorCode);
 }
 
