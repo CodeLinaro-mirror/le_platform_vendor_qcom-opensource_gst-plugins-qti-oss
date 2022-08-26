@@ -454,8 +454,7 @@ gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec * decoder)
   if (dec->use_external_buf) {
     ret = c2component_setUseExternalBuffer (dec->comp, TRUE);
     if (ret == FALSE) {
-      GST_ERROR_OBJECT (dec,
-          "Failed to set component use external buffer");
+      GST_ERROR_OBJECT (dec, "Failed to set component use external buffer");
       return FALSE;
     }
   }
@@ -856,7 +855,7 @@ gst_qticodec2vdec_stop (GstVideoDecoder * decoder)
   GST_DEBUG_OBJECT (dec, "stop");
 
   if (dec->use_external_buf) {
-    gst_pad_stop_task(GST_VIDEO_DECODER_SRC_PAD (decoder));
+    gst_pad_stop_task (GST_VIDEO_DECODER_SRC_PAD (decoder));
   }
 
   /* Stop the component */
@@ -930,14 +929,15 @@ acquire_external_buf_loop (GstVideoDecoder * decoder)
     if (dec->acquired_external_buf < dec->max_external_buf_cnt) {
       ret = gst_buffer_pool_acquire_buffer (dec->out_port_pool, &buffer, NULL);
       if (buffer) {
-        memory = gst_buffer_peek_memory(buffer, 0);
+        memory = gst_buffer_peek_memory (buffer, 0);
         if (memory) {
-          fd = gst_dmabuf_memory_get_fd(memory);
-          GST_DEBUG_OBJECT (dec, "Acquired external buffer fd: %d in buffer: %p from pool: %p",
-                            fd, buffer, dec->out_port_pool);
+          fd = gst_dmabuf_memory_get_fd (memory);
+          GST_DEBUG_OBJECT (dec,
+              "Acquired external buffer fd: %d in buffer: %p from pool: %p", fd,
+              buffer, dec->out_port_pool);
 
           /* Attach the fd to c2component */
-          if (!c2component_attachExternalFd(dec->comp, fd)) {
+          if (!c2component_attachExternalFd (dec->comp, fd)) {
             GST_ERROR_OBJECT (dec, "Failed to attach fd to Codec2");
           }
 
@@ -946,26 +946,34 @@ acquire_external_buf_loop (GstVideoDecoder * decoder)
           GstBuffer *gst_buf = NULL;
           gst_buf = (GstBuffer *) g_hash_table_lookup (buffer_table, &key);
           if (gst_buf) {
-            GST_DEBUG_OBJECT (dec, "GstBuffer(%p) is already in hashtable, fd=%d", gst_buf, fd);
+            GST_DEBUG_OBJECT (dec,
+                "GstBuffer(%p) is already in hashtable, fd=%d", gst_buf, fd);
           } else {
             gint64 *buf_key = NULL;
             buf_key = g_malloc (sizeof (gint64));
             *buf_key = key;
             g_hash_table_insert (buffer_table, buf_key, buffer);
-            GST_DEBUG_OBJECT(dec, "Insert buffer %p with buf_fd=%d to hashtable, table_size=%u",
-                             buffer, fd, g_hash_table_size(buffer_table));
+            GST_DEBUG_OBJECT (dec,
+                "Insert buffer %p with buf_fd=%d to hashtable, table_size=%u",
+                buffer, fd, g_hash_table_size (buffer_table));
           }
           dec->acquired_external_buf++;
         }
       } else {
-        GST_ERROR_OBJECT (dec, "Failed to acquire buffer from pool: %p with ret=%d",
-                          dec->out_port_pool, ret);
+        GST_ERROR_OBJECT (dec,
+            "Failed to acquire buffer from pool: %p with ret=%d",
+            dec->out_port_pool, ret);
       }
     } else {
-      GST_DEBUG_OBJECT(dec, "Waiting for external buffers, acquired_external_buf=%u, "
-          "max_external_buf_cnt=%u", dec->acquired_external_buf, dec->max_external_buf_cnt);
-      timeout = g_get_monotonic_time () + (EXT_BUF_WAIT_TIMEOUT_MS * G_TIME_SPAN_MILLISECOND);
-      if (!g_cond_wait_until (&dec->external_buf_cond, &dec->external_buf_lock, timeout)) {
+      GST_DEBUG_OBJECT (dec,
+          "Waiting for external buffers, acquired_external_buf=%u, "
+          "max_external_buf_cnt=%u", dec->acquired_external_buf,
+          dec->max_external_buf_cnt);
+      timeout =
+          g_get_monotonic_time () +
+          (EXT_BUF_WAIT_TIMEOUT_MS * G_TIME_SPAN_MILLISECOND);
+      if (!g_cond_wait_until (&dec->external_buf_cond, &dec->external_buf_lock,
+              timeout)) {
         dec->max_external_buf_cnt++;
         GST_ERROR_OBJECT (dec, "Timed out on wait for external buf! Updated "
             "max_external_buf_cnt to %u", dec->max_external_buf_cnt);
@@ -1089,7 +1097,8 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
           dec->buffer_table =
               g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free, NULL);
         }
-        GST_DEBUG_OBJECT (dec, "Use buffer pool from downstream, pool: %p, size: %u, "
+        GST_DEBUG_OBJECT (dec,
+            "Use buffer pool from downstream, pool: %p, size: %u, "
             "min_buffers: %u, max_buffers: %u", pool, size, min, max);
 
         config = gst_buffer_pool_get_config (pool);
@@ -1098,7 +1107,7 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
         if (min > dec->max_external_buf_cnt) {
           dec->max_external_buf_cnt = min;
           GST_DEBUG_OBJECT (dec, "Updated the max_external_buf_cnt to %u",
-                            dec->max_external_buf_cnt);
+              dec->max_external_buf_cnt);
         }
         max = MAX (MAX (min, max), QCODEC2_MAX_OUTBUFFERS);
 
@@ -1162,7 +1171,8 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
 
     gst_buffer_pool_config_set_params (config, outcaps, size, min, max);
 
-    GST_DEBUG_OBJECT (dec, "setting own pool config to %" GST_PTR_FORMAT, config);
+    GST_DEBUG_OBJECT (dec, "setting own pool config to %" GST_PTR_FORMAT,
+        config);
 
     /* configure own pool */
     if (!gst_buffer_pool_set_config (pool, config)) {
@@ -1398,18 +1408,6 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
           GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
 
       if (!(out_buf->flag & FLAG_TYPE_END_OF_STREAM)) {
-        if (dec->use_external_buf && out_buf->max_buf_cnt) {
-          g_mutex_lock (&dec->external_buf_lock);
-          if (out_buf->max_buf_cnt > dec->max_external_buf_cnt) {
-            dec->max_external_buf_cnt = out_buf->max_buf_cnt;
-            g_cond_signal (&dec->external_buf_cond);
-            GST_DEBUG_OBJECT(dec, "Updated max_external_buf_cnt to %u",
-                             dec->max_external_buf_cnt);
-          }
-          g_mutex_unlock (&dec->external_buf_lock);
-          break;
-        }
-
         if (!dec->output_setup || dec->width != out_buf->width
             || dec->height != out_buf->height) {
           if (dec->output_setup) {
@@ -1508,6 +1506,24 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
     case EVENT_ERROR:{
       GST_ERROR_OBJECT (dec, "Something un-expected happened(%d)",
           *(gint32 *) data);
+      break;
+    }
+    case EVENT_UPDATE_MAX_BUF_CNT:{
+      guint32 max_buf_cnt = *(guint32 *) data;
+      GST_DEBUG_OBJECT (dec,
+          "Receive update max buf count event, expected value "
+          "is %u, current max buf count is %u", max_buf_cnt,
+          dec->max_external_buf_cnt);
+      if (dec->use_external_buf && max_buf_cnt) {
+        g_mutex_lock (&dec->external_buf_lock);
+        if (max_buf_cnt > dec->max_external_buf_cnt) {
+          dec->max_external_buf_cnt = max_buf_cnt;
+          g_cond_signal (&dec->external_buf_cond);
+          GST_DEBUG_OBJECT (dec, "Updated max_external_buf_cnt to %u",
+              dec->max_external_buf_cnt);
+        }
+        g_mutex_unlock (&dec->external_buf_lock);
+      }
       break;
     }
     default:{
@@ -1804,11 +1820,11 @@ gst_qticodec2vdec_class_init (Gstqticodec2vdecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)
       );
 
-  g_object_class_install_property (G_OBJECT_CLASS (klass), PROP_USE_EXTERNAL_POOL,
-      g_param_spec_boolean ("use-external-pool", "if allow using external pool",
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_USE_EXTERNAL_POOL, g_param_spec_boolean ("use-external-pool",
+          "if allow using external pool",
           "If enabled, decoder will use external buffer pool if supported by downstream.",
-          FALSE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   video_decoder_class->set_format =
       GST_DEBUG_FUNCPTR (gst_qticodec2vdec_set_format);

@@ -183,7 +183,8 @@ typedef enum {
 typedef enum {
     EVENT_OUTPUTS_DONE = 0,
     EVENT_TRIPPED,
-    EVENT_ERROR
+    EVENT_ERROR,
+    EVENT_UPDATE_MAX_BUF_CNT,
 } EVENT_TYPE;
 
 typedef enum {
@@ -364,7 +365,6 @@ typedef struct {
     void* gbm_bo;
     gboolean secure;
     guint32 interlaceMode;
-    guint32 max_buf_cnt;
 } BufferDescriptor;
 
 typedef struct {

@@ -623,10 +623,10 @@ public:
         uint64_t index,
         uint64_t timestamp,
         uint32_t interlace,
-        uint32_t outputDelay,
         C2FrameData::flags_t flag) override;
     void onTripped(uint32_t errorCode) override;
     void onError(uint32_t errorCode) override;
+    void onUpdateMaxBufCount(uint32_t outputDelay) override;
 
 private:
     listener_cb mCallback;
@@ -653,7 +653,6 @@ void CodecCallback::onOutputBufferAvailable(
     uint64_t index,
     uint64_t timestamp,
     uint32_t interlace,
-    uint32_t outputDelay,
     C2FrameData::flags_t flag)
 {
 
@@ -758,10 +757,6 @@ void CodecCallback::onOutputBufferAvailable(
         outBuf.flag = toWrapperFlag(flag);
 
         mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);
-    } else if (outputDelay) {
-        LOG_MESSAGE("Update max buffer count to %u", outputDelay);
-        outBuf.max_buf_cnt = outputDelay;
-        mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);
     } else {
         LOG_MESSAGE("Buffer is null");
     }
@@ -787,6 +782,17 @@ void CodecCallback::onError(uint32_t errorCode)
     }
 
     mCallback(mHandle, EVENT_ERROR, &errorCode);
+}
+
+void CodecCallback::onUpdateMaxBufCount(uint32_t outputDelay)
+{
+
+    if (!mCallback) {
+        LOG_MESSAGE("Callback not set in CodecCallback(%p)", this);
+        return;
+    }
+
+    mCallback(mHandle, EVENT_UPDATE_MAX_BUF_CNT, &outputDelay);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

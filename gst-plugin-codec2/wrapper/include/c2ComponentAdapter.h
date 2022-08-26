@@ -118,6 +118,7 @@ private:
     void unregisterTrackBufferAll();
     void onBufferDestroyed(const C2Buffer* buf, void* arg);
     static void onDestroyNotify(const C2Buffer* buf, void* arg);
+    bool isUseExternalBuffer();
 
     std::weak_ptr<C2ComponentStore> mStore;
     std::shared_ptr<C2Component> mComp;

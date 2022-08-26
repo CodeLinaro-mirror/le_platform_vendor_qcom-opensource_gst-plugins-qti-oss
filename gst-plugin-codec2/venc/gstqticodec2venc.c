@@ -1657,7 +1657,7 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
         enc->eos_reached = TRUE;
         g_cond_signal (&enc->pending_cond);
         g_mutex_unlock (&enc->pending_lock);
-      } else if (0 == outBuffer->max_buf_cnt) {
+      } else {
         GST_ERROR_OBJECT (enc, "Invalid output buffer");
       }
       break;
@@ -1668,6 +1668,10 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
     }
     case EVENT_ERROR:{
       GST_ERROR_OBJECT (enc, "EVENT_ERROR(%d)", *(gint32 *) data);
+      break;
+    }
+    case EVENT_UPDATE_MAX_BUF_CNT:{
+      GST_DEBUG_OBJECT (enc, "Ignore event:update_max_buf_cnt:%d on enc", type);
       break;
     }
     default:{
