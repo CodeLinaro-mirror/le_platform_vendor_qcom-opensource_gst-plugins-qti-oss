@@ -76,11 +76,6 @@
 #include <gst/ml/gstmlmeta.h>
 #include <gst/video/gstimagepool.h>
 
-#ifdef HAVE_LINUX_DMA_BUF_H
-#include <sys/ioctl.h>
-#include <linux/dma-buf.h>
-#endif // HAVE_LINUX_DMA_BUF_H
-
 #define GST_CAT_DEFAULT gst_ml_video_segmentation_debug
 GST_DEBUG_CATEGORY_STATIC (gst_ml_video_segmentation_debug);
 
@@ -90,17 +85,11 @@ G_DEFINE_TYPE (GstMLVideoSegmentation, gst_ml_video_segmentation,
 
 #define GST_TYPE_ML_MODULES (gst_ml_modules_get_type())
 
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
-
 #define GST_ML_VIDEO_SEGMENTATION_VIDEO_FORMATS \
     "{ RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR }"
 
 #define GST_ML_VIDEO_SEGMENTATION_SRC_CAPS                            \
     "video/x-raw, "                                                   \
-    "format = (string) " GST_ML_VIDEO_SEGMENTATION_VIDEO_FORMATS "; " \
-    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "                  \
     "format = (string) " GST_ML_VIDEO_SEGMENTATION_VIDEO_FORMATS
 
 #define GST_ML_VIDEO_SEGMENTATION_SINK_CAPS \
@@ -180,24 +169,6 @@ gst_ml_modules_get_type (void)
   return gtype;
 }
 
-static gboolean
-caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint idx = 0;
-
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    // Skip ANY caps and return immediately if feature is present.
-    if (!gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
-  }
-  return FALSE;
-}
-
 static GstBufferPool *
 gst_ml_video_segmentation_create_pool (GstMLVideoSegmentation * segmentation,
     GstCaps * caps)
@@ -214,14 +185,8 @@ gst_ml_video_segmentation_create_pool (GstMLVideoSegmentation * segmentation,
     return NULL;
   }
 
-  // If downstream allocation query supports GBM, allocate gbm memory.
-  if (caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    GST_INFO_OBJECT (segmentation, "Uses GBM memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
-  } else {
-    GST_INFO_OBJECT (segmentation, "Uses ION memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
-  }
+  // If downstream allocation query supports SYSTEM, allocate system memory.
+  pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_SYS);
 
   if (NULL == pool) {
     GST_ERROR_OBJECT (segmentation, "Failed to create buffer pool!");
@@ -234,7 +199,7 @@ gst_ml_video_segmentation_create_pool (GstMLVideoSegmentation * segmentation,
   gst_buffer_pool_config_set_params (config, caps, size,
       DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
+  allocator = gst_allocator_find (NULL);
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
@@ -621,33 +586,9 @@ gst_ml_video_segmentation_transform (GstBaseTransform * base,
     return GST_FLOW_ERROR;
   }
 
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (segmentation, "DMA IOCTL SYNC START failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
-
   // Call the submodule process funtion.
   success = gst_ml_video_segmentation_module_execute (segmentation->module,
       &mlframe, &vframe);
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (segmentation, "DMA IOCTL SYNC END failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   gst_video_frame_unmap (&vframe);
   gst_ml_frame_unmap (&mlframe);
