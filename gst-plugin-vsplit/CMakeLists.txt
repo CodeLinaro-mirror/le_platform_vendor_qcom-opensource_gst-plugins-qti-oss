@@ -1,12 +1,10 @@
 cmake_minimum_required(VERSION 3.8.2)
 project(GST_PLUGIN_QTI_OSS_VIDEO_SPLIT
-  VERSION ${GST_PLUGINS_QTI_OSS_VERSION} LANGUAGES C
+  VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
+  LANGUAGES C CXX
 )
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
-
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
 
 find_package(PkgConfig)
 
@@ -33,11 +31,6 @@ set(GST_QTI_VIDEO_SPLIT gstqtivsplit)
 add_library(${GST_QTI_VIDEO_SPLIT} SHARED
   videosplit.c
   videosplitpads.c
-)
-
-target_compile_definitions(${GST_QTI_VIDEO_SPLIT} PRIVATE
-  $<$<STREQUAL:${GST_VIDEO_CONVERTER_ENGINE},C2D>:USE_C2D_CONVERTER>
-  $<$<STREQUAL:${GST_VIDEO_CONVERTER_ENGINE},GLES>:USE_GLES_CONVERTER>
 )
 
 target_include_directories(${GST_QTI_VIDEO_SPLIT} PUBLIC

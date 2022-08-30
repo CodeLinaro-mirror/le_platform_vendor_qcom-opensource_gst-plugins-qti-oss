@@ -46,37 +46,11 @@ GST_DEBUG_CATEGORY_STATIC (gst_video_split_debug);
 #define DEFAULT_PROP_MIN_BUFFERS      2
 #define DEFAULT_PROP_MAX_BUFFERS      10
 
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
-
 static gboolean
 queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
     guint64 time, gpointer checkdata)
 {
   // There won't be any condition limiting for the buffer queue size.
-  return FALSE;
-}
-
-static gboolean
-gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint idx = 0;
-
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    if (feature == NULL && ((gst_caps_features_get_size (features) == 0) ||
-            gst_caps_features_is_any (features)))
-      return TRUE;
-
-    // Skip ANY caps and return immediately if feature is present.
-    if ((feature != NULL) && !gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
-  }
   return FALSE;
 }
 
@@ -93,20 +67,15 @@ gst_video_split_create_pool (GstPad * pad, GstCaps * caps)
     return NULL;
   }
 
-  // If downstream allocation query supports GBM, allocate gbm memory.
-  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    GST_INFO_OBJECT (pad, "Uses GBM memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
-  } else {
-    GST_INFO_OBJECT (pad, "Uses ION memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
-  }
+  // If downstream allocation query supports SYS, allocate system memory.
+  GST_INFO_OBJECT (pad, "Uses system memory");
+  pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_SYS);
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
+  allocator = gst_allocator_find (NULL);
 
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
@@ -236,15 +205,6 @@ gst_video_split_fixate_format (GstPad * pad, GstStructure * input,
       gst_structure_fixate_field_string (output, "chroma-site", string);
     else
       gst_structure_set (output, "chroma-site", G_TYPE_STRING, string, NULL);
-  }
-
-  if (gst_structure_has_field (input, "compression") && sametype) {
-    const gchar *string = gst_structure_get_string (input, "compression");
-
-    if (gst_structure_has_field (output, "compression"))
-      gst_structure_fixate_field_string (output, "compression", string);
-    else
-      gst_structure_set (output, "compression", G_TYPE_STRING, string, NULL);
   }
 }
 
