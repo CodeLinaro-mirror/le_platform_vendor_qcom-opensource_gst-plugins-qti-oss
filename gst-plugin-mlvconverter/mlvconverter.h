@@ -69,12 +69,7 @@
 #include <gst/video/video.h>
 #include <gst/ml/ml-info.h>
 
-#ifdef USE_C2D_CONVERTER
-#include <gst/video/c2d-video-converter.h>
-#endif //USE_C2D_CONVERTER
-#ifdef USE_GLES_CONVERTER
-#include <gst/video/gles-video-converter.h>
-#endif //USE_GLES_CONVERTER
+#include <gst/video/cv-video-converter.h>
 
 G_BEGIN_DECLS
 
@@ -93,6 +88,8 @@ G_BEGIN_DECLS
 
 #define GST_TYPE_ML_VIDEO_PIXEL_LAYOUT (gst_ml_video_pixel_layout_get_type())
 
+#define GST_TYPE_ML_VIDEO_TRANSPOSE (gst_ml_video_transpose_get_type())
+
 typedef struct _GstMLVideoConverter GstMLVideoConverter;
 typedef struct _GstMLVideoConverterClass GstMLVideoConverterClass;
 
@@ -100,6 +97,12 @@ typedef enum {
   GST_ML_VIDEO_PIXEL_LAYOUT_REGULAR,
   GST_ML_VIDEO_PIXEL_LAYOUT_REVERSE,
 } GstVideoPixelLayout;
+
+typedef enum {
+  GST_ML_VIDEO_TRANSPOSE_UNKNOWN,
+  GST_ML_VIDEO_TRANSPOSE_NHWC,
+  GST_ML_VIDEO_TRANSPOSE_NCHW,
+} GstVideoTranspose;
 
 struct _GstMLVideoConverter {
   GstBaseTransform     parent;
@@ -115,18 +118,16 @@ struct _GstMLVideoConverter {
   GstBufferPool        *outpool;
 
   /// Supported converters.
-#ifdef USE_C2D_CONVERTER
-  GstC2dVideoConverter *c2dconvert;
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
-  GstGlesConverter     *glesconvert;
-#endif // USE_GLES_CONVERTER
+  GstCVConverter     *cvconvert;
 
   /// Properties.
   GstVideoPixelLayout  pixlayout;
   GArray               *mean;
   GArray               *sigma;
+  GstVideoTranspose    transpose;
+  gboolean             convert_enable;
+  gboolean             resize_enable;
+  gboolean             aspect_ration;
 };
 
 struct _GstMLVideoConverterClass {
@@ -136,6 +137,8 @@ struct _GstMLVideoConverterClass {
 G_GNUC_INTERNAL GType gst_ml_video_converter_get_type (void);
 
 G_GNUC_INTERNAL GType gst_ml_video_pixel_layout_get_type (void);
+
+G_GNUC_INTERNAL GType gst_ml_video_transpose_get_type (void);
 
 G_END_DECLS
 
