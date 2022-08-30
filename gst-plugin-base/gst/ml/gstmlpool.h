@@ -26,7 +26,12 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
 #ifndef __GST_ML_POOL_H__
 #define __GST_ML_POOL_H__
 
@@ -47,12 +52,6 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_CLASS_TYPE ((klass), GST_TYPE_ML_POOL))
 #define GST_ML_POOL_CAST(obj) ((GstMLBufferPool*)(obj))
 
-/**
- * GST_ML_BUFFER_POOL_TYPE_ION:
- *
- * Type of memory that the pool will use for allocating buffers.
- */
-#define GST_ML_BUFFER_POOL_TYPE_ION "GstMLBufferPoolTypeIonMemory"
 
 /**
  * GST_ML_BUFFER_POOL_TYPE_SYSTEM:

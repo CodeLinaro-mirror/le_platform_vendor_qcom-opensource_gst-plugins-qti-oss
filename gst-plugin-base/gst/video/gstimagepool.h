@@ -83,12 +83,6 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_CLASS_TYPE ((klass), GST_TYPE_IMAGE_BUFFER_POOL))
 #define GST_IMAGE_BUFFER_POOL_CAST(obj) ((GstImageBufferPool*)(obj))
 
-/**
- * GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE:
- *
- * An option indicating that the allocated buffer must be UBWC.
- */
-#define GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE "GstBufferPoolOptionUBWCMode"
 
 /**
  * GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED:
@@ -99,18 +93,11 @@ G_BEGIN_DECLS
 #define GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED "GstBufferPoolOptionKeepMapped"
 
 /**
- * GST_IMAGE_BUFFER_POOL_TYPE_ION:
+ * GST_IMAGE_BUFFER_POOL_TYPE_SYS:
  *
  * Type of memory that the pool will use for allocating buffers.
  */
-#define GST_IMAGE_BUFFER_POOL_TYPE_ION "GstBufferPoolTypeIonMemory"
-
-/**
- * GST_IMAGE_BUFFER_POOL_TYPE_GBM:
- *
- * Type of memory that the pool will use for allocating buffers.
- */
-#define GST_IMAGE_BUFFER_POOL_TYPE_GBM "GstBufferPoolTypeGbmMemory"
+#define GST_IMAGE_BUFFER_POOL_TYPE_SYS "GstBufferPoolTypeSysMemory"
 
 typedef struct _GstImageBufferPool GstImageBufferPool;
 typedef struct _GstImageBufferPoolClass GstImageBufferPoolClass;
