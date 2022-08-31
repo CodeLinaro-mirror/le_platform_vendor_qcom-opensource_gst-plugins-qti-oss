@@ -48,13 +48,13 @@ GST_DEBUG_CATEGORY (gst_videoblend_debug);
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
                                                                    GST_PAD_SRC,
                                                                    GST_PAD_ALWAYS,
-                                                                   GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA, ARGB } " ))
+                                                                   GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { NV12, RGBA, ARGB } " ))
                                                                   );
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink_%u",
                                                                     GST_PAD_SINK,
                                                                     GST_PAD_REQUEST,
-                                                                    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { RGBA, ARGB } " ))
+                                                                    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ( " { NV12, RGBA, ARGB } " ))
                                                                    );
 
 static void gst_videoblend_child_proxy_init (gpointer g_iface, gpointer iface_data);
@@ -849,13 +849,19 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                     }
                 case GST_VIDEO_FORMAT_ARGB:
                     {
-                        source_format = ARGB8888;
+                        if (target_format == NV12_128m)
+                            source_format = ARGB8888_NO_PREMULTIPLIED;
+                        else
+                            source_format = ARGB8888;
                         GST_DEBUG_OBJECT (blend, "ARGB source");
                         break;
                     }
                 case GST_VIDEO_FORMAT_RGBA:
                     {
-                        source_format = RGBA8888;
+                        if (target_format == NV12_128m)
+                            source_format = RGBA8888_NO_PREMULTIPLIED;
+                        else
+                            source_format = RGBA8888;
                         GST_DEBUG_OBJECT (blend, "RGBA source");
                         break;
                     }
