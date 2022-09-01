@@ -49,31 +49,20 @@ enum
     "NV12 "  /*  8-bit 4:2:0 */ \
     "}"
 
-#define QVDEIN_CAPS(formats) \
-    GST_VIDEO_CAPS_MAKE (formats)
-
 #define QVDEIN_CAPS_DMABUF(formats) \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_DMABUF, formats)
 
-#define QVDEIN_COMPRESSION_CAPS(formats) \
-    GST_VIDEO_CAPS_MAKE (formats) \
-    ",compression={linear,ubwc}"
-
 #define QVDEIN_COMPRESSION_CAPS_DMABUF(formats) \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_DMABUF, formats) \
-    ",compression={linear,ubwc}"
+    ",compression=ubwc"
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (QVDEIN_COMPRESSION_CAPS (SINK_FORMATS)
-        ",interlace-mode=progressive;"
-        QVDEIN_COMPRESSION_CAPS_DMABUF (SINK_FORMATS)
-        ",interlace-mode=progressive;" QVDEIN_COMPRESSION_CAPS (SINK_FORMATS)
-        ",interlace-mode={interleaved,mixed},"
-        "field-order={top-field-first,bottom-field-first};"
+    GST_STATIC_CAPS (
+        QVDEIN_CAPS_DMABUF (SINK_FORMATS) ",interlace-mode=progressive;"
         QVDEIN_COMPRESSION_CAPS_DMABUF (SINK_FORMATS)
         ",interlace-mode={interleaved,mixed},"
         "field-order={top-field-first,bottom-field-first};")
@@ -82,7 +71,7 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (QVDEIN_CAPS (SRC_FORMATS) ",interlace-mode=progressive;"
+    GST_STATIC_CAPS (
         QVDEIN_CAPS_DMABUF (SRC_FORMATS) ",interlace-mode=progressive;")
     );
 
