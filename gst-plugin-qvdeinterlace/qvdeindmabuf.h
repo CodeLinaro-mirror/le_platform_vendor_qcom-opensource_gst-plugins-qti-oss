@@ -14,6 +14,8 @@ typedef struct gbm_buf_desc DmaBufDesc;
 typedef struct dma_heap_allocation_data DmaBufDesc;
 #endif
 
+gboolean qvdein_dmabuf_load_libs_once (void);
+
 gboolean qvdein_dmabuf_alloc (DmaBufDesc ** desc,
     const GstVideoInfo * info, gboolean ubwc);
 

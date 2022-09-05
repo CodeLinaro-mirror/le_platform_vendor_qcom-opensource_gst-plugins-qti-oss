@@ -20,9 +20,9 @@ gstqvdeinterlace_link_args = [ ]
 # comment out below 5 lines for testing on Ubuntu
 gstqvdeinterlace_c_args += ['-DQTI_PLATFORM']
 gstqvdeinterlace_c_args += ['-DUSE_GBM']
-gstqvdeinterlace_link_args += ['-lgbm']
+#gstqvdeinterlace_link_args += ['-lgbm']
 # comment out below 2 lines for testing without GPU deinterlace
-#gstqvdeinterlace_c_args += ['-DUSE_GPU_DEINTERLACE']
+gstqvdeinterlace_c_args += ['-DUSE_GPU_DEINTERLACE']
 #gstqvdeinterlace_link_args += ['-L.', '-lgpudi']
 
 configinc = include_directories('.')
@@ -48,7 +48,7 @@ glib_dep = dependency('glib-2.0', version: '>= 2.44', required: false)
 gstqvdeinterlace = library('gstqvdeinterlace',
   gstqvdeinterlace_sources,
   c_args : [gstqvdeinterlace_c_args, '-Wall'],
-  link_args : [gstqvdeinterlace_link_args],
+  link_args : [gstqvdeinterlace_link_args, '-ldl'],
   include_directories : [configinc],
   dependencies : [glib_dep, gst_dep, gstbase_dep, gstvideo_dep, gstallocators_dep],
   install : true,

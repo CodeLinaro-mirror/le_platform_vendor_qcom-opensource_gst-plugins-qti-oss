@@ -215,7 +215,7 @@ make_resolution_param (guint32 width, guint32 height, gboolean is_input)
   return param;
 }
 
-static ConfigParams
+ConfigParams
 make_pixel_format_param (guint32 fmt, gboolean is_input)
 {
   ConfigParams param;
@@ -343,11 +343,11 @@ get_c2_comp_name (GstVideoDecoder * decoder, GstStructure * s,
   return str;
 }
 
-static guint32
-gst_to_c2_pixelformat (GstVideoDecoder * decoder, GstVideoFormat format)
+guint32
+gst_to_c2_pixelformat (Gstqticodec2vdec * decoder, GstVideoFormat format)
 {
   guint32 result = 0;
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  Gstqticodec2vdec *dec = decoder;
 
   switch (format) {
     case GST_VIDEO_FORMAT_NV12:
@@ -411,6 +411,40 @@ gst_qticodec2vdec_create_component (GstVideoDecoder * decoder)
     }
   } else {
     GST_ERROR_OBJECT (dec, "Component store is Null");
+  }
+
+  return ret;
+}
+
+gboolean
+gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec * decoder)
+{
+  gboolean ret = TRUE;
+  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+
+  GST_DEBUG_OBJECT (dec, "start component and config pool");
+
+  /* Start decoder */
+  ret = c2component_start (dec->comp);
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (dec, "Failed to start component");
+    return FALSE;
+  }
+
+  /* NOTICE: Config own graphic block pool should be called after c2 compoennt
+   * started and before buffer queued. */
+  ret = c2component_createBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (dec, "Failed to create graphic pool");
+    return FALSE;
+  }
+
+  /* let C2 component use graphic block pool created by client */
+  ret = c2component_configBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (dec,
+        "Failed to let component use graphic pool created by client");
+    return FALSE;
   }
 
   return ret;
@@ -522,34 +556,12 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
   GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
       dec->output_state->caps);
 
-  if (dec->is_10bit) {
-    if (dec->is_ubwc)
-      output_format = GST_VIDEO_FORMAT_NV12_10LE32;
-    else
-      output_format = GST_VIDEO_FORMAT_P010_10LE;
-  }
-
   dec->output_format = output_format;
 
-  GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d",
-      dec->width, dec->height, output_format);
+  GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d(%s)",
+      dec->width, dec->height, output_format,
+      gst_video_format_to_string (output_format));
 
-  config = g_ptr_array_new ();
-  if (config) {
-    pixelformat =
-        make_pixel_format_param (gst_to_c2_pixelformat (decoder,
-            output_format), FALSE);
-    GST_LOG_OBJECT (dec, "set c2 output format: %d",
-        pixelformat.pixelFormat.fmt);
-    g_ptr_array_add (config, &pixelformat);
-    if (!c2componentInterface_config (dec->comp_intf,
-            config, BLOCK_MODE_MAY_BLOCK)) {
-      GST_WARNING_OBJECT (dec, "Failed to set config");
-    }
-    g_ptr_array_free (config, TRUE);
-  } else {
-    goto error_setup_output;
-  }
 
   GST_DEBUG_OBJECT (dec, "Complete setup output");
 
@@ -643,7 +655,6 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
   ConfigParams interlace;
   ConfigParams output_picture_order_mode;
   ConfigParams low_latency_mode;
-  const gchar *profile_string = NULL;
 
   GST_DEBUG_OBJECT (dec, "set format caps:%" GST_PTR_FORMAT, state->caps);
 
@@ -653,22 +664,6 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_ERROR_OBJECT (dec, "Failed to get relevant component name, caps:%"
         GST_PTR_FORMAT, state->caps);
     return FALSE;
-  }
-
-  profile_string = gst_structure_get_string (structure, "profile");
-  if (!profile_string) {
-    GST_DEBUG_OBJECT (dec, "no profile field in caps");
-  } else {
-    GST_DEBUG_OBJECT (dec, "profile:%s", profile_string);
-  }
-
-  if (gst_structure_has_name (structure, "video/x-h265")
-      && !g_strcmp0 (profile_string, "main-10")) {
-    dec->is_10bit = TRUE;
-    GST_DEBUG_OBJECT (dec, "10 bit output");
-  } else if (gst_structure_has_name (structure, "video/x-vp9")) {
-    dec->check_vp9_10bit = TRUE;
-    GST_DEBUG_OBJECT (dec, "try to check whether vp9 10 bit later");
   }
 
   retval = gst_structure_get_int (structure, "width", &width);
@@ -754,29 +749,16 @@ gst_qticodec2vdec_set_format (GstVideoDecoder * decoder,
     GST_DEBUG_OBJECT (dec, "Subclass set format");
     if (!dec_class->set_format (dec, state)) {
       GST_ERROR_OBJECT (dec, "Subclass failed to set format");
-      return FALSE;
+      goto error_set_format;
     }
   }
 
-  /* Start decoder */
-  if (!c2component_start (dec->comp)) {
-    GST_ERROR_OBJECT (dec, "Failed to start component");
-    goto error_set_format;
-  }
-
-  /* NOTICE: Config own graphic block pool should be called after c2 compoennt
-   * started and before buffer queued. */
-  ret = c2component_createBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
-  if (ret == FALSE) {
-    GST_ERROR_OBJECT (dec, "Failed to create graphic pool");
-    return FALSE;
-  }
-  /* let C2 component use graphic block pool created by client */
-  ret = c2component_configBlockpool (dec->comp, BUFFER_POOL_BASIC_GRAPHIC);
-  if (ret == FALSE) {
-    GST_ERROR_OBJECT (dec,
-        "Failed to let component use graphic pool created by client");
-    return FALSE;
+  if (!dec->delay_start) {
+    ret = gst_qticodec2vdec_start_comp_and_config_pool (dec);
+    if (ret == FALSE) {
+      GST_ERROR_OBJECT (dec, "failed to start component");
+      goto error_set_format;
+    }
   }
 
 done:
@@ -803,6 +785,7 @@ static gboolean
 gst_qticodec2vdec_open (GstVideoDecoder * decoder)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  Gstqticodec2vdecClass *dec_class = GST_QTICODEC2VDEC_GET_CLASS (decoder);
   gboolean ret = TRUE;
 
   dec->input_setup = FALSE;
@@ -816,7 +799,7 @@ gst_qticodec2vdec_open (GstVideoDecoder * decoder)
   dec->comp_intf = NULL;
   dec->out_port_pool = NULL;
   dec->is_10bit = FALSE;
-  dec->check_vp9_10bit = FALSE;
+  dec->delay_start = FALSE;
 
   memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
   memset (&dec->start_time, 0, sizeof (struct timeval));
@@ -827,6 +810,14 @@ gst_qticodec2vdec_open (GstVideoDecoder * decoder)
 
   /* Create component store */
   dec->comp_store = c2componentStore_create ();
+
+  if (dec_class->open) {
+    GST_DEBUG_OBJECT (dec, "Subclass open");
+    if (!dec_class->open (dec)) {
+      GST_ERROR_OBJECT (dec, "Subclass failed to open");
+      ret = FALSE;
+    }
+  }
 
   return ret;
 }
@@ -895,6 +886,7 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
+  Gstqticodec2vdecClass *dec_class = GST_QTICODEC2VDEC_GET_CLASS (decoder);
   GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (dec, "handle_frame");
@@ -907,6 +899,15 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
       "Frame number : %d, Distance from Sync : %d, Presentation timestamp : %"
       GST_TIME_FORMAT, frame->system_frame_number, frame->distance_from_sync,
       GST_TIME_ARGS (frame->pts));
+
+  if (frame) {
+    if (dec_class->handle_frame) {
+      if (!dec_class->handle_frame (dec, frame)) {
+        GST_ERROR_OBJECT (dec, "Subclass failed to handle format");
+        return GST_FLOW_ERROR;
+      }
+    }
+  }
 
   /* Decode frame */
   if (frame) {
@@ -1352,8 +1353,6 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstMapInfo mapinfo = { 0, };
   GstBuffer *buf = NULL;
   BufferDescriptor inBuf;
-  GstVp9Parser *vp9_parser = NULL;
-  GstVp9FrameHdr *vp9_hdr = NULL;
   GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
   ConfigParams pixelformat;
   GPtrArray *config = NULL;
@@ -1374,56 +1373,6 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   inBuf.data = mapinfo.data;
   inBuf.size = mapinfo.size;
   inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
-
-  /*check whether VP9 10bit */
-  if (dec->check_vp9_10bit) {
-    vp9_parser = gst_vp9_parser_new ();
-    vp9_hdr = g_slice_new0 (GstVp9FrameHdr);
-    config = g_ptr_array_new ();
-    if (vp9_parser && vp9_hdr && config) {
-      gst_vp9_parser_parse_frame_header (vp9_parser, vp9_hdr, inBuf.data,
-          inBuf.size);
-    } else {
-      if (config)
-        g_ptr_array_free (config, TRUE);
-      if (vp9_hdr)
-        g_slice_free (GstVp9FrameHdr, vp9_hdr);
-      if (vp9_parser)
-        gst_vp9_parser_free (vp9_parser);
-      GST_ERROR_OBJECT (dec, "failed to new some structure");
-      gst_buffer_unmap (buf, &mapinfo);
-      return GST_FLOW_ERROR;
-    }
-    if (vp9_parser->bit_depth == GST_VP9_BIT_DEPTH_10) {
-      if (dec->is_ubwc)
-        output_format = GST_VIDEO_FORMAT_NV12_10LE32;
-      else
-        output_format = GST_VIDEO_FORMAT_P010_10LE;
-
-      dec->output_format = output_format;
-      GST_LOG_OBJECT (dec, "output width: %d, height: %d, format: %d for VP9",
-          dec->width, dec->height, output_format);
-
-      if (config) {
-        pixelformat =
-            make_pixel_format_param (gst_to_c2_pixelformat (decoder,
-                output_format), FALSE);
-        GST_LOG_OBJECT (dec, "set c2 output format: %d for VP9",
-            pixelformat.pixelFormat.fmt);
-      }
-
-      g_ptr_array_add (config, &pixelformat);
-      if (!c2componentInterface_config (dec->comp_intf,
-              config, BLOCK_MODE_MAY_BLOCK)) {
-        GST_WARNING_OBJECT (dec, "Failed to set config");
-      }
-    }
-
-    g_ptr_array_free (config, TRUE);
-    g_slice_free (GstVp9FrameHdr, vp9_hdr);
-    gst_vp9_parser_free (vp9_parser);
-    dec->check_vp9_10bit = FALSE;
-  }
 
   GST_INFO_OBJECT (dec, "frame->pts (%" G_GUINT64_FORMAT ")", frame->pts);
 
@@ -1708,6 +1657,7 @@ gst_qticodec2vdec_init (Gstqticodec2vdec * dec)
   dec->cb.data_copy_func = NULL;
   dec->cb.data_copy_func_param = NULL;
   dec->deinterlace = DEFAULT_DEINTERLACE;
+  dec->delay_start = FALSE;
 
   g_cond_init (&dec->pending_cond);
   g_mutex_init (&dec->pending_lock);
