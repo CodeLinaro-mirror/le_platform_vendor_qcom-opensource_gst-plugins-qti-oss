@@ -125,6 +125,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_ISO_MODE (gst_qmmfsrc_iso_mode_get_type())
 #define GST_TYPE_QMMFSRC_NOISE_REDUCTION \
     (gst_qmmfsrc_noise_reduction_get_type())
+#define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -257,6 +258,12 @@ enum
   NOISE_REDUCTION_HIGH_QUALITY,
 };
 
+enum
+{
+  FRAME_SKIP,
+  CAPTURE_REQUEST,
+};
+
 GType gst_qmmfsrc_control_mode_get_type (void);
 
 GType gst_qmmfsrc_effect_mode_get_type (void);
@@ -279,21 +286,39 @@ GType gst_qmmfsrc_iso_mode_get_type (void);
 
 GType gst_qmmfsrc_noise_reduction_get_type (void);
 
+GType gst_qmmfsrc_frc_mode_get_type (void);
+
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_control_mode (const guchar value);
 
 guchar gst_qmmfsrc_effect_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_effect_mode (const guchar value);
+
 guchar gst_qmmfsrc_scene_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_scene_mode (const guchar value);
 
 guchar gst_qmmfsrc_antibanding_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_antibanding (const guchar value);
+
 guchar gst_qmmfsrc_exposure_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_exposure_mode (const guchar value);
 
 guchar gst_qmmfsrc_white_balance_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_white_balance_mode (const guchar value);
+
 guchar gst_qmmfsrc_focus_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_focus_mode (const guchar value);
+
 guchar gst_qmmfsrc_noise_reduction_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_noise_reduction (const guchar value);
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =
