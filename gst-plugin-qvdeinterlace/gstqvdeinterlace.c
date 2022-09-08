@@ -24,6 +24,7 @@
 
 #include <gst/video/video.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <linux-msm/vidc/media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY (gst_qvdeinterlace_debug);
 #define GST_CAT_DEFAULT gst_qvdeinterlace_debug
@@ -322,6 +323,38 @@ _caps_has_compression_ubwc (const GstCaps * caps)
   return g_strcmp0 (compression, "ubwc") == 0 ? TRUE : FALSE;
 }
 
+/* Calculate valid size of stride*scanlines with alignment padding of
+ * planes but without alignment padding of total size, see format detail
+ * in msm_media_info.h. The valid size is for filesink to dump, hence can
+ * view the dump correctly by setting line stride and plane scanlines in
+ * image player tool. */
+static gsize
+_calc_valid_size (const GstVideoInfo * info)
+{
+  gsize size = 0;
+  gint format = GST_VIDEO_INFO_FORMAT (info);
+  gint width = GST_VIDEO_INFO_WIDTH (info);
+  gint height = GST_VIDEO_INFO_HEIGHT (info);
+
+  switch (format) {
+    case GST_VIDEO_FORMAT_NV12: {
+      int vformat = COLOR_FMT_NV12;
+      int y_stride = (int) VENUS_Y_STRIDE(vformat, width);
+      int uv_stride = (int) VENUS_UV_STRIDE(vformat, width);
+      int y_sclines = (int) VENUS_Y_SCANLINES(vformat, height);
+      int uv_sclines = (int) VENUS_UV_SCANLINES(vformat, height);
+      size = y_stride * y_sclines + uv_stride * uv_sclines;
+      GST_DEBUG ("NV12 valid size %" G_GSIZE_FORMAT, size);
+      break;
+    }
+    default:
+      GST_ERROR ("NOT support format %s", GST_VIDEO_INFO_NAME (info));
+      break;
+  }
+
+  return size;
+}
+
 /* this function is called in gst_video_filter_set_caps() that overrides
  * gstbasetransform_class->set_caps().
  * if return TRUE, GstVideoFilter's in/out video info will be set ready.
@@ -344,6 +377,9 @@ gst_qvdeinterlace_set_info (GstVideoFilter * filter,
    * and out info by buffer pool */
   self->in_info = *in_info;
   self->out_info = *out_info;
+  /* Set valid size for _decide_allocation() to create output buffer pool
+   * and allocate gstbuffer with the valid size for filesink to dump. */
+  GST_VIDEO_INFO_SIZE (&self->out_info) = _calc_valid_size (out_info);
 
   features = gst_caps_get_features (incaps, 0);
   self->in_dmabuf = gst_caps_features_contains (features,
