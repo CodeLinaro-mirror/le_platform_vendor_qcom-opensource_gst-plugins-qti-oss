@@ -223,6 +223,7 @@ gst_c2_venc_intra_refresh_mode_get_type (void)
     static const GEnumValue values[] = {
       {IR_MODE_NONE, "None", "none"},
       {IR_MODE_RANDOM, "Random", "random"},
+      {IR_MODE_CYCLIC, "Cyclic", "cyclic"},
       {0, NULL, NULL}
     };
 

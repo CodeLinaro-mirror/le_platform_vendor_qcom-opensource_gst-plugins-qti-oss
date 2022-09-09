@@ -211,6 +211,7 @@ typedef enum {
 typedef enum {
   IR_MODE_NONE = 0,
   IR_MODE_RANDOM,
+  IR_MODE_CYCLIC,
 } ir_mode_t;
 
 typedef enum {
