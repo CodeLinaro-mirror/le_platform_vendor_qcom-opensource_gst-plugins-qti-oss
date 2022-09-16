@@ -332,7 +332,7 @@ make_slicemode_param (guint32 size, SLICE_MODE mode)
   memset (&param, 0, sizeof (ConfigParams));
 
   param.config_name = CONFIG_FUNCTION_KEY_SLICE_MODE;
-  param.val.u32 = size;
+  param.sliceMode.slice_size = size;
   param.sliceMode.type = mode;
 
   return param;
@@ -1004,7 +1004,6 @@ static gboolean
 gst_qticodec2venc_stop (GstVideoEncoder * encoder)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (enc, "stop");
   enc->input_setup = FALSE;
@@ -1012,12 +1011,12 @@ gst_qticodec2venc_stop (GstVideoEncoder * encoder)
 
   /* Stop the component */
   if (enc->comp) {
-    ret = c2component_stop (enc->comp);
+    c2component_stop (enc->comp);
   }
 
   gst_qticodec2venc_release_frames (encoder);
 
-  return ret;
+  return TRUE;
 }
 
 /* Dispatch any pending remaining data at EOS. Class can refuse to encode new data after. */
@@ -1328,8 +1327,7 @@ error_config:
 static void
 gst_qticodec2venc_release_frames (GstVideoEncoder * encoder)
 {
-  GstVideoCodecFrame *frame = NULL;
-  GList *frames, *l;
+  GList *frames;
 
   GST_DEBUG_OBJECT (encoder, "release remain frames");
   frames = gst_video_encoder_get_frames (encoder);
@@ -1668,6 +1666,8 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
     }
     case EVENT_ERROR:{
       GST_ERROR_OBJECT (enc, "EVENT_ERROR(%d)", *(gint32 *) data);
+      GST_ELEMENT_ERROR (enc, STREAM, ENCODE, ("Encoder posts an error"),
+          (NULL));
       break;
     }
     default:{
