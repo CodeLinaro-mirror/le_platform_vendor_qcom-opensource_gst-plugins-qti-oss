@@ -41,6 +41,7 @@
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/gstmlmeta.h>
 
+#include <time.h>
 
 #define GST_CAT_DEFAULT gst_ml_aic_debug
 GST_DEBUG_CATEGORY_STATIC (gst_ml_aic_debug);
@@ -51,8 +52,8 @@ G_DEFINE_TYPE (GstMLAic, gst_ml_aic, GST_TYPE_ELEMENT);
 #define DEFAULT_PROP_MODEL         NULL
 #define DEFAULT_PROP_N_ACTIVATIONS 1
 
-#define DEFAULT_PROP_MIN_BUFFERS   48
-#define DEFAULT_PROP_MAX_BUFFERS   48
+#define DEFAULT_PROP_MIN_BUFFERS   4
+#define DEFAULT_PROP_MAX_BUFFERS   4
 
 #define GST_ML_AIC_SINK_TENSOR_TYPES "{ INT8, FLOAT16, FLOAT32 }"
 #define GST_ML_AIC_SRC_TENSOR_TYPES "{ INT8, FLOAT32 }"
@@ -277,12 +278,19 @@ gst_ml_aic_propose_allocation (GstPad * pad, GstQuery * query)
   GstMLInfo info;
   guint size = 0;
   gboolean needpool = FALSE;
+  GstStructure *structure = NULL;
 
   // Extract caps from the query.
   gst_query_parse_allocation (query, &caps, &needpool);
 
   if (NULL == caps) {
     GST_ERROR_OBJECT (pad, "Failed to extract caps from query!");
+    return FALSE;
+  }
+
+  structure = gst_caps_get_structure (caps, 0);
+  if (!gst_structure_has_name (structure, "neural-network/tensors")) {
+    GST_INFO_OBJECT (pad, "Unexpected caps from query: %" GST_PTR_FORMAT, caps);
     return FALSE;
   }
 
@@ -295,8 +303,6 @@ gst_ml_aic_propose_allocation (GstPad * pad, GstQuery * query)
   size = gst_ml_info_size (&info);
 
   if (needpool) {
-    GstStructure *structure = NULL;
-
     if ((pool = gst_ml_aic_create_pool (pad, caps)) == NULL) {
       GST_ERROR_OBJECT (pad, "Failed to create buffer pool!");
       return FALSE;
@@ -489,9 +495,11 @@ gst_ml_aic_src_worker_task (gpointer userdata)
 
     GST_TRACE_OBJECT (pad, "Waiting request %d", request->id);
 
+    GST_ML_AIC_SRCPAD (pad)->in_use = TRUE;
     if (!gst_ml_aic_engine_wait_request (mlaic->engine, request->id)) {
       GST_DEBUG_OBJECT (pad, " Waiting request %d failed!", request->id);
       gst_engine_request_unref (request);
+      gst_object_unref (mlaic);
       return;
     }
 
@@ -512,6 +520,8 @@ gst_ml_aic_src_worker_task (gpointer userdata)
         GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_GAP)) {
       GST_TRACE_OBJECT (pad, "Pushing GAP buffer downstream");
       gst_pad_push (pad, buffer);
+      GST_ML_AIC_SRCPAD (pad)->in_use = FALSE;
+      gst_object_unref (mlaic);
       return;
     }
 
@@ -520,6 +530,8 @@ gst_ml_aic_src_worker_task (gpointer userdata)
 
     mlinfo = gst_ml_aic_engine_get_output_info (mlaic->engine);
     memory = gst_buffer_peek_memory (buffer, 0);
+
+    gst_object_unref (mlaic);
 
     // Share memory blocks from processed buffer with the new buffer.
     for (idx = 0; idx < GST_ML_INFO_N_TENSORS (mlinfo); idx++) {
@@ -556,10 +568,20 @@ gst_ml_aic_src_worker_task (gpointer userdata)
         outbuffer, gst_buffer_get_size (outbuffer));
 
     gst_pad_push (pad, outbuffer);
+    GST_ML_AIC_SRCPAD (pad)->in_use = FALSE;
   } else {
     GST_DEBUG_OBJECT (pad, "Paused worker thread");
     gst_pad_pause_task (pad);
+    gst_object_unref (mlaic);
+    GST_ML_AIC_SRCPAD (pad)->in_use = FALSE;
   }
+
+  GST_ML_AIC_SRCPAD_LOCK (pad);
+  if (GST_ML_AIC_SRCPAD (pad)->eos && gst_data_queue_is_empty (GST_ML_AIC_SRCPAD (pad)->requests)) {
+    g_cond_broadcast (&GST_ML_AIC_SRCPAD (pad)->cond);
+    GST_DEBUG_OBJECT (pad, "Broadcast eos condition!");
+  }
+  GST_ML_AIC_SRCPAD_UNLOCK (pad);
 }
 
 static GstCaps *
@@ -782,6 +804,7 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       if (gst_caps_is_empty (intersect)) {
         GST_ERROR_OBJECT (pad, "Source and peer caps do not intersect!");
         gst_caps_unref (intersect);
+        gst_event_unref (event);
         return FALSE;
       }
 
@@ -794,7 +817,7 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
       // Query and decide buffer pool allocation.
       query = gst_query_new_allocation (outcaps, TRUE);
-
+      gst_caps_unref (intersect);
       if (!gst_pad_peer_query (srcpad, query))
         GST_DEBUG_OBJECT (pad, "Failed to query peer allocation!");
 
@@ -804,10 +827,12 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
         GST_ERROR_OBJECT (pad, "Failed to decide allocation!");
 
         gst_query_unref (query);
+        gst_event_unref (event);
         return FALSE;
       }
 
       gst_query_unref (query);
+      gst_event_unref (event);
       return TRUE;
     }
     case GST_EVENT_SEGMENT:
@@ -862,9 +887,29 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
     case GST_EVENT_EOS:
     {
       gboolean success = FALSE;
+      gint64 end_time;
+      struct timespec timeout;
+      GstClockTime to;
+      gboolean res;
+      GstDataQueueSize qsize;
 
-      gst_data_queue_set_flushing (GST_ML_AIC_SRCPAD (srcpad)->requests, TRUE);
-      // TODO wait for all requests.
+      timeout.tv_sec = 0;
+      timeout.tv_nsec = 100000000; //100ms
+      to = GST_TIMESPEC_TO_TIME (timeout);
+      end_time = g_get_monotonic_time () + GST_TIME_AS_USECONDS (to);
+
+      GST_DEBUG_OBJECT (pad, "EOS wait condition start");
+      while (!gst_data_queue_is_empty (GST_ML_AIC_SRCPAD (srcpad)->requests) || (GST_ML_AIC_SRCPAD (srcpad)->in_use)) {
+        GST_ML_AIC_SRCPAD_LOCK(srcpad);
+        GST_ML_AIC_SRCPAD (srcpad)->eos = TRUE;
+        res = g_cond_wait_until (&GST_ML_AIC_SRCPAD (srcpad)->cond, &GST_ML_AIC_SRCPAD (srcpad)->lock, end_time);
+        GST_ML_AIC_SRCPAD_UNLOCK(srcpad);
+        if (!res) {
+          gst_data_queue_get_level (GST_ML_AIC_SRCPAD(srcpad)->requests, &qsize);
+          GST_DEBUG_OBJECT (pad, "EOS wait condition timeout, queue size = %u", qsize.visible);
+        }
+      }
+      GST_DEBUG_OBJECT (pad, "EOS wait condition end");
 
       gst_segment_init (&(GST_ML_AIC_SINKPAD (pad))->segment,
           GST_FORMAT_UNDEFINED);
@@ -975,9 +1020,31 @@ gst_ml_aic_src_activate_mode (GstPad * pad, GstObject * parent,
         success = gst_pad_start_task (pad, gst_ml_aic_src_worker_task, pad,
             NULL);
       } else {
+        gint64 end_time;
+        struct timespec timeout;
+        GstClockTime to;
+        gboolean res;
+        GstDataQueueSize qsize;
+
+        timeout.tv_sec = 0;
+        timeout.tv_nsec = 100000000; //100ms
+        to = GST_TIMESPEC_TO_TIME (timeout);
+        end_time = g_get_monotonic_time () + GST_TIME_AS_USECONDS (to);
+
+        GST_DEBUG_OBJECT (pad, "Deactivate worker task start!");
+        while (!gst_data_queue_is_empty (GST_ML_AIC_SRCPAD (pad)->requests) || (GST_ML_AIC_SRCPAD (pad)->in_use)) {
+          GST_ML_AIC_SRCPAD_LOCK (pad);
+          res = g_cond_wait_until (&GST_ML_AIC_SRCPAD (pad)->cond, &GST_ML_AIC_SRCPAD (pad)->lock, end_time);
+          GST_ML_AIC_SRCPAD_UNLOCK (pad);
+          if (!res) {
+            gst_data_queue_get_level (GST_ML_AIC_SRCPAD(pad)->requests, &qsize);
+            GST_DEBUG_OBJECT (pad, "pause task wait timeout, queue size = %u", qsize.visible);
+          }
+        }
+
         gst_data_queue_set_flushing (GST_ML_AIC_SRCPAD (pad)->requests, TRUE);
-        // TODO wait for all requests.
         success = gst_pad_stop_task (pad);
+        GST_DEBUG_OBJECT (pad, "Deactive worker task end!");
       }
       break;
     default:
@@ -1063,6 +1130,11 @@ gst_ml_aic_request_pad (GstElement * element, GstPadTemplate * templ,
   } else {
     // Use the requested pad name.
     name = g_strdup (reqname);
+    if (GST_PAD_SINK == templ->direction) {
+      type = GST_TYPE_ML_AIC_SINKPAD;
+    } else {
+      type = GST_TYPE_ML_AIC_SRCPAD;
+    }
   }
 
   GST_OBJECT_UNLOCK (element);
@@ -1168,15 +1240,14 @@ gst_ml_aic_change_state (GstElement * element, GstStateChange transition)
   }
 
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret != GST_STATE_CHANGE_SUCCESS) {
+  if (ret != GST_STATE_CHANGE_SUCCESS && ret != GST_STATE_CHANGE_NO_PREROLL) {
     GST_ERROR_OBJECT (mlaic, "Failure");
     return ret;
   }
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_ml_aic_engine_free (mlaic->engine);
-      mlaic->engine = NULL;
+      GST_DEBUG_OBJECT (mlaic, "state change:READY to NULL");
       break;
     default:
       // This is to catch PAUSED->PAUSED and PLAYING->PLAYING transitions.
@@ -1291,7 +1362,7 @@ gst_ml_aic_class_init (GstMLAicClass * klass)
   g_object_class_install_property (gobject, PROP_N_ACTIVATIONS,
       g_param_spec_uint ("activations", "Activations",
           "Number of activations (AIC programs and queues).",
-          1, 10, DEFAULT_PROP_N_ACTIVATIONS,
+          1, 50, DEFAULT_PROP_N_ACTIVATIONS,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,

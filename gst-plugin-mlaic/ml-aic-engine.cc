@@ -508,7 +508,7 @@ gst_ml_aic_engine_new (GstStructure * settings)
     for (idx = 0; idx < (guint) ioset.bindings_size(); idx++)
       gst_ml_aic_populate_info (engine, idx, ioset);
 
-
+    delete iodesc;
   } catch (const ::qaic::rt::CoreExceptionInit &e) {
     GST_ERROR ("Caught exception during initialization: %s", e.what());
     gst_ml_aic_engine_free (engine);

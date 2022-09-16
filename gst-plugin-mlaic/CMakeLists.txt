@@ -15,8 +15,8 @@ pkg_check_modules(GST_BASE
   REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(PROTOBUF_LITE
-  REQUIRED protobuf-lite>=${PROTOBUF_VERSION_REQUIRED})
+pkg_check_modules(PROTOBUF
+  REQUIRED protobuf>=${PROTOBUF_VERSION_REQUIRED})
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
@@ -49,7 +49,7 @@ target_link_libraries(${GST_QTI_ML_AIC} PRIVATE
   ${GST_LIBRARIES}
   ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
-  ${PROTOBUF_LITE_LIBRARIES}
+  ${PROTOBUF_LIBRARIES}
   gstqtimlbase
   QAic
 )
