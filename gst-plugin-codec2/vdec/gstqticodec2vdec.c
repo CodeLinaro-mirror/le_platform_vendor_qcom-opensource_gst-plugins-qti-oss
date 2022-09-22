@@ -163,10 +163,10 @@ static GstStaticPadTemplate gst_qtivdec_src_template =
         ";" QTICODEC2VDEC_RAW_CAPS ("{ P010_10LE }")));
 
 static gboolean
-caps_has_compression (const GstCaps * caps, const gchar * compression)
+_unfixed_caps_has_compression (const GstCaps * caps, const gchar * compression)
 {
   GstStructure *structure = NULL;
-  const gchar *string = NULL;
+  gchar *string = NULL;
   guint count = gst_caps_get_size (caps);
   gboolean ret = FALSE;
 
@@ -175,8 +175,10 @@ caps_has_compression (const GstCaps * caps, const gchar * compression)
     string =
         gst_structure_has_field (structure,
         "compression") ? gst_structure_to_string (structure) : NULL;
-    if (string && g_strrstr (string, compression)) {
-      ret = TRUE;
+    ret = !!g_strrstr (string, compression);
+    g_free (string);
+
+    if (ret == TRUE) {
       break;
     }
   }
@@ -509,7 +511,7 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
   }
 
   /* Secure mode only support UBWC output */
-  dec->is_ubwc = caps_has_compression (intersection, "ubwc") | dec->secure;
+  dec->is_ubwc = _unfixed_caps_has_compression (intersection, "ubwc") | dec->secure;
 
   /* Fixate color format */
   intersection = gst_caps_truncate (intersection);
