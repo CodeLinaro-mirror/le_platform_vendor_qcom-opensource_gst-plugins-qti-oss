@@ -484,16 +484,12 @@ static GstFlowReturn
 gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  GstVideoAlignment align;
   GstFlowReturn ret = GST_FLOW_OK;
   GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
-  ConfigParams pixelformat;
-  GPtrArray *config = NULL;
 
   GstCaps *templ_caps, *intersection = NULL;
   GstStructure *s;
   const gchar *format_str;
-  gboolean actual_map = FALSE;
 
   /* Set decoder output format to NV12 by default */
   dec->output_state =
@@ -579,7 +575,6 @@ gst_qticodec2vdec_setup_output (GstVideoDecoder * decoder)
 
   GST_DEBUG_OBJECT (dec, "Complete setup output");
 
-done:
   return ret;
 
 error_setup_output:
@@ -868,7 +863,6 @@ static gboolean
 gst_qticodec2vdec_close (GstVideoDecoder * decoder)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (dec, "close");
 
@@ -1012,7 +1006,6 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   Gstqticodec2vdecClass *dec_class = GST_QTICODEC2VDEC_GET_CLASS (decoder);
-  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (dec, "handle_frame");
 
@@ -1229,22 +1222,15 @@ gst_qticodec2vdec_wrap_output_buffer (GstVideoDecoder * decoder,
 {
   GstBuffer *out_buf = NULL;
   GstVideoCodecState *state;
-  GstVideoInfo *vinfo;
-  GstStructure *structure = NULL;
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   guint output_size = decode_buf->size;
   GstBufferPoolAcquireParamsExt param_ext;
   guint64 *p_modifier = NULL;
-  guint32 color_fmt = 0;
-  gsize offset[GST_VIDEO_MAX_PLANES] = { 0, };
-  gint stride[GST_VIDEO_MAX_PLANES] = { 0, };
 
   memset (&param_ext, 0, sizeof (GstBufferPoolAcquireParamsExt));
 
   state = gst_video_decoder_get_output_state (decoder);
-  if (state) {
-    vinfo = &state->info;
-  } else {
+  if (!state) {
     GST_ERROR_OBJECT (dec, "Failed to get decoder output state");
     return NULL;
   }
@@ -1559,9 +1545,6 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstMapInfo mapinfo = { 0, };
   GstBuffer *buf = NULL;
   BufferDescriptor inBuf;
-  GstVideoFormat output_format = GST_VIDEO_FORMAT_NV12;
-  ConfigParams pixelformat;
-  GPtrArray *config = NULL;
   gboolean status = FALSE;
   GstFlowReturn ret = GST_FLOW_OK;
 

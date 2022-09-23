@@ -257,20 +257,6 @@ make_pixel_format_param (guint32 fmt, gboolean is_input)
 }
 
 static ConfigParams
-make_interlace_param (INTERLACE_MODE_TYPE mode, gboolean is_input)
-{
-  ConfigParams param;
-
-  memset (&param, 0, sizeof (ConfigParams));
-
-  param.config_name = CONFIG_FUNCTION_KEY_INTERLACE_INFO;
-  param.isInput = is_input;
-  param.interlaceMode.type = mode;
-
-  return param;
-}
-
-static ConfigParams
 make_mirror_param (MIRROR_TYPE mirror, gboolean is_input)
 {
   ConfigParams param;
@@ -1097,10 +1083,8 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   gint height = 0;
   GstVideoFormat input_format = GST_VIDEO_FORMAT_UNKNOWN;
   GstVideoInterlaceMode interlace_mode = GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
-  INTERLACE_MODE_TYPE c2interlace_mode = INTERLACE_MODE_PROGRESSIVE;
   GPtrArray *config = NULL;
   ConfigParams resolution;
-  ConfigParams interlace;
   ConfigParams pixelformat;
   ConfigParams mirror;
   ConfigParams rotation;
@@ -1149,16 +1133,12 @@ gst_qticodec2venc_set_format (GstVideoEncoder * encoder,
   if ((mode = gst_structure_get_string (structure, "interlace-mode"))) {
     if (g_str_equal ("progressive", mode)) {
       interlace_mode = GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
-      c2interlace_mode = INTERLACE_MODE_PROGRESSIVE;
     } else if (g_str_equal ("interleaved", mode)) {
       interlace_mode = GST_VIDEO_INTERLACE_MODE_INTERLEAVED;
-      c2interlace_mode = INTERLACE_MODE_INTERLEAVED_TOP_FIRST;
     } else if (g_str_equal ("mixed", mode)) {
       interlace_mode = GST_VIDEO_INTERLACE_MODE_MIXED;
-      c2interlace_mode = INTERLACE_MODE_INTERLEAVED_TOP_FIRST;
     } else if (g_str_equal ("fields", mode)) {
       interlace_mode = GST_VIDEO_INTERLACE_MODE_FIELDS;
-      c2interlace_mode = INTERLACE_MODE_FIELD_TOP_FIRST;
     }
   }
 
@@ -1407,7 +1387,6 @@ gst_qticodec2venc_handle_frame (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (enc, "handle_frame");
 
@@ -1515,7 +1494,6 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
   GstFlowReturn ret = GST_FLOW_OK;
   GstVideoCodecFrame *frame = NULL;
-  GstMapInfo map = GST_MAP_INFO_INIT;
   GstBuffer *outbuf = NULL;
   GstVideoCodecState *state = NULL;
   GstVideoInfo *vinfo = NULL;
@@ -1906,7 +1884,6 @@ static GstFlowReturn
 gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  GstVideoFrame video_frame;
   BufferDescriptor inBuf;
   GstBuffer *buf = NULL;
   GstMemory *mem;
@@ -1983,8 +1960,8 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
     if (inBuf.offset[0] != 0 || inBuf.offset[1] != offset) {
       chk_result |= 2;
-      GST_ERROR_OBJECT (enc, "The input buffer offset<%u, %u> does not meet the "
-          "requirements of encoder <0, %u>", inBuf.offset[0], inBuf.offset[1], offset);
+      GST_ERROR_OBJECT (enc, "The input buffer offset<%" G_GSIZE_FORMAT ", %" G_GSIZE_FORMAT ">"
+          " does not meet the requirements of encoder <0, %u>", inBuf.offset[0], inBuf.offset[1], offset);
     }
 
     g_warn_if_fail (!chk_result && "Input NV12 linear dmabuf layout does not meet HW enc requirement!");

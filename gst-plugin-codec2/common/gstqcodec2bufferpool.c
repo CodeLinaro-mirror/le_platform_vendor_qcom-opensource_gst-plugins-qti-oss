@@ -59,7 +59,7 @@ _buffer_pool_release_buffer_wrap (GstBufferPool * bpool, GstBuffer * buffer);
 GType
 gst_video_c2buf_meta_api_get_type (void)
 {
-  static volatile GType type = 0;
+  static GType type = 0;
   static const gchar *tags[] = { GST_META_TAG_VIDEO_STR, NULL };
 
   if (g_once_init_enter (&type)) {
@@ -340,7 +340,6 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
   gint64 key = ((gint64) param_ext->fd << 32) | param_ext->meta_fd;
   gint64 *buf_key = NULL;
   GValue new_index = { 0, };
-  GstVideoMeta *video_meta = NULL;
   g_value_init (&new_index, G_TYPE_UINT64);
   guint32 color_fmt = 0;
   GstVideoC2BufMeta *video_c2buf_meta = NULL;
@@ -425,8 +424,7 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
         GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo), offset[0],
         offset[1], stride[0], stride[1], GST_VIDEO_INFO_N_PLANES (vinfo),
         GST_VIDEO_INFO_SIZE (vinfo), gst_buffer_get_size (gst_buf));
-    video_meta =
-        gst_buffer_add_video_meta_full (gst_buf, GST_VIDEO_FRAME_FLAG_NONE,
+    gst_buffer_add_video_meta_full (gst_buf, GST_VIDEO_FRAME_FLAG_NONE,
         GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
         GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo), offset,
         stride);

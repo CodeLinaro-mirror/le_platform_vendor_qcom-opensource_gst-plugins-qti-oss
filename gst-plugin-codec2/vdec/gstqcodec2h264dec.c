@@ -100,7 +100,6 @@ static void
 gst_qcodec2_h264_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GstQcodec2H264Dec *dec = GST_QCODEC2_H264_DEC (object);
   Gstqticodec2vdec *base_dec = GST_QTICODEC2VDEC (object);
 
   switch (prop_id) {
@@ -117,7 +116,6 @@ static void
 gst_qcodec2_h264_dec_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
-  GstQcodec2H264Dec *dec = GST_QCODEC2_H264_DEC (object);
   Gstqticodec2vdec *base_dec = GST_QTICODEC2VDEC (object);
 
   switch (prop_id) {

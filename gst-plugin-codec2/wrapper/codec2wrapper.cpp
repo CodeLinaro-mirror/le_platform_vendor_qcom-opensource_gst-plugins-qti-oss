@@ -247,7 +247,7 @@ std::unique_ptr<C2Param> setMirrorType(gpointer param, void* const comp_intf)
 
         mirror = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(mirror);
+        return mirror;
     }
     LOG_WARNING("setMirrorType output not implemented");
 
@@ -274,7 +274,7 @@ std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf)
 
         rotation = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(rotation);
+        return rotation;
     }
     LOG_WARNING("setRotation output not implemented");
 
@@ -317,7 +317,7 @@ std::unique_ptr<C2Param> setOutputPictureOrderMode(gpointer param, void* const c
     kvpairs.emplace("vendor.qti-ext-dec-picture-order.enable", item);
     outputPictureOrderMode = intf_wrapper->updateParamFromConfig(kvpairs);
 
-    return std::move(outputPictureOrderMode);
+    return outputPictureOrderMode;
 }
 
 std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
@@ -345,7 +345,7 @@ std::unique_ptr<C2Param> setSliceMode(gpointer param, void* const comp_intf)
         sliceModeBytesOrMb = intf_wrapper->updateParamFromConfig(kvpairs);
     }
 
-    return std::move(sliceModeBytesOrMb);
+    return sliceModeBytesOrMb;
 }
 
 std::unique_ptr<C2Param> setDecLowLatency(gpointer param)
@@ -354,8 +354,6 @@ std::unique_ptr<C2Param> setDecLowLatency(gpointer param)
     if (param == NULL) {
         return nullptr;
     }
-
-    ConfigParams* config = (ConfigParams*)param;
 
     C2GlobalLowLatencyModeTuning lowLatencyMode;
     lowLatencyMode.value = C2_TRUE;
@@ -386,7 +384,7 @@ std::unique_ptr<C2Param> setDownscale(gpointer param, void* const comp_intf)
 
         scale = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(scale);
+        return scale;
     }
     LOG_WARNING("setDownscale input not implemented");
 
@@ -410,7 +408,7 @@ std::unique_ptr<C2Param> setEncColorSpaceConv(gpointer param, void* const comp_i
 
     colorSpaceConv = intf_wrapper->updateParamFromConfig(kvpairs);
 
-    return std::move(colorSpaceConv);
+    return colorSpaceConv;
 }
 
 std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param)
@@ -463,7 +461,7 @@ std::unique_ptr<C2Param> setBlurMode(gpointer param, void* const comp_intf)
 
         blur = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(blur);
+        return blur;
     }
     LOG_WARNING("setBlurMode output not implemented");
 
@@ -491,7 +489,7 @@ std::unique_ptr<C2Param> setBlurResolution(gpointer param, void* const comp_intf
 
         blur = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(blur);
+        return blur;
     }
     LOG_WARNING("setBlurResolution output not implemented");
 
@@ -522,7 +520,7 @@ std::unique_ptr<C2Param> setRoiRegion(gpointer param, void* const comp_intf)
 
     roi = intf_wrapper->updateParamFromConfig(kvpairs);
 
-    return std::move(roi);
+    return roi;
 }
 
 std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_intf)
@@ -544,7 +542,7 @@ std::unique_ptr<C2Param> setBitrateSavingMode(gpointer param, void* const comp_i
 
         bitrateSavingMode = intf_wrapper->updateParamFromConfig(kvpairs);
 
-        return std::move(bitrateSavingMode);
+        return bitrateSavingMode;
     }
     return nullptr;
 }
@@ -586,7 +584,7 @@ std::unique_ptr<C2Param> setInterlaceInfo(gpointer param, void* const comp_intf)
 
     interlaceInfo = intf_wrapper->updateParamFromConfig(kvpairs);
 
-    return std::move(interlaceInfo);
+    return interlaceInfo;
 }
 
 std::unique_ptr<C2Param> setDeInterlace(gpointer param, void* const comp_intf)
@@ -607,7 +605,7 @@ std::unique_ptr<C2Param> setDeInterlace(gpointer param, void* const comp_intf)
 
     deinterlace = intf_wrapper->updateParamFromConfig(kvpairs);
 
-    return std::move(deinterlace);
+    return deinterlace;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1100,11 +1098,8 @@ gboolean c2component_drain(void* const comp, DRAIN_MODE_TYPE mode)
     LOG_MESSAGE("Draining work");
 
     gboolean ret = FALSE;
-    c2_status_t c2Status = C2_NO_INIT;
 
     if (comp) {
-        C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
-
         LOG_MESSAGE("Not implemented");
     }
 
