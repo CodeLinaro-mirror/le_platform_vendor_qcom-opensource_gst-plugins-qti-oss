@@ -273,7 +273,7 @@ gbm_dmabuf_alloc (DmaBufDesc * desc)
   }
 
   desc->bo = bo;
-  //desc->fd = gbm_bo_get_fd (bo); // GBM has bug on this API
+  //desc->fd = gbm_bo_get_fd (bo); //gbm_bo_get_fd() dup original fd, which lose pairing relationship between fd and metadata fd, lead to issue
   desc->fd = bo->ion_fd;
   width = gbm_bo_get_width (bo);
   height = gbm_bo_get_height (bo);
