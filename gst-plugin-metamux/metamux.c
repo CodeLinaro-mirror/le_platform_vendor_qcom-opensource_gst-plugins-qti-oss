@@ -716,6 +716,9 @@ gst_metamux_data_sink_pad_event (GstPad * pad, GstObject * parent,
       else
         GST_METAMUX_DATA_PAD (pad)->type = GST_DATA_TYPE_UNKNOWN;
 
+      if (intersect != NULL)
+        gst_caps_unref (intersect);
+
       return TRUE;
     }
     case GST_EVENT_FLUSH_START:
