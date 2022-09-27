@@ -448,6 +448,11 @@ typedef struct {
     };
 } ConfigParams;
 
+typedef struct {
+    guint32 width;
+    guint32 height;
+} BufferResolution;
+
 typedef void (*listener_cb)(const void* handle, EVENT_TYPE type, void* data);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

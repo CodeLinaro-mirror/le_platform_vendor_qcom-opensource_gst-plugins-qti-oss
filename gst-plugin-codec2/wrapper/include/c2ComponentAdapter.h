@@ -106,7 +106,7 @@ public:
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
     c2_status_t attachExternalFd(int fd);
     c2_status_t setUseExternalBuffer(bool useExternal);
-    void acquireExtBuf();
+    void acquireExtBuf(uint32_t width, uint32_t height);
 
 private:
     c2_status_t prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf, BufferDescriptor* buffer);

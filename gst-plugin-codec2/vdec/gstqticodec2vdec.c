@@ -1404,8 +1404,8 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
           GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
 
       if (!(out_buf->flag & FLAG_TYPE_END_OF_STREAM)) {
-        if (!dec->output_setup || dec->width != out_buf->width
-            || dec->height != out_buf->height) {
+        if (!dec->use_external_buf && (!dec->output_setup ||
+            dec->width != out_buf->width || dec->height != out_buf->height)) {
           if (dec->output_setup) {
             GST_DEBUG_OBJECT (dec,
                 "resolution change, width height:%d %d -> %u %u", dec->width,
@@ -1527,6 +1527,55 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
       break;
     }
     case EVENT_ACQUIRE_EXT_BUF:{
+      BufferResolution *resolution = (BufferResolution*) data;
+      GstVideoCodecState *output_state = NULL;
+
+      if (dec->width != resolution->width || dec->height != resolution->height) {
+        GST_DEBUG_OBJECT (dec,
+            "resolution change for external buffer, width height:%d %d -> %u %u",
+            dec->width, dec->height, resolution->width, resolution->height);
+        dec->acquired_external_buf = 0;
+        /* Destroy current buffer hash table as the fds/gstbuffers are outdated */
+        if (dec->buffer_table) {
+          g_hash_table_destroy (dec->buffer_table);
+          dec->buffer_table = NULL;
+          GST_DEBUG_OBJECT(dec, "Destroy outdated buffer hash table");
+        }
+
+        dec->width = resolution->width;
+        dec->height = resolution->height;
+        output_state =
+            gst_video_decoder_set_output_state (decoder,
+            dec->output_format, dec->width, dec->height,
+            dec->input_state);
+        if (!output_state) {
+          GST_ERROR_OBJECT (dec, "Failed to set output state");
+          break;
+        }
+        output_state->caps = gst_video_info_to_caps (&output_state->info);
+
+        if (dec->downstream_supports_dma) {
+          gst_caps_set_features (output_state->caps, 0,
+              gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
+          GST_DEBUG_OBJECT (dec, "set DMA feature in Caps");
+        }
+        if (dec->is_ubwc) {
+          gst_caps_set_simple (output_state->caps, "compression",
+              G_TYPE_STRING, "ubwc", NULL);
+        } else {
+          gst_caps_set_simple (output_state->caps, "compression",
+              G_TYPE_STRING, "linear", NULL);
+        }
+        GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
+            output_state->caps);
+        dec->output_state = output_state;
+        if (!gst_video_decoder_negotiate (decoder)) {
+          gst_video_codec_state_unref (dec->output_state);
+          GST_ERROR_OBJECT (dec, "Failed to negotiate");
+          break;
+        }
+      }
+
       acquire_external_buf_callback(decoder);
       break;
     }

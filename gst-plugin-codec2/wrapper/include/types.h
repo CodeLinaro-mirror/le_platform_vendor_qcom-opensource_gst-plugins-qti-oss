@@ -99,7 +99,7 @@ public:
     virtual void onTripped(uint32_t errorCode) = 0;
     virtual void onError(uint32_t errorCode) = 0;
     virtual void onUpdateMaxBufCount(uint32_t outputDelay) = 0;
-    virtual void onAcquireExtBuffer() = 0;
+    virtual void onAcquireExtBuffer(uint32_t width, uint32_t height) = 0;
 
     virtual ~EventCallback() {}
 };
