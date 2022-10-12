@@ -52,13 +52,6 @@ G_DEFINE_TYPE (GstVideoSplit, gst_video_split, GST_TYPE_ELEMENT);
 #define GST_TYPE_VIDEO_SPLIT_MODE (gst_video_split_mode_get_type())
 
 #define DEFAULT_PROP_MODE           GST_VIDEO_SPLIT_MODE_NORMAL
-
-#undef GST_VIDEO_SIZE_RANGE
-#define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
-
-#undef GST_VIDEO_FPS_RANGE
-#define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
-
 #define GST_VIDEO_FORMATS \
   "{ RGB, BGR }"
 
@@ -378,6 +371,16 @@ gst_video_split_update_params (GstVideoSplit * vsplit,
       }
 
       outrect.x = (GST_VIDEO_FRAME_WIDTH (frame) - outrect.w) / 2;
+    }
+
+    if (outrect.w == 0) {
+      GST_INFO_OBJECT (vsplit, "Bad rectangle parameters:[%d %d %d %d]", outrect.x, outrect.y, outrect.w, outrect.h);
+      outrect.w = 1;
+    }
+
+    if (outrect.h == 0) {
+      GST_INFO_OBJECT (vsplit, "Bad rectangle parameters:[%d %d %d %d]", outrect.x, outrect.y, outrect.w, outrect.h);
+      outrect.h = 1;
     }
 
     g_value_set_int (&value, outrect.x);
