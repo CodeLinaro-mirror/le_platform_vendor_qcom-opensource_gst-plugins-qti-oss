@@ -99,6 +99,7 @@ gst_batch_sink_pad_init (GstBatchSinkPad * pad)
   g_mutex_init (&pad->lock);
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
   pad->queue = g_queue_new ();
+  pad->got_eos = FALSE;
 }
 
 

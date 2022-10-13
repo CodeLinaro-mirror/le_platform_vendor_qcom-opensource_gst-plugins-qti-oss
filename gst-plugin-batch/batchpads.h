@@ -91,6 +91,8 @@ struct _GstBatchSinkPad {
 
   /// Queue for managing incoming buffers.
   GQueue     *queue;
+
+  gboolean    got_eos;
 };
 
 struct _GstBatchSinkPadClass {
