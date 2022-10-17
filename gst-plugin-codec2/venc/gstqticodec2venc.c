@@ -1679,10 +1679,6 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
       GST_DEBUG_OBJECT (enc, "Ignore event:acquire_ext_buf:%d on enc", type);
       break;
     }
-    case EVENT_UPDATE_MAX_BUF_CNT:{
-      GST_DEBUG_OBJECT (enc, "Ignore event:update_max_buf_cnt:%d on enc", type);
-      break;
-    }
     default:{
       GST_ERROR_OBJECT (enc, "Invalid Event(%d)", type);
     }
