@@ -78,6 +78,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
+#include <media/msm_media_info.h>
 
 #include "gstqticodec2venc.h"
 #include "gstqcodec2h264enc.h"
@@ -1004,7 +1005,6 @@ static gboolean
 gst_qticodec2venc_stop (GstVideoEncoder * encoder)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-  gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (enc, "stop");
   enc->input_setup = FALSE;
@@ -1012,12 +1012,12 @@ gst_qticodec2venc_stop (GstVideoEncoder * encoder)
 
   /* Stop the component */
   if (enc->comp) {
-    ret = c2component_stop (enc->comp);
+    c2component_stop (enc->comp);
   }
 
   gst_qticodec2venc_release_frames (encoder);
 
-  return ret;
+  return TRUE;
 }
 
 /* Dispatch any pending remaining data at EOS. Class can refuse to encode new data after. */
@@ -1328,8 +1328,7 @@ error_config:
 static void
 gst_qticodec2venc_release_frames (GstVideoEncoder * encoder)
 {
-  GstVideoCodecFrame *frame = NULL;
-  GList *frames, *l;
+  GList *frames;
 
   GST_DEBUG_OBJECT (encoder, "release remain frames");
   frames = gst_video_encoder_get_frames (encoder);
@@ -1668,6 +1667,16 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
     }
     case EVENT_ERROR:{
       GST_ERROR_OBJECT (enc, "EVENT_ERROR(%d)", *(gint32 *) data);
+      GST_ELEMENT_ERROR (enc, STREAM, ENCODE, ("Encoder posts an error"),
+          (NULL));
+      break;
+    }
+    case EVENT_UPDATE_MAX_BUF_CNT:{
+      GST_DEBUG_OBJECT (enc, "Ignore event:update_max_buf_cnt:%d on enc", type);
+      break;
+    }
+    case EVENT_ACQUIRE_EXT_BUF:{
+      GST_DEBUG_OBJECT (enc, "Ignore event:acquire_ext_buf:%d on enc", type);
       break;
     }
     case EVENT_UPDATE_MAX_BUF_CNT:{
@@ -1960,6 +1969,30 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
       "stride %u, width %u, height %u",
       inBuf.fd, inBuf.data, inBuf.size, inBuf.timestamp, inBuf.index,
       inBuf.stride[0], inBuf.width, inBuf.height);
+
+  /* Check the input buffer stride/offset for NV12 linear dmabuf case */
+  if (inBuf.fd != -1 && !inBuf.ubwc_flag && GST_VIDEO_FORMAT_NV12 == inBuf.format) {
+    uint32_t y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, inBuf.width);
+    uint32_t uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, inBuf.width);
+    uint32_t y_scanlines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, inBuf.height);
+    uint32_t offset = y_stride * y_scanlines;
+    unsigned int chk_result = 0;
+
+    if (inBuf.stride[0] != y_stride || inBuf.stride[1] != uv_stride) {
+      chk_result |= 1;
+      GST_ERROR_OBJECT (enc, "The input buffer stride<%u, %u> does not meet the "
+          "requirements of encoder <%u, %u>", inBuf.stride[0], inBuf.stride[1],
+          y_stride, uv_stride);
+    }
+
+    if (inBuf.offset[0] != 0 || inBuf.offset[1] != offset) {
+      chk_result |= 2;
+      GST_ERROR_OBJECT (enc, "The input buffer offset<%u, %u> does not meet the "
+          "requirements of encoder <0, %u>", inBuf.offset[0], inBuf.offset[1], offset);
+    }
+
+    g_warn_if_fail (!chk_result && "Input NV12 linear dmabuf layout does not meet HW enc requirement!");
+  }
 
   build_roi_meta (encoder, frame);
 

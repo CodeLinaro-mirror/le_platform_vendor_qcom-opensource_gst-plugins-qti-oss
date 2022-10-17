@@ -38,6 +38,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ion/ion.h>
 #include <sys/mman.h>
 #include <linux/dma-buf.h>
+#include <OMX_Core.h>
 
 #define SECURE_PLAYBACK
 #include "crypto.h"

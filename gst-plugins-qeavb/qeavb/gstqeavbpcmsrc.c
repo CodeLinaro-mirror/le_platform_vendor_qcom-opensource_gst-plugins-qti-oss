@@ -28,6 +28,7 @@
  *
  */
 
+#include <stdio.h>
 #include "gstqeavbpcmsrc.h"
 
 GST_DEBUG_CATEGORY_STATIC (qeavbpcmsrc_debug);
@@ -63,11 +64,7 @@ static void gst_qeavb_pcm_src_set_property (GObject * object, guint prop_id,
 static void gst_qeavb_pcm_src_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-static gboolean gst_qeavb_pcm_src_setcaps (GstBaseSrc * basesrc,
-    GstCaps * caps);
 static GstCaps *gst_qeavb_pcm_src_fixate (GstBaseSrc * bsrc, GstCaps * caps);
-static gboolean gst_qeavb_pcm_src_query (GstBaseSrc * basesrc, GstQuery * query);
-
 static gboolean gst_qeavb_pcm_src_start (GstBaseSrc * basesrc);
 static gboolean gst_qeavb_pcm_src_stop (GstBaseSrc * basesrc);
 static GstFlowReturn gst_qeavb_pcm_src_fill (GstPushSrc * pushsrc, GstBuffer *
@@ -107,9 +104,7 @@ gst_qeavb_pcm_src_class_init (GstQeavbPcmSrcClass * klass)
   basesrc_class->start = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_start);
   basesrc_class->stop = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_stop);
   pushsrc_class->fill = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_fill);
-  basesrc_class->set_caps = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_setcaps);
   basesrc_class->fixate = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_fixate);
-  basesrc_class->query = GST_DEBUG_FUNCPTR (gst_qeavb_pcm_src_query);
 }
 
 static void
@@ -246,36 +241,13 @@ gst_qeavb_pcm_src_fixate (GstBaseSrc * bsrc, GstCaps * caps)
   return caps;
 }
 
-static gboolean
-gst_qeavb_pcm_src_setcaps (GstBaseSrc * basesrc, GstCaps * caps)
-{
-  GstQeavbPcmSrc *src = GST_QEAVB_PCM_SRC (basesrc);
-  GstAudioInfo info;
-
-  if (!gst_audio_info_from_caps (&info, caps))
-    goto invalid_caps;
-
-  GST_DEBUG_OBJECT (src, "negotiated to caps %" GST_PTR_FORMAT, caps);
-
-  if (0 != src->stream_info.max_buffer_size && 0 != src->stream_info.pkts_per_wake)
-    gst_base_src_set_blocksize (basesrc, src->stream_info.max_buffer_size * src->stream_info.pkts_per_wake);
-
-  return TRUE;
-
-  /* ERROR */
-invalid_caps:
-  {
-    GST_ERROR_OBJECT (basesrc, "received invalid caps");
-    return FALSE;
-  }
-}
-
 static GstStateChangeReturn
 gst_qeavb_pcm_src_change_state (GstElement * element,
     GstStateChange transition)
 {
   GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
   GstQeavbPcmSrc *src = GST_QEAVB_PCM_SRC (element);
+  GST_INFO_OBJECT(src, "Doing self transition: 0x%x(%s)", transition, gst_state_change_get_name(transition));
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       gst_qeavb_pcm_src_stop(GST_BASE_SRC (src));
@@ -285,25 +257,12 @@ gst_qeavb_pcm_src_change_state (GstElement * element,
     break;
   }
 
+  GST_INFO_OBJECT(src, "Doing parent transition: 0x%x", transition);
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
+  GST_INFO_OBJECT(src, "Done transition: 0x%x, ret %d(%s)", transition, ret, gst_element_state_change_return_get_name(ret));
   return ret;
 }
-
-static gboolean
-gst_qeavb_pcm_src_query (GstBaseSrc * basesrc, GstQuery * query)
-{
-  gboolean res = FALSE;
-
-  switch (GST_QUERY_TYPE (query)) {
-    default:
-      res = GST_BASE_SRC_CLASS (parent_class)->query (basesrc, query);
-      break;
-  }
-
-  return res;
-}
-
 
 static gboolean
 gst_qeavb_pcm_src_start (GstBaseSrc * basesrc)
@@ -319,15 +278,9 @@ gst_qeavb_pcm_src_start (GstBaseSrc * basesrc)
     return FALSE;
   }
 
-  err = qeavb_read_config_file(&(qeavbpcmsrc->cfg_data), qeavbpcmsrc->config_file);
-  if (0 == err) {
-    err = qeavb_create_stream(qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->cfg_data), &(qeavbpcmsrc->hdr));
-  }
-  else {
-    err = qeavb_create_stream_remote(qeavbpcmsrc->eavb_fd, qeavbpcmsrc->config_file, &(qeavbpcmsrc->hdr));
-  }
+  err = qeavb_create_stream_remote(qeavbpcmsrc->eavb_fd, qeavbpcmsrc->config_file, &(qeavbpcmsrc->hdr));
   if (0 != err) {
-    GST_ERROR_OBJECT (qeavbpcmsrc,"create stream error %d, exit!", err);
+    GST_ERROR_OBJECT (qeavbpcmsrc,"create stream remote error %d, exit!", err);
     goto error_close;
   }
 
@@ -343,8 +296,11 @@ gst_qeavb_pcm_src_start (GstBaseSrc * basesrc)
     GST_ERROR_OBJECT (qeavbpcmsrc,"get stream info error %d, exit!", err);
     goto error_disconnect;
   }
-  GST_DEBUG_OBJECT (qeavbpcmsrc, "QEAVB PCM source stream info pcm_bit_depth %d, num_pcm_channels %d, sample_rate %d, endianness %d", qeavbpcmsrc->stream_info.pcm_bit_depth,
-                    qeavbpcmsrc->stream_info.num_pcm_channels, qeavbpcmsrc->stream_info.sample_rate, qeavbpcmsrc->stream_info.endianness);
+  GST_DEBUG_OBJECT (qeavbpcmsrc, "QEAVB PCM source stream info pcm_bit_depth %d, num_pcm_channels %d, sample_rate %d, endianness %d, max_buffer_size %d, pkts_per_wake %d", qeavbpcmsrc->stream_info.pcm_bit_depth,
+    qeavbpcmsrc->stream_info.num_pcm_channels, qeavbpcmsrc->stream_info.sample_rate, qeavbpcmsrc->stream_info.endianness, qeavbpcmsrc->stream_info.max_buffer_size, qeavbpcmsrc->stream_info.pkts_per_wake);
+
+  if (0 != qeavbpcmsrc->stream_info.max_buffer_size && 0 != qeavbpcmsrc->stream_info.pkts_per_wake)
+    gst_base_src_set_blocksize (basesrc, qeavbpcmsrc->stream_info.max_buffer_size * qeavbpcmsrc->stream_info.pkts_per_wake);
   // mmap
   qeavbpcmsrc->eavb_addr = mmap(NULL, qeavbpcmsrc->stream_info.max_buffer_size * qeavbpcmsrc->stream_info.pkts_per_wake, PROT_READ | PROT_WRITE, MAP_SHARED, qeavbpcmsrc->eavb_fd, 0);
   qeavbpcmsrc->started = TRUE;
@@ -415,25 +371,42 @@ gst_qeavb_pcm_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
   GstFlowReturn error = GST_FLOW_OK;
   int err = 0;
   guint32 payload_size = 0;
+  char tips[64];
 
-  if (qeavbpcmsrc->is_first_pcmpacket) {
-    kpi_place_marker("M - qeavbpcmsrc begin recv 1st pkt.");
-  }
-
-  if(qeavbpcmsrc->stream_info.wakeup_period_us != 0)
+  if (qeavbpcmsrc->stream_info.wakeup_period_us != 0) {
     sleep_us = qeavbpcmsrc->stream_info.wakeup_period_us;
+  }
+  if (sleep_us < MIN_SLEEP_US) {
+    sleep_us = MIN_SLEEP_US;
+  }
 
   payload_size = qeavbpcmsrc->stream_info.max_buffer_size * qeavbpcmsrc->stream_info.pkts_per_wake;
 
+  GST_DEBUG_OBJECT (qeavbpcmsrc, "pkts_per_wake %d, payload_size %u, wakeup_period_us %d", qeavbpcmsrc->stream_info.pkts_per_wake, payload_size, qeavbpcmsrc->stream_info.wakeup_period_us);
+
+  if (qeavbpcmsrc->is_first_pcmpacket) {
+    snprintf(tips, sizeof(tips), "M - qeavbpcmsrc begin recv 1st pkt. w_p_us %d", qeavbpcmsrc->stream_info.wakeup_period_us);
+    kpi_place_marker(tips);
+  }
+
 retry:
+#define PCMSRC_RETRY_KPILOG_SUPPRESS 300  //Every PCMSRC_RETRY_KPILOG_SUPPRESS, will print one KPI log
   g_mutex_lock(&qeavbpcmsrc->lock);
   if (qeavbpcmsrc->started) {
     memset(&qavb_buffer, 0, sizeof(eavb_ioctl_buf_data_t));
     qavb_buffer.hdr.payload_size = payload_size;
     qavb_buffer.pbuf = (uint64_t)qeavbpcmsrc->eavb_addr;
-    GST_DEBUG_OBJECT (qeavbpcmsrc, "pkts_per_wake %d, qavb_buffer.hdr.payload_size %d",qeavbpcmsrc->stream_info.pkts_per_wake, qavb_buffer.hdr.payload_size);
+    GST_LOG_OBJECT (qeavbpcmsrc, "will call qeavb_receive_data(), retry %d", retry_time);
+    if (qeavbpcmsrc->is_first_pcmpacket && 0 == retry_time%PCMSRC_RETRY_KPILOG_SUPPRESS) {
+      snprintf(tips, sizeof(tips), "M - qeavbpcmsrc recving 1st pkt, retry %d.", retry_time);
+      kpi_place_marker(tips);
+    }
     recv_len = qeavb_receive_data(qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->hdr), &qavb_buffer);
-    GST_DEBUG_OBJECT (qeavbpcmsrc, "receive data len %d", recv_len);
+    if (qeavbpcmsrc->is_first_pcmpacket && (0==retry_time%PCMSRC_RETRY_KPILOG_SUPPRESS || recv_len>0)) {
+      snprintf(tips, sizeof(tips), "M - qeavbpcmsrc recv 1st pkt rt %d retry %d.", recv_len, retry_time);
+      kpi_place_marker(tips);
+    }
+    GST_LOG_OBJECT (qeavbpcmsrc, "receive data len %d", recv_len);
     if (recv_len > 0) {
       if (qeavbpcmsrc->is_first_pcmpacket) {
         kpi_place_marker("M - qeavbpcmsrc receive the first packet");
@@ -445,6 +418,7 @@ retry:
       err = qeavb_receive_done(qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->hdr), &qavb_buffer);
       if (0 != err) {
         GST_ERROR_OBJECT (qeavbpcmsrc,"receive data (len %d) done error %d, exit!", recv_len, err);
+        g_warn_if_fail(FALSE && "qeavb_receive_done() ret err after qeavb_receive_data() received data!");
         error = GST_FLOW_ERROR;
         goto finish_handle;
       }
@@ -452,18 +426,20 @@ retry:
       err = qeavb_receive_done(qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->hdr), &qavb_buffer);
       if (0 != err) {
         GST_ERROR_OBJECT (qeavbpcmsrc,"receive data done error %d, exit!", err);
+        g_warn_if_fail(FALSE && "qeavb_receive_done() ret err after qeavb_receive_data() not received data!");
         error = GST_FLOW_ERROR;
         goto finish_handle;
       }
       if (retry_time < RETRY_COUNT){
         retry_time ++;
         g_mutex_unlock(&qeavbpcmsrc->lock);
-        GST_DEBUG_OBJECT (qeavbpcmsrc,"retry to receive data %d, will sleep time %d us\n", retry_time, sleep_us);
+        GST_LOG_OBJECT (qeavbpcmsrc,"retry to receive data %d, will sleep time %d us\n", retry_time, sleep_us);
         g_usleep(sleep_us);
         goto retry;
       } else {
         kpi_place_marker("E - qeavbpcmsrc recv data timeout!");
         GST_ERROR_OBJECT (qeavbpcmsrc, "Failed to receive audio pcm, timeout %dus X %d", sleep_us, retry_time);
+        g_warn_if_fail(FALSE && "qeavb_receive_data() receiving data timeout!");
         error = GST_FLOW_ERROR;
       }
     }

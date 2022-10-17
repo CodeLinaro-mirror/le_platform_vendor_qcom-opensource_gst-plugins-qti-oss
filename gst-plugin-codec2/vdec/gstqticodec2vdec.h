@@ -62,7 +62,7 @@ G_BEGIN_DECLS
   "width  = (int) [ 96, 8192 ], "     \
   "height = (int) [ 96, 8192 ]"
 #define QTICODEC2VDEC_SRC_FPS_CAPS    \
-  "framerate = (fraction) [ 0, 480 ]"
+  "framerate = (fraction) [ 0, 960 ]"
 #define QTICODEC2VDEC_RAW_CAPS(formats) \
   "video/x-raw, "                       \
   "format = (string) " formats ", "     \

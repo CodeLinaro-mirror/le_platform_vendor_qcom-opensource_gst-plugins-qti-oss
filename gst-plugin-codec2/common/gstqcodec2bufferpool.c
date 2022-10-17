@@ -456,7 +456,9 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
       gst_buffer_remove_meta (gst_buf, (GstMeta *) video_c2buf_meta);
     }
     video_c2buf_meta = gst_buffer_add_video_c2buf_meta (gst_buf);
-    video_c2buf_meta->c2_buf = param_ext->c2_buf;
+    if (video_c2buf_meta) {
+      video_c2buf_meta->c2_buf = param_ext->c2_buf;
+    }
     GST_DEBUG_OBJECT (bpool, "attach c2buf meta, c2_buf:%p", param_ext->c2_buf);
   }
 

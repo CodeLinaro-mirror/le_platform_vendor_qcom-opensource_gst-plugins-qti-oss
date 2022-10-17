@@ -30,18 +30,13 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef _CRYPTO_H
 #define _CRYPTO_H
 
-#include <linux/dma-buf.h>
-
-#include "OMX_Core.h"
+#include <stdint.h>
 #include <gst/gst.h>
 
 struct secure_handle {
   unsigned char *ion_sbuffer;
 };
 
-typedef unsigned int uint32;
-
-//Errors
 typedef enum SecureCopyResult {
   SECURE_COPY_SUCCESS                           = 0,
   SECURE_COPY_ERROR_COPY_FAILED                 = 1,
@@ -66,12 +61,11 @@ typedef enum SecureCopyDir {
   SECURE_COPY_INVALID_DIR
 } SecureCopyDir;
 
-
 typedef SecureCopyResult(*Crypto_Set_AppName)(const char *name);
 typedef SecureCopyResult(*Crypto_Init)(struct secure_handle **);
 typedef SecureCopyResult(*Crypto_Deinit)(struct secure_handle **);
 typedef SecureCopyResult(*Crypto_Copy)(struct secure_handle *,
-        OMX_U8 *, const uint32, uint32, uint32, uint32 *, SecureCopyDir);
+        uint8_t*, const uint32_t, uint32_t, uint32_t, uint32_t *, SecureCopyDir);
 
 typedef struct secure_handle secure_handle;
 
@@ -84,14 +78,10 @@ typedef struct Crypto {
     Crypto_Copy m_crypto_copy;
 } Crypto;
 
-OMX_ERRORTYPE crypto_init(Crypto *crypto);
-OMX_ERRORTYPE crypto_deinit(Crypto *crypto);
-OMX_ERRORTYPE crypto_terminate(Crypto *crypto);
-OMX_ERRORTYPE crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
-    OMX_U8 *pBuffer, unsigned long nBufferFd, OMX_U32 *pBufferSize);
-OMX_ERRORTYPE load_crypto_lib(Crypto *crypto);
-void unload_crypto_lib(Crypto *crypto);
-
-
+SecureCopyResult crypto_init(Crypto *crypto);
+SecureCopyResult crypto_deinit(Crypto *crypto);
+SecureCopyResult crypto_terminate(Crypto *crypto);
+SecureCopyResult crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
+    uint8_t* pBuffer, unsigned long nBufferFd, uint32_t* pBufferSize);
 
 #endif //#ifndef _CRYPTO_H
