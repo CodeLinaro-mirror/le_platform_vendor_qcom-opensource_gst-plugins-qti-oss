@@ -1387,26 +1387,31 @@ gst_qticodec2venc_handle_frame (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame)
 {
   Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
+  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (enc, "handle_frame");
 
+  g_return_val_if_fail (frame != NULL, GST_FLOW_ERROR);
+
   if (!enc->input_setup) {
-    return GST_FLOW_OK;
+    goto done;
   }
 
   if (!enc->output_setup) {
-    return GST_FLOW_ERROR;
+    ret = GST_FLOW_ERROR;
+    goto done;
   }
 
   GST_DEBUG ("Frame number : %d, pts: %" GST_TIME_FORMAT,
       frame->system_frame_number, GST_TIME_ARGS (frame->pts));
 
   /* Encode frame */
-  if (frame) {
-    return gst_qticodec2venc_encode (encoder, frame);
-  } else {
-    return GST_FLOW_EOS;
-  }
+  ret = gst_qticodec2venc_encode (encoder, frame);
+
+done:
+  gst_video_codec_frame_unref (frame);
+
+  return ret;
 }
 
 static gboolean
@@ -1506,6 +1511,7 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
     vinfo = &state->info;
   } else {
     GST_ERROR_OBJECT (enc, "video codec state is NULL, unexpected!");
+    ret = GST_FLOW_ERROR;
     goto out;
   }
 
@@ -1514,6 +1520,7 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
     GST_ERROR_OBJECT (enc,
         "Error in gst_video_encoder_get_frame, frame number: %lu",
         encode_buf->index);
+    ret = GST_FLOW_ERROR;
     goto out;
   }
 
@@ -1557,23 +1564,22 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
         (GDestroyNotify) gst_qticodec2venc_buffer_release);
 
     frame->output_buffer = outbuf;
-    gst_video_codec_frame_unref (frame);
     ret = gst_video_encoder_finish_frame (encoder, frame);
     if (ret == GST_FLOW_FLUSHING) {
       GST_WARNING_OBJECT (enc, "downstream is flushing");
     } else if (ret != GST_FLOW_OK) {
       GST_ERROR_OBJECT (enc, "Failed to finish frame, outbuf: %p", outbuf);
-      goto out;
     }
   } else {
     GST_ERROR_OBJECT (enc, "Failed to create outbuf");
-    goto out;
+    ret = GST_FLOW_ERROR;
   }
 
-  return ret;
-
 out:
-  return GST_FLOW_ERROR;
+  if (state)
+    gst_video_codec_state_unref (state);
+
+  return ret;
 }
 
 static void
@@ -1894,10 +1900,6 @@ gst_qticodec2venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstVideoC2BufMeta *video_c2buf_meta = NULL;
 
   GST_DEBUG_OBJECT (enc, "encode");
-  if (!frame) {
-    GST_WARNING_OBJECT (enc, "frame is NULL, ret GST_FLOW_EOS");
-    return GST_FLOW_EOS;
-  }
 
   memset (&inBuf, 0, sizeof (BufferDescriptor));
 

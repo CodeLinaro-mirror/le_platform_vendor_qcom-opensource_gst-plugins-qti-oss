@@ -180,7 +180,9 @@ _unfixed_caps_has_compression (const GstCaps * caps, const gchar * compression)
     string =
         gst_structure_has_field (structure,
         "compression") ? gst_structure_to_string (structure) : NULL;
-    ret = !!g_strrstr (string, compression);
+    if (string && g_strrstr (string, compression)) {
+      ret = TRUE;
+    }
     g_free (string);
 
     if (ret == TRUE) {
@@ -1006,11 +1008,14 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   Gstqticodec2vdecClass *dec_class = GST_QTICODEC2VDEC_GET_CLASS (decoder);
+  GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (dec, "handle_frame");
 
+  g_return_val_if_fail (frame != NULL, GST_FLOW_ERROR);
+
   if (!dec->input_setup) {
-    return GST_FLOW_OK;
+    goto done;
   }
 
   GST_DEBUG_OBJECT (dec,
@@ -1018,22 +1023,21 @@ gst_qticodec2vdec_handle_frame (GstVideoDecoder * decoder,
       GST_TIME_FORMAT, frame->system_frame_number, frame->distance_from_sync,
       GST_TIME_ARGS (frame->pts));
 
-  if (frame) {
-    if (dec_class->handle_frame) {
-      if (!dec_class->handle_frame (dec, frame)) {
-        GST_ERROR_OBJECT (dec, "Subclass failed to handle format");
-        return GST_FLOW_ERROR;
-      }
+  if (dec_class->handle_frame) {
+    if (!dec_class->handle_frame (dec, frame)) {
+      GST_ERROR_OBJECT (dec, "Subclass failed to handle format");
+      ret = GST_FLOW_ERROR;
+      goto done;
     }
   }
 
   /* Decode frame */
-  if (frame) {
-    return gst_qticodec2vdec_decode (decoder, frame);
-  } else {
-    GST_DEBUG_OBJECT (dec, "EOS reached in handle_frame");
-    return GST_FLOW_EOS;
-  }
+  ret = gst_qticodec2vdec_decode (decoder, frame);
+
+done:
+  gst_video_codec_frame_unref (frame);
+
+  return ret;
 }
 
 static gboolean
@@ -1368,10 +1372,6 @@ push_frame_downstream (GstVideoDecoder * decoder, BufferDescriptor * decode_buf)
         vinfo->fps_n, decode_buf->interlaceMode);
   }
 
-  /* Decrease the refcount of the frame so that the frame is released by the
-   * gst_video_decoder_finish_frame function and so that the output buffer is
-   * writable when it's pushed downstream */
-  gst_video_codec_frame_unref (frame);
   ret = gst_video_decoder_finish_frame (decoder, frame);
   if (ret == GST_FLOW_FLUSHING) {
     GST_DEBUG_OBJECT (dec, "seek: downstream is flushing");
@@ -1456,6 +1456,10 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
           }
           GST_INFO_OBJECT (dec, "output caps: %" GST_PTR_FORMAT,
               output_state->caps);
+
+          if (dec->output_state) {
+            gst_video_codec_state_unref (dec->output_state);
+          }
           dec->output_state = output_state;
           if (!gst_video_decoder_negotiate (decoder)) {
             gst_video_codec_state_unref (dec->output_state);
@@ -1598,10 +1602,6 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   GstFlowReturn ret = GST_FLOW_OK;
 
   GST_DEBUG_OBJECT (dec, "decode");
-  if (!frame) {
-    GST_WARNING_OBJECT (dec, "frame is NULL, ret GST_FLOW_EOS");
-    return GST_FLOW_EOS;
-  }
 
   memset (&inBuf, 0, sizeof (BufferDescriptor));
 
