@@ -513,10 +513,45 @@ gst_cv_video_converter_do_pre_process(
     resize_img = convert_img;
   }
 
-  resize_img.convertTo(out_image.mat(cv::Rect(0, 0, resize_w, resize_h)),
-                         data_type);
+  if (data_type == CV_8SC3) {
+    resize_img.convertTo(out_image.mat(cv::Rect(0, 0, resize_w, resize_h)), data_type, 1.0, -128.0);
+  } else if (data_type == CV_32FC3
+#if OPENCV_IS_SUPPORTED_16FC3
+         || data_type == CV_16FC3
+#endif
+        ) {
+    resize_img.convertTo(out_image.mat(cv::Rect(0, 0, resize_w, resize_h)), data_type, 1.0 / 255.0, 0.0);
+  } else {
+    resize_img.convertTo(out_image.mat(cv::Rect(0, 0, resize_w, resize_h)), data_type);
+  }
 
   GST_TRACE("Rect Mat calibration: %d, %d\n", resize_h, resize_w);
+
+  cv::Mat norm_mat = out_image.mat(cv::Rect(0, 0, resize_w, resize_h));
+
+  if (data_type == CV_32FC3
+#if OPENCV_IS_SUPPORTED_16FC3
+         || data_type == CV_16FC3
+#endif
+     ) {
+    cv::Scalar meansc(convert->roffset, convert->goffset, convert->boffset);
+    cv::Scalar stdsc(convert->rscale, convert->gscale, convert->bscale);
+    cv::Mat mean(resize_h, resize_w, data_type, meansc);
+    cv::Mat std(resize_h, resize_w, data_type, stdsc);
+
+    if (convert->roffset != 0.0 && convert->goffset != 0.0 && convert->boffset != 0.0) {
+      norm_mat = norm_mat - mean;
+    }
+
+    if (convert->rscale == 0.0 || convert->gscale == 0.0 || convert->bscale == 0.0) {
+      GST_ERROR ("Invalid divisor: <R,G,B>=<%f,%f,%f>", convert->rscale, convert->gscale, convert->bscale);
+      return FALSE;
+    }
+
+    if (convert->rscale != 1.0 && convert->gscale != 1.0 && convert->bscale != 1.0) {
+      norm_mat = norm_mat / std;
+    }
+  }
 
   // if true. Mat nhwc will to nchw
   if (convert->ntranspose == 2) {
@@ -535,32 +570,6 @@ gst_cv_video_converter_do_pre_process(
     }
   }
 
-  cv::Mat norm_mat = out_image.mat(cv::Rect(0, 0, resize_w, resize_h));
-
-  cv::Scalar meansc(convert->roffset, convert->goffset, convert->boffset);
-  cv::Scalar stdsc(convert->rscale, convert->gscale, convert->bscale);
-  if (data_type == CV_32FC3) {
-    // meansc = cv::Scalar(0.44, 0.44, 0.44);
-    // stdsc = cv::Scalar(0.23, 0.23, 0.23);
-    cv::Mat mean(resize_h, resize_w, data_type, meansc);
-    cv::Mat std(resize_h, resize_w, data_type, stdsc);
-
-    const float scale_normal = 1.0 / 255.0;
-    norm_mat = norm_mat * scale_normal;
-    norm_mat = norm_mat - mean;
-    norm_mat = norm_mat / std;
-#if OPENCV_IS_SUPPORTED_16FC3
-    } else if (data_type == CV_16FC3) {
-      const float scale_normal = 1.0 / 255.0;
-      norm_mat = norm_mat * scale_normal;
-#endif
-  } else if (data_type == CV_8SC3) {
-    // meansc = cv::Scalar(128, 128, 128);
-    cv::Mat mean(resize_h, resize_w, data_type, meansc);
-    norm_mat = norm_mat - mean;
-  } else if (data_type == CV_8UC3) {
-    // Nothing to do, when is UINT8
-  }
   return TRUE;
 }
 
