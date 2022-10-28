@@ -96,6 +96,10 @@ gst_ml_aic_srcpad_finalize (GObject * object)
   gst_data_queue_flush (pad->requests);
 
   gst_object_unref (GST_OBJECT_CAST(pad->requests));
+  g_cond_clear (&pad->cond);
+  g_mutex_clear (&pad->lock);
+  pad->eos = TRUE;
+  pad->in_use = FALSE;
 
   G_OBJECT_CLASS (gst_ml_aic_srcpad_parent_class)->finalize(object);
 }
@@ -115,5 +119,9 @@ void
 gst_ml_aic_srcpad_init (GstMLAicSrcPad * pad)
 {
   pad->requests = gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
+  pad->in_use = FALSE;
+  pad->eos = FALSE;
+  g_mutex_init (&pad->lock);
+  g_cond_init (&pad->cond);
 }
 

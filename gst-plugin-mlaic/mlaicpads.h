@@ -68,6 +68,12 @@ G_BEGIN_DECLS
 #define GST_ML_AIC_SINKPAD_UNLOCK(obj) \
   g_mutex_unlock(GST_ML_AIC_SINKPAD_GET_LOCK(obj))
 
+#define GST_ML_AIC_SRCPAD_GET_LOCK(obj) (&GST_ML_AIC_SRCPAD(obj)->lock)
+#define GST_ML_AIC_SRCPAD_LOCK(obj) \
+  g_mutex_lock(GST_ML_AIC_SRCPAD_GET_LOCK(obj))
+#define GST_ML_AIC_SRCPAD_UNLOCK(obj) \
+  g_mutex_unlock(GST_ML_AIC_SRCPAD_GET_LOCK(obj))
+
 typedef struct _GstMLAicSinkPad GstMLAicSinkPad;
 typedef struct _GstMLAicSinkPadClass GstMLAicSinkPadClass;
 typedef struct _GstMLAicSrcPad GstMLAicSrcPad;
@@ -100,6 +106,14 @@ struct _GstMLAicSrcPad {
 
   /// Worker queue.
   GstDataQueue *requests;
+
+  gboolean     in_use;
+
+  gboolean     eos;
+
+  GMutex       lock;
+
+  GCond        cond;
 };
 
 struct _GstMLAicSrcPadClass {
