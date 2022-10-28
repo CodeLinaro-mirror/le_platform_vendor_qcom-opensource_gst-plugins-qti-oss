@@ -283,6 +283,8 @@ gst_videoblend_pad_sink_getcaps (GstPad * pad, GstVideoBlend * blend, GstCaps * 
     GstCaps *filtered_caps;
     GstCaps *returned_caps;
     gboolean had_current_caps = TRUE;
+    gint n, i;
+    GstStructure *s;
 
     template_caps = gst_pad_get_pad_template_caps (GST_PAD (blend->srcpad));
 
@@ -294,6 +296,18 @@ gst_videoblend_pad_sink_getcaps (GstPad * pad, GstVideoBlend * blend, GstCaps * 
     }
 
     srccaps = gst_caps_make_writable (srccaps);
+
+    n = gst_caps_get_size (srccaps);
+    for (i = 0; i < n; i++)
+    {
+        s = gst_caps_get_structure (srccaps, i);
+        gst_structure_set (s, "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, "height", GST_TYPE_INT_RANGE
+            , 1, G_MAXINT, "framerate", GST_TYPE_FRACTION_RANGE, 0, 1, G_MAXINT, 1, NULL);
+        if (!gst_structure_has_field (s, "pixel-aspect-ratio"))
+            gst_structure_set (s, "pixel-aspect-ratio", GST_TYPE_FRACTION, 1, 1, NULL);
+        gst_structure_remove_fields (s, "colorimetry", "chroma-site", "format", NULL);
+        GST_INFO_OBJECT (pad, "src cap %d changed to %" GST_PTR_FORMAT, i, s);
+    }
 
     filtered_caps = srccaps;
     if (filter)
