@@ -165,25 +165,23 @@ gst_batch_all_sink_pads_non_flushing (GstBatch * batch, GstPad * pad)
 static gboolean
 gst_batch_all_sink_pads_eos (GstBatch * batch, GstPad * pad)
 {
+  GstElement *element = GST_ELEMENT_CAST (batch);
   GList *list = NULL;
-  gboolean eos = TRUE;
 
-  GST_OBJECT_LOCK (batch);
+  if (element->numsinkpads == 0)
+    return FALSE;
 
-  // Check all whether other sink pads are in EOS state.
-  for (list = GST_ELEMENT (batch)->sinkpads; list; list = list->next) {
-    // Skip current sink pad as it is already in EOS state.
-    if (g_strcmp0 (GST_PAD_NAME (list->data), GST_PAD_NAME (pad)) == 0)
-      continue;
-
-    GST_OBJECT_LOCK (GST_PAD (list->data));
-    eos &= GST_PAD_IS_EOS (GST_PAD (list->data));
-    GST_OBJECT_UNLOCK (GST_PAD (list->data));
+  for (list = element->sinkpads; list; list = list->next) {
+    GstBatchSinkPad *sinkpad = GST_BATCH_SINK_PAD (list->data);
+    if (!sinkpad->got_eos) {
+      GST_DEBUG_OBJECT (batch, "Not all pads got eos");
+      return FALSE;
+    }
   }
 
-  GST_OBJECT_UNLOCK (batch);
+  GST_DEBUG_OBJECT (batch, "All pads got eos");
 
-  return eos;
+  return TRUE;
 }
 
 static gboolean
@@ -234,6 +232,7 @@ gst_batch_update_src_caps (GstBatch * batch)
   GList *list = NULL;
   GValue framerate = G_VALUE_INIT;
   guint idx = 0, length = 0;
+  gboolean ret = FALSE;
 
   // In case the RECONFIGURE flag was not set just return immediately.
   if (!gst_pad_check_reconfigure (batch->srcpad))
@@ -353,7 +352,10 @@ gst_batch_update_src_caps (GstBatch * batch)
   }
 
   // Propagate fixates caps to the peer of the source pad.
-  return gst_pad_set_caps (batch->srcpad, srccaps);
+  ret = gst_pad_set_caps (batch->srcpad, srccaps);
+  gst_caps_unref (srccaps);
+
+  return ret;
 }
 
 static gboolean
@@ -738,6 +740,9 @@ gst_batch_sink_setcaps (GstBatch * batch, GstPad * pad, GstCaps * caps)
     return FALSE;
   }
 
+  if (intersect != NULL)
+    gst_caps_unref (intersect);
+
   return TRUE;
 }
 
@@ -866,6 +871,9 @@ gst_batch_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       gst_event_unref (event);
       return TRUE;
     case GST_EVENT_EOS:
+    {
+      GstBatchSinkPad *sinkpad = GST_BATCH_SINK_PAD (pad);
+      sinkpad->got_eos = TRUE;
       // Flush the sink pad buffer queue.
       gst_batch_sink_pad_flush_queue (pad);
 
@@ -881,6 +889,7 @@ gst_batch_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       // Drop the event until all sink pads are in EOS state.
       gst_event_unref (event);
       return TRUE;
+    }
     case GST_EVENT_STREAM_START:
       // Drop the event, element will create its own start event.
       gst_event_unref (event);
@@ -908,7 +917,10 @@ gst_batch_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   g_queue_push_tail (sinkpad->queue, buffer);
   GST_BATCH_SINK_UNLOCK (sinkpad);
 
+  GST_BATCH_LOCK (batch);
   g_cond_signal (&(batch)->wakeup);
+  GST_BATCH_UNLOCK (batch);
+
   return GST_FLOW_OK;
 }
 
