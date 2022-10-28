@@ -387,6 +387,9 @@ gst_video_mark_ip (GstVideoMark * video_mark, GstVideoFrame * frame)
         cv::putText(mat, std::string(video_mark->label), bbox_min, cv::FONT_HERSHEY_DUPLEX , video_mark->fontscale, scalar, 1, cv::LINE_AA);
       }
       cv::rectangle(mat, bbox_min, bbox_max, scalar, 1, cv::LINE_AA);
+      GST_DEBUG_OBJECT (video_mark, "Video[w=%d, h=%d],Bounding box[%d]:[x=%u, y=%u, w=%u, h=%u]",
+        width, height,
+        roi_meta->id, roi_meta->x, roi_meta->y, roi_meta->w, roi_meta->h);
     }
 
     std::string res;
@@ -471,14 +474,22 @@ static GstFlowReturn
 gst_video_mark_transform_frame_ip (GstVideoFilter * vfilter, GstVideoFrame * frame)
 {
   GstVideoMark *video_mark = GST_VIDEO_MARK (vfilter);
+  GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
+  GstClockTimeDiff ts_delta = GST_CLOCK_STIME_NONE;
 
   if (!video_mark->process)
     goto not_negotiated;
 
+  ts_begin = gst_util_get_timestamp ();
   GST_OBJECT_LOCK (video_mark);
   video_mark->process (video_mark, frame);
   GST_OBJECT_UNLOCK (video_mark);
+  ts_end = gst_util_get_timestamp ();
 
+  ts_delta = GST_CLOCK_DIFF (ts_begin, ts_end);
+  GST_LOG_OBJECT (video_mark, "Video mark took %" G_GINT64_FORMAT ".%03"
+    G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (ts_delta),
+    (GST_TIME_AS_USECONDS (ts_delta) % 1000));
   return GST_FLOW_OK;
 
   /* ERRORS */
