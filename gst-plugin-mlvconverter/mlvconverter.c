@@ -86,8 +86,8 @@ G_DEFINE_TYPE (GstMLVideoConverter, gst_ml_video_converter,
 
 #define GST_BATCH_CHANNEL_BASE       100
 
-#define DEFAULT_PROP_MIN_BUFFERS     2
-#define DEFAULT_PROP_MAX_BUFFERS     24
+#define DEFAULT_PROP_MIN_BUFFERS     4
+#define DEFAULT_PROP_MAX_BUFFERS     4
 
 #define DEFAULT_PROP_SUBPIXEL_LAYOUT GST_ML_VIDEO_PIXEL_LAYOUT_REGULAR
 #define DEFAULT_PROP_MEAN            0.0
@@ -364,9 +364,16 @@ gst_map_input_video_frames (GstVideoFrame ** inframes, guint n_inputs,
     GstVideoRegionOfInterestMeta *roimeta = NULL;
 
     // Check if a bitwise mask was set for this channel/batch input.
-    if ((GST_BUFFER_OFFSET (inbuffer) != GST_BUFFER_OFFSET_NONE) &&
-        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0))
-      continue;
+    if ((GST_BUFFER_OFFSET (inbuffer) != GST_BUFFER_OFFSET_NONE)) {
+      if ((GST_BUFFER_OFFSET_END (inbuffer) == GST_BUFFER_OFFSET_NONE) &&
+        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0)) {
+        continue;
+      } else if ((GST_BUFFER_OFFSET_END (inbuffer) != GST_BUFFER_OFFSET_NONE)) {
+        GST_TRACE ("n_inputs = %u, offset = %lu, offset_end = %lu", n_inputs,
+          GST_BUFFER_OFFSET (inbuffer), GST_BUFFER_OFFSET_END (inbuffer));
+        GST_BUFFER_OFFSET (inbuffer) = 1;
+      }
+    }
 
     // Check if there is memory block for this index.
     if (num >= n_memory)
@@ -1050,13 +1057,13 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GST_VIDEO_INFO_SIZE (&outinfo) *= GST_ML_INFO_TENSOR_DIM (&mlinfo, 0, 0);
   // Adjust height with the batch number of the tensor (1st dimension).
   GST_VIDEO_INFO_HEIGHT (&outinfo) *= GST_ML_INFO_TENSOR_DIM (&mlinfo, 0, 0);
-
+#if 0 // optimize later
   passthrough =
       GST_VIDEO_INFO_SIZE (&ininfo) == GST_VIDEO_INFO_SIZE (&outinfo) &&
       GST_VIDEO_INFO_WIDTH (&ininfo) == GST_VIDEO_INFO_WIDTH (&outinfo) &&
       GST_VIDEO_INFO_HEIGHT (&ininfo) == GST_VIDEO_INFO_HEIGHT (&outinfo) &&
       GST_VIDEO_INFO_FORMAT (&ininfo) == GST_VIDEO_INFO_FORMAT (&outinfo);
-
+#endif
   gst_base_transform_set_passthrough (base, passthrough);
   gst_base_transform_set_in_place (base, FALSE);
 
