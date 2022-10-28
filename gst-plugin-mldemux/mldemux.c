@@ -501,18 +501,22 @@ gst_ml_demux_sink_pad_event (GstPad * pad, GstObject * parent, GstEvent * event)
       } else {
         GST_ERROR_OBJECT (pad, "Unsupported SEGMENT format: %s!",
             gst_format_get_name (segment.format));
+        gst_event_unref (event);
         return FALSE;
       }
 
+      gst_event_unref (event);
       return TRUE;
     }
     case GST_EVENT_STREAM_START:
       success = gst_element_foreach_src_pad (GST_ELEMENT (demux),
           gst_ml_demux_src_pad_push_event, event);
+      gst_event_unref (event);
       return success;
     case GST_EVENT_FLUSH_START:
       success = gst_element_foreach_src_pad (GST_ELEMENT (demux),
           gst_ml_demux_src_pad_push_event, event);
+      gst_event_unref (event);
       return success;
     case GST_EVENT_FLUSH_STOP:
     {
@@ -532,11 +536,13 @@ gst_ml_demux_sink_pad_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
       success = gst_element_foreach_src_pad (GST_ELEMENT (demux),
           gst_ml_demux_src_pad_push_event, event);
+      gst_event_unref (event);
       return success;
     }
     case GST_EVENT_EOS:
       success = gst_element_foreach_src_pad (GST_ELEMENT (demux),
           gst_ml_demux_src_pad_push_event, event);
+      gst_event_unref (event);
       return success;
     default:
       break;
