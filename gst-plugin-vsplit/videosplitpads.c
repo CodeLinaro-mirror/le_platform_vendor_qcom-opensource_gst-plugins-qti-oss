@@ -43,8 +43,8 @@ G_DEFINE_TYPE(GstVideoSplitSrcPad, gst_video_split_srcpad, GST_TYPE_PAD);
 GST_DEBUG_CATEGORY_STATIC (gst_video_split_debug);
 #define GST_CAT_DEFAULT gst_video_split_debug
 
-#define DEFAULT_PROP_MIN_BUFFERS      2
-#define DEFAULT_PROP_MAX_BUFFERS      10
+#define DEFAULT_PROP_MIN_BUFFERS      4
+#define DEFAULT_PROP_MAX_BUFFERS      4
 
 static gboolean
 queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
@@ -965,7 +965,7 @@ gst_video_split_srcpad_setcaps (GstVideoSplitSrcPad * srcpad, GstCaps * incaps)
   outcaps = gst_video_split_srcpad_fixate_caps (srcpad, incaps, outcaps);
 
   if ((outcaps == NULL) || gst_caps_is_empty (outcaps)) {
-    GST_DEBUG_OBJECT (srcpad, "Failed to fixate caps!");
+    GST_ERROR_OBJECT (srcpad, "Failed to fixate caps!");
 
     if (outcaps != NULL)
       gst_caps_unref (outcaps);
@@ -986,7 +986,7 @@ gst_video_split_srcpad_setcaps (GstVideoSplitSrcPad * srcpad, GstCaps * incaps)
     GST_DEBUG_OBJECT (srcpad, "Failed to query peer allocation!");
 
   if (!gst_video_split_srcpad_decide_allocation (srcpad, query)) {
-    GST_DEBUG_OBJECT (srcpad, "Failed to decide allocation!");
+    GST_ERROR_OBJECT (srcpad, "Failed to decide allocation!");
     gst_query_unref (query);
     return FALSE;
   }
@@ -995,7 +995,7 @@ gst_video_split_srcpad_setcaps (GstVideoSplitSrcPad * srcpad, GstCaps * incaps)
 
   // Fill video info structure from the negotiated caps.
   if (!gst_video_info_from_caps (&info, outcaps)) {
-    GST_DEBUG_OBJECT (srcpad, "Failed to extract video info!");
+    GST_ERROR_OBJECT (srcpad, "Failed to extract video info!");
     return FALSE;
   }
 
