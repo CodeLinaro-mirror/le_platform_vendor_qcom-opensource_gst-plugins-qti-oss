@@ -34,6 +34,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   This module contains the implementation of the OpenMAX core & component.
 
 *//*========================================================================*/
+#include <stdio.h>
 
 #define LOG_TAG "video_decode_sample"
 

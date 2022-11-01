@@ -42,6 +42,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef VENC_OMX_SAMPLE_OMX_UTILS_H_
 #define VENC_OMX_SAMPLE_OMX_UTILS_H_
 
+#include <sys/time.h>
 #include "video_sample.h"
 #include "video_types.h"
 

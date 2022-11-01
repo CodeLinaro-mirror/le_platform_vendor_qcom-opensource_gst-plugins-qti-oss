@@ -49,8 +49,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pthread.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-//  #include <sys/time.h>
-#include <time.h>
 #include <sys/ioctl.h>
 #include <limits.h>
 #include <errno.h>
