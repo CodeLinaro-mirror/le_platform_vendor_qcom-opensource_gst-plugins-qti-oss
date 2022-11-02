@@ -25,6 +25,40 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials provided
+ *       with the distribution.
+ *
+ *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /*
@@ -120,6 +154,14 @@ struct _GstMleData
   GstVideoRectangle rect;
   gboolean data_valid;
 };
+
+static void
+sample_unref (GstSample *sample) {
+    gst_sample_unref (sample);
+#if GST_VERSION_MAJOR >= 1 && GST_VERSION_MINOR > 14
+    gst_sample_set_buffer (sample, NULL);
+#endif
+}
 
 static void
 gst_free_queue_item (gpointer data)
@@ -273,14 +315,14 @@ mle_detect_new_sample (GstElement * sink, gpointer userdata)
 
   if ((buffer = gst_sample_get_buffer (sample)) == NULL) {
     g_printerr ("ERROR: Pulled buffer is NULL!\n");
-    gst_sample_unref (sample);
+    sample_unref(sample);
     return GST_FLOW_ERROR;
   }
 
   if (!gst_buffer_map (buffer, &info, (GstMapFlags) (GST_MAP_READ |
       GST_VIDEO_FRAME_MAP_FLAG_NO_REF))) {
     g_printerr ("ERROR: Failed to map the pulled buffer!\n");
-    gst_sample_unref (sample);
+    sample_unref(sample);
     return GST_FLOW_ERROR;
   }
 
@@ -341,7 +383,7 @@ mle_detect_new_sample (GstElement * sink, gpointer userdata)
           item->destroy (item);
           g_mutex_unlock (&tracking_camera->process_lock);
           gst_buffer_unmap (buffer, &info);
-          gst_sample_unref (sample);
+          sample_unref (sample);
           return GST_FLOW_ERROR;
         }
         g_cond_signal (&tracking_camera->process_signal);
@@ -372,7 +414,7 @@ mle_detect_new_sample (GstElement * sink, gpointer userdata)
         item->destroy (item);
         g_mutex_unlock (&tracking_camera->process_lock);
         gst_buffer_unmap (buffer, &info);
-        gst_sample_unref (sample);
+        sample_unref (sample);
         return GST_FLOW_ERROR;
       }
       g_cond_signal (&tracking_camera->process_signal);
@@ -381,7 +423,7 @@ mle_detect_new_sample (GstElement * sink, gpointer userdata)
   }
 
   gst_buffer_unmap (buffer, &info);
-  gst_sample_unref (sample);
+  sample_unref (sample);
 
   return GST_FLOW_OK;
 }
@@ -560,9 +602,9 @@ main (gint argc, gchar * argv[])
   tracking_camera.format = DEFAULT_FORMAT;
   tracking_camera.crop_type = DEFAULT_CROP_TYPE;
   tracking_camera.sync_enable = FALSE;
-  diff_pos_threshold = DEFAULT_POS_THRESHOLD;
-  diff_size_threshold = DEFAULT_SIZE_THRESHOLD;
-  speed_movement = DEFAULT_SPEED_MOVEMENT;
+  diff_pos_threshold = AFR_DEFAULT_POS_THRESHOLD;
+  diff_size_threshold = AFR_DEFAULT_SIZE_THRESHOLD;
+  speed_movement = AFR_DEFAULT_SPEED_MOVEMENT;
 
   GOptionEntry entries[] = {
       { "pos-percent", 'p', 0, G_OPTION_ARG_INT,
@@ -681,7 +723,7 @@ main (gint argc, gchar * argv[])
 
   GstElement *qtiqmmfsrc, *qtiqmmfsrc2, *mle_capsfilter, *main_capsfilter,
              *out_capsfilter, *qtimletflite, *appsink, *qtivtransform,
-             *waylandsink, *omxh264enc, *tee, *filesink, *h264parse,
+             *waylandsink, *encoder, *tee, *filesink, *h264parse,
              *mp4mux, *queue1, *queue2, *avimux;
 
   // Create the pipeline
@@ -698,7 +740,11 @@ main (gint argc, gchar * argv[])
   qtivtransform   = gst_element_factory_make ("qtivtransform", "qtivtransform");
   tee             = gst_element_factory_make ("tee", "tee");
   waylandsink     = gst_element_factory_make ("waylandsink", "waylandsink");
-  omxh264enc      = gst_element_factory_make ("omxh264enc", "omxh264enc");
+#ifdef CODEC2_ENCODE
+  encoder         = gst_element_factory_make ("qtic2venc", "qtic2venc");
+#else
+  encoder         = gst_element_factory_make ("omxh264enc", "omxh264enc");
+#endif
   filesink        = gst_element_factory_make ("filesink", "filesink");
   h264parse       = gst_element_factory_make ("h264parse", "h264parse");
   mp4mux          = gst_element_factory_make ("mp4mux", "mp4mux");
@@ -709,7 +755,7 @@ main (gint argc, gchar * argv[])
   // Check if all elements are created successfully
   if (!pipeline || !qtiqmmfsrc || !mle_capsfilter || !main_capsfilter ||
       !out_capsfilter || !qtimletflite || !appsink || !qtivtransform ||
-      !tee || !waylandsink || !omxh264enc || !filesink || !h264parse ||
+      !tee || !waylandsink || !encoder || !filesink || !h264parse ||
       !mp4mux || !queue1 || !queue2 || !avimux) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
@@ -795,10 +841,12 @@ main (gint argc, gchar * argv[])
   g_object_set (G_OBJECT (waylandsink), "enable-last-sample", 0, NULL);
 
   // Set encoder properties
-  g_object_set (G_OBJECT (omxh264enc), "target-bitrate", 10000000, NULL);
-  g_object_set (G_OBJECT (omxh264enc), "periodicity-idr", 1, NULL);
-  g_object_set (G_OBJECT (omxh264enc), "interval-intraframes", 59, NULL);
-  g_object_set (G_OBJECT (omxh264enc), "control-rate", 2, NULL);
+  g_object_set (G_OBJECT (encoder), "target-bitrate", 10000000, NULL);
+#ifndef CODEC2_ENCODE
+  g_object_set (G_OBJECT (encoder), "periodicity-idr", 1, NULL);
+  g_object_set (G_OBJECT (encoder), "interval-intraframes", 59, NULL);
+  g_object_set (G_OBJECT (encoder), "control-rate", 2, NULL);
+#endif
 
   // Set qtivtransform properties
   g_object_set (G_OBJECT (qtivtransform), "name", "transform", NULL);
@@ -835,7 +883,7 @@ main (gint argc, gchar * argv[])
     case FORMAT_NV12:
     default:
       gst_bin_add_many (GST_BIN (pipeline),
-          qtivtransform, tee, waylandsink, omxh264enc,
+          qtivtransform, tee, waylandsink, encoder,
           h264parse, mp4mux, NULL);
       break;
   }
@@ -872,7 +920,7 @@ main (gint argc, gchar * argv[])
       }
       // Linking the Main stream to the encoder
       ret = gst_element_link_many (
-          tee, omxh264enc, h264parse, mp4mux, filesink, NULL);
+          tee, encoder, h264parse, mp4mux, filesink, NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
         return -1;

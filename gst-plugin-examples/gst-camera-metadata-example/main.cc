@@ -35,8 +35,17 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <camera/CameraMetadata.h>
+#include <camera/VendorTagDescriptor.h>
 
 #define GST_PROTECTION_META_CAST(obj) ((GstProtectionMeta *) obj)
+
+static void
+sample_unref (GstSample *sample) {
+    gst_sample_unref (sample);
+#if GST_VERSION_MAJOR >= 1 && GST_VERSION_MINOR > 14
+    gst_sample_set_buffer (sample, NULL);
+#endif
+}
 
 static gboolean
 handle_interrupt_signal (gpointer userdata)
@@ -120,6 +129,29 @@ error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   g_main_loop_quit (mloop);
 }
 
+static guint
+get_vendor_tag_by_name (const gchar * section, const gchar * name)
+{
+  ::android::sp<::android::VendorTagDescriptor> vtags;
+  ::android::status_t status = 0;
+  guint tag_id = 0;
+
+  vtags = ::android::VendorTagDescriptor::getGlobalVendorTagDescriptor();
+  if (vtags.get() == NULL) {
+    GST_WARNING ("Failed to retrieve Global Vendor Tag Descriptor!");
+    return 0;
+  }
+
+  status = vtags->lookupTag(::android::String8(name),
+      ::android::String8(section), &tag_id);
+  if (status != 0) {
+    GST_WARNING ("Unable to locate tag for '%s', section '%s'!", name, section);
+    return 0;
+  }
+
+  return tag_id;
+}
+
 static GstFlowReturn
 new_sample (GstElement *sink, gpointer userdata)
 {
@@ -138,13 +170,13 @@ new_sample (GstElement *sink, gpointer userdata)
 
   if ((buffer = gst_sample_get_buffer (sample)) == NULL) {
     g_printerr ("ERROR: Pulled buffer is NULL!");
-    gst_sample_unref (sample);
+    sample_unref(sample);
     return GST_FLOW_ERROR;
   }
 
   if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
     g_printerr ("ERROR: Failed to map the pulled buffer!");
-    gst_sample_unref (sample);
+    sample_unref(sample);
     return GST_FLOW_ERROR;
   }
 
@@ -153,7 +185,7 @@ new_sample (GstElement *sink, gpointer userdata)
   g_print ("Camera timestamp: %" G_GUINT64_FORMAT "\n", timestamp);
 
   gst_buffer_unmap (buffer, &info);
-  gst_sample_unref (sample);
+  sample_unref (sample);
 
   return GST_FLOW_OK;
 }
@@ -162,21 +194,142 @@ static GstFlowReturn
 result_metadata (gpointer userdata, guint camera_id, gpointer metadata)
 {
   ::android::CameraMetadata *meta_ptr = (::android::CameraMetadata*) metadata;
-  camera_metadata_entry entry;
+  guint tag_id = 0;
 
   if (meta_ptr != nullptr) {
-    g_print ("Result metadata ... entries - %ld\n", meta_ptr->entryCount());
+    g_print ("\nResult metadata ... entries - %ld\n", meta_ptr->entryCount());
 
+    // Exposure time
     if (meta_ptr->exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
       gint64 sensorExpTime =
           meta_ptr->find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
-      g_print ("Result sensorExpTime - %ld\n", sensorExpTime);
+      g_print ("Result sensor_exp_time - %ld\n", sensorExpTime);
     }
 
+    // Sensor Timestamp
     if (meta_ptr->exists(ANDROID_SENSOR_TIMESTAMP)) {
       gint64 timestamp =
           meta_ptr->find(ANDROID_SENSOR_TIMESTAMP).data.i64[0];
-      g_print ("Result ts - %ld\n", timestamp);
+      g_print ("Result timestamp - %ld\n", timestamp);
+    }
+
+    // AE mode for manual control
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_MODE)) {
+      gint ae_mode = meta_ptr->find(ANDROID_CONTROL_AE_MODE).data.u8[0];
+      g_print ("Result ae_mode - %d\n", ae_mode);
+    }
+
+    // AE Target
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION)) {
+      gint exp_compensation =
+        meta_ptr->find(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION).data.i32[0];
+      g_print ("Result exp_compensation - %d\n", exp_compensation);
+    }
+
+    // AE Lock
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_LOCK)) {
+      gint exp_lock =
+        meta_ptr->find(ANDROID_CONTROL_AE_LOCK).data.u8[0];
+      g_print ("Result exp_lock - %d\n", exp_lock);
+    }
+
+     // sensor analog + digital gain
+    if (meta_ptr->exists(ANDROID_SENSOR_SENSITIVITY)) {
+      gint32 sensitivity =
+        meta_ptr->find(ANDROID_SENSOR_SENSITIVITY).data.i32[0];
+      g_print ("Result sensitivity - %d\n", sensitivity);
+    }
+
+     // EV mode
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_COMPENSATION_RANGE)) {
+      gint32 min =
+        meta_ptr->find(ANDROID_CONTROL_AE_COMPENSATION_RANGE).data.i32[0];
+      gint32 max =
+        meta_ptr->find(ANDROID_CONTROL_AE_COMPENSATION_RANGE).data.i32[1];
+      g_print ("Result AE compensation range - %d - %d\n", min, max);
+    }
+
+     // EV steps
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_COMPENSATION_STEP)) {
+      gint numerator =
+        meta_ptr->find(ANDROID_CONTROL_AE_COMPENSATION_STEP).data.r[0].numerator;
+      gint denominator =
+        meta_ptr->find(ANDROID_CONTROL_AE_COMPENSATION_STEP).data.r[0].denominator;
+      g_print ("Result AE compensation step - %d/%d\n", numerator, denominator);
+    }
+
+    // Sensor analog gain
+    if (meta_ptr->exists(ANDROID_SENSOR_MAX_ANALOG_SENSITIVITY)) {
+      gint32 maxsensitivity =
+        meta_ptr->find(ANDROID_SENSOR_MAX_ANALOG_SENSITIVITY).data.i32[0];
+      g_print ("Result max sensitivity - %d\n", maxsensitivity);
+    }
+
+    // Sensor Read Result
+    gboolean flag = 0;
+    tag_id = get_vendor_tag_by_name (
+        "org.codeaurora.qcamera3.sensorreadoutput", "SensorReadResult");
+    if (meta_ptr->exists(tag_id)) {
+      flag = meta_ptr->find(tag_id).data.u8[0];
+      g_print ("Sensor Read Result: %d\n", flag);
+    }
+
+    if (flag) {
+      // Sensor Read Output
+      tag_id = get_vendor_tag_by_name (
+          "org.codeaurora.qcamera3.sensorreadoutput", "SensorReadOutput");
+      if (meta_ptr->exists(tag_id)) {
+        guint value = (meta_ptr->find(tag_id).data.u8[0]) | (meta_ptr->find(tag_id).data.u8[1] << 8);
+        g_print ("Sensor Read Output: %d\n", value);
+      }
+    }
+  }
+
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+urgent_metadata (gpointer userdata, guint camera_id, gpointer metadata)
+{
+  ::android::CameraMetadata *meta_ptr = (::android::CameraMetadata*) metadata;
+
+  if (meta_ptr != nullptr) {
+    g_print ("\nUrgent metadata ... entries - %ld\n", meta_ptr->entryCount());
+
+    // AWB Mode
+    if (meta_ptr->exists(ANDROID_CONTROL_AWB_MODE)) {
+      gint8 AWBMode = meta_ptr->find(ANDROID_CONTROL_AWB_MODE).data.u8[0];
+      g_print ("Urgent AWB mode - %ld\n", AWBMode);
+    }
+
+    // AWB State
+    if (meta_ptr->exists(ANDROID_CONTROL_AWB_STATE)) {
+      gint8 AWBState = meta_ptr->find(ANDROID_CONTROL_AWB_STATE).data.u8[0];
+      g_print ("Urgent AWB state - %ld\n", AWBState);
+    }
+
+    // AF Mode
+    if (meta_ptr->exists(ANDROID_CONTROL_AF_MODE)) {
+      gint8 AFMode = meta_ptr->find(ANDROID_CONTROL_AF_MODE).data.u8[0];
+      g_print ("Urgent AF mode - %ld\n", AFMode);
+    }
+
+    // AF State
+    if (meta_ptr->exists(ANDROID_CONTROL_AF_STATE)) {
+      gint8 AFState = meta_ptr->find(ANDROID_CONTROL_AF_STATE).data.u8[0];
+      g_print ("Urgent AF state - %ld\n", AFState);
+    }
+
+    // AE Mode
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_MODE)) {
+      gint8 AEMode = meta_ptr->find(ANDROID_CONTROL_AE_MODE).data.u8[0];
+      g_print ("Urgent AE mode - %ld\n", AEMode);
+    }
+
+    // AE State
+    if (meta_ptr->exists(ANDROID_CONTROL_AE_STATE)) {
+      gint8 AEState = meta_ptr->find(ANDROID_CONTROL_AE_STATE).data.u8[0];
+      g_print ("Urgent AE state - %ld\n", AEState);
     }
   }
 
@@ -294,6 +447,8 @@ main (gint argc, gchar *argv[])
   GstElement *qtiqmmfsrc = gst_bin_get_by_name (GST_BIN (pipeline), "camera");
   g_signal_connect (qtiqmmfsrc, "result-metadata",
       G_CALLBACK (result_metadata), NULL);
+  g_signal_connect (qtiqmmfsrc, "urgent-metadata",
+      G_CALLBACK (urgent_metadata), NULL);
 
   // Get static metadata
   ::android::CameraMetadata *st_meta_ptr = nullptr;
@@ -315,6 +470,13 @@ main (gint argc, gchar *argv[])
     // Set capture metadata
     guchar awb = 6;
     meta_ptr->update(ANDROID_CONTROL_AWB_MODE, &awb, 1);
+
+    // Sensor Read Input
+    guchar flag = 1;
+    guint tag_id = get_vendor_tag_by_name (
+        "org.codeaurora.qcamera3.sensorreadinput", "SensorReadFlag");
+    meta_ptr->update(tag_id, &flag, 1);
+
     g_object_set (G_OBJECT (qtiqmmfsrc), "capture-metadata", meta_ptr, NULL);
 
     // Release metadata
