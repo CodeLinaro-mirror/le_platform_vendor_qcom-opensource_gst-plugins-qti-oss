@@ -1635,7 +1635,8 @@ int Play_Decoder(bool secure)
   bufCnt = 0;
   portFmt.format.video.nFrameHeight = height;
   portFmt.format.video.nFrameWidth  = width;
-  portFmt.format.video.xFramerate = fps;
+  portFmt.format.video.xFramerate = fps << 16;//xFramerate is Q16 format
+  printf("SetParameter for input port fmt: portidx %d, w %u, h %u, xFramerate %u(%d fps)\n", portFmt.nPortIndex, portFmt.format.video.nFrameWidth, portFmt.format.video.nFrameHeight, portFmt.format.video.xFramerate, fps);
   OMX_SetParameter(dec_handle,OMX_IndexParamPortDefinition, (OMX_PTR)&portFmt);
   OMX_GetParameter(dec_handle,OMX_IndexParamPortDefinition, &portFmt);
   DEBUG_PRINT("Dec: New Min Buffer Count %d", portFmt.nBufferCountMin);

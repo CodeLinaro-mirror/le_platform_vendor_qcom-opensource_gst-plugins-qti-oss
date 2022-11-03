@@ -94,14 +94,42 @@ enum {
   PRIO_LOW=0x8
 };
 
+enum Mode
+{
+  MODE_PREVIEW,
+  MODE_DISPLAY,
+  MODE_PROFILE,
+  MODE_FILE_ENCODE,
+  MODE_LIVE_ENCODE,
+  MODE_KPI_ENCODE
+};
+
+static int m_eMode = MODE_PREVIEW;
 static int omx_debug_level = PRIO_ERROR|PRIO_INFO|PRIO_HIGH|PRIO_LOW;
 
 void omx_debug_level_init(void)
 {
   char *ptr = getenv("OMX_DEBUG_LEVEL");
   omx_debug_level = ptr ? atoi(ptr) : omx_debug_level;
+  if (m_eMode == MODE_KPI_ENCODE)
+      omx_debug_level = PRIO_ERROR;
   printf("omx_debug_level=0x%x\n", omx_debug_level);
 }
+
+
+int kpi_place_marker(const char* str)
+{
+//#define KPI_MARKER_NODE "/sys/kernel/debug/bootkpi/kpi_values"
+#define KPI_MARKER_NODE "/sys/kernel/boot_kpi/kpi_values"	//TO DO: probably, it only fit for AGL/LXC-host case.
+  int fd = open(KPI_MARKER_NODE, O_WRONLY);
+  if(fd >= 0) {
+    int ret = write(fd, str, strlen(str));
+    close(fd);
+    return ret;
+  }
+  return -1;
+}
+
 
 typedef struct PrependSPSPPSToIDRFramesParams {
   OMX_U32 nSize;
@@ -354,15 +382,6 @@ struct MsgQ
   int size;
 };
 
-enum Mode
-{
-  MODE_PREVIEW,
-  MODE_DISPLAY,
-  MODE_PROFILE,
-  MODE_FILE_ENCODE,
-  MODE_LIVE_ENCODE
-};
-
 enum ResyncMarkerType
 {
   RESYNC_MARKER_NONE,     ///< No resync marker
@@ -463,7 +482,6 @@ ProfileType m_sProfile;
 
 static int m_nFramePlay = 0;
 static int m_rotation = 0;
-static int m_eMode = MODE_PREVIEW;
 static int m_nInFd = -1;
 static FILE * m_nOutFd;
 static int m_nTimeStamp = 0;
@@ -753,7 +771,7 @@ void SetState(OMX_STATETYPE eState)
                     NULL);                         \
     while (m_eState != eState)                     \
     {                                              \
-      sleep(1);                               \
+      usleep(1000);                               \
     }                                              \
     D("Now in state " # eState);                   \
     break;                                         \
@@ -895,7 +913,7 @@ OMX_ERRORTYPE ConfigureEncoder()
 
     mb_per_sec = mb_per_frame*(m_sProfile.nFramerate);
 
-    printf("mb_per_frame: %d, mb_per_sec: %d, m_sProfile.nBitrate: %u%s\n", mb_per_frame, mb_per_sec, m_sProfile.nBitrate, m_sProfile.nBitrate==DEADVALUE ? "(it is DEADVALUE)" : "");
+    D("\n mb_per_frame: %d, mb_per_sec: %d, m_sProfile.nBitrate: %u%s", mb_per_frame, mb_per_sec, m_sProfile.nBitrate, m_sProfile.nBitrate==DEADVALUE ? "(it is DEADVALUE)" : "");
 
     do{
       if(mb_per_frame <= (unsigned int)profile_tbl[0])
@@ -1090,6 +1108,8 @@ OMX_ERRORTYPE ConfigureEncoder()
   OMX_INIT_STRUCT(&param, PrependSPSPPSToIDRFramesParams);
   param.nSize = sizeof(PrependSPSPPSToIDRFramesParams);
   param.bEnable = OMX_FALSE;
+  if (m_eMode == MODE_KPI_ENCODE)
+     param.bEnable = OMX_TRUE;
   D ("\n Set SPS/PPS headers: %d", param.bEnable);
   result = OMX_SetParameter(m_hHandle,
            (OMX_INDEXTYPE)OMX_QcomIndexParamSequenceHeaderWithIDR,
@@ -1445,9 +1465,15 @@ OMX_ERRORTYPE FBD_CB(OMX_OUT OMX_HANDLETYPE hComponent,
   m_bWatchDogKicked = true;
 
   /* Empty Buffers should not be counted */
-  if(pBuffer->nFilledLen !=0)
+  if (pBuffer->nFilledLen != 0)
   {
-    /* Counting Buffers supplied from OpneMax Encoder */
+    if (m_eMode == MODE_KPI_ENCODE && !m_fbd_cnt)
+    {
+       kpi_place_marker("M - Video Encoding 1st frame gotten");
+       D("the first frame is gotten!");
+    }
+
+    /* Counting Buffers supplied from OpenMax Encoder */
     m_fbd_cnt++;
     m_tot_bufsize += pBuffer->nFilledLen;
   }
@@ -1676,7 +1702,7 @@ OMX_ERRORTYPE VencTest_Exit(void)
 
   while (m_eState != OMX_StateLoaded)
   {
-    sleep(1);
+    usleep(1000);
   }
 
   OMX_FreeHandle(m_hHandle);
@@ -1795,43 +1821,45 @@ void VencTest_ProcessDynamicConfigurationFile()
 OMX_ERRORTYPE VencTest_ReadAndEmpty(OMX_BUFFERHEADERTYPE* pYUVBuffer)
 {
   OMX_ERRORTYPE result = OMX_ErrorNone;
-  int i, lscanl, lstride, cscanl, cstride, height, width;
-  int bytes = 0, read_bytes = 0;
-  OMX_U8 *yuv = NULL;
-  OMX_U8 *start = NULL;
-  height = m_sProfile.nFrameHeight;
-  width = m_sProfile.nFrameWidth;
-  lstride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
-  lscanl = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
-  cstride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
-  cscanl = VENUS_UV_SCANLINES(COLOR_FMT_NV12, height);
-  if (m_eMetaMode) {
-    yuv = (OMX_U8 *)pYUVBuffer->pInputPortPrivate;
-    start = (OMX_U8 *)pYUVBuffer->pInputPortPrivate;
-  }else{
-    yuv = pYUVBuffer->pBuffer;
-    start = pYUVBuffer->pBuffer;
-  }
-  for(i = 0; i < height; i++) {
-    bytes = read(m_nInFd, yuv, width);
-    if (bytes != width) {
-      E("read failed: %d != %d\n", bytes, width);
-      return OMX_ErrorUndefined;
+  if (m_eMode != MODE_KPI_ENCODE) {
+    int i, lscanl, lstride, cscanl, cstride, height, width;
+    int bytes = 0, read_bytes = 0;
+    OMX_U8 *yuv = NULL;
+    OMX_U8 *start = NULL;
+    height = m_sProfile.nFrameHeight;
+    width = m_sProfile.nFrameWidth;
+    lstride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+    lscanl = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+    cstride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+    cscanl = VENUS_UV_SCANLINES(COLOR_FMT_NV12, height);
+    if (m_eMetaMode) {
+      yuv = (OMX_U8 *)pYUVBuffer->pInputPortPrivate;
+      start = (OMX_U8 *)pYUVBuffer->pInputPortPrivate;
+    }else{
+      yuv = pYUVBuffer->pBuffer;
+      start = pYUVBuffer->pBuffer;
     }
-    read_bytes += bytes;
-    yuv += lstride;
-  }
-  yuv = start + (lscanl * lstride);
-  for (i = 0; i < ((height + 1) >> 1); i++) {
-    bytes = read(m_nInFd, yuv, width);
-    if (bytes != width) {
-      E("read failed: %d != %d\n", bytes, width);
-      return OMX_ErrorUndefined;
+    for(i = 0; i < height; i++) {
+      bytes = read(m_nInFd, yuv, width);
+      if (bytes != width) {
+        E("read failed: %d != %d\n", bytes, width);
+        return OMX_ErrorUndefined;
+      }
+      read_bytes += bytes;
+      yuv += lstride;
     }
-    read_bytes += bytes;
-    yuv += cstride;
+    yuv = start + (lscanl * lstride);
+    for (i = 0; i < ((height + 1) >> 1); i++) {
+      bytes = read(m_nInFd, yuv, width);
+      if (bytes != width) {
+        E("read failed: %d != %d\n", bytes, width);
+        return OMX_ErrorUndefined;
+      }
+      read_bytes += bytes;
+      yuv += cstride;
+    }
+    D("\n\nActual read bytes: %d from file, which will be filled into NV12 buf area size: %d\n\n\n", read_bytes, m_sProfile.nFrameRead);
   }
-  D("\n\nActual read bytes: %d from file, which will be filled into NV12 buf area size: %d\n\n\n", read_bytes, m_sProfile.nFrameRead);
   if(m_eMetaMode){
     OMX_S32 nFds = 1;
     OMX_S32 nInts = 3;
@@ -1863,6 +1891,9 @@ OMX_ERRORTYPE VencTest_ReadAndEmpty(OMX_BUFFERHEADERTYPE* pYUVBuffer)
   if (m_pDynConfFile)
     VencTest_ProcessDynamicConfigurationFile();
   D("about to call VencTest_EncodeFrame...");
+  if (m_eMode == MODE_KPI_ENCODE && !m_nFrameIn) {
+    kpi_place_marker("M - Video Encoding 1st frame begin");
+  }
   pthread_mutex_lock(&m_mutex);
   ++m_nFrameIn;
   pYUVBuffer->nFilledLen = m_sProfile.nFrameRead;
@@ -2016,7 +2047,7 @@ void help()
   printf("=============================\n");
   printf("mm-venc-omx-test-lite args... \n");
   printf("=============================\n\n");
-  printf("      -m mode (live, file). Only support file mode now\n");
+  printf("      -m mode (live, file, kpi). Only support file and kpi mode now\n");
   printf("      -t encode type (mpeg4, h263, h264, vp8, hevc). h264 and hevc are verified\n");
   printf("      -w width\n");
   printf("      -h height\n");
@@ -2037,6 +2068,8 @@ void help()
   printf("Example:\n");
   printf("program -m file -t h264 -w 1280 -h 720 -f 30 -b 5000000 -c 3 -n 300 -i jelly_nv12.yuv -o 5mbps.h264\n");
   printf("program -m file -t hevc -w 1280 -h 720 -f 30 -b 5000000 -c 3 -n 300 -i jelly_nv12.yuv -o 5mbps.h265\n");
+  printf("program -m kpi -t h264 -w 1280 -h 720 -f 30 -b 5000000 -c 3 -n 10\n");
+  printf("program -m kpi -t hevc -w 1280 -h 720 -f 30 -b 5000000 -c 3 -n 10\n");
   printf("=============================\n\n\n");
 }
 
@@ -2082,6 +2115,9 @@ static int parse_args(int argc, char **argv)
         }
         else if (!strcmp("file", optarg)) {
           m_eMode = MODE_FILE_ENCODE;
+        }
+        else if (!strcmp("kpi", optarg)) {
+          m_eMode = MODE_KPI_ENCODE;
         }
         else {
           E("Invalid test mode");
@@ -2322,17 +2358,24 @@ int main(int argc, char** argv)
 
   if (m_eMode != MODE_PROFILE)
   {
-    if(!m_sProfile.cOutFileName)
+    if (!m_sProfile.cOutFileName && m_eMode == MODE_FILE_ENCODE)
     {
       E("No output file name");
       CHK(1);
     }
-    m_nOutFd = fopen(m_sProfile.cOutFileName,"wb");
-    if (m_nOutFd == NULL)
+    if (m_sProfile.cOutFileName)
     {
-      E("could not open output file %s", m_sProfile.cOutFileName);
-      CHK(1);
+      m_nOutFd = fopen(m_sProfile.cOutFileName,"wb");
+      if (m_nOutFd == NULL)
+      {
+        E("could not open output file %s", m_sProfile.cOutFileName);
+        CHK(1);
+      }
     }
+  }
+
+  if (m_eMode == MODE_KPI_ENCODE) {
+    kpi_place_marker("M - Video Encoding start");
   }
 
   pthread_mutex_init(&m_mutex, NULL);
@@ -2365,20 +2408,22 @@ int main(int argc, char** argv)
   }
 
   if (m_eMode == MODE_FILE_ENCODE ||
-    m_eMode == MODE_PROFILE)
+    m_eMode == MODE_PROFILE || m_eMode == MODE_KPI_ENCODE)
   {
     int i;
-    if(!m_sProfile.cInFileName)
-    {
-      E("No input file name");
-      CHK(1);
-    }
-    m_nInFd = open(m_sProfile.cInFileName, O_RDONLY);
-    if (m_nInFd < 0)
-    {
-      E("could not open input file");
-      CHK(1);
+    if (m_eMode != MODE_KPI_ENCODE) {
+       if(!m_sProfile.cInFileName)
+       {
+         E("No input file name");
+         CHK(1);
+       }
+       m_nInFd = open(m_sProfile.cInFileName, O_RDONLY);
+       if (m_nInFd < 0)
+       {
+          E("could not open input file");
+          CHK(1);
 
+       }
     }
     D("going to idle state");
     //SetState(OMX_StateIdle);
@@ -2422,6 +2467,7 @@ int main(int argc, char** argv)
         {
           CHK(1);
         }
+        memset(pvirt, 0, m_sProfile.nFrameBytes);
         result = VencTest_RegisterYUVBuffer(&m_pInBuffers[i],
                                                (OMX_U8*) pvirt,
                                                (OMX_PTR) pMem);
@@ -2476,7 +2522,7 @@ int main(int argc, char** argv)
 
   while (m_eState != OMX_StateIdle)
   {
-    sleep(1);
+    usleep(1000);
   }
   //D("Now in state " # eState);
 
@@ -2503,11 +2549,12 @@ int main(int argc, char** argv)
       {
         CHK(1);
       }
+      memset(pvirt, 0, m_sProfile.nFrameBytes);
       m_pInBuffers[i]->pAppPrivate = pMem;
       m_pInBuffers[i]->pInputPortPrivate = pvirt;
     }
   }
-  if (m_eMode == MODE_FILE_ENCODE)
+  if (m_eMode == MODE_FILE_ENCODE || m_eMode == MODE_KPI_ENCODE)
   {
     // encode the first frame to kick off the whole process
     VencTest_ReadAndEmpty(m_pInBuffers[0]);
@@ -2608,7 +2655,7 @@ int main(int argc, char** argv)
 
   Msg msg;
   bool bQuit = false;
-  while ((m_eMode == MODE_FILE_ENCODE || m_eMode == MODE_LIVE_ENCODE) &&
+  while ((m_eMode == MODE_FILE_ENCODE || m_eMode == MODE_LIVE_ENCODE || m_eMode == MODE_KPI_ENCODE) &&
         !bQuit)
   {
     PopMessage(&msg);
@@ -2626,7 +2673,7 @@ int main(int argc, char** argv)
         }
         pthread_mutex_unlock(&m_mutex);*/
 
-        if (!bQuit && m_eMode == MODE_FILE_ENCODE)
+        if (!bQuit && (m_eMode == MODE_FILE_ENCODE || m_eMode == MODE_KPI_ENCODE ))
         {
           D("pushing another frame down to encoder");
           if (VencTest_ReadAndEmpty(msg.data.sBitstreamData.pBuffer))
@@ -2638,13 +2685,15 @@ int main(int argc, char** argv)
         }
         break;
       case MSG_ID_OUTPUT_FRAME_DONE:
-        int bytes_written;
-        bytes_written = fwrite(msg.data.sBitstreamData.pBuffer->pBuffer,
-            1, msg.data.sBitstreamData.pBuffer->nFilledLen,
-            m_nOutFd);
-        D("================ writing frame %d = %d bytes to output file",
-            m_nFrameOut+1,
-            bytes_written);
+        if (m_nOutFd != NULL) {
+          int bytes_written;
+          bytes_written = fwrite(msg.data.sBitstreamData.pBuffer->pBuffer,
+              1, msg.data.sBitstreamData.pBuffer->nFilledLen,
+              m_nOutFd);
+          D("================ writing frame %d = %d bytes to output file",
+              m_nFrameOut+1,
+              bytes_written);
+        }
         D("StopEncodeTime=%lld", GetTimeStamp());
 
         result = OMX_FillThisBuffer(m_hHandle,
@@ -2693,11 +2742,13 @@ int main(int argc, char** argv)
   if (m_eMode == MODE_LIVE_ENCODE)
   {
     CameraTest_Exit();
-    fclose(m_nOutFd);
+    if (m_nOutFd != NULL)
+      fclose(m_nOutFd);
     m_nOutFd = NULL;
   }
   else if (m_eMode == MODE_FILE_ENCODE ||
-           m_eMode == MODE_PROFILE)
+           m_eMode == MODE_PROFILE ||
+           m_eMode == MODE_KPI_ENCODE)
   {
     // deallocate pmem buffers
     for (int i = 0; i < m_num_in_buffers; i++)
@@ -2714,10 +2765,12 @@ int main(int argc, char** argv)
     if(m_ion_data_array)
       free(m_ion_data_array);
     close_device();
-    close(m_nInFd);
+    if (m_nInFd)
+      close(m_nInFd);
     if (m_eMode == MODE_FILE_ENCODE)
     {
-      fclose(m_nOutFd);
+      if (m_nOutFd != NULL)
+        fclose(m_nOutFd);
       m_nOutFd = NULL;
     }
     if (m_pDynConfFile)

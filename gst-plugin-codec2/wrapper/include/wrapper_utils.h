@@ -61,6 +61,8 @@ C2Color::primaries_t toC2Primaries(COLOR_PRIMARIES pixel);
 C2Color::transfer_t toC2TransferChar(TRANSFER_CHAR transfer_char);
 C2Color::matrix_t toC2Matrix(MATRIX matrix);
 C2Color::range_t toC2FullRange(FULL_RANGE full_range);
+C2Config::profile_t toC2Profile(C2W_PROFILE_T profile);
+C2Config::level_t toC2Level(C2W_LEVEL_T level);
 
 } // namespace QTI
 
