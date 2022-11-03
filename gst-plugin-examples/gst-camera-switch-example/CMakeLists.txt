@@ -1,5 +1,7 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+cmake_minimum_required(VERSION 3.8.2)
+
+# GStreamer gst-camera-switch-example
+set(GST_EXAMPLE_BIN gst-camera-switch-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -9,21 +11,13 @@ target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
 )
 
-if(CAMERA_CLIENT_DISABLED)
-target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  camera_metadata
-)
-else()
-target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  camera_client
-)
+if(CODEC2_ENCODE)
+add_definitions(-DCODEC2_ENCODE)
 endif()
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
+  pthread
   ${GST_LIBRARIES}
-  binder
-  cutils
-  utils
 )
 
 install(
