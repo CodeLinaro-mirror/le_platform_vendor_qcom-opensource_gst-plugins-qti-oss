@@ -1,6 +1,8 @@
 # GStreamer depth-assist-autofocus-example example
 set(GST_EXAMPLE_BIN gst-depth-assist-autofocus-example)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
+
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
 )
