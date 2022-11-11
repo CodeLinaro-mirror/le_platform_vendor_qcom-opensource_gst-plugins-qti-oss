@@ -607,6 +607,32 @@ gst_qmmfsrc_frc_mode_get_type (void)
   return gtype;
 }
 
+GType
+gst_qmmfsrc_select_tscp_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { SELECT_TSCP_DEFAULT,
+        "Choose Start of Exposure time.", "default"
+    },
+    { SELECT_TSCP_SOE,
+        "Choose Start of Exposure time.", "soe"
+    },
+    { SELECT_TSCP_EOE,
+        "Choose End of Exposure time.", "eoe"
+    },
+    { SELECT_TSCP_SOF,
+        "Choose Start of Frame.", "sof"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstCameraSelectTscp", variants);
+
+  return gtype;
+}
+
 guchar
 gst_qmmfsrc_control_mode_android_value (const guint value)
 {

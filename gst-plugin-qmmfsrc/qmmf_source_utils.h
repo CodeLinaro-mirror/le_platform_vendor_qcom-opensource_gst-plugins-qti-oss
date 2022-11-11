@@ -126,6 +126,8 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_NOISE_REDUCTION \
     (gst_qmmfsrc_noise_reduction_get_type())
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
+#define GST_TYPE_QMMFSRC_SELECT_TSCP \
+    (gst_qmmfsrc_select_tscp_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -264,6 +266,14 @@ enum
   CAPTURE_REQUEST,
 };
 
+enum
+{
+  SELECT_TSCP_DEFAULT,
+  SELECT_TSCP_SOE,
+  SELECT_TSCP_EOE,
+  SELECT_TSCP_SOF,
+};
+
 GType gst_qmmfsrc_control_mode_get_type (void);
 
 GType gst_qmmfsrc_effect_mode_get_type (void);
@@ -287,6 +297,8 @@ GType gst_qmmfsrc_iso_mode_get_type (void);
 GType gst_qmmfsrc_noise_reduction_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
+
+GType gst_qmmfsrc_select_tscp_get_type (void);
 
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
 

@@ -64,6 +64,8 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 
+#define GST_PROTECTION_META_CAST(obj) ((GstProtectionMeta *) obj)
+
 static void
 sample_unref (GstSample *sample) {
     gst_sample_unref (sample);
@@ -82,6 +84,21 @@ handle_interrupt_signal (gpointer userdata)
   gst_element_send_event (pipeline, gst_event_new_eos ());
 
   return TRUE;
+}
+
+static GstProtectionMeta *
+gst_buffer_get_protection_meta_id (GstBuffer * buffer, const gchar * name)
+{
+  gpointer state = NULL;
+  GstMeta *meta = NULL;
+
+  while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
+              GST_PROTECTION_META_API_TYPE))) {
+    if (gst_structure_has_name (GST_PROTECTION_META_CAST (meta)->info, name))
+      return GST_PROTECTION_META_CAST (meta);
+  }
+
+  return NULL;
 }
 
 static void
@@ -145,6 +162,7 @@ new_sample (GstElement *sink, gpointer userdata)
 {
   GstSample *sample = NULL;
   GstBuffer *buffer = NULL;
+  GstProtectionMeta *pmeta = NULL;
   GstMapInfo info;
 
   // New sample is available, retrieve the buffer from the sink.
@@ -168,6 +186,108 @@ new_sample (GstElement *sink, gpointer userdata)
   }
 
   g_print ("\nReceived a buffer, doing some processing ...\n\n");
+
+  // Extract the original camera timestamp from GST protection meta.
+  pmeta = gst_buffer_get_protection_meta_id (buffer, "CameraFrameMeta");
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "timestamp")) {
+    guint64 timestamp = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "timestamp", &timestamp);
+    g_print ("Camera frame timestamp: %" G_GUINT64_FORMAT "\n", timestamp);
+  } else {
+    g_print ("No Camera frame timestamp\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_soe")) {
+    guint64 ts_soe = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_soe", &ts_soe);
+    g_print ("Camera T0 ts_soe: %" G_GUINT64_FORMAT "\n", ts_soe);
+  } else {
+    g_print ("No Camera T0 ts_soe\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_eoe")) {
+    guint64 ts_eoe = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_eoe", &ts_eoe);
+    g_print ("Camera T1 ts_eoe: %" G_GUINT64_FORMAT "\n", ts_eoe);
+  } else {
+    g_print ("No Camera T1 ts_eoe\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_sof")) {
+    guint64 ts_sof = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_sof", &ts_sof);
+    g_print ("Camera T2 ts_sof: %" G_GUINT64_FORMAT "\n", ts_sof);
+  } else {
+    g_print ("No Camera T2 ts_sof\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_eof")) {
+    guint64 ts_eof = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_eof", &ts_eof);
+    g_print ("Camera T2'ts_eof: %" G_GUINT64_FORMAT "\n", ts_eof);
+  } else {
+    g_print ("No Camera T2'ts_eof\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_hal")) {
+    guint64 ts_hal = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_hal", &ts_hal);
+    g_print ("Camera T3 ts_hal: %" G_GUINT64_FORMAT "\n", ts_hal);
+  } else {
+    g_print ("No Camera T3 ts_hal\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_qmf")) {
+    guint64 ts_qmf = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_qmf", &ts_qmf);
+    g_print ("Camera T4 ts_qmf: %" G_GUINT64_FORMAT "\n", ts_qmf);
+  } else {
+    g_print ("No Camera T4 ts_qmf\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_gst")) {
+    guint64 ts_gst = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_gst", &ts_gst);
+    g_print ("Camera T5 ts_gst: %" G_GUINT64_FORMAT "\n", ts_gst);
+  } else {
+    g_print ("No Camera T5 ts_gst\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "td_exp")) {
+    guint64 td_exp = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "td_exp", &td_exp);
+    g_print ("Camera T6 td_exp: %" G_GUINT64_FORMAT "\n", td_exp);
+  } else {
+    g_print ("No Camera T6 td_exp\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "ts_aux")) {
+    guint64 ts_aux = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "ts_aux", &ts_aux);
+    g_print ("Camera T7 ts_aux: %" G_GUINT64_FORMAT "\n", ts_aux);
+  } else {
+    g_print ("No Camera T7 ts_aux\n");
+  }
+
+  if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "td_aux")) {
+    guint64 td_aux = 0;
+
+    gst_structure_get_uint64 (pmeta->info, "td_aux", &td_aux);
+    g_print ("Camera T8 td_aux: %" G_GUINT64_FORMAT "\n", td_aux);
+  } else {
+    g_print ("No Camera T8 td_aux\n");
+  }
 
   gst_buffer_unmap (buffer, &info);
   sample_unref (sample);
@@ -201,11 +321,17 @@ main (gint argc, gchar *argv[])
   {
     GError *error = NULL;
 
+#if 0  //single camera
     pipeline = gst_parse_launch ("qtiqmmfsrc name=camera ! \
-        video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! \
+        video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! \
         queue ! appsink name=sink emit-signals=true",
         &error);
-
+#else  //dual camera
+    pipeline = gst_parse_launch ("qtiqmmfsrc select-tscp=sof camera=4 name=camera ! \
+        video/x-raw,format=NV12,width=2560,height=800,framerate=30/1 ! \
+        queue ! appsink name=sink emit-signals=true",
+        &error);
+#endif
     // Check for errors on pipe creation.
     if ((NULL == pipeline) && (error != NULL)) {
       g_printerr ("Failed to create pipeline, error: %s!\n",
