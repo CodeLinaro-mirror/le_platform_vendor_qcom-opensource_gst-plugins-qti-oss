@@ -92,7 +92,9 @@ GST_STATIC_PAD_TEMPLATE ("src",
         ";"
         "video/x-heic,"
         "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }")
+        "alignment = (string) { au }"
+        ";"
+        "image/x-heic")
     );
 
 // Function will be named gst_c2_venc_qdata_quark()
@@ -635,6 +637,20 @@ make_rotate_param (rotate_t rotate)
   return param;
 }
 
+static config_params_t
+make_csdmode_param (csdmode_t csdmode)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_CSDMODE;
+  param.csdmode = csdmode;
+
+  return param;
+}
+
+
 static gboolean
 gst_c2_venc_trigger_iframe (GstC2_VENCEncoder *c2venc)
 {
@@ -663,6 +679,8 @@ gst_c2_venc_get_c2_comp_name (GstStructure * structure)
   } else if (gst_structure_has_name (structure, "video/x-h265")) {
     ret = g_strdup ("c2.qti.hevc.encoder");
   } else if (gst_structure_has_name (structure, "video/x-heic")) {
+    ret = g_strdup ("c2.qti.heic.encoder");
+  } else if (gst_structure_has_name (structure, "image/x-heic")) {
     ret = g_strdup ("c2.qti.heic.encoder");
   }
 
@@ -729,6 +747,10 @@ gst_c2_venc_setup_output (GstVideoEncoder * encoder,
       gst_caps_unref (outcaps);
       g_free(comp_name);
       return GST_FLOW_ERROR;
+    }
+
+    if (gst_structure_has_name (structure, "image/x-heic")) {
+      c2venc->csdmode = CSD_PREPEND_HEADER_ALL;
     }
     c2venc->output_setup = TRUE;
   }
@@ -1018,6 +1040,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   config_params_t num_ltr_frames;
   config_params_t profileLevel;
   config_params_t rotate;
+  config_params_t csdmode;
 
   structure = gst_caps_get_structure (state->caps, 0);
   retval = gst_structure_get_int (structure, "width", &width);
@@ -1228,6 +1251,12 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     g_stpcpy (rectPayloadExt, "0,0-0,0=0;");
     roi_encoding = make_roi_encoding (0, rectPayload, rectPayloadExt);
     g_ptr_array_add (config, &roi_encoding);
+  }
+
+  if (c2venc->csdmode != CSD_PREPEND_HEADER_NONE) {
+    csdmode = make_csdmode_param(c2venc->csdmode);
+    g_ptr_array_add (config, &csdmode);
+    GST_DEBUG_OBJECT (c2venc, "set csdmde - %d", 1);
   }
 
   // Config component
@@ -2010,6 +2039,7 @@ gst_c2_venc_init (GstC2_VENCEncoder * c2venc)
   c2venc->quant_b_frames = GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT;
   c2venc->num_ltr_frames = GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT;
   c2venc->rotate = ROTATE_NONE;
+  c2venc->csdmode = CSD_PREPEND_HEADER_NONE;
   c2venc->is_ubwc = FALSE;
 
   memset (c2venc->queued_frame, 0, sizeof (c2venc->queued_frame));

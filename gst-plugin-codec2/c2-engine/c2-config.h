@@ -64,6 +64,7 @@
 #define CONFIG_FUNCTION_KEY_NUM_LTR_FRAMES "num_ltr_frames"
 #define CONFIG_FUNCTION_KEY_PROFILE_LEVEL "profile_level"
 #define CONFIG_FUNCTION_KEY_ROTATE "rotate"
+#define CONFIG_FUNCTION_KEY_CSDMODE "csdmode"
 
 typedef enum {
   INTERLACE_MODE_PROGRESSIVE = 0,
@@ -153,6 +154,11 @@ typedef enum {
   ROTATE_180,
   ROTATE_90_CCW,
 } rotate_t;
+
+typedef enum {
+  CSD_PREPEND_HEADER_NONE,
+  CSD_PREPEND_HEADER_ALL
+} csdmode_t;
 
 typedef enum {
   COLOR_PRIMARIES_UNSPECIFIED,
@@ -322,6 +328,7 @@ typedef struct {
   video_profile_t profile;
   video_level_t level;
   rotate_t rotate;
+  csdmode_t csdmode;
 
   struct {
     ir_mode_t type;

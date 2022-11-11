@@ -96,6 +96,7 @@ std::unique_ptr<C2Param> setQPInit (gpointer param);
 std::unique_ptr<C2Param> setNumLtrFrames (gpointer param);
 std::unique_ptr<C2Param> setProfileLevel (gpointer param);
 std::unique_ptr<C2Param> setRotate (gpointer param);
+std::unique_ptr<C2Param> setCSDMode (gpointer param);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -125,6 +126,7 @@ static configFunctionMap sConfigFunctionMap = {
   { CONFIG_FUNCTION_KEY_NUM_LTR_FRAMES, setNumLtrFrames },
   { CONFIG_FUNCTION_KEY_PROFILE_LEVEL, setProfileLevel },
   { CONFIG_FUNCTION_KEY_ROTATE, setRotate },
+  { CONFIG_FUNCTION_KEY_CSDMODE, setCSDMode },
 };
 
 static const VideoProfileMapping video_profile[] = {
@@ -1120,6 +1122,22 @@ setRotate (gpointer param)
   rotate.angle = (qc2::RotationType)toC2Rotate(config->rotate);
 
   return C2Param::Copy (rotate);
+}
+
+std::unique_ptr<C2Param>
+setCSDMode (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  C2PrependHeaderModeSetting csdmode;
+  config_params_t *config = (config_params_t*) param;
+
+  csdmode.value = config->csdmode ?
+          C2Config::PREPEND_HEADER_TO_ALL_SYNC :
+          C2Config::PREPEND_HEADER_TO_NONE;
+
+  return C2Param::Copy (csdmode);
 }
 
 void
