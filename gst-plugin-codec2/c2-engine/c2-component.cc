@@ -259,6 +259,14 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
           }
           break;
         }
+    case GST_VIDEO_FORMAT_P010_10LE:
+    case GST_VIDEO_FORMAT_NV12_10LE32: {
+          uint8_t *src, *dest;
+          src = rawBuffer;
+          dest = (uint8_t *)*data;
+          memcpy(dest, src, buffer->size);
+          break;
+        }
         default:
           GST_ERROR("Unsupported format");
           return C2_BAD_VALUE;
@@ -311,10 +319,23 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
           gbm_handle->mInts.width = buffer->width;
           gbm_handle->mInts.height = buffer->height;
           if (buffer->ubwc_flag) {
+            if(GST_VIDEO_FORMAT_NV12_10LE32 == buffer->format) {
+              gbm_handle->mInts.stride = (VENUS_Y_STRIDE (
+                COLOR_FMT_NV12_BPP10_UBWC, buffer->width)* 3) / 4;
+              gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+                COLOR_FMT_NV12_BPP10_UBWC, buffer->height);
+            }
+            else {
+              gbm_handle->mInts.stride = VENUS_Y_STRIDE (
+                COLOR_FMT_NV12_UBWC, buffer->width);
+              gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+                COLOR_FMT_NV12_UBWC, buffer->height);
+            }
+          } else if (GST_VIDEO_FORMAT_P010_10LE == buffer->format){
             gbm_handle->mInts.stride = VENUS_Y_STRIDE (
-              COLOR_FMT_NV12_UBWC, buffer->width);
+              COLOR_FMT_P010, buffer->width) / 2;
             gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
-              COLOR_FMT_NV12_UBWC, buffer->height);
+              COLOR_FMT_P010, buffer->height);
           } else {
             gbm_handle->mInts.stride = VENUS_Y_STRIDE (
               COLOR_FMT_NV12, buffer->width);
@@ -442,6 +463,9 @@ C2ComponentWrapper::gst_to_c2_gbmformat (GstVideoFormat format)
     break;
   case GST_VIDEO_FORMAT_P010_10LE:
     result = GBM_FORMAT_YCbCr_420_P010_VENUS;
+    break;
+  case GST_VIDEO_FORMAT_NV12_10LE32:
+    result = GBM_FORMAT_YCbCr_420_TP10_UBWC;
     break;
   default:
     GST_WARNING ("unsupported video format:%s",
