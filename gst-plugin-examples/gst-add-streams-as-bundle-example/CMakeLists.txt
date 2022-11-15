@@ -8,28 +8,23 @@ pkg_check_modules(GST_ALLOC
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 
-# GStreamer tracking-cam-app
-set(GST_EXAMPLE_BIN gst-tracking-cam-app)
+# GStreamer gst-add-streams-as-bundle-example
+set(GST_EXAMPLE_BIN gst-add-streams-as-bundle-example)
 
 add_executable(${GST_EXAMPLE_BIN}
-  tracking_camera.cc
+  main.c
 )
 
-if(CODEC2_ENCODE)
-add_definitions(-DCODEC2_ENCODE)
-endif()
+target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
+  $<$<BOOL:${CODEC2_ENCODE}>:CODEC2_ENCODE>
+)
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  m
   ${GST_LIBRARIES}
-  ${GST_VIDEO_LIBRARIES}
-  ${GST_ALLOC_LIBRARIES}
-  qtimlmeta
-  qtiafralgo
 )
 
 install(

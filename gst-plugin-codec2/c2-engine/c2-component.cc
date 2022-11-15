@@ -198,9 +198,15 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
       GST_INFO("@@@ input size %d",frameSize);
       buf = createLinearBuffer(linear_block);
     } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
+      if (buffer->format == GST_VIDEO_FORMAT_NV12
+          && buffer->ubwc_flag) {
+        GST_INFO ("NV12: usage add UBWC");
+        usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+          C2MemoryUsage::CPU_WRITE };
+      }
       err = mGraphicPool_->fetchGraphicBlock(buffer->width, buffer->height,
               gst_to_c2_gbmformat (buffer->format),
-              {C2MemoryUsage::CPU_WRITE, C2MemoryUsage::CPU_READ}, &graphic_block);
+              usage, &graphic_block);
       if (err != C2_OK || graphic_block == nullptr) {
         GST_ERROR("Graphic pool failed to allocate");
         return C2_NO_MEMORY;
@@ -218,24 +224,34 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
           uint32_t i, j, src_stride, dest_stride, height;
           uint8_t *src, *dest;
 
-          src = rawBuffer;
-          src_stride = buffer->width;
-          for (i=0; i<2; i++) {
-            if (0 == i){
-              dest_stride = VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width);
-              height = ((buffer->size / buffer->width) / 3) * 2;
-              dest = (uint8_t *)*data;
-            } else {
-              dest_stride = VENUS_UV_STRIDE (COLOR_FMT_NV12, buffer->width);
-              height = (buffer->size / buffer->width) / 3;
-              dest = (uint8_t *)*data + VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width)
-                      * VENUS_Y_SCANLINES(COLOR_FMT_NV12, buffer->height);
-            }
+          if (buffer->ubwc_flag) {
+            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+              buffer->width, buffer->height, 0);
 
-            for (j = 0; j < height; j++) {
-              memcpy (dest, src, buffer->width);
-              src += src_stride;
-              dest += dest_stride;
+            src = rawBuffer;
+            dest = (uint8_t *)*data;
+            memcpy(dest, src, buf_size);
+          } else {
+            src = rawBuffer;
+            src_stride = buffer->width;
+            for (i=0; i<2; i++) {
+              if (0 == i){
+                dest_stride = VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width);
+                height = ((buffer->size / buffer->width) / 3) * 2;
+                dest = (uint8_t *)*data;
+              } else {
+                dest_stride = VENUS_UV_STRIDE (COLOR_FMT_NV12, buffer->width);
+                height = (buffer->size / buffer->width) / 3;
+                dest = (uint8_t *)*data + VENUS_Y_STRIDE (COLOR_FMT_NV12,
+                       buffer->width) * VENUS_Y_SCANLINES(COLOR_FMT_NV12,
+                       buffer->height);
+              }
+
+              for (j = 0; j < height; j++) {
+                memcpy (dest, src, buffer->width);
+                src += src_stride;
+                dest += dest_stride;
+              }
             }
           }
           break;
@@ -291,11 +307,23 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 
           gbm_handle->mInts.width = buffer->width;
           gbm_handle->mInts.height = buffer->height;
-          gbm_handle->mInts.stride = VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width);
-          gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (COLOR_FMT_NV12,
-            buffer->height);
+          if (buffer->ubwc_flag) {
+            gbm_handle->mInts.stride = VENUS_Y_STRIDE (
+              COLOR_FMT_NV12_UBWC, buffer->width);
+            gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+              COLOR_FMT_NV12_UBWC, buffer->height);
+          } else {
+            gbm_handle->mInts.stride = VENUS_Y_STRIDE (
+              COLOR_FMT_NV12, buffer->width);
+            gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+              COLOR_FMT_NV12, buffer->height);
+          }
           gbm_handle->mInts.format = gst_to_c2_gbmformat (buffer->format);
-          gbm_handle->mInts.usage_lo = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
+          gbm_handle->mInts.usage_lo = GBM_BO_USE_SCANOUT
+                                       | GBM_BO_USE_RENDERING;
+          if (buffer->ubwc_flag) {
+            gbm_handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+          }
           gbm_handle->mInts.size = buffer->size;
           // Use fd as the unique buffer id for C2Buffer
           gbm_handle->mInts.id = buffer->fd;
@@ -591,6 +619,22 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
   if (C2FrameData::FLAG_CODEC_CONFIG & flag) {
     flag_res |= FLAG_TYPE_CODEC_CONFIG;
   }
+
+  if (buffer) {
+    C2BufferData::type_t buf_type = buffer->data ().type ();
+    if (buf_type == C2BufferData::LINEAR) {
+      // check for sync frame
+      auto picTypeInfo =
+          std::static_pointer_cast<const C2StreamPictureTypeInfo::output> (
+          buffer->getInfo (C2StreamPictureTypeInfo::output::PARAM_TYPE));
+      if (picTypeInfo) {
+        if (picTypeInfo->value == C2Config::SYNC_FRAME) {
+          flag_res |= FLAG_TYPE_SYNC_FRAME;
+        }
+      }
+    }
+  }
+
   flag_type = static_cast<FLAG_TYPE> (flag_res);
 
   if (buffer) {
