@@ -139,8 +139,8 @@ gst_dfs_engine_new (DfsInitSettings * settings)
 
   engine->mode = settings->mode;
   engine->format = settings->format;
-  engine->width = settings->stereo_frame_width / 2;
-  engine->height = settings->stereo_frame_height;
+  engine->width = settings->stereo_frame_width;
+  engine->height = settings->stereo_frame_height / 2;
   engine->stride = settings->stride;
 
 
@@ -324,10 +324,13 @@ gst_dfs_engine_execute (GstDfsEngine * engine,
   float *disparity_map = NULL;
   gpointer img_left = GST_VIDEO_FRAME_PLANE_DATA (inframe, 0);
 
+  uint8_t * img_left_new = (uint8_t *) img_left;
+  uint8_t * img_right_new = (uint8_t *)(img_left_new + engine->stride * engine->height);
+
   if (engine->mode == OUTPUT_MODE_VIDEO) {
     disparity_map = (float *) engine->out_work_buffer;
     ret = rvDFS_CalculateDisparity (engine->handle,
-        (uint8_t *) img_left, nullptr, disparity_map);
+        (uint8_t *) img_left, img_right_new, disparity_map);
     if (!ret) {
       GST_ERROR ("Error in DFS process function");
       return ret;
@@ -339,7 +342,7 @@ gst_dfs_engine_execute (GstDfsEngine * engine,
 
     disparity_map = (float *) output;
     ret = rvDFS_CalculateDisparity (engine->handle,
-        (uint8_t *) img_left, nullptr, disparity_map);
+        (uint8_t *) img_left, img_right_new, disparity_map);
     if (!ret) {
       GST_ERROR ("Error in DFS process function");
       return ret;
@@ -349,7 +352,7 @@ gst_dfs_engine_execute (GstDfsEngine * engine,
 
     PointCloudType pcl;
     ret = rvDFS_CalculatePointCloud (engine->handle,
-        (uint8_t *) img_left, nullptr, &pcl);
+        (uint8_t *) img_left, img_right_new, &pcl);
     if (!ret) {
       GST_ERROR ("Error in DFS process function");
       return ret;

@@ -333,15 +333,15 @@ gst_dfs_create_pool (GstDfs * dfs, GstCaps * caps)
   } else if (gst_structure_has_name (structure, "dfs/disparity-map")) {
     GST_INFO_OBJECT (dfs, "Uses SYSTEM memory");
     pool = gst_buffer_pool_new ();
-    guint width = GST_VIDEO_INFO_WIDTH (dfs->ininfo) / 2;
-    guint height = GST_VIDEO_INFO_HEIGHT (dfs->ininfo);
+    guint width = GST_VIDEO_INFO_WIDTH (dfs->ininfo);
+    guint height = GST_VIDEO_INFO_HEIGHT (dfs->ininfo) / 2;
     size = width * height * sizeof (float);
 
   } else if (gst_structure_has_name (structure, "dfs/point-cloud")) {
     GST_INFO_OBJECT (dfs, "Uses SYSTEM memory");
     pool = gst_buffer_pool_new ();
-    guint width = GST_VIDEO_INFO_WIDTH (dfs->ininfo) / 2;
-    guint height = GST_VIDEO_INFO_HEIGHT (dfs->ininfo);
+    guint width = GST_VIDEO_INFO_WIDTH (dfs->ininfo);
+    guint height = GST_VIDEO_INFO_HEIGHT (dfs->ininfo) / 2;
     // Setting initial size of buffer to worst case size.
     // since point cloud is not known ahead of time and is not constant.
     size = (width * height) + PLY_HEADER_SIZE;
@@ -514,8 +514,8 @@ gst_dfs_fixate_caps (GstBaseTransform * trans,
       GST_ERROR_OBJECT (dfs, "Failed to get input video info from caps!");
 
 
-    width = GST_VIDEO_INFO_WIDTH (&ininfo) / 2;
-    height = GST_VIDEO_INFO_HEIGHT (&ininfo);
+    width = GST_VIDEO_INFO_WIDTH (&ininfo);
+    height = GST_VIDEO_INFO_HEIGHT (&ininfo) / 2;
 
     value = gst_structure_get_value (output, "width");
     if ((NULL == value) || !gst_value_is_fixed (value)) {
@@ -736,11 +736,11 @@ gst_dfs_set_caps (GstBaseTransform * trans, GstCaps * incaps, GstCaps * outcaps)
 
   //Populate stereo parameter values
   dfs->stereo_parameter.camera[0].pixelWidth =
-      GST_VIDEO_INFO_WIDTH (&ininfo) / 2;
-  dfs->stereo_parameter.camera[0].pixelHeight = GST_VIDEO_INFO_HEIGHT (&ininfo);
+      GST_VIDEO_INFO_WIDTH (&ininfo);
+  dfs->stereo_parameter.camera[0].pixelHeight = GST_VIDEO_INFO_HEIGHT (&ininfo) / 2;
   dfs->stereo_parameter.camera[1].pixelWidth =
-      GST_VIDEO_INFO_WIDTH (&ininfo) / 2;
-  dfs->stereo_parameter.camera[1].pixelHeight = GST_VIDEO_INFO_HEIGHT (&ininfo);
+      GST_VIDEO_INFO_WIDTH (&ininfo);
+  dfs->stereo_parameter.camera[1].pixelHeight = GST_VIDEO_INFO_HEIGHT (&ininfo) / 2;
   if (dfs->rectification) {
     if (!gst_dfs_parse_config (dfs->config_location, &dfs->stereo_parameter)) {
       GST_ERROR_OBJECT (dfs, "Error parsing config file");
