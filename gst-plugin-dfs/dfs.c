@@ -40,6 +40,10 @@
 #include <gst/video/gstimagepool.h>
 #include <gst/video/video.h>
 
+#define DFS_MSM_MEDIA_ALIGN(__sz, __align) (((__align) & ((__align) - 1)) ?\
+	((((__sz) + (__align) - 1) / (__align)) * (__align)) :\
+	(((__sz) + (__align) - 1) & (~((__align) - 1))))
+
 #define GST_CAT_DEFAULT gst_dfs_debug
 GST_DEBUG_CATEGORY_STATIC (gst_dfs_debug);
 
@@ -562,7 +566,7 @@ gst_dfs_transform (GstBaseTransform * trans, GstBuffer * inbuffer,
     settings.format = dfs->format;
     settings.stereo_frame_width = vmeta->width;
     settings.stereo_frame_height = vmeta->height;
-    settings.stride = vmeta->stride[0]; //Only need Y-plane
+    settings.stride = DFS_MSM_MEDIA_ALIGN(vmeta->stride[0],512); //Only need Y-plane
     settings.dfs_mode = dfs->dfs_mode;
     settings.min_disparity = dfs->min_disparity;
     settings.num_disparity_levels = dfs->num_disparity_levels;
