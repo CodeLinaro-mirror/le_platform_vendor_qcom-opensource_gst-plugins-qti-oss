@@ -386,6 +386,18 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 
     work->worklets.clear ();
     work->worklets.emplace_back (new C2Worklet);
+
+    if(buffer->config_data)
+    {
+      auto& worklet = work->worklets.front();
+
+      std::list<std::unique_ptr<C2Param>> settings;
+      g_ptr_array_foreach (reinterpret_cast<GPtrArray *>(buffer->config_data), push_to_settings, &settings);
+      std::for_each(settings.begin(), settings.end(),
+                [&](std::unique_ptr<C2Param>& param) {
+                worklet->tunings.push_back(std::unique_ptr<C2Tuning>(reinterpret_cast<C2Tuning *>(param.release())));
+                });
+    }
     workList.push_back (std::move (work));
 
     if (!isEOSFrame) {
