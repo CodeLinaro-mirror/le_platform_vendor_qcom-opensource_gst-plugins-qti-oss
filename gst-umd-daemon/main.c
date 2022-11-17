@@ -98,7 +98,22 @@
 #define PIPELINE_EOS_MESSAGE   "PIPELINE_EOS_MSG"
 #define PIPELINE_ERROR_MESSAGE "PIPELINE_ERROR_MSG"
 
+#define GST_VIDEO_PIPELINE "qtiqmmfsrc name=camsrc " \
+    "camsrc. ! capsfilter name=mlfilter caps=video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
+    "queue name=camsrc_queue ! qtimlvconverter name=mlvconverter ! queue name=mlvconverter_queue ! " \
+    "qtimltflite name=mltflite delegate=hexagon model=/data/yolov5m-320x320-int8.tflite ! queue name=mltflite_queue ! " \
+    "qtimlvdetection name=mlvdetection threshold=60.0 results=1 module=yolov5m labels=/data/yolov5m.labels ! " \
+    "capsfilter name=mldetection_filter caps=text/x-raw ! queue name=mlvdetection_queue ! appsink name=mlsink " \
+    "camsrc. ! capsfilter name=umdvfilter ! queue name=vqueue ! qtivtransform name=vtransform ! queue name=umdvqueue ! " \
+    "appsink name=umdvsink"
+
 #define GST_SERVICE_CONTEXT_CAST(obj)  ((GstServiceContext*)(obj))
+
+#define UMD_VIDEO_GET_PAN_VALUE(pantilt)  (((int32_t *)(pantilt))[0] / 3600)
+#define UMD_VIDEO_GET_TILT_VALUE(pantilt) (((int32_t *)(pantilt))[1] / 3600)
+#define UMD_VIDEO_SET_PANTILT_VALUE(pan, tilt) \
+    ((((signed long)(pan) * 3600) & 0xFFFFFFFF) | \
+    ((((signed long)(tilt) * 3600) & 0xFFFFFFFF) << 32))
 
 typedef struct _GstServiceContext GstServiceContext;
 typedef struct _GstUvcControlValues GstUvcControlValues;
@@ -133,7 +148,7 @@ struct _MainOps
 {
   gchar * video;
   gchar * audio;
-  gchar * config;
+  gchar * cfgfile;
 };
 
 static MainOps mainops = {
@@ -154,10 +169,10 @@ static const GOptionEntry entries[] = {
       "USB-AUDIO-DEVICE"
     },
     { "config-file", 'c', 0, G_OPTION_ARG_STRING,
-      &mainops.config,
+      &mainops.cfgfile,
       "UVC config file "
       "(default: NULL)",
-      "UVC-config-file"
+      "UVC-CONFIGURATION-FILE"
     },
     { "ml-auto-framing-enable", 'f', 0, G_OPTION_ARG_NONE,
       &afrmops.enable,
@@ -240,69 +255,91 @@ struct _AutoFrmLib
   void           (*set_movement_speed) (gpointer instance, gint speed);
 };
 
-static umd_pan_tilt_t umd_current_pan_and_tilt = 0;
-
 struct _GstUvcControlValues {
-  umd_brightness_t      brightness_min;
-  umd_brightness_t      brightness_max;
-  umd_brightness_t      brightness_def;
-  umd_contrast_t        contrast_min;
-  umd_contrast_t        contrast_max;
-  umd_contrast_t        contrast_def;
-  umd_saturation_t      saturation_min;
-  umd_saturation_t      saturation_max;
-  umd_saturation_t      saturation_def;
-  umd_sharpness_t       sharpness_min;
-  umd_sharpness_t       sharpness_max;
-  umd_sharpness_t       sharpness_def;
-  umd_antibanding_t     antibanding_def;
-  umd_antibanding_t     antibanding_min;
-  umd_antibanding_t     antibanding_max;
-  umd_backlight_comp_t  backlight_comp_min;
-  umd_backlight_comp_t  backlight_comp_max;
-  umd_backlight_comp_t  backlight_comp_def;
-  umd_gain_t            gain_min;
-  umd_gain_t            gain_max;
-  umd_gain_t            gain_def;
-  umd_wb_temp_t         wb_temp_min;
-  umd_wb_temp_t         wb_temp_max;
-  umd_wb_temp_t         wb_temp_def;
-  umd_wb_mode_t         wb_mode_def;
-  umd_exp_time_t        exp_time_min;
-  umd_exp_time_t        exp_time_max;
-  umd_exp_time_t        exp_time_def;
-  umd_exp_mode_t        exp_mode_def;
-  umd_exp_focus_mode_t  exp_focus_mode_def;
-  umd_zoom_t            zoom_min;
-  umd_zoom_t            zoom_max;
-  umd_zoom_t            zoom_def;
-  umd_pan_tilt_t        pan_tilt_min;
-  umd_pan_tilt_t        pan_tilt_max;
-  umd_pan_tilt_t        pan_tilt_def;
+  struct _U8 {
+    uint8_t min;
+    uint8_t max;
+    uint8_t dflt;
+  } U8;
+
+  struct _I16 {
+    int16_t min;
+    int16_t max;
+    int16_t dflt;
+  } I16;
+
+  struct _U16 {
+    uint16_t min;
+    uint16_t max;
+    uint16_t dflt;
+  } U16;
+
+  struct _I32 {
+    int32_t min;
+    int32_t max;
+    int32_t dflt;
+  } I32;
+
+  struct _U32 {
+    uint32_t min;
+    uint32_t max;
+    uint32_t dflt;
+  } U32;
+
+  // Brightness MIN/MAX and DEFAULT values.
+  struct _I16 brightness;
+  // Contrast MIN/MAX and DEFAULT values.
+  struct _U16 contrast;
+  // Saturation MIN/MAX and DEFAULT values.
+  struct _U16 saturation;
+  // Sharpness MIN/MAX and DEFAULT values.
+  struct _U16 sharpness;
+  // Antibanding DEFAULT value.
+  struct _U8  antibanding;
+  // Backlight Compensation MIN/MAX and DEFAULT values.
+  struct _U16 blcompensation;
+  // Gain MIN/MAX and DEFAULT values.
+  struct _U16 gain;
+  // White Balance Temperature MIN/MAX and DEFAULT values.
+  struct _U16 wbtemp;
+  // White Balance Mode DEFAULT value.
+  uint8_t     wbmode;
+  // Exposure Time MIN/MAX and DEFAULT values.
+  struct _U32 exptime;
+  // Exposure Mode DEFAULT value.
+  uint8_t     expmode;
+  // Focus Mode DEFAULT value.
+  uint8_t     focusmode;
+  // Zoom MIN/MAX and DEFAULT values.
+  struct _U16 zoom;
+  // Pan MIN/MAX and DEFAULT values.
+  struct _I32 pan;
+  // Tilt MIN/MAX and DEFAULT values.
+  struct _I32 tilt;
 };
 
 struct _GstServiceContext
 {
   // UMD Gadget instance.
-  UmdGadget       *gadget;
+  UmdGadget           *gadget;
 
   // GStreamer video pipeline instance.
-  GstElement      *vpipeline;
+  GstElement          *vpipeline;
 
   // GStreamer audio pipeline instance.
-  GstElement      *apipeline;
+  GstElement          *apipeline;
 
   // Auto Framing Algorithm library instance.
-  AutoFrmLib      *afrmalgo;
+  AutoFrmLib          *afrmalgo;
 
   // Asynchronous queue for signaling pipeline EOS and state changes.
-  GAsyncQueue     *pipemsgs;
+  GAsyncQueue         *pipemsgs;
 
   // Asynchronous queue for signaling menu thread messages from stdin.
-  GAsyncQueue     *menumsgs;
+  GAsyncQueue         *menumsgs;
 
   // Conteiner for UVC controls min, max and default values
-  GstUvcControlValues ctrl_values;
+  GstUvcControlValues ctrlvals;
 };
 
 static void
@@ -639,14 +676,18 @@ set_crop_rectangle (GstElement * pipeline, gint x, gint y, gint w, gint h)
   g_value_unset (&crop);
 }
 
-// Event handler for all data received from the MLE
+// Event handler for all data received from the ML
 static GstFlowReturn
-mle_new_sample (GstElement *sink, gpointer userdata)
+ml_new_sample (GstElement *sink, gpointer userdata)
 {
   GstServiceContext *srvctx = GST_SERVICE_CONTEXT_CAST (userdata);
   GstSample *sample = NULL;
   GstBuffer *buffer = NULL;
-  GstMapInfo info;
+  GstMapInfo memmap = {};
+  GValue value = G_VALUE_INIT;
+  VideoRectangle rectangle = {0};
+  guint idx = 0, length = 0;
+  gdouble confidence = 0.0;
 
   // New sample is available, retrieve the buffer from the sink.
   g_signal_emit_by_name (sink, "pull-sample", &sample);
@@ -662,50 +703,83 @@ mle_new_sample (GstElement *sink, gpointer userdata)
     return GST_FLOW_ERROR;
   }
 
-  if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
+  if (!gst_buffer_map (buffer, &memmap, GST_MAP_READ)) {
     g_printerr ("\nFailed to map the pulled buffer!\n");
     gst_sample_release (sample);
     return GST_FLOW_ERROR;
   }
 
-  {
-    GSList *metalist = NULL, *list = NULL;
-    VideoRectangle rectangle = {0};
-    gfloat confidence = 0.0;
+  g_value_init (&value, GST_TYPE_LIST);
 
-    metalist = list = gst_buffer_get_detection_meta (buffer);
+  // Deserialize the GValue string containing the detections.
+  if (!gst_value_deserialize (&value, memmap.data)) {
+    g_printerr ("\nFailed to deserialize ML detection result!\n");
 
-    while (list != NULL) {
-      GstMLDetectionMeta *meta = NULL;
-      GstMLClassificationResult *classification = NULL;
+    gst_buffer_unmap (buffer, &memmap);
+    gst_sample_release (sample);
 
-      meta = (GstMLDetectionMeta *) list->data;
-      classification =
-          (GstMLClassificationResult *) g_slist_nth_data (meta->box_info, 0);
-
-      // Get the ML detection rectangle with highest confidence.
-      if (g_strcmp0 (classification->name, "person") == 0 &&
-          classification->confidence >= confidence) {
-        rectangle.x = meta->bounding_box.x;
-        rectangle.y = meta->bounding_box.y;
-        rectangle.w = meta->bounding_box.width;
-        rectangle.h = meta->bounding_box.height;
-        confidence = classification->confidence;
-      }
-
-      list = g_slist_next (list);
-    }
-
-    g_slist_free (metalist);
-
-    rectangle = srvctx->afrmalgo->process (
-        srvctx->afrmalgo->instance, (confidence > 0.0) ? &rectangle : NULL);
-
-    set_crop_rectangle (srvctx->vpipeline, rectangle.x, rectangle.y,
-        rectangle.w, rectangle.h);
+    return GST_FLOW_ERROR;
   }
 
-  gst_buffer_unmap (buffer, &info);
+  length = gst_value_list_get_size (&value);
+
+  // Iterate of the ML detection entries.
+  for (idx = 0; idx < length; idx++) {
+    const GValue *entry = gst_value_list_get_value (&value, idx);
+    GstStructure *structure = GST_STRUCTURE (g_value_get_boxed (entry));
+    const gchar *label = NULL;
+
+    // Skip the 'Parameters' structure as this is not a prediction result.
+    if (gst_structure_has_name (structure, "Parameters"))
+      continue;
+
+    label = gst_structure_get_string (structure, "label");
+
+    // Skip non-human detection results.
+    if (g_strcmp0 (label, "person") != 0)
+      continue;
+
+    // Fetch bounding box rectangle if it exists and fill ROI coordinates.
+    entry = gst_structure_get_value (structure, "rectangle");
+
+    if ((entry != NULL) && (gst_value_array_get_size (entry) != 4)) {
+      g_printerr ("\nBadly formed ROI rectangle, expected 4 entries "
+          "but received %u!\n", gst_value_array_get_size (entry));
+    } else if (entry != NULL) {
+      gfloat left = 0.0, right = 0.0, top = 0.0, bottom = 0.0;
+
+      top    = g_value_get_float (gst_value_array_get_value (entry, 0));
+      left   = g_value_get_float (gst_value_array_get_value (entry, 1));
+      bottom = g_value_get_float (gst_value_array_get_value (entry, 2));
+      right  = g_value_get_float (gst_value_array_get_value (entry, 3));
+
+      // Convert from relative coordinates to absolute.
+      rectangle.x = ABS (left) * 1280;
+      rectangle.y = ABS (top) * 720;
+      rectangle.w = ABS (right - left) * 1280;
+      rectangle.h = ABS (bottom - top) * 720;
+
+      // Clip width and height if it outside the frame limits.
+      rectangle.w = ((rectangle.x + rectangle.w) > 1280) ?
+          (1280 - rectangle.x) : rectangle.w;
+      rectangle.h = ((rectangle.y + rectangle.h) > 720) ?
+          (720 - rectangle.y) : rectangle.h;
+
+      gst_structure_get_double (structure, "confidence", &confidence);
+      break;
+
+    }
+  }
+
+  rectangle = srvctx->afrmalgo->process (
+      srvctx->afrmalgo->instance, (confidence > 0.0) ? &rectangle : NULL);
+
+  set_crop_rectangle (srvctx->vpipeline, rectangle.x, rectangle.y,
+      rectangle.w, rectangle.h);
+
+  g_value_reset (&value);
+
+  gst_buffer_unmap (buffer, &memmap);
   gst_sample_release (sample);
 
   return GST_FLOW_OK;
@@ -910,6 +984,7 @@ create_audio_pipeline (GstServiceContext * srvctx)
     g_printerr ("\nFailed to create empty audio pipeline.\n");
     return FALSE;
   }
+
   pcmsrc    = gst_element_factory_make ("pulsesrc", "pcmsrc");
   afilter   = gst_element_factory_make ("capsfilter", "afilter");
   abufsplit = gst_element_factory_make ("audiobuffersplit", "abufsplit");
@@ -1006,133 +1081,38 @@ create_audio_pipeline (GstServiceContext * srvctx)
 }
 
 static gboolean
-create_video_pipeline (GstServiceContext * srvctx, const char * cfgfile)
+create_video_pipeline (GstServiceContext * srvctx)
 {
-  GstElement *camsrc = NULL, *vtransform = NULL;
-  GstElement *mlefilter = NULL, *mletflite = NULL, *mlesink = NULL;
-  GstElement *in_mlequeue = NULL, *out_mlequeue = NULL, *vqueue = NULL;
-  GstElement *umdvqueue = NULL, *umdvfilter = NULL, *umdvsink = NULL;
-
-  GstCaps *filtercaps = NULL;
+  GstElement *element = NULL;
   GstBus *bus = NULL;
+  GError *error = NULL;
 
   // Create the empty video pipeline.
-  if ((srvctx->vpipeline = gst_pipeline_new ("video-pipeline")) == NULL) {
-    g_printerr ("\nFailed to create empty video pipeline.\n");
+  srvctx->vpipeline = gst_parse_launch (GST_VIDEO_PIPELINE, &error);
+
+  if (srvctx->vpipeline == NULL) {
+    g_printerr ("\nPipeline could not be created, error: %s!\n",
+        GST_STR_NULL (error->message));
+    g_clear_error (&error);
     return FALSE;
   }
 
-  // Create the elements.
-  camsrc = gst_element_factory_make ("qtiqmmfsrc", "camsrc");
-  vqueue = gst_element_factory_make ("queue", "vqueue");
-  vtransform = gst_element_factory_make ("qtivtransform", "vtransform");
-  in_mlequeue = gst_element_factory_make ("queue", "inmlequeue");
-  mlefilter = gst_element_factory_make ("capsfilter", "mlefilter");
-  mletflite = gst_element_factory_make ("qtimletflite", "mletflite");
-  out_mlequeue = gst_element_factory_make ("queue", "outmlequeue");
-  mlesink  = gst_element_factory_make ("appsink", "mlesink");
-  umdvfilter = gst_element_factory_make ("capsfilter", "umdvfilter");
-  umdvqueue = gst_element_factory_make ("queue", "umdvqueue");
-  umdvsink = gst_element_factory_make ("appsink", "umdvsink");
-
-  if (!camsrc || !vtransform || !vqueue || !in_mlequeue || !out_mlequeue ||
-      !mlefilter || !mletflite || !mlesink || !umdvfilter || !umdvqueue ||
-      !umdvsink) {
-    g_printerr ("\nNot all elements could be created.\n");
-
-    if (camsrc)
-      gst_object_unref (camsrc);
-
-    if (vtransform)
-      gst_object_unref (vtransform);
-
-    if (vqueue)
-      gst_object_unref (vqueue);
-
-    if (mlefilter)
-      gst_object_unref (mlefilter);
-
-    if (in_mlequeue)
-      gst_object_unref (in_mlequeue);
-
-    if (out_mlequeue)
-      gst_object_unref (out_mlequeue);
-
-    if (mletflite)
-      gst_object_unref (mletflite);
-
-    if (mlesink)
-      gst_object_unref (mlesink);
-
-    if (umdvfilter)
-      gst_object_unref (umdvfilter);
-
-    if (umdvqueue)
-      gst_object_unref (umdvqueue);
-
-    if (umdvsink)
-      gst_object_unref (umdvsink);
-
-    return FALSE;
-  }
-
-  // Add the elements to the pipeline.
-  gst_bin_add_many (GST_BIN (srvctx->vpipeline), camsrc, vtransform, vqueue,
-      mlefilter, in_mlequeue, out_mlequeue, mletflite, mlesink, umdvfilter,
-      umdvqueue, umdvsink, NULL);
-
-  // Link the plugins in the MLE portion of the pipeline.
-  if (!gst_element_link_many (camsrc, mlefilter, in_mlequeue, mletflite,
-          out_mlequeue, mlesink, NULL)) {
-    g_printerr ("\nFailed to link pipeline MLE elements.\n");
-    return FALSE;
-  }
-
-  // Set caps for the MLE camera pad.
-  filtercaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, 1280,
-      "height", G_TYPE_INT, 720,
-      "framerate", GST_TYPE_FRACTION, 30, 1,
-      NULL);
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
-
-  g_object_set (G_OBJECT (mlefilter), "caps", filtercaps, NULL);
-  gst_caps_unref (filtercaps);
-
-  // Set MLE properties
-  g_object_set (G_OBJECT (mletflite),
-      "delegate", 0, NULL);
-  g_object_set (G_OBJECT (mletflite),
-      "config", "/data/misc/camera/mle_tflite.config", NULL);
-  g_object_set (G_OBJECT (mletflite),
-      "model", "/data/misc/camera/detect.tflite", NULL);
-  g_object_set (G_OBJECT (mletflite),
-      "labels", "/data/misc/camera/labelmap.txt", NULL);
-  g_object_set (G_OBJECT (mletflite),
-      "postprocessing", "detection", NULL);
-  g_object_set (G_OBJECT (mletflite),
-      "preprocess-accel", 1, NULL);
-
+  element = gst_bin_get_by_name (GST_BIN (srvctx->vpipeline), "mlsink");
   // Set emit-signals property and connect a callback to the new-sample signal.
-  g_object_set (G_OBJECT (mlesink), "emit-signals", TRUE, NULL);
-  g_signal_connect (mlesink, "new-sample", G_CALLBACK (mle_new_sample), srvctx);
+  g_object_set (G_OBJECT (element), "emit-signals", TRUE, NULL);
+  g_signal_connect (element, "new-sample", G_CALLBACK (ml_new_sample), srvctx);
+  gst_object_unref (element);
 
-  // Link the plugins in the UMD portion of the pipeline.
-  if (!gst_element_link_many (camsrc, umdvfilter, vqueue, vtransform, umdvqueue,
-          umdvsink, NULL)) {
-    g_printerr ("\nFailed to link pipeline UMD elements.\n");
-    return FALSE;
-  }
-
+  element = gst_bin_get_by_name (GST_BIN (srvctx->vpipeline), "umdvsink");
   // Set emit-signals property and connect a callback to the new-sample signal.
-  g_object_set (G_OBJECT (umdvsink), "emit-signals", TRUE, NULL);
-  g_signal_connect (umdvsink, "new-sample", G_CALLBACK (umd_new_sample), srvctx);
+  g_object_set (G_OBJECT (element), "emit-signals", TRUE, NULL);
+  g_signal_connect (element, "new-sample", G_CALLBACK (umd_new_sample), srvctx);
 
-  g_object_set (G_OBJECT (umdvsink), "wait-on-eos", FALSE, NULL);
-  g_object_set (G_OBJECT (umdvsink), "enable-last-sample", FALSE, NULL);
-  g_object_set (G_OBJECT (umdvsink), "sync", FALSE, NULL);
+  g_object_set (G_OBJECT (element), "wait-on-eos", FALSE, NULL);
+  g_object_set (G_OBJECT (element), "enable-last-sample", FALSE, NULL);
+  g_object_set (G_OBJECT (element), "sync", FALSE, NULL);
+
+  gst_object_unref (element);
 
   // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (srvctx->vpipeline))) == NULL) {
@@ -1172,143 +1152,212 @@ create_video_pipeline (GstServiceContext * srvctx, const char * cfgfile)
       break;
   }
 
-  gst_service_load_uvc_controls_values (srvctx, cfgfile);
-
   return TRUE;
 }
 
 static gboolean
-mle_reconfigure_pipeline (GstServiceContext * srvctx, gboolean enable)
+ml_reconfigure_pipeline (GstServiceContext * srvctx, gboolean enable)
 {
   GstElement *pipeline = srvctx->vpipeline;
-  GstElement *mlefilter = NULL, *mletflite = NULL, *mlesink = NULL;
-  GstElement *in_mlequeue = NULL, *out_mlequeue = NULL, *fakesink = NULL;
-  gboolean success = TRUE;
+  GstElement *plugin = NULL, *prevplugin = NULL, *newplugin = NULL;
+  GstCaps *filtercaps = NULL;
 
-  // Use the existance of fakesink as indicator for MLE status.
-  fakesink = gst_bin_get_by_name (GST_BIN (pipeline), "fakesink");
+  // Use the existance of fakesink as indicator for ML status.
+  plugin = gst_bin_get_by_name (GST_BIN (pipeline), "fakesink");
 
-  if (enable && (fakesink != NULL)) {
-    gst_bin_remove_many (GST_BIN (pipeline), fakesink, NULL);
+  if (enable && (plugin != NULL)) {
+    GParamSpec *propspecs = NULL;
+    GValue value = G_VALUE_INIT;
+
+    gst_bin_remove_many (GST_BIN (pipeline), plugin, NULL);
 
     // Set the element into NULL state before destroying it.
-    gst_element_set_state (fakesink, GST_STATE_NULL);
-    gst_object_unref (fakesink);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    in_mlequeue = gst_element_factory_make ("queue", "inmlequeue");
-    mletflite = gst_element_factory_make ("qtimletflite", "mletflite");
-    out_mlequeue = gst_element_factory_make ("queue", "outmlequeue");
-    mlesink  = gst_element_factory_make ("appsink", "mlesink");
+    newplugin = gst_element_factory_make ("qtimlvconverter", "mlvconverter");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
 
-    if (!in_mlequeue || !mletflite || !out_mlequeue || !mlesink) {
-      g_printerr ("\nFailed to create one or more MLE elements!\n");
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
 
-      if (in_mlequeue)
-        gst_object_unref (in_mlequeue);
+    // Link the new element with the previous one in the pipeline.
+    prevplugin = gst_bin_get_by_name (GST_BIN (pipeline), "camsrc_queue");
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+    gst_object_unref (prevplugin);
 
-      if (mletflite)
-        gst_object_unref (mletflite);
+    prevplugin = newplugin;
 
-      if (out_mlequeue)
-        gst_object_unref (out_mlequeue);
+    newplugin = gst_element_factory_make ("queue", "mlvconverter_queue");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
 
-      if (mlesink)
-        gst_object_unref (mlesink);
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
 
-      return FALSE;
-    }
+    prevplugin = newplugin;
 
-    // Add the new elements to the pipeline.
-    gst_bin_add_many (GST_BIN (pipeline), in_mlequeue, mletflite,
-        out_mlequeue, mlesink, NULL);
+    newplugin = gst_element_factory_make ("qtimltflite", "mltflite");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
 
-    // New elements need to be in the same state as the pipeline.
-    success = gst_element_sync_state_with_parent (mlesink);
-    success &= gst_element_sync_state_with_parent (out_mlequeue);
-    success &= gst_element_sync_state_with_parent (mletflite);
-    success &= gst_element_sync_state_with_parent (in_mlequeue);
+    // Set ML properties
+    propspecs = g_object_class_find_property (G_OBJECT_GET_CLASS (newplugin),
+        "delegate");
 
-    if (!success) {
-      g_printerr ("\nFailed to set new MLE elements into proper state!\n");
-      return FALSE;
-    }
+    g_value_init (&value, G_PARAM_SPEC_VALUE_TYPE (propspecs));
+    g_return_val_if_fail (gst_value_deserialize (&value, "hexagon"), FALSE);
 
-    // Set MLE properties
-    g_object_set (G_OBJECT (mletflite),
-        "delegate", 0, NULL);
-    g_object_set (G_OBJECT (mletflite),
-        "config", "/data/misc/camera/mle_tflite.config", NULL);
-    g_object_set (G_OBJECT (mletflite),
-        "model", "/data/misc/camera/detect.tflite", NULL);
-    g_object_set (G_OBJECT (mletflite),
-        "labels", "/data/misc/camera/labelmap.txt", NULL);
-    g_object_set (G_OBJECT (mletflite),
-        "postprocessing", "detection", NULL);
-    g_object_set (G_OBJECT (mletflite),
-        "preprocess-accel", 1, NULL);
+    g_object_set_property (G_OBJECT (newplugin), "delegate", &value);
+    g_value_unset (&value);
+
+    g_object_set (G_OBJECT (newplugin),  "model",
+        "/data/yolov5m-320x320-int8.tflite", NULL);
+
+    // Add the new element to the pipeline and sync its state.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+
+    // Link the new element with the previous one in the pipeline.
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+
+    prevplugin = newplugin;
+
+    newplugin = gst_element_factory_make ("queue", "mltflite_queue");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
+
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+
+    prevplugin = newplugin;
+
+    newplugin = gst_element_factory_make ("qtimlvdetection", "mlvdetection");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
+
+    // Set ML Detection properties
+    propspecs = g_object_class_find_property (G_OBJECT_GET_CLASS (newplugin),
+        "module");
+
+    g_value_init (&value, G_PARAM_SPEC_VALUE_TYPE (propspecs));
+    g_return_val_if_fail (gst_value_deserialize (&value, "yolov5m"), FALSE);
+
+    g_object_set_property (G_OBJECT (newplugin), "module", &value);
+    g_value_unset (&value);
+
+    g_object_set (G_OBJECT (newplugin), "labels", "/data/yolov5m.labels", NULL);
+    g_object_set (G_OBJECT (newplugin), "threshold", 75.0, NULL);
+    g_object_set (G_OBJECT (newplugin), "results", 10, NULL);
+
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+
+    prevplugin = newplugin;
+
+    newplugin = gst_element_factory_make ("capsfilter", "mldetection_filter");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
+
+    // Set caps for the ML Detection pad.
+    filtercaps = gst_caps_new_simple ("text/x-raw", "format", G_TYPE_STRING,
+        "utf8", NULL);
+    g_object_set (G_OBJECT (newplugin), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+
+    prevplugin = newplugin;
+
+    newplugin = gst_element_factory_make ("queue", "mlvdetection_queue");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
+
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+
+    prevplugin = newplugin;
+
+    newplugin = gst_element_factory_make ("appsink", "mlsink");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
 
     // Set emit-signals property and connect a callback to the new-sample signal.
-    g_object_set (G_OBJECT(mlesink), "emit-signals", TRUE, NULL);
-    g_signal_connect (mlesink, "new-sample", G_CALLBACK (mle_new_sample), srvctx);
+    g_object_set (G_OBJECT(newplugin), "emit-signals", TRUE, NULL);
+    g_signal_connect (newplugin, "new-sample", G_CALLBACK (ml_new_sample), srvctx);
 
-    g_object_set (G_OBJECT(mlesink), "wait-on-eos", FALSE, NULL);
-    g_object_set (G_OBJECT(mlesink), "enable-last-sample", FALSE, NULL);
-    g_object_set (G_OBJECT(mlesink), "sync", FALSE, NULL);
+    g_object_set (G_OBJECT(newplugin), "wait-on-eos", FALSE, NULL);
+    g_object_set (G_OBJECT(newplugin), "enable-last-sample", FALSE, NULL);
+    g_object_set (G_OBJECT(newplugin), "sync", FALSE, NULL);
 
-    // Retrieve MLE filter plugin in order to link the new elements.
-    mlefilter = gst_bin_get_by_name (GST_BIN (pipeline), "mlefilter");
+    // Add the new element to the pipeline, sync its state and link to previous.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
 
-    success = gst_element_link_many (mlefilter, in_mlequeue, mletflite,
-        out_mlequeue, mlesink, NULL);
+  } else if (!enable && (NULL == plugin)) {
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mlvconverter");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    gst_object_unref (mlefilter);
-  } else if (!enable && (NULL == fakesink)) {
-    in_mlequeue = gst_bin_get_by_name (GST_BIN (pipeline), "inmlequeue");
-    mletflite = gst_bin_get_by_name (GST_BIN (pipeline), "mletflite");
-    out_mlequeue = gst_bin_get_by_name (GST_BIN (pipeline), "outmlequeue");
-    mlesink = gst_bin_get_by_name (GST_BIN (pipeline), "mlesink");
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mlvconverter_queue");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    gst_bin_remove_many (GST_BIN (pipeline), in_mlequeue, mletflite,
-        out_mlequeue, mlesink, NULL);
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mltflite");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    // Removed elements need to be in NULL state before deletion.
-    gst_element_set_state (mlesink, GST_STATE_NULL);
-    gst_element_set_state (out_mlequeue, GST_STATE_NULL);
-    gst_element_set_state (mletflite, GST_STATE_NULL);
-    gst_element_set_state (in_mlequeue, GST_STATE_NULL);
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mltflite_queue");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    gst_object_unref (mlesink);
-    gst_object_unref (out_mlequeue);
-    gst_object_unref (mletflite);
-    gst_object_unref (in_mlequeue);
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mlvdetection");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    fakesink = gst_element_factory_make ("fakesink", "fakesink");
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mldetection_filter");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    if (!fakesink) {
-      g_printerr ("\nFailed to create fakesink element!\n");
-      return FALSE;
-    }
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mlvdetection_queue");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    // Add the new elements to the pipeline.
-    gst_bin_add_many (GST_BIN (pipeline), fakesink, NULL);
+    plugin = gst_bin_get_by_name (GST_BIN (pipeline), "mlsink");
+    g_return_val_if_fail (gst_bin_remove (GST_BIN (pipeline), plugin), FALSE);
+    gst_element_set_state (plugin, GST_STATE_NULL);
+    gst_object_unref (plugin);
 
-    // New elements need to be in the same state as the pipeline.
-    if (!gst_element_sync_state_with_parent (fakesink)) {
-      g_printerr ("\nFailed to set fakesink into proper state!\n");
-      return FALSE;
-    }
+    newplugin = gst_element_factory_make ("fakesink", "fakesink");
+    g_return_val_if_fail (newplugin != NULL, FALSE);
 
-    // Retrieve MLE filter plugin in order to link the new elements.
-    mlefilter = gst_bin_get_by_name (GST_BIN (pipeline), "mlefilter");
-    success = gst_element_link (mlefilter, fakesink);
+    // Add the new element to the pipeline and sync its state.
+    g_return_val_if_fail (gst_bin_add (GST_BIN (pipeline), newplugin), FALSE);
+    g_return_val_if_fail (gst_element_sync_state_with_parent (newplugin), FALSE);
 
-    gst_object_unref (mlefilter);
+    // Retrieve ML filter plugin in order to link the new elements.
+    prevplugin = gst_bin_get_by_name (GST_BIN (pipeline), "camsrc_queue");
+    g_return_val_if_fail (gst_element_link (prevplugin, newplugin), FALSE);
+    gst_object_unref (prevplugin);
   }
 
-  return success;
+  return TRUE;
 }
 
-static gboolean
+static bool
 setup_camera_stream (UmdVideoSetup * stmsetup, void * userdata)
 {
   GstServiceContext *srvctx = GST_SERVICE_CONTEXT_CAST (userdata);
@@ -1464,8 +1513,8 @@ setup_camera_stream (UmdVideoSetup * stmsetup, void * userdata)
   // Reset the crop parameters.
   set_crop_rectangle (srvctx->vpipeline, 0, 0, 0, 0);
 
-  if (!mle_reconfigure_pipeline (srvctx, afrmops.enable)) {
-    g_printerr ("\nFailed to reconfigure pipeline MLE elements!\n");
+  if (!ml_reconfigure_pipeline (srvctx, afrmops.enable)) {
+    g_printerr ("\nFailed to reconfigure pipeline ML elements!\n");
     return false;
   }
 
@@ -1502,7 +1551,7 @@ setup_camera_stream (UmdVideoSetup * stmsetup, void * userdata)
   return true;
 }
 
-static gboolean
+static bool
 enable_camera_stream (void * userdata)
 {
   GstServiceContext *srvctx = GST_SERVICE_CONTEXT_CAST (userdata);
@@ -1521,7 +1570,7 @@ enable_camera_stream (void * userdata)
   return true;
 }
 
-static gboolean
+static bool
 disable_camera_stream (void * userdata)
 {
   GstServiceContext *srvctx = GST_SERVICE_CONTEXT_CAST (userdata);
@@ -1997,27 +2046,12 @@ get_zoom_property (GstElement * element, guint16 * magnification)
 }
 
 static void
-set_zoom_property (GstElement * element, guint16 * in_magnification,
-    umd_pan_tilt_t * pan_and_tilt, GstUvcControlValues * ctrl_vals)
+set_zoom_property (GstElement * element, guint16 magnification,
+    gint32 pan, gint32 tilt, GstUvcControlValues * ctrlvals)
 {
   GValue value = G_VALUE_INIT, v = G_VALUE_INIT;
   GstVideoRectangle sensor = {}, zoom = {};
-  guint16 magnification = 0;
-  static gint32 pan = 0, tilt = 0;
-
-  if (pan_and_tilt) {
-    pan  = UMD_VIDEO_CTRL_GET_PAN (*pan_and_tilt);
-    tilt = UMD_VIDEO_CTRL_GET_TILT (*pan_and_tilt);
-    umd_current_pan_and_tilt = *pan_and_tilt;
-  } else {
-    pan  = UMD_VIDEO_CTRL_GET_PAN (umd_current_pan_and_tilt);
-    tilt = UMD_VIDEO_CTRL_GET_TILT (umd_current_pan_and_tilt);
-  }
-
-  if (in_magnification)
-    magnification = *in_magnification;
-  else
-    get_zoom_property (element, &magnification);
+  gfloat steps = 0.0;
 
   g_value_init (&value, GST_TYPE_ARRAY);
   g_object_get_property (G_OBJECT (element), "active-sensor-size", &value);
@@ -2040,19 +2074,17 @@ set_zoom_property (GstElement * element, guint16 * in_magnification,
   zoom.w = (sensor.w - sensor.x) / (magnification / 100.0);
   zoom.h = (sensor.h - sensor.y) / (magnification / 100.0);
 
-  gint pan_min = UMD_VIDEO_CTRL_GET_PAN (ctrl_vals->pan_tilt_min);
-  gint pan_max = UMD_VIDEO_CTRL_GET_PAN (ctrl_vals->pan_tilt_max);
-  gfloat pan_steps = (pan_max - pan_min) / 2.0;
+  // Calculate the total number of Pan steps.
+  steps = (ctrlvals->pan.max - ctrlvals->pan.min) / 2.0;
 
   zoom.x = ((sensor.w - sensor.x) - zoom.w) / 2;
-  zoom.x += (zoom.x * pan) / pan_steps;
+  zoom.x += (zoom.x * pan) / steps;
 
-  gint tilt_min = UMD_VIDEO_CTRL_GET_TILT (ctrl_vals->pan_tilt_min);
-  gint tilt_max = UMD_VIDEO_CTRL_GET_TILT (ctrl_vals->pan_tilt_max);
-  gfloat tilt_steps = (pan_max - pan_min) / 2.0;
+  // Calculate the total number of Tilt steps.
+  steps = (ctrlvals->tilt.max - ctrlvals->tilt.min) / 2.0;
 
   zoom.y = ((sensor.h - sensor.y) - zoom.h) / 2;
-  zoom.y -= (zoom.y * tilt) / tilt_steps;
+  zoom.y -= (zoom.y * tilt) / steps;
 
   g_value_unset (&value);
   g_value_init (&value, GST_TYPE_ARRAY);
@@ -2074,12 +2106,14 @@ set_zoom_property (GstElement * element, guint16 * in_magnification,
   g_object_set_property (G_OBJECT (element), "zoom", &value);
 }
 
-static gboolean
+static bool
 handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     void * userdata)
 {
   GstServiceContext *srvctx = GST_SERVICE_CONTEXT_CAST (userdata);
   GstElement *element = NULL;
+  static guint16 magnification = 0;
+  static gint32 pan = 0, tilt = 0;
 
   element = gst_bin_get_by_name (GST_BIN (srvctx->vpipeline), "camsrc");
 
@@ -2087,7 +2121,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
   switch (ctrl) {
     case UMD_VIDEO_CTRL_BRIGHTNESS:
     {
-      umd_brightness_t * value = (umd_brightness_t *) payload;
+      int16_t *value = (int16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_exposure_compensation_property (element, *value);
@@ -2096,13 +2131,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_exposure_compensation_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.brightness_min;
+          *value = srvctx->ctrlvals.brightness.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.brightness_max;
+          *value = srvctx->ctrlvals.brightness.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.brightness_def;
+          *value = srvctx->ctrlvals.brightness.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2112,7 +2147,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_CONTRAST:
     {
-      umd_contrast_t * value = (umd_contrast_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_contrast_property (element, *value);
@@ -2121,13 +2157,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_contrast_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.contrast_min;
+          *value = srvctx->ctrlvals.contrast.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.contrast_max;
+          *value = srvctx->ctrlvals.contrast.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.contrast_def;
+          *value = srvctx->ctrlvals.contrast.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2137,7 +2173,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_SATURATION:
     {
-      umd_saturation_t * value = (umd_saturation_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_saturation_property (element, *value);
@@ -2146,13 +2183,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_saturation_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.saturation_min;
+          *value = srvctx->ctrlvals.saturation.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.saturation_max;
+          *value = srvctx->ctrlvals.saturation.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.saturation_def;
+          *value = srvctx->ctrlvals.saturation.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2162,7 +2199,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_SHARPNESS:
     {
-      umd_sharpness_t * value = (umd_sharpness_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_sharpness_property (element, *value);
@@ -2171,13 +2209,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_sharpness_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.sharpness_min;
+          *value = srvctx->ctrlvals.sharpness.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.sharpness_max;
+          *value = srvctx->ctrlvals.sharpness.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.sharpness_def;
+          *value = srvctx->ctrlvals.sharpness.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2187,7 +2225,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_BACKLIGHT_COMPENSATION:
     {
-      umd_backlight_comp_t * value = (umd_backlight_comp_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_adrc_property (element, *value);
@@ -2196,13 +2235,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_adrc_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.backlight_comp_min;
+          *value = srvctx->ctrlvals.blcompensation.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.backlight_comp_max;
+          *value = srvctx->ctrlvals.blcompensation.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.backlight_comp_def;
+          *value = srvctx->ctrlvals.blcompensation.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2212,25 +2251,26 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_ANTIBANDING:
     {
-      umd_antibanding_t * value = (umd_antibanding_t *) payload;
+      uint8_t *value = (uint8_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_antibanding_property (element, *value);
           break;
         case UMD_CTRL_GET_REQUEST:
           if (!get_antibanding_property (element, value)) {
-            *value = srvctx->ctrl_values.antibanding_def;
+            *value = srvctx->ctrlvals.antibanding.dflt;
             set_antibanding_property (element, *value);
           }
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.antibanding_def;
+          *value = srvctx->ctrlvals.antibanding.dflt;
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.antibanding_min;
+          *value = srvctx->ctrlvals.antibanding.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.antibanding_max;
+          *value = srvctx->ctrlvals.antibanding.max;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2240,7 +2280,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_GAIN:
     {
-      umd_gain_t * value = (umd_gain_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_iso_property (element, *value);
@@ -2249,13 +2290,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_iso_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.gain_min;
+          *value = srvctx->ctrlvals.gain.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.gain_max;
+          *value = srvctx->ctrlvals.gain.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.gain_def;
+          *value = srvctx->ctrlvals.gain.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2265,25 +2306,26 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_WB_TEMPERTURE:
     {
-      umd_wb_temp_t * value = (umd_wb_temp_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_wb_temperature_property (element, *value);
           break;
         case UMD_CTRL_GET_REQUEST:
           if (!get_wb_temperature_property (element, value)) {
-            *value = srvctx->ctrl_values.wb_temp_def;
+            *value = srvctx->ctrlvals.wbtemp.dflt;
             set_wb_temperature_property (element, *value);
           }
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.wb_temp_min;
+          *value = srvctx->ctrlvals.wbtemp.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.wb_temp_max;
+          *value = srvctx->ctrlvals.wbtemp.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.wb_temp_def;
+          *value = srvctx->ctrlvals.wbtemp.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2293,19 +2335,20 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_WB_MODE:
     {
-      umd_wb_mode_t * value = (umd_wb_mode_t *) payload;
+      uint8_t *value = (uint8_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_wb_mode_property (element, *value);
           break;
         case UMD_CTRL_GET_REQUEST:
           if (!get_wb_mode_property (element, value)) {
-            *value = srvctx->ctrl_values.wb_mode_def;
+            *value = srvctx->ctrlvals.wbmode;
             set_wb_mode_property (element, *value);
           }
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.wb_mode_def;
+          *value = srvctx->ctrlvals.wbmode;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2315,7 +2358,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_EXPOSURE_TIME:
     {
-      umd_exp_time_t * value = (umd_exp_time_t *) payload;
+      uint32_t *value = (uint32_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_exposure_time_property (element, *value);
@@ -2324,13 +2368,13 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
           get_exposure_time_property (element, value);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.exp_time_min;
+          *value = srvctx->ctrlvals.exptime.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.exp_time_max;
+          *value = srvctx->ctrlvals.exptime.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.exp_time_def;
+          *value = srvctx->ctrlvals.exptime.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2340,19 +2384,20 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_EXPOSURE_MODE:
     {
-      umd_exp_mode_t * value = (umd_exp_mode_t *) payload;
+      uint8_t *value = (uint8_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_exposure_mode_property (element, *value);
           break;
         case UMD_CTRL_GET_REQUEST:
           if (!get_exposure_mode_property (element, value)) {
-            *value = srvctx->ctrl_values.exp_mode_def;
+            *value = srvctx->ctrlvals.expmode;
             set_exposure_mode_property (element, *value);
           }
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.exp_mode_def;
+          *value = srvctx->ctrlvals.expmode;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2362,7 +2407,8 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_EXPOSURE_PRIORITY:
     {
-      umd_exp_priority_t * value = (umd_exp_priority_t *) payload;
+      uint8_t *value = (uint8_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           if (*value = UMD_VIDEO_EXPOSURE_PRIORITY_CONSTANT)
@@ -2379,19 +2425,20 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_FOCUS_MODE:
     {
-      umd_exp_focus_mode_t * value = (umd_exp_focus_mode_t *) payload;
+      uint8_t *value = (uint8_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
           set_focus_mode_property (element, *value);
           break;
         case UMD_CTRL_GET_REQUEST:
           if (!get_focus_mode_property (element, value)) {
-            *value = srvctx->ctrl_values.exp_focus_mode_def;
+            *value = srvctx->ctrlvals.focusmode;
             set_focus_mode_property (element, *value);
           }
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.exp_focus_mode_def;
+          *value = srvctx->ctrlvals.focusmode;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2401,22 +2448,29 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_ZOOM:
     {
-      umd_zoom_t * value = (umd_zoom_t *) payload;
+      uint16_t *value = (uint16_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
-          set_zoom_property (element, value, NULL, &srvctx->ctrl_values);
+          // Update the static variable that tracks the current zoom factor.
+          magnification = *value;
+
+          set_zoom_property (element, magnification, pan, tilt, &srvctx->ctrlvals);
           break;
         case UMD_CTRL_GET_REQUEST:
           get_zoom_property (element, value);
+
+          // Update the static variable that tracks the current zoom factor.
+          magnification = *value;
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.zoom_min;
+          *value = srvctx->ctrlvals.zoom.min;
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.zoom_max;
+          *value = srvctx->ctrlvals.zoom.max;
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.zoom_def;
+          *value = srvctx->ctrlvals.zoom.dflt;
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2426,23 +2480,30 @@ handle_camera_control (uint32_t ctrl, uint32_t request, void * payload,
     }
     case UMD_VIDEO_CTRL_PANTILT:
     {
-      umd_pan_tilt_t * value = (umd_pan_tilt_t *) payload;
-      umd_zoom_t magnification;
+      uint64_t *value = (uint64_t *) payload;
+
       switch (request) {
         case UMD_CTRL_SET_REQUEST:
-          set_zoom_property (element, NULL, value, &srvctx->ctrl_values);
+          // Update the static variables that tracks the current Pan and Tilt.
+          pan = UMD_VIDEO_GET_PAN_VALUE (value);
+          tilt = UMD_VIDEO_GET_TILT_VALUE (value);
+
+          set_zoom_property (element, magnification, pan, tilt, &srvctx->ctrlvals);
           break;
         case UMD_CTRL_GET_REQUEST:
-          *value = umd_current_pan_and_tilt;
+          *value = UMD_VIDEO_SET_PANTILT_VALUE (pan, tilt);
           break;
         case UMD_CTRL_MIN_REQUEST:
-          *value = srvctx->ctrl_values.pan_tilt_min;
+          *value = UMD_VIDEO_SET_PANTILT_VALUE (
+              srvctx->ctrlvals.pan.min, srvctx->ctrlvals.tilt.min);
           break;
         case UMD_CTRL_MAX_REQUEST:
-          *value = srvctx->ctrl_values.pan_tilt_max;
+          *value = UMD_VIDEO_SET_PANTILT_VALUE (
+              srvctx->ctrlvals.pan.max, srvctx->ctrlvals.tilt.max);
           break;
         case UMD_CTRL_DEF_REQUEST:
-          *value = srvctx->ctrl_values.pan_tilt_def;
+          *value = UMD_VIDEO_SET_PANTILT_VALUE (
+              srvctx->ctrlvals.pan.dflt, srvctx->ctrlvals.tilt.dflt);
           break;
         default:
           g_printerr ("\nUnknown control request 0x%X!\n", request);
@@ -2478,18 +2539,18 @@ extract_integer_value (gchar * input, gint64 min, gint64 max, gint64 * value)
 }
 
 static gboolean
-gst_service_load_config (gchar * config_location, GstStructure ** structure)
+load_control_values (const gchar * cfgfile, GstStructure ** structure)
 {
   gboolean rc = FALSE;
+  GValue value = G_VALUE_INIT;
 
-  GValue gvalue = G_VALUE_INIT;
-  g_value_init (&gvalue, GST_TYPE_STRUCTURE);
+  g_value_init (&value, GST_TYPE_STRUCTURE);
 
-  if (g_file_test (config_location, G_FILE_TEST_IS_REGULAR)) {
+  if (g_file_test (cfgfile, G_FILE_TEST_IS_REGULAR)) {
     gchar *contents = NULL;
     GError *error = NULL;
 
-    if (!g_file_get_contents (config_location, &contents, NULL, &error)) {
+    if (!g_file_get_contents (cfgfile, &contents, NULL, &error)) {
       g_printerr ("Failed to get config file contents, error: %s!",
           GST_STR_NULL (error->message));
       g_clear_error (&error);
@@ -2500,144 +2561,136 @@ gst_service_load_config (gchar * config_location, GstStructure ** structure)
     contents = g_strstrip (contents);
     contents = g_strdelimit (contents, "\n", ',');
 
-    rc = gst_value_deserialize (&gvalue, contents);
+    rc = gst_value_deserialize (&value, contents);
     g_free (contents);
 
     if (!rc) {
       g_printerr ("Failed to deserialize config file contents!");
       return FALSE;
     }
-  } else if (!gst_value_deserialize (&gvalue, config_location)) {
+  } else if (!gst_value_deserialize (&value, cfgfile)) {
     g_printerr ("Failed to deserialize the config!");
     return FALSE;
   }
 
-  *structure = GST_STRUCTURE (g_value_dup_boxed (&gvalue));
-  g_value_unset (&gvalue);
+  *structure = GST_STRUCTURE (g_value_dup_boxed (&value));
+  g_value_unset (&value);
 
   return TRUE;
 }
 
 static void
-gst_service_load_uvc_controls_values (GstServiceContext * ctx,
-    const char * cfgfile)
+setup_video_controls_values (GstServiceContext * srvctx, const gchar * cfgfile)
 {
   GstElement *camsrc = NULL;
   GstStructure * structure = NULL;
-  gint pan_min, pan_max, pan_def, tilt_min, tilt_max, tilt_def;
 
-  camsrc = gst_bin_get_by_name (GST_BIN (ctx->vpipeline), "camsrc");
+  camsrc = gst_bin_get_by_name (GST_BIN (srvctx->vpipeline), "camsrc");
 
-  ctx->ctrl_values.brightness_min = -12;
-  ctx->ctrl_values.brightness_max = 12;
-  ctx->ctrl_values.brightness_def = 0;
+  srvctx->ctrlvals.brightness.min = -12;
+  srvctx->ctrlvals.brightness.max = 12;
+  srvctx->ctrlvals.brightness.dflt = 0;
 
-  ctx->ctrl_values.contrast_min = 1;
-  ctx->ctrl_values.contrast_max = 10;
-  ctx->ctrl_values.contrast_def = 5;
+  srvctx->ctrlvals.contrast.min = 1;
+  srvctx->ctrlvals.contrast.max = 10;
+  srvctx->ctrlvals.contrast.dflt = 5;
 
-  ctx->ctrl_values.saturation_min = 0;
-  ctx->ctrl_values.saturation_max = 10;
-  ctx->ctrl_values.saturation_def = 5;
+  srvctx->ctrlvals.saturation.min = 0;
+  srvctx->ctrlvals.saturation.max = 10;
+  srvctx->ctrlvals.saturation.dflt = 5;
 
-  ctx->ctrl_values.sharpness_min = 0;
-  ctx->ctrl_values.sharpness_max = 6;
-  ctx->ctrl_values.sharpness_def = 2;
+  srvctx->ctrlvals.sharpness.min = 0;
+  srvctx->ctrlvals.sharpness.max = 6;
+  srvctx->ctrlvals.sharpness.dflt = 2;
 
-  ctx->ctrl_values.antibanding_def = UMD_VIDEO_ANTIBANDING_AUTO;
-  ctx->ctrl_values.antibanding_min = UMD_VIDEO_ANTIBANDING_DISABLED;
-  ctx->ctrl_values.antibanding_max = UMD_VIDEO_ANTIBANDING_AUTO;
+  srvctx->ctrlvals.antibanding.dflt = UMD_VIDEO_ANTIBANDING_AUTO;
+  srvctx->ctrlvals.antibanding.min = UMD_VIDEO_ANTIBANDING_DISABLED;
+  srvctx->ctrlvals.antibanding.max = UMD_VIDEO_ANTIBANDING_AUTO;
 
-  ctx->ctrl_values.backlight_comp_min = 0;
-  ctx->ctrl_values.backlight_comp_max = 1;
-  ctx->ctrl_values.backlight_comp_def = 0;
+  srvctx->ctrlvals.blcompensation.min = 0;
+  srvctx->ctrlvals.blcompensation.max = 1;
+  srvctx->ctrlvals.blcompensation.dflt = 0;
 
-  ctx->ctrl_values.gain_min = 100;
-  ctx->ctrl_values.gain_max = 3200;
-  ctx->ctrl_values.gain_def = 800;
+  srvctx->ctrlvals.gain.min = 100;
+  srvctx->ctrlvals.gain.max = 3200;
+  srvctx->ctrlvals.gain.dflt = 800;
 
-  ctx->ctrl_values.wb_temp_min = 2800;
-  ctx->ctrl_values.wb_temp_max = 6500;
-  ctx->ctrl_values.wb_temp_def = 4600;
+  srvctx->ctrlvals.wbtemp.min = 2800;
+  srvctx->ctrlvals.wbtemp.max = 6500;
+  srvctx->ctrlvals.wbtemp.dflt = 4600;
 
-  ctx->ctrl_values.wb_mode_def = UMD_VIDEO_WB_MODE_AUTO;
+  srvctx->ctrlvals.wbmode = UMD_VIDEO_WB_MODE_AUTO;
 
-  ctx->ctrl_values.exp_time_min = 333;
-  ctx->ctrl_values.exp_time_max = 100000;
-  ctx->ctrl_values.exp_time_def = 333;
+  srvctx->ctrlvals.exptime.min = 333;
+  srvctx->ctrlvals.exptime.max = 100000;
+  srvctx->ctrlvals.exptime.dflt = 333;
 
-  ctx->ctrl_values.exp_mode_def = UMD_VIDEO_EXPOSURE_MODE_AUTO;
+  srvctx->ctrlvals.expmode = UMD_VIDEO_EXPOSURE_MODE_AUTO;
 
-  ctx->ctrl_values.exp_focus_mode_def = UMD_VIDEO_FOCUS_MODE_AUTO;
+  srvctx->ctrlvals.focusmode = UMD_VIDEO_FOCUS_MODE_AUTO;
 
-  ctx->ctrl_values.zoom_min = 100;
-  ctx->ctrl_values.zoom_max = 500;
-  ctx->ctrl_values.zoom_def = 100;
+  srvctx->ctrlvals.zoom.min = 100;
+  srvctx->ctrlvals.zoom.max = 500;
+  srvctx->ctrlvals.zoom.dflt = 100;
 
-  pan_min = -25;
-  pan_max = 25;
-  pan_def = 0;
-  tilt_min = -25;
-  tilt_max = 25;
-  tilt_def = 0;
+  srvctx->ctrlvals.pan.min = -25;
+  srvctx->ctrlvals.pan.max = 25;
+  srvctx->ctrlvals.pan.dflt = 0;
 
-  if (cfgfile && gst_service_load_config (cfgfile, &structure)) {
+  srvctx->ctrlvals.tilt.min = -25;
+  srvctx->ctrlvals.tilt.max = 25;
+  srvctx->ctrlvals.tilt.dflt = 0;
+
+  if (cfgfile && load_control_values (cfgfile, &structure)) {
     gint value;
 
-    if (gst_structure_get_int (structure, "brightness_def", &value))
-      ctx->ctrl_values.brightness_def = (umd_brightness_t) value;
+    if (gst_structure_get_int (structure, "brightness.default", &value))
+      srvctx->ctrlvals.brightness.dflt = (int16_t) value;
 
-    if (gst_structure_get_int (structure, "contrast_def", &value))
-      ctx->ctrl_values.contrast_def = (umd_contrast_t) value;
+    if (gst_structure_get_int (structure, "contrast.default", &value))
+      srvctx->ctrlvals.contrast.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "saturation_def", &value))
-      ctx->ctrl_values.saturation_def = (umd_saturation_t) value;
+    if (gst_structure_get_int (structure, "saturation.default", &value))
+      srvctx->ctrlvals.saturation.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "sharpness_def", &value))
-      ctx->ctrl_values.sharpness_def = (umd_sharpness_t) value;
+    if (gst_structure_get_int (structure, "sharpness.default", &value))
+      srvctx->ctrlvals.sharpness.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "antibanding_def", &value))
-      ctx->ctrl_values.antibanding_def = (umd_antibanding_t) value;
+    if (gst_structure_get_int (structure, "antibanding.default", &value))
+      srvctx->ctrlvals.antibanding.dflt = (uint8_t) value;
 
-    if (gst_structure_get_int (structure, "backlight_comp_def", &value))
-      ctx->ctrl_values.backlight_comp_def = (umd_backlight_comp_t) value;
+    if (gst_structure_get_int (structure, "backlight-compensation.default", &value))
+      srvctx->ctrlvals.blcompensation.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "gain_def", &value))
-      ctx->ctrl_values.gain_def = (umd_gain_t) value;
+    if (gst_structure_get_int (structure, "gain.default", &value))
+      srvctx->ctrlvals.gain.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "wb_temp_def", &value))
-      ctx->ctrl_values.wb_temp_def = (umd_wb_temp_t) value;
+    if (gst_structure_get_int (structure, "whitebalance-temperature.default", &value))
+      srvctx->ctrlvals.wbtemp.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "wb_mode_def", &value))
-      ctx->ctrl_values.wb_mode_def = (umd_wb_mode_t) value;
+    if (gst_structure_get_int (structure, "whitebalance-mode.default", &value))
+      srvctx->ctrlvals.wbmode = (uint8_t) value;
 
-    if (gst_structure_get_int (structure, "exp_time_def", &value))
-      ctx->ctrl_values.exp_time_def = (umd_exp_time_t) value;
+    if (gst_structure_get_int (structure, "exposure-time.default", &value))
+      srvctx->ctrlvals.exptime.dflt = (uint32_t) value;
 
-    if (gst_structure_get_int (structure, "exp_mode_def", &value))
-      ctx->ctrl_values.exp_mode_def = (umd_exp_mode_t) value;
+    if (gst_structure_get_int (structure, "exposure-mode.default", &value))
+      srvctx->ctrlvals.expmode = (uint8_t) value;
 
-    if (gst_structure_get_int (structure, "exp_focus_mode_def", &value))
-      ctx->ctrl_values.exp_focus_mode_def = (umd_exp_focus_mode_t) value;
+    if (gst_structure_get_int (structure, "focus-mode.default", &value))
+      srvctx->ctrlvals.focusmode = (uint8_t) value;
 
-    if (gst_structure_get_int (structure, "zoom_def", &value))
-      ctx->ctrl_values.zoom_def = (umd_zoom_t) value;
+    if (gst_structure_get_int (structure, "zoom.default", &value))
+      srvctx->ctrlvals.zoom.dflt = (uint16_t) value;
 
-    if (gst_structure_get_int (structure, "pan_def", &value))
-      pan_def = value;
+    if (gst_structure_get_int (structure, "pan.default", &value))
+      srvctx->ctrlvals.pan.dflt = value;
 
-    if (gst_structure_get_int (structure, "tilt_def", &value))
-      tilt_def = value;
+    if (gst_structure_get_int (structure, "tilt.default", &value))
+      srvctx->ctrlvals.tilt.dflt = value;
 
     gst_structure_free (structure);
   }
-
-  ctx->ctrl_values.pan_tilt_min =
-      UMD_VIDEO_CTRL_SET_PAN_AND_TILT (pan_min, tilt_min);
-  ctx->ctrl_values.pan_tilt_max =
-      UMD_VIDEO_CTRL_SET_PAN_AND_TILT (pan_max, tilt_max);
-  ctx->ctrl_values.pan_tilt_def =
-      UMD_VIDEO_CTRL_SET_PAN_AND_TILT (pan_def, tilt_def);
 
   {
     // Set the camera ISO mode to manual.
@@ -2653,20 +2706,20 @@ gst_service_load_uvc_controls_values (GstServiceContext * ctx,
     g_object_set_property (G_OBJECT (camsrc), "iso-mode", &value);
   }
 
-  set_exposure_compensation_property (camsrc, ctx->ctrl_values.brightness_def);
-  set_contrast_property (camsrc, ctx->ctrl_values.contrast_def);
-  set_saturation_property (camsrc, ctx->ctrl_values.saturation_def);
-  set_sharpness_property (camsrc, ctx->ctrl_values.sharpness_def);
-  set_antibanding_property (camsrc, ctx->ctrl_values.antibanding_def);
-  set_adrc_property (camsrc, ctx->ctrl_values.backlight_comp_def);
-  set_iso_property (camsrc, ctx->ctrl_values.gain_def);
-  set_wb_temperature_property (camsrc, ctx->ctrl_values.wb_temp_def);
-  set_wb_mode_property (camsrc, ctx->ctrl_values.wb_mode_def);
-  set_exposure_time_property (camsrc, ctx->ctrl_values.exp_time_def);
-  set_exposure_mode_property (camsrc, ctx->ctrl_values.exp_mode_def);
-  set_focus_mode_property (camsrc, ctx->ctrl_values.exp_focus_mode_def);
-  set_zoom_property (camsrc, &ctx->ctrl_values.zoom_def,
-      &ctx->ctrl_values.pan_tilt_def, &ctx->ctrl_values);
+  set_exposure_compensation_property (camsrc, srvctx->ctrlvals.brightness.dflt);
+  set_contrast_property (camsrc, srvctx->ctrlvals.contrast.dflt);
+  set_saturation_property (camsrc, srvctx->ctrlvals.saturation.dflt);
+  set_sharpness_property (camsrc, srvctx->ctrlvals.sharpness.dflt);
+  set_antibanding_property (camsrc, srvctx->ctrlvals.antibanding.dflt);
+  set_adrc_property (camsrc, srvctx->ctrlvals.blcompensation.dflt);
+  set_iso_property (camsrc, srvctx->ctrlvals.gain.dflt);
+  set_wb_temperature_property (camsrc, srvctx->ctrlvals.wbtemp.dflt);
+  set_wb_mode_property (camsrc, srvctx->ctrlvals.wbmode);
+  set_exposure_time_property (camsrc, srvctx->ctrlvals.exptime.dflt);
+  set_exposure_mode_property (camsrc, srvctx->ctrlvals.expmode);
+  set_focus_mode_property (camsrc, srvctx->ctrlvals.focusmode);
+  set_zoom_property (camsrc, srvctx->ctrlvals.zoom.dflt,
+      srvctx->ctrlvals.pan.dflt, srvctx->ctrlvals.tilt.dflt, &srvctx->ctrlvals);
 
   gst_object_unref (camsrc);
 }
@@ -2866,11 +2919,13 @@ main (gint argc, gchar *argv[])
     return -1;
   }
 
-  if (mainops.video && !create_video_pipeline (srvctx, mainops.config)) {
+  if (mainops.video && !create_video_pipeline (srvctx)) {
     g_printerr ("\nFailed to create video pipeline!\n");
     gst_service_context_free (srvctx);
     return -1;
   }
+
+  setup_video_controls_values (srvctx, mainops.cfgfile);
 
   // If a device is not to be initialized, NULL is passed for respective device
   srvctx->gadget = umd_gadget_new (mainops.video, mainops.audio, &callbacks, srvctx);
