@@ -366,8 +366,9 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
 
     // Set the most appropriate font size based on the bounding box dimensions.
     fontsize = (width / MAX_TEXT_LENGTH) * 9.0 / 5.0;
+#if 0
     cairo_set_font_size (context, fontsize);
-
+#endif
     // Set color.
     cairo_set_source_rgba (context,
         EXTRACT_RED_COLOR (prediction->color),
