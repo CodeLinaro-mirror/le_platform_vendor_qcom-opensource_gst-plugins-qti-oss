@@ -258,10 +258,11 @@ _gst_qcodec2_alloc_buf (GstBufferPool * bpool)
             GST_VIDEO_INFO_HEIGHT (info), GST_VIDEO_INFO_N_PLANES (info),
             info->offset, info->stride);
         if (meta) {
+          meta->id = buffer.meta_fd;  //store meta_fd in GstVideoMeta's id for downstream plugin using
           GST_INFO_OBJECT (bpool, "format %s, %ux%u, stride0 %u, "
-              "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT,
+              "offset0 %" G_GSIZE_FORMAT ", offset1 %" G_GSIZE_FORMAT ", meta_fd %d",
               gst_video_format_to_string (meta->format), meta->width,
-              meta->height, meta->stride[0], meta->offset[0], meta->offset[1]);
+              meta->height, meta->stride[0], meta->offset[0], meta->offset[1], buffer.meta_fd);
         }
 
         gst_buffer_prepend_memory (gst_buf, mem);
@@ -421,15 +422,18 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
 
     /* Add video meta data, which is needed for downstream element. */
     GST_DEBUG_OBJECT (bpool,
-        "attach video meta: width:%d height:%d offset:%lu %lu stride:%d %d planes:%d size:%lu gst size:%lu",
+        "attach video meta: width:%d height:%d offset:%lu %lu stride:%d %d planes:%d size:%lu gst size:%lu meta_fd:%d",
         GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo), offset[0],
         offset[1], stride[0], stride[1], GST_VIDEO_INFO_N_PLANES (vinfo),
-        GST_VIDEO_INFO_SIZE (vinfo), gst_buffer_get_size (gst_buf));
+        GST_VIDEO_INFO_SIZE (vinfo), gst_buffer_get_size (gst_buf), param_ext->meta_fd);
     video_meta =
         gst_buffer_add_video_meta_full (gst_buf, GST_VIDEO_FRAME_FLAG_NONE,
         GST_VIDEO_INFO_FORMAT (vinfo), GST_VIDEO_INFO_WIDTH (vinfo),
         GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo), offset,
         stride);
+    if (video_meta) {
+      video_meta->id = param_ext->meta_fd;  //store meta_fd in GstVideoMeta's id for downstream plugin using
+    }
 
     /* lock all metadata and mark as pooled, we want this to remain on the buffer */
     gst_buffer_foreach_meta (gst_buf, mark_meta_data_pooled, NULL);
