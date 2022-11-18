@@ -111,6 +111,14 @@ struct _GstVideoTransform {
   GstVideoInfo            *ininfo;
   GstVideoInfo            *outinfo;
 
+  // Features of the negotiated input and output caps.
+  GQuark                  infeature;
+  GQuark                  outfeature;
+
+  // Whether input and output caps have UBWC compression.
+  gboolean                inubwc;
+  gboolean                outubwc;
+
   // Output buffer pool
   GstBufferPool           *outpool;
 
