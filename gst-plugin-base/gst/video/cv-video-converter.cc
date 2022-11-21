@@ -578,6 +578,8 @@ gst_cv_video_converter_new ()
 {
   GstCVConverter *convert = NULL;
 
+  cv::setNumThreads (0);
+
   convert = g_slice_new0 (GstCVConverter);
   g_return_val_if_fail (convert != NULL, NULL);
 
