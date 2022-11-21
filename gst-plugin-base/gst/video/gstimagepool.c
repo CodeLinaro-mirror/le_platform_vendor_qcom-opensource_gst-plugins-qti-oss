@@ -505,7 +505,7 @@ gst_image_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
 
     usage |= priv->isubwc ? GBM_BO_USAGE_UBWC_ALIGNED_QTI : 0;
 
-    priv->gbm_perform (GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS, &bufinfo,
+    priv->gbm_perform (GBM_PERFORM_GET_BUFFER_STRIDE_SCANLINE_SIZE, &bufinfo,
         usage, &stride, &scanline, &size);
 
     GST_VIDEO_INFO_PLANE_STRIDE (&priv->info, 0) = stride;

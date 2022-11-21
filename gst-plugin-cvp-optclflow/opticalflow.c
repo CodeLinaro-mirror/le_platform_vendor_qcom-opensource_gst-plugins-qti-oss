@@ -380,7 +380,7 @@ gst_cvp_optclflow_set_caps (GstBaseTransform * base, GstCaps * incaps,
         return FALSE;
     }
 
-    gbm_perform (GBM_PERFORM_GET_BUFFER_SIZE_DIMENSIONS,
+    gbm_perform (GBM_PERFORM_GET_BUFFER_STRIDE_SCANLINE_SIZE,
         &bufinfo, 0, &stride, &scanline, &size);
   } else {
     GST_LOG_OBJECT (optclflow, "Using stride and scanline from GstVideoInfo");
