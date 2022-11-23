@@ -38,7 +38,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef VDEC_OMX_SAMPLE_OMX_UTILS_H_
 #define VDEC_OMX_SAMPLE_OMX_UTILS_H_
 
-#include <time.h>
+#include <sys/time.h>
 #include "video_types.h"
 
 // log control

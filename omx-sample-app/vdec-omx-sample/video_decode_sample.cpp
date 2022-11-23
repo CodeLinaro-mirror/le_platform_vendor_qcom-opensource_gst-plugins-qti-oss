@@ -43,7 +43,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <getopt.h>
 #include <sys/types.h>
 #include <sys/mman.h>
-#include <time.h>
 #include <sys/ioctl.h>
 #include <errno.h>
 #include <pthread.h>

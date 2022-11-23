@@ -38,6 +38,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/time.h>
 
 #include "OMX_Core.h"
 
