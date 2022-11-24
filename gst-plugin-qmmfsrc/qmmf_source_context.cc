@@ -192,6 +192,8 @@ struct _GstQmmfContext {
   gint               sensormode;
   /// Streams frame rate control mode
   guchar            frc_mode;
+  /// HFR Sync Mode
+  gboolean          hfr_sync_mode;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -1138,6 +1140,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
   yuv_cb.enable = context->yuv_cb;
   xtraparam.Update(::qmmf::recorder::QMMF_YUVCALLBACK, yuv_cb);
 
+  // HFRSyncMode
+  ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
+  hfr_sync_mode.enable = context->hfr_sync_mode;
+  xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
+
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const android::CameraMetadata& result) {
 
@@ -1840,6 +1847,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_YUVCALLBACK:
       context->yuv_cb = g_value_get_boolean (value);
       return;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      context->hfr_sync_mode = g_value_get_boolean(value);
+      return;
   }
 
   if (context->state >= GST_STATE_READY &&
@@ -2355,6 +2365,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       break;
     case PARAM_CAMERA_FRC_MODE:
       g_value_set_enum (value, context->frc_mode);
+      return;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      g_value_set_boolean(value, context->hfr_sync_mode);
       return;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
