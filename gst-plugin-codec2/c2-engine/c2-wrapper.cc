@@ -69,7 +69,7 @@ GstC2Wrapper *
 gst_c2_wrapper_new ()
 {
   GstC2Wrapper *wrapper = NULL;
-  wrapper = g_slice_new0 (GstC2Wrapper);
+  wrapper = g_new0 (GstC2Wrapper, 1);
   g_return_val_if_fail (wrapper != NULL, NULL);
 
   wrapper->dlhandle = dlopen("libqcodec2_core.so", RTLD_NOW);
@@ -84,18 +84,18 @@ gst_c2_wrapper_new ()
       "QC2ComponentStoreFactoryGetter");
 
   if (factoryGetter == NULL) {
-    g_slice_free (GstC2Wrapper, wrapper);
     GST_ERROR("failed to load symbol QC2ComponentStoreFactoryGetter: %s",
         dlerror());
     dlclose(wrapper->dlhandle);
+    g_free(wrapper);
     return NULL;
   }
 
   auto c2StoreFactory = (*factoryGetter) (1, 0); // get version 1.0
   if (c2StoreFactory == NULL) {
-    g_slice_free (GstC2Wrapper, wrapper);
     GST_ERROR("failed to get Store factory !");
     dlclose(wrapper->dlhandle);
+    g_free(wrapper);
     return NULL;
   } else {
     GST_INFO ("Successfully get store factory");
@@ -103,9 +103,9 @@ gst_c2_wrapper_new ()
 
   wrapper->compstore = c2StoreFactory->getInstance();
   if (wrapper->compstore == NULL) {
-    g_slice_free (GstC2Wrapper, wrapper);
     GST_ERROR("failed to get Component Store instance!");
     dlclose(wrapper->dlhandle);
+    g_free(wrapper);
     return NULL;
   }
 
@@ -118,7 +118,7 @@ gst_c2_wrapper_free (GstC2Wrapper * wrapper)
 {
   dlclose(wrapper->dlhandle);
   GST_INFO ("Destroyed C2 wrapper: %p", wrapper);
-  g_slice_free (GstC2Wrapper, wrapper);
+  g_free(wrapper);
 }
 
 gboolean
