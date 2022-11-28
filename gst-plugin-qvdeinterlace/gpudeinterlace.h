@@ -4,37 +4,31 @@
 #ifndef __GST_GPUDEINTERLACE_H__
 #define __GST_GPUDEINTERLACE_H__
 
-//#define QTI_PLATFORM
-
-#ifdef QTI_PLATFORM
+#ifdef USE_GPU_DEINTERLACE
 #include <gpudi.h>
 #endif
 
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
-typedef enum {
+typedef enum
+{
   GPUDI_SCAN_METHOD_NONE = -1,
   GPUDI_SCAN_METHOD_PROGRESSIVE = 0,
-  GPUDI_SCAN_METHOD_TOP_FIRST,
-  GPUDI_SCAN_METHOD_BOTTOM_FIRST,
+  GPUDI_SCAN_METHOD_TOP_FIRST = 1,
+  GPUDI_SCAN_METHOD_BOTTOM_FIRST = 2,
 } GpudiScanMethod;
 
-/* This is opaque to client, do NOT use the fields directly. */
-struct gpudi_buf_desc
-{
-  gint fd;
-  GstVideoFormat format;
-  gint width;
-  gint height;
-  gint stride;
-  gsize size;
-  gboolean ubwc;
-  GpudiScanMethod scan;
-};
+#ifdef USE_GPU_DEINTERLACE
+/* GpudiBufDesc is opaque to user. */
+typedef GpuDeinterlace_BufferDesc GpudiBufDesc;
+#else
+/* It's meaningless just for passing compilation. */
+typedef gint GpudiBufDesc;
+#endif /* USE_GPU_DEINTERLACE */
 
-/* GpudiBufDesc is opaque to client */
-typedef struct gpudi_buf_desc GpudiBufDesc;
+gboolean
+gpu_deinterlace_load_libs_once (void);
 
 void
 gpu_deinterlace_fill_desc (GpudiBufDesc * desc, const GstVideoInfo * info,
@@ -45,7 +39,7 @@ gpu_deinterlace_invalidate_reference_option (gboolean invalidate)
 {
   gint option = 0;
 
-#ifdef QTI_PLATFORM
+#ifdef USE_GPU_DEINTERLACE
   if (invalidate)
     option = GpuDeinterlace_Invalidate_Backward_Reference;
 #endif
@@ -61,10 +55,8 @@ gint
 gpu_deinterlace_process_frame (gint handle, GpudiBufDesc * dst,
     const GpudiBufDesc * src, gint flags);
 
-gint
-gpu_deinterlace_reset_instance (gint handle);
+gint gpu_deinterlace_reset_instance (gint handle);
 
-gint
-gpu_deinterlace_close_instance (gint handle);
+gint gpu_deinterlace_close_instance (gint handle);
 
 #endif /* __GST_GPUDEINTERLACE_H__ */

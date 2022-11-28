@@ -8,7 +8,8 @@
  * <refsect2>
  * <title>Example launch line</title>
  * |[
- * gst-launch -v -m fakesrc ! qvdeinterlace ! fakesink silent=TRUE
+ * gst-launch filesrc location=xxx.mp4 ! qtdemux ! h264parse !
+ * qcodec2h264dec deinterlace=0 ! qvdeinterlace ! waylandsink
  * ]|
  * </refsect2>
  */
@@ -41,40 +42,27 @@ enum
 };
 
 #define SINK_FORMATS "{" \
-    "RGBx, " \
-    "NV21, "  /*  8-bit 4:2:0 */ \
+    "NV12 "  /*  8-bit 4:2:0 */ \
     "}"
 
 #define SRC_FORMATS "{" \
-    "BGRx, " \
-    "NV12, "  /*  8-bit 4:2:0 */ \
+    "NV12 "  /*  8-bit 4:2:0 */ \
     "}"
-
-#define QVDEIN_CAPS(formats) \
-    GST_VIDEO_CAPS_MAKE (formats)
 
 #define QVDEIN_CAPS_DMABUF(formats) \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_DMABUF, formats)
 
-#define QVDEIN_COMPRESSION_CAPS(formats) \
-    GST_VIDEO_CAPS_MAKE (formats) \
-    ",compression={linear,ubwc}"
-
 #define QVDEIN_COMPRESSION_CAPS_DMABUF(formats) \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_DMABUF, formats) \
-    ",compression={linear,ubwc}"
+    ",compression=ubwc"
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (QVDEIN_COMPRESSION_CAPS (SINK_FORMATS)
-        ",interlace-mode=progressive;"
-        QVDEIN_COMPRESSION_CAPS_DMABUF (SINK_FORMATS)
-        ",interlace-mode=progressive;" QVDEIN_COMPRESSION_CAPS (SINK_FORMATS)
-        ",interlace-mode={interleaved,mixed},"
-        "field-order={top-field-first,bottom-field-first};"
+    GST_STATIC_CAPS (
+        QVDEIN_CAPS_DMABUF (SINK_FORMATS) ",interlace-mode=progressive;"
         QVDEIN_COMPRESSION_CAPS_DMABUF (SINK_FORMATS)
         ",interlace-mode={interleaved,mixed},"
         "field-order={top-field-first,bottom-field-first};")
@@ -83,15 +71,12 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (QVDEIN_CAPS (SRC_FORMATS) ",interlace-mode=progressive;"
+    GST_STATIC_CAPS (
         QVDEIN_CAPS_DMABUF (SRC_FORMATS) ",interlace-mode=progressive;")
     );
 
 #define gst_qvdeinterlace_parent_class parent_class
 G_DEFINE_TYPE (GstQvdeinterlace, gst_qvdeinterlace, GST_TYPE_VIDEO_FILTER);
-
-GST_ELEMENT_REGISTER_DEFINE (qvdeinterlace, "qvdeinterlace", GST_RANK_NONE,
-    GST_TYPE_QVDEINTERLACE);
 
 static void
 _print_video_info (const GstVideoInfo * info, const char *func, int line)
@@ -608,13 +593,53 @@ _check_invalidate_reference_buffer (const GstBuffer * buffer,
   return FALSE;
 }
 
+#ifndef USE_GPU_DEINTERLACE
+/* This function is just for testing without GPU deinterlace. */
+static inline gboolean
+gst_qvdeinterlace_do_frame_copy (GstQvdeinterlace * self,
+    GstBuffer * inbuf, GstBuffer * outbuf)
+{
+  GstVideoFrame src, dst;
+
+  GST_LOG_OBJECT (self, "just copy without format conversion");
+
+  if (!gst_video_frame_map (&src, &self->in_info, inbuf, GST_MAP_READ)) {
+    GST_ERROR_OBJECT (self, "map inbuf error");
+    goto invalid_buffer;
+  }
+
+  /* Since gst_fd_mem_map() only return address if mapping flags are a subset
+   * of the previous flags, here map it as read and write, thereafter, mapping
+   * it again as read in filesink shall succeed, otherwise, mapping late may
+   * fail if GstMapFlags is not the subset of the previous flags. */
+  if (!gst_video_frame_map (&dst, &self->out_info, outbuf,
+          GST_MAP_READ | GST_MAP_WRITE)) {
+    GST_ERROR_OBJECT (self, "map outbuf error");
+    gst_video_frame_unmap (&src);
+    goto invalid_buffer;
+  }
+
+  /* need to remove format check predicate in gst_video_frame_copy(),
+   * RGBx is pushed directly to ximagesink as BGRx for display */
+  if (!gst_video_frame_copy (&dst, &src))
+    GST_ERROR_OBJECT (self, "copy buffer error");
+
+  gst_video_frame_unmap (&dst);
+  gst_video_frame_unmap (&src);
+
+  return TRUE;
+
+invalid_buffer:
+  return FALSE;
+}
+#endif /* USE_GPU_DEINTERLACE */
+
 /* For GPU HW acceleration, both inbuf & outbuf MUST be DMABUF */
 static gboolean
 gst_qvdeinterlace_do_transform (GstQvdeinterlace * self,
     GstBuffer * inbuf, GstBuffer * outbuf)
 {
   //GstVideoFilter *filter = GST_VIDEO_FILTER_CAST (self);
-  GstVideoFrame src, dst;       /* just for Ubuntu testing */
   GpudiBufDesc in_desc, out_desc;
   static GpudiScanMethod in_scan_prev = GPUDI_SCAN_METHOD_NONE;
   GpudiScanMethod in_scan;
@@ -658,33 +683,11 @@ gst_qvdeinterlace_do_transform (GstQvdeinterlace * self,
     gst_qvdeinterlace_reference_buffer_hold (self, inbuf);
   }
 
-#if 1                           /* just for Ubuntu testing */
-  GST_LOG_OBJECT (self, "FIXME: just copy without format conversion");
-
-  if (!gst_video_frame_map (&src, &self->in_info, inbuf, GST_MAP_READ)) {
-    GST_ERROR_OBJECT (self, "map inbuf error");
-    goto invalid_buffer;
-  }
-
-  if (!gst_video_frame_map (&dst, &self->out_info, outbuf, GST_MAP_WRITE)) {
-    GST_ERROR_OBJECT (self, "map outbuf error");
-    gst_video_frame_unmap (&src);
-    goto invalid_buffer;
-  }
-
-  /* need to remove format check predicate in gst_video_frame_copy(),
-   * RGBx is pushed directly to ximagesink as BGRx for display */
-  if (!gst_video_frame_copy (&dst, &src))
-    GST_ERROR_OBJECT (self, "copy buffer error");
-
-  gst_video_frame_unmap (&dst);
-  gst_video_frame_unmap (&src);
-#endif
-
+#ifdef USE_GPU_DEINTERLACE
   return TRUE;
-
-invalid_buffer:
-  return FALSE;
+#else
+  return gst_qvdeinterlace_do_frame_copy (self, inbuf, outbuf);
+#endif
 }
 
 /* this function is called in default_generate_output() by
@@ -696,22 +699,36 @@ gst_qvdeinterlace_transform (GstBaseTransform * trans,
 {
   GstQvdeinterlace *self = GST_QVDEINTERLACE (trans);
 
-  if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (outbuf)))
-    gst_object_sync_values (GST_OBJECT (self), GST_BUFFER_TIMESTAMP (outbuf));
-
   if (self->silent == FALSE)
     GST_LOG_OBJECT (self, "inbuf=%p, outbuf=%p", inbuf, outbuf);
 
   if (!gst_qvdeinterlace_do_transform (self, inbuf, outbuf))
     return GST_FLOW_ERROR;
 
-/* still black screen with ximagesink
-  GstBufferCopyFlags flags = GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS
-      | GST_BUFFER_COPY_META | GST_BUFFER_COPY_MEMORY | GST_BUFFER_COPY_DEEP;
-  gst_buffer_copy_into (outbuf, inbuf, flags, 0, -1);
-*/
-
   return GST_FLOW_OK;
+}
+
+/* Override GstBaseTransformClass's default_copy_metadata() not to copy
+ * buffer flags like interlaced flags. Instead, qvdeinterlace should set
+ * buffer flags itself to reflect the reality. */
+static gboolean
+gst_qvdeinterlace_copy_metadata (GstBaseTransform * trans,
+    GstBuffer * inbuf, GstBuffer * outbuf)
+{
+  GstQvdeinterlace *self = GST_QVDEINTERLACE (trans);
+
+  GST_LOG_OBJECT (self, "copy timestamps");
+
+  /* when we get here, the outbuf should be writable */
+  GST_BUFFER_PTS (outbuf) = GST_BUFFER_PTS (inbuf);
+  GST_BUFFER_DTS (outbuf) = GST_BUFFER_DTS (inbuf);
+  GST_BUFFER_OFFSET (outbuf) = GST_BUFFER_OFFSET (inbuf);
+  GST_BUFFER_DURATION (outbuf) = GST_BUFFER_DURATION (inbuf);
+  GST_BUFFER_OFFSET_END (outbuf) = GST_BUFFER_OFFSET_END (inbuf);
+
+  //gst_buffer_copy_into (outbuf, inbuf, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+  return TRUE;
 }
 
 static gboolean
@@ -772,11 +789,28 @@ gst_qvdeinterlace_class_init (GstQvdeinterlaceClass * klass)
   trans_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_qvdeinterlace_fixate_caps);
   trans_class->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_qvdeinterlace_decide_allocation);
+  trans_class->copy_metadata =
+      GST_DEBUG_FUNCPTR (gst_qvdeinterlace_copy_metadata);
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_qvdeinterlace_transform);
   trans_class->transform_ip = NULL;
   trans_class->passthrough_on_same_caps = TRUE;
   filter_class->set_info = GST_DEBUG_FUNCPTR (gst_qvdeinterlace_set_info);
   trans_class->stop = GST_DEBUG_FUNCPTR (gst_qvdeinterlace_stop);
+}
+
+static gboolean
+gst_qvdeinterlace_load_libs (void)
+{
+  extern gboolean qvdein_dmabuf_load_libs_once (void);
+  gboolean ret = TRUE;
+
+  if (!qvdein_dmabuf_load_libs_once () ||
+      !gpu_deinterlace_load_libs_once ()) {
+    GST_ERROR ("failed to load libs");
+    ret = FALSE;
+  }
+
+  return ret;
 }
 
 /* initialize the new element
@@ -785,7 +819,9 @@ gst_qvdeinterlace_class_init (GstQvdeinterlaceClass * klass)
 static void
 gst_qvdeinterlace_init (GstQvdeinterlace * self)
 {
-  //self->pool = NULL;
+  if (!gst_qvdeinterlace_load_libs ())
+    return;
+
   gst_video_info_init (&self->in_info);
   gst_video_info_init (&self->out_info);
   self->gpudi_handle = -1;
@@ -810,7 +846,8 @@ qvdeinterlace_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (gst_qvdeinterlace_debug, "qvdeinterlace", 0,
       "qvdeinterlace debug category");
 
-  return GST_ELEMENT_REGISTER (qvdeinterlace, plugin);
+  return gst_element_register (plugin, "qvdeinterlace",
+      GST_RANK_SECONDARY, GST_TYPE_QVDEINTERLACE);
 }
 
 /* gstreamer looks for this structure to register qvdeinterlace */
@@ -818,5 +855,4 @@ GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     qvdeinterlace,
     "QTI video deinterlacer",
-    qvdeinterlace_init,
-    PACKAGE_VERSION, GST_LICENSE, GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)
+    qvdeinterlace_init, PACKAGE_VERSION, GST_LICENSE_UNKNOWN, PACKAGE_NAME, "-")

@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <dlfcn.h>
 #include <drm/drm_fourcc.h>
 
 #ifdef USE_GBM
@@ -48,11 +49,96 @@ struct gbm_buf_desc
 GST_DEBUG_CATEGORY_EXTERN (gst_qvdeinterlace_debug);
 #define GST_CAT_DEFAULT gst_qvdeinterlace_debug
 
+/* Dynamically load libgbm by dlopen. */
+#define GBM_LIB_NAME "libgbm.so"
+
+static const char *gbm_lib_name  = GBM_LIB_NAME;
+
+/* GBM APIs */
+static struct gbm_device *(*_gbm_create_device) (int fd);
+static void (*_gbm_device_destroy) (struct gbm_device *gbm_dev);
+static struct gbm_bo *(*_gbm_bo_create) (struct gbm_device *gbm_dev,
+        uint32_t width, uint32_t height, uint32_t format, uint32_t usage);
+static int (*_gbm_perform) (int operation, ...);
+static uint32_t (*_gbm_bo_get_width) (struct gbm_bo *bo);
+static uint32_t (*_gbm_bo_get_height) (struct gbm_bo *bo);
+static uint32_t (*_gbm_bo_get_stride) (struct gbm_bo *bo);
+static uint32_t (*_gbm_bo_get_offset) (struct gbm_bo *bo, int plane);
+static uint64_t (*_gbm_bo_get_modifier) (struct gbm_bo *bo);
+static void (*_gbm_bo_destroy) (struct gbm_bo *bo);
+
+#define LOAD_SYMBOL(lib, sym) do {                        \
+      dlerror (); /* clear any existing error */          \
+      *(void **) & (_ ## sym) = dlsym (lib, #sym);        \
+      const char *dlerr = dlerror ();                     \
+      if (NULL != dlerr) {                                \
+        GST_ERROR ("dlsym error: %s", dlerr);             \
+        goto error;                                       \
+      }                                                   \
+      GST_DEBUG ("loaded symbol %s", #sym);               \
+    } while (0)
+
+static gpointer _do_load_lib_symbols (gpointer data)
+{
+  gpointer ret = NULL;
+  void *handle_gbm;
+
+  GST_INFO ("data %p", data);
+
+  handle_gbm = dlopen (gbm_lib_name, RTLD_NOW);
+  if (NULL == handle_gbm) {
+    const char *dlerr = dlerror();
+    if (NULL == dlerr)
+        dlerr = "NULL";
+    GST_ERROR ("dlopen %s error: %s", gbm_lib_name, dlerr);
+    goto error;
+  }
+
+  LOAD_SYMBOL (handle_gbm, gbm_create_device);
+  LOAD_SYMBOL (handle_gbm, gbm_device_destroy);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_create);
+  LOAD_SYMBOL (handle_gbm, gbm_perform);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_width);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_height);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_stride);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_offset);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_modifier);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_destroy);
+
+  ret = (gpointer) -1; /* load all okay */
+
+error:
+  GST_INFO ("ret %p", ret);
+  return ret;
+}
+
+/* Load libs only once in multi-threaded usage. */
+gboolean qvdein_dmabuf_load_libs_once (void)
+{
+  static GOnce once = G_ONCE_INIT;
+
+  g_once (&once, _do_load_lib_symbols, NULL);
+  GST_INFO ("GOnce retval %p status %d", once.retval, once.status);
+
+  return once.retval != NULL ? TRUE : FALSE;
+}
+
+#define gbm_create_device _gbm_create_device
+#define gbm_device_destroy _gbm_device_destroy
+#define gbm_bo_create _gbm_bo_create
+#define gbm_perform _gbm_perform
+#define gbm_bo_get_width _gbm_bo_get_width
+#define gbm_bo_get_height _gbm_bo_get_height
+#define gbm_bo_get_stride _gbm_bo_get_stride
+#define gbm_bo_get_offset _gbm_bo_get_offset
+#define gbm_bo_get_modifier _gbm_bo_get_modifier
+#define gbm_bo_destroy _gbm_bo_destroy
+
+
 static int dev_fd = -1;
 
 #ifdef USE_GBM
 #define GBM_RENDER_DEVICE_NAME "/dev/dri/renderD128"
-//#define GBM_RENDER_DEVICE_NAME "/dev/dri/card0"
 static struct gbm_device *gbm_dev = NULL;
 #else
 #define LINUX_DMABUF_DEVICE_NAME "/dev/dma_heap/system"
@@ -187,7 +273,8 @@ gbm_dmabuf_alloc (DmaBufDesc * desc)
   }
 
   desc->bo = bo;
-  desc->fd = gbm_bo_get_fd (bo);
+  //desc->fd = gbm_bo_get_fd (bo); // GBM has bug on this API
+  desc->fd = bo->ion_fd;
   width = gbm_bo_get_width (bo);
   height = gbm_bo_get_height (bo);
   desc->stride = gbm_bo_get_stride (bo);
@@ -199,17 +286,17 @@ gbm_dmabuf_alloc (DmaBufDesc * desc)
 
 #ifdef QTI_PLATFORM
   {
-    uint32_t size = 0;
+    size_t size = 0;
 
     gbm_perform (GBM_PERFORM_GET_METADATA_ION_FD, bo, &desc->meta_fd);
 
     gbm_perform (GBM_PERFORM_GET_BO_SIZE, bo, &size);
     if ((gsize) size < desc->size)
-      GST_WARNING ("gbm bo size %u should >= requested size", size);
+      GST_WARNING ("gbm bo size %lu should >= requested size", size);
 
     desc->size = (gsize) size;
 
-    GST_DEBUG ("created gbm bo meta_fd %d, size %u", desc->meta_fd, size);
+    GST_DEBUG ("created gbm bo meta_fd %d, size %lu", desc->meta_fd, size);
   }
 #endif
 
@@ -230,7 +317,7 @@ gbm_dmabuf_free (DmaBufDesc * desc)
   /* TODO: desc->data not mapped yet */
 
   if (desc->bo) {
-    close (desc->fd);
+    //close (desc->fd);
     gbm_bo_destroy (desc->bo);
     desc->bo = NULL;
     desc->fd = -1;
@@ -491,10 +578,9 @@ qvdein_dmabuf_get_modifier (const DmaBufDesc * desc)
 {
   uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
 
-  if (desc) {
+  if (desc && desc->bo) {
 #ifdef USE_GBM
-    if (desc->bo)
-      modifier = gbm_bo_get_modifier (desc->bo);
+    modifier = gbm_bo_get_modifier (desc->bo);
 #else
     /* NOT implemented for Linux dmabuf heaps. */
 #endif
@@ -509,18 +595,20 @@ qvdein_dmabuf_get_modifier (const DmaBufDesc * desc)
 void
 qvdein_dmabuf_align_info (const DmaBufDesc * desc, GstVideoInfo * info)
 {
-  GST_DEBUG ("desc %p, info=%p", desc, info);
-  if (!desc || !info)
-    return;
+  GST_DEBUG ("desc %p, info %p", desc, info);
+  g_return_if_fail (desc != NULL && desc->bo != NULL);
+  g_return_if_fail (info != NULL);
 
 #ifdef USE_GBM
   GST_VIDEO_INFO_PLANE_STRIDE (info, 0) = desc->stride;
-  /* FIXME: stride0 == stride1 is true for NV12, may be not true for others */
+  /* FIXME: stride0 == stride1 is true for NV12, maybe not true for others */
   GST_VIDEO_INFO_PLANE_STRIDE (info, 1) = desc->stride;
+  GST_VIDEO_INFO_PLANE_OFFSET (info, 0) = gbm_bo_get_offset (desc->bo, 0);
   GST_VIDEO_INFO_PLANE_OFFSET (info, 1) = gbm_bo_get_offset (desc->bo, 1);
   GST_VIDEO_INFO_SIZE (info) = desc->size;
 
-  GST_DEBUG ("aligned info stride %u, offset1 %u, size %lu", desc->stride,
+  GST_DEBUG ("aligned info stride=%u, offset0=%u, offset1=%u, size=%"
+      G_GSIZE_FORMAT, desc->stride, gbm_bo_get_offset (desc->bo, 0),
       gbm_bo_get_offset (desc->bo, 1), desc->size);
 #endif /* USE_GBM */
 }

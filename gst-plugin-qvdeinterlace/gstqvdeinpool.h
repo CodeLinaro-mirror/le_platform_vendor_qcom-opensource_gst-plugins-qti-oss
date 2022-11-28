@@ -8,7 +8,6 @@
 #include <gst/video/video.h>
 
 G_BEGIN_DECLS
-
 #define GST_TYPE_QVDEIN_POOL (gst_qvdein_pool_get_type())
 G_DECLARE_FINAL_TYPE (GstQvdeinPool, gst_qvdein_pool,
     GST, QVDEIN_POOL, GstBufferPool)
@@ -30,7 +29,7 @@ GstBufferPool * gst_qvdein_pool_new (gboolean ubwc);
 
 /* only can get aligned info after first allocation */
 static inline GstVideoInfo *
-gst_qvdein_pool_aligned_info (const GstBufferPool *pool)
+gst_qvdein_pool_aligned_info (const GstBufferPool * pool)
 {
   GstQvdeinPool *self = GST_QVDEIN_POOL ((GstBufferPool *) pool);
 
@@ -46,5 +45,4 @@ gst_qvdein_pool_buffer_get_ubwc (const GstBufferPool * pool,
     const GstBuffer * buffer);
 
 G_END_DECLS
-
 #endif /* __GST_GSTQVDEINPOOL_H__ */

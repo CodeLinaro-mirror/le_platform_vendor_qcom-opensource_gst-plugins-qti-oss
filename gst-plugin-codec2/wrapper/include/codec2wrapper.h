@@ -74,13 +74,13 @@ extern "C" {
 #include <gmodule.h>
 #include <dlfcn.h>
 #include <gst/video/video.h>
+#include <stdint.h>
 
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
 
 #define CONFIG_FUNCTION_KEY_PIXELFORMAT "pixelformat"
 #define CONFIG_FUNCTION_KEY_RESOLUTION "resolution"
 #define CONFIG_FUNCTION_KEY_BITRATE "bitrate"
-#define CONFIG_FUNCTION_KEY_INTERLACE "interlace"
 #define CONFIG_FUNCTION_KEY_MIRROR "mirror"
 #define CONFIG_FUNCTION_KEY_ROTATION "rotation"
 #define CONFIG_FUNCTION_KEY_RATECONTROL "ratecontrol"
@@ -95,6 +95,10 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_BLUR_RESOLUTION "blur_resolution"
 #define CONFIG_FUNCTION_KEY_ROIREGION "roiregion"
 #define CONFIG_FUNCTION_KEY_BITRATE_SAVING_MODE "bitrate_saving_mode"
+#define CONFIG_FUNCTION_KEY_PROFILE_LEVEL "profile_level"
+#define CONFIG_FUNCTION_KEY_INTERLACE_INFO "interlace_info"
+#define CONFIG_FUNCTION_KEY_DEINTERLACE "deinterlace"
+
 #define C2_TICKS_PER_SECOND 1000000
 
 typedef struct comp_cb {
@@ -102,7 +106,7 @@ typedef struct comp_cb {
     gpointer data_copy_func_param;
 } comp_cb;
 
-typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, int datalen, void* param);
+typedef int (*fnDataCopy)(int dstbuf_fd, void* srcbuf, uint32_t* pdatalen, void* param);
 
 typedef enum {
     BUFFER_POOL_BASIC_LINEAR = 0,
@@ -273,6 +277,71 @@ typedef enum {
     BITRATE_SAVING_MODE_ENABLE_ALL,
 } BITRATE_SAVING_MODE;
 
+typedef enum {
+    C2W_PROFILE_UNSPECIFIED,
+    C2W_AVC_PROFILE_BASELINE, ///< AVC (H.264) Baseline
+    C2W_AVC_PROFILE_CONSTRAINT_BASELINE, ///< AVC (H.264) Constrained Baseline
+    C2W_AVC_PROFILE_MAIN, ///< AVC (H.264) Main
+    C2W_AVC_PROFILE_HIGH, ///< AVC (H.264) High
+    C2W_AVC_PROFILE_CONSTRAINT_HIGH, ///< AVC (H.264) Constrained High
+
+    C2W_HEVC_PROFILE_MAIN = 128, ///< HEVC (H.265) Main
+    C2W_HEVC_PROFILE_MAIN10, ///< HEVC (H.265) Main 10
+    C2W_HEVC_PROFILE_MAIN_STILL_PIC, ///< HEVC (H.265) Main Still Picture
+} C2W_PROFILE_T;
+
+typedef enum {
+    C2W_LEVEL_UNSPECIFIED,
+    C2W_AVC_LEVEL_1, ///< AVC (H.264) Level 1
+    C2W_AVC_LEVEL_1b, ///< AVC (H.264) Level 1b
+    C2W_AVC_LEVEL_11, ///< AVC (H.264) Level 1.1
+    C2W_AVC_LEVEL_12, ///< AVC (H.264) Level 1.2
+    C2W_AVC_LEVEL_13, ///< AVC (H.264) Level 1.3
+    C2W_AVC_LEVEL_2, ///< AVC (H.264) Level 2
+    C2W_AVC_LEVEL_21, ///< AVC (H.264) Level 2.1
+    C2W_AVC_LEVEL_22, ///< AVC (H.264) Level 2.2
+    C2W_AVC_LEVEL_3, ///< AVC (H.264) Level 3
+    C2W_AVC_LEVEL_31, ///< AVC (H.264) Level 3.1
+    C2W_AVC_LEVEL_32, ///< AVC (H.264) Level 3.2
+    C2W_AVC_LEVEL_4, ///< AVC (H.264) Level 4
+    C2W_AVC_LEVEL_41, ///< AVC (H.264) Level 4.1
+    C2W_AVC_LEVEL_42, ///< AVC (H.264) Level 4.2
+    C2W_AVC_LEVEL_5, ///< AVC (H.264) Level 5
+    C2W_AVC_LEVEL_51, ///< AVC (H.264) Level 5.1
+    C2W_AVC_LEVEL_52, ///< AVC (H.264) Level 5.2
+    C2W_AVC_LEVEL_6, ///< AVC (H.264) Level 6
+    C2W_AVC_LEVEL_61, ///< AVC (H.264) Level 6.1
+    C2W_AVC_LEVEL_62, ///< AVC (H.264) Level 6.2
+
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL1 = 128, ///< HEVC (H.265) Main Tier Level 1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL2, ///< HEVC (H.265) Main Tier Level 2
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL21, ///< HEVC (H.265) Main Tier Level 2.1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL3, ///< HEVC (H.265) Main Tier Level 3
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL31, ///< HEVC (H.265) Main Tier Level 3.1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL4, ///< HEVC (H.265) Main Tier Level 4
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL41, ///< HEVC (H.265) Main Tier Level 4.1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL5, ///< HEVC (H.265) Main Tier Level 5
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL51, ///< HEVC (H.265) Main Tier Level 5.1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL52, ///< HEVC (H.265) Main Tier Level 5.2
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL6, ///< HEVC (H.265) Main Tier Level 6
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL61, ///< HEVC (H.265) Main Tier Level 6.1
+    C2W_HEVC_LEVEL_MAIN_TIER_LEVEL62, ///< HEVC (H.265) Main Tier Level 6.2
+
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL1 = 256, ///< HEVC (H.265) High Tier Level 1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL2, ///< HEVC (H.265) High Tier Level 2
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL21, ///< HEVC (H.265) High Tier Level 2.1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL3, ///< HEVC (H.265) High Tier Level 3
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL31, ///< HEVC (H.265) High Tier Level 3.1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL4, ///< HEVC (H.265) High Tier Level 4
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL41, ///< HEVC (H.265) High Tier Level 4.1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL5, ///< HEVC (H.265) High Tier Level 5
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL51, ///< HEVC (H.265) High Tier Level 5.1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL52, ///< HEVC (H.265) High Tier Level 5.2
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL6, ///< HEVC (H.265) High Tier Level 6
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL61, ///< HEVC (H.265) High Tier Level 6.1
+    C2W_HEVC_LEVEL_HIGH_TIER_LEVEL62, ///< HEVC (H.265) High Tier Level 6.2
+} C2W_LEVEL_T;
+
 typedef struct {
     guint8* data;
     gint32 fd;
@@ -294,15 +363,21 @@ typedef struct {
     void* c2Buffer;
     void* gbm_bo;
     gboolean secure;
+    guint32 interlaceMode;
 } BufferDescriptor;
 
 typedef struct {
     const char* config_name;
     gboolean isInput;
+    // Each parameter should only use one member of union. For example,
+    // member val and sliceMode can not be used at the same time.
+    // Otherwise, date overlapped since members in union shares the
+    // same address.
     union {
         guint output_picture_order_mode;
         gboolean low_latency_mode;
         gboolean color_space_conversion;
+        gboolean deinterlace;
 
         union {
             guint32 u32;
@@ -333,6 +408,7 @@ typedef struct {
         } rcMode;
 
         struct {
+            guint32 slice_size;
             SLICE_MODE type;
         } sliceMode;
 
@@ -362,6 +438,11 @@ typedef struct {
         struct {
             BITRATE_SAVING_MODE saving_mode;
         } bitrate_saving_mode;
+
+        struct {
+            C2W_PROFILE_T profile;
+            C2W_LEVEL_T level;
+        } profileAndLevel;
     };
 } ConfigParams;
 

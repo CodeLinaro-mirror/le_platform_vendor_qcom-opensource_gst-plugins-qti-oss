@@ -37,9 +37,6 @@
 #include <gst/allocators/allocators.h>
 #include "codec2wrapper.h"
 
-#define GST_USE_UNSTABLE_API
-#include <gst/codecparsers/gstvp9parser.h>
-
 G_BEGIN_DECLS
 #define COMMON_VIDEO_CAPS(min, max) \
     "width = (int) [" #min ", " #max "], "    \
@@ -79,15 +76,22 @@ G_BEGIN_DECLS
 #define GST_TYPE_QTICODEC2VDEC          (gst_qticodec2vdec_get_type())
 #define GST_QTICODEC2VDEC(obj)          (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdec))
 #define GST_QTICODEC2VDEC_CLASS(klass)  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
+#define GST_QTICODEC2VDEC_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj),GST_TYPE_QTICODEC2VDEC,Gstqticodec2vdecClass))
 #define GST_IS_QTICODEC2VDEC(obj)       (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_QTICODEC2VDEC))
 #define GST_IS_QTICODEC2VDEC_CLASS(obj) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_QTICODEC2VDEC))
 typedef struct _Gstqticodec2vdec Gstqticodec2vdec;
 typedef struct _Gstqticodec2vdecClass Gstqticodec2vdecClass;
 
 typedef guint64 (*f_get_modifier) (void *bo);
+ConfigParams make_pixel_format_param (guint32 fmt, gboolean is_input);
+guint32 gst_to_c2_pixelformat (Gstqticodec2vdec * decoder,
+    GstVideoFormat format);
+gboolean gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec *
+    decoder);
 
 /* Maximum number of input frame queued */
 #define MAX_QUEUED_FRAME  64
+#define DEFAULT_DEINTERLACE TRUE
 
 struct _Gstqticodec2vdec
 {
@@ -115,7 +119,7 @@ struct _Gstqticodec2vdec
   gint height;
   guint64 frame_index;
   GstVideoInterlaceMode interlace_mode;
-  GstVideoFormat outPixelfmt;
+  GstVideoFormat output_format;
   guint64 num_input_queued;
   guint64 num_output_done;
   gboolean downstream_supports_dma;
@@ -131,10 +135,14 @@ struct _Gstqticodec2vdec
   f_get_modifier gbm_api_bo_get_modifier;
   gboolean is_ubwc;
   gboolean is_10bit;
-  gboolean check_vp9_10bit;
   gboolean secure;
+  gboolean delay_start;
   comp_cb cb;
+  gboolean deinterlace;
 };
+
+/* Param function */
+ConfigParams make_deinterlace_param (gboolean deinterlace);
 
 /*
   Class structure should always contain the class structure for the type you're inheriting from.
@@ -142,6 +150,12 @@ struct _Gstqticodec2vdec
 struct _Gstqticodec2vdecClass
 {
   GstVideoDecoderClass parent_class;
+
+    gboolean (*open) (Gstqticodec2vdec * decoder);
+    gboolean (*set_format) (Gstqticodec2vdec * decoder,
+      GstVideoCodecState * state);
+    GstFlowReturn (*handle_frame) (Gstqticodec2vdec * decoder,
+      GstVideoCodecFrame * frame);
 };
 
 GType gst_qticodec2vdec_get_type (void);

@@ -90,7 +90,7 @@ C2ComponentStoreAdapter::~C2ComponentStoreAdapter()
         delete mFactory;
     }
     if (mDlHandle) {
-        GST_DEBUG("dl close libqcodec2_core handle");
+        LOG_DEBUG("dl close libqcodec2_core handle");
         dlclose(mDlHandle);
     }
 }
