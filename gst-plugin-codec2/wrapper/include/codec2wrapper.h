@@ -495,8 +495,8 @@ gboolean c2component_createBlockpool(void* const comp, BUFFER_POOL_TYPE poolType
 gboolean c2component_configBlockpool(void* comp, BUFFER_POOL_TYPE poolType);
 gboolean c2component_freeOutBuffer(void* const comp, guint64 bufferId);
 gboolean c2component_delete(void* comp);
-gboolean c2component_attachExternalFd(void* comp, int fd);
-gboolean c2component_setUseExternalBuffer(void* comp, gboolean useExternal);
+gboolean c2component_attachExternalFd(void* comp, BUFFER_POOL_TYPE type, int fd);
+gboolean c2component_setUseExternalBuffer(void* comp, BUFFER_POOL_TYPE type, gboolean useExternal);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ComponentInterface API
