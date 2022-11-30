@@ -24,6 +24,7 @@
 
 #include <gst/video/video.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <linux-msm/vidc/media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY (gst_qvdeinterlace_debug);
 #define GST_CAT_DEFAULT gst_qvdeinterlace_debug
@@ -45,25 +46,24 @@ enum
     "NV12 "  /*  8-bit 4:2:0 */ \
     "}"
 
+#define SINK_COMPRESSION ",compression=ubwc"
+
 #define SRC_FORMATS "{" \
     "NV12 "  /*  8-bit 4:2:0 */ \
     "}"
 
+#define SRC_COMPRESSION ",compression={linear,ubwc}"
+
 #define QVDEIN_CAPS_DMABUF(formats) \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_DMABUF, formats)
-
-#define QVDEIN_COMPRESSION_CAPS_DMABUF(formats) \
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
-    (GST_CAPS_FEATURE_MEMORY_DMABUF, formats) \
-    ",compression=ubwc"
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (
         QVDEIN_CAPS_DMABUF (SINK_FORMATS) ",interlace-mode=progressive;"
-        QVDEIN_COMPRESSION_CAPS_DMABUF (SINK_FORMATS)
+        QVDEIN_CAPS_DMABUF (SINK_FORMATS) SINK_COMPRESSION
         ",interlace-mode={interleaved,mixed},"
         "field-order={top-field-first,bottom-field-first};")
     );
@@ -72,7 +72,8 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (
-        QVDEIN_CAPS_DMABUF (SRC_FORMATS) ",interlace-mode=progressive;")
+        QVDEIN_CAPS_DMABUF (SRC_FORMATS) SRC_COMPRESSION
+        ",interlace-mode=progressive;")
     );
 
 #define gst_qvdeinterlace_parent_class parent_class
@@ -194,6 +195,44 @@ gst_qvdeinterlace_transform_caps (GstBaseTransform * trans,
   return result;
 }
 
+static gboolean
+_caps_has_compression_ubwc (const GstCaps * caps)
+{
+  gboolean ret = FALSE;
+
+  for (gint i = 0; i < gst_caps_get_size (caps); i++) {
+    GstStructure *s = gst_caps_get_structure (caps, i);
+    gchar *str = gst_structure_to_string (s);
+    gboolean has_ubwc = !!g_strrstr (str, "ubwc");
+    g_free (str);
+
+    if (has_ubwc) {
+      ret = TRUE;
+      break;
+    }
+  }
+
+  GST_DEBUG ("ret %u", ret);
+  return ret;
+}
+
+static void
+_fixate_caps_compression (GstPad * pad, GstCaps * result)
+{
+  GstCaps *peer_caps = gst_pad_peer_query_caps (pad, NULL);
+  gboolean has_ubwc = _caps_has_compression_ubwc (peer_caps);
+
+  GST_DEBUG_OBJECT (pad, "peer caps: %" GST_PTR_FORMAT, peer_caps);
+  gst_caps_unref (peer_caps);
+
+  if (has_ubwc)
+    gst_caps_set_simple (result, "compression", G_TYPE_STRING, "ubwc", NULL);
+  else
+    gst_caps_set_simple (result, "compression", G_TYPE_STRING, "linear", NULL);
+
+  GST_DEBUG_OBJECT (pad, "result caps: %" GST_PTR_FORMAT, result);
+}
+
 /* given fixed @caps, fixate @othercaps,
  * this function is called in gst_base_transform_find_transform().
  *
@@ -250,6 +289,9 @@ gst_qvdeinterlace_fixate_caps (GstBaseTransform * trans,
   }
 
   if (direction == GST_PAD_SINK) {
+    /* If downstream supports ubwc, then output ubwc, else linear. */
+    _fixate_caps_compression (trans->srcpad, result);
+
     if (gst_caps_is_subset (caps, result)) {
       GST_DEBUG_OBJECT (pad, "caps is subset of result");
       gst_caps_replace (&result, caps);
@@ -314,12 +356,49 @@ gst_qvdeinterlace_align_info (GstQvdeinterlace * self,
 }
 
 static gboolean
-_caps_has_compression_ubwc (const GstCaps * caps)
+_caps_compression_is_ubwc (const GstCaps * caps)
 {
   GstStructure *s = gst_caps_get_structure (caps, 0);
   const gchar *compression = gst_structure_get_string (s, "compression");
 
   return g_strcmp0 (compression, "ubwc") == 0 ? TRUE : FALSE;
+}
+
+/* Calculate valid size of stride*scanlines with alignment padding of
+ * planes but without alignment padding of total size, see format detail
+ * in msm_media_info.h. The valid size is for filesink to dump, hence can
+ * view the dump correctly by setting line stride and plane scanlines in
+ * image player tool. */
+static gsize
+_calc_valid_size (const GstVideoInfo * info, gboolean ubwc)
+{
+  gsize size = 0;
+  gint format = GST_VIDEO_INFO_FORMAT (info);
+  gint width = GST_VIDEO_INFO_WIDTH (info);
+  gint height = GST_VIDEO_INFO_HEIGHT (info);
+
+  switch (format) {
+    case GST_VIDEO_FORMAT_NV12: {
+      if (ubwc) {
+        size = VENUS_BUFFER_SIZE_USED (COLOR_FMT_NV12_UBWC, width, height, 0);
+        GST_DEBUG ("NV12_UBWC valid size %" G_GSIZE_FORMAT, size);
+      } else {
+        int vformat = COLOR_FMT_NV12;
+        int y_stride = (int) VENUS_Y_STRIDE(vformat, width);
+        int uv_stride = (int) VENUS_UV_STRIDE(vformat, width);
+        int y_sclines = (int) VENUS_Y_SCANLINES(vformat, height);
+        int uv_sclines = (int) VENUS_UV_SCANLINES(vformat, height);
+        size = y_stride * y_sclines + uv_stride * uv_sclines;
+        GST_DEBUG ("NV12 valid size %" G_GSIZE_FORMAT, size);
+      }
+      break;
+    }
+    default:
+      GST_ERROR ("NOT support format %s", GST_VIDEO_INFO_NAME (info));
+      break;
+  }
+
+  return size;
 }
 
 /* this function is called in gst_video_filter_set_caps() that overrides
@@ -340,10 +419,19 @@ gst_qvdeinterlace_set_info (GstVideoFilter * filter,
   GST_INFO_OBJECT (self, "out_info=%p, outcaps: %" GST_PTR_FORMAT,
       out_info, outcaps);
 
+  self->in_ubwc = _caps_compression_is_ubwc (incaps);
+  self->out_ubwc = _caps_compression_is_ubwc (outcaps);
+  GST_INFO_OBJECT (self, "in_ubwc=%u, out_ubwc=%u",
+      self->in_ubwc, self->out_ubwc);
+
   /* when 1st frame comes, align in info by video meta
    * and out info by buffer pool */
   self->in_info = *in_info;
   self->out_info = *out_info;
+  /* Set valid size for _decide_allocation() to create output buffer pool
+   * and allocate gstbuffer with the valid size for filesink to dump. */
+  GST_VIDEO_INFO_SIZE (&self->out_info) =
+      _calc_valid_size (out_info, self->out_ubwc);
 
   features = gst_caps_get_features (incaps, 0);
   self->in_dmabuf = gst_caps_features_contains (features,
@@ -353,14 +441,8 @@ gst_qvdeinterlace_set_info (GstVideoFilter * filter,
   self->out_dmabuf = gst_caps_features_contains (features,
       GST_CAPS_FEATURE_MEMORY_DMABUF);
 
-  if (!self->in_dmabuf || !self->out_dmabuf)
-    GST_INFO_OBJECT (self, "in_dmabuf=%u, out_dmabuf=%u",
-        self->in_dmabuf, self->out_dmabuf);
-
-  self->in_ubwc = _caps_has_compression_ubwc (incaps);
-  self->out_ubwc = _caps_has_compression_ubwc (outcaps);
-  GST_INFO_OBJECT (self, "in_ubwc=%u, out_ubwc=%u",
-      self->in_ubwc, self->out_ubwc);
+  GST_INFO_OBJECT (self, "in_dmabuf=%u, out_dmabuf=%u",
+      self->in_dmabuf, self->out_dmabuf);
 
   return ret;
 }
