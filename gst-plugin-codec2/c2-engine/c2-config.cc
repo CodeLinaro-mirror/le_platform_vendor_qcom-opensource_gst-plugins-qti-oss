@@ -97,6 +97,8 @@ std::unique_ptr<C2Param> setNumLtrFrames (gpointer param);
 std::unique_ptr<C2Param> setProfileLevel (gpointer param);
 std::unique_ptr<C2Param> setRotate (gpointer param);
 std::unique_ptr<C2Param> setCSDMode (gpointer param);
+std::unique_ptr<C2Param> setBPreconditions (gpointer param);
+std::unique_ptr<C2Param> setVideoGopTuning (gpointer param);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -127,6 +129,8 @@ static configFunctionMap sConfigFunctionMap = {
   { CONFIG_FUNCTION_KEY_PROFILE_LEVEL, setProfileLevel },
   { CONFIG_FUNCTION_KEY_ROTATE, setRotate },
   { CONFIG_FUNCTION_KEY_CSDMODE, setCSDMode },
+  { CONFIG_FUNCTION_KEY_B_PRECONDITIONS, setBPreconditions },
+  { CONFIG_FUNCTION_KEY_GOP_TUNING, setVideoGopTuning },
 };
 
 static const VideoProfileMapping video_profile[] = {
@@ -1138,6 +1142,35 @@ setCSDMode (gpointer param)
           C2Config::PREPEND_HEADER_TO_NONE;
 
   return C2Param::Copy (csdmode);
+}
+
+std::unique_ptr<C2Param>
+setBPreconditions (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  config_params_t *config = (config_params_t*) param;
+
+  qc2::C2StreamAdaptiveBPreconditions::output bprecondition;
+  bprecondition.value = config->val.bl;
+
+  return C2Param::Copy (bprecondition);
+}
+
+std::unique_ptr<C2Param>
+setVideoGopTuning (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  config_params_t *config = (config_params_t*) param;
+
+  auto gop = C2StreamGopTuning::output::AllocUnique(2, 0u);
+  gop->m.values[0] = { P_FRAME, UINT32_MAX };
+  gop->m.values[1] = { C2Config::picture_type_t(P_FRAME | B_FRAME), config->val.u32 };
+
+  return C2Param::Copy (*gop);
 }
 
 void
