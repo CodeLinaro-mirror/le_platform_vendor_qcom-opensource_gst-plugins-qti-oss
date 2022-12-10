@@ -92,6 +92,8 @@
 
 #define GST_CAT_DEFAULT gst_ml_aic_engine_debug_category()
 
+#define MAX_EXEC_OBJECTS_OF_ONE_ACTIVATION  (100)
+
 struct _GstMLAicEngine
 {
   // Mutex lock synchronizing between threads
@@ -112,12 +114,18 @@ struct _GstMLAicEngine
 
   // List of programs on a AIC100 device.
   std::map<::qaic::rt::shProgram, uint32_t> programs;
-  // List of user-level queue for enqueuing ExecObj for execution.
-  std::map<::qaic::rt::shQueue, uint32_t> queues;
-  // Map of ExecObj and the activation queue used to enqueue that object.
-  std::map<::qaic::rt::shExecObj, ::qaic::rt::shQueue> objects;
-  // Map of ExecObj and the buffers associated with it.
-  std::map<::qaic::rt::shExecObj, std::vector<QBuffer>> buffers;
+  // Map of activation queue for enqueuing ExecObj.
+  std::map<::qaic::rt::shProgram, ::qaic::rt::shQueue> queues;
+  // Map of ExecObj status for assoicated activation.
+  std::map<::qaic::rt::shProgram, std::map<::qaic::rt::shExecObj, uint32_t>> objects;
+  // Max ExecObj number for each activation.
+  uint32_t maxExecObj;
+};
+
+struct _GstMLAicExecObj {
+  ::qaic::rt::shExecObj shExecObj;
+  ::qaic::rt::shProgram program;
+  gint shExecObjId;
 };
 
 static GstDebugCategory *
@@ -216,95 +224,6 @@ gst_ml_aic_populate_info (GstMLAicEngine * engine, gint idx,
   mlinfo->n_tensors++;
 }
 
-static ::qaic::rt::shExecObj
-gst_ml_aic_retrieve_execution_object (GstMLAicEngine * engine,
-    std::vector<QBuffer> &qbuffers)
-{
-  ::qaic::rt::shExecObj object;
-
-  GST_AIC_LOCK (engine);
-
-  // Try to find and reuse an existing ExecObj.
-  for (auto const& pair : engine->buffers) {
-    std::vector<QBuffer> buffers = pair.second;
-    bool match = true;
-
-    if (buffers.size() != qbuffers.size())
-      continue;
-
-    for (uint32_t idx = 0; idx < buffers.size(); idx++)
-      match &= (buffers[idx].buf == qbuffers[idx].buf) ? true : false;
-
-    if (!match) continue;
-
-    object = pair.first;
-    break;
-  }
-
-  GST_AIC_UNLOCK (engine);
-
-  if (object)
-    return object;
-
-  // If we reach this point then there is no ExecObj that can be reused.
-  GST_AIC_LOCK (engine);
-
-  // Initialize the usage and program with the 1st activation before search.
-  ::qaic::rt::shProgram program = engine->programs.begin()->first;
-  uint32_t n_usage = engine->programs.begin()->second;
-
-  // Find the least loaded program.
-  for (auto& pair : engine->programs) {
-    if (pair.second >= n_usage)
-      continue;
-
-    program = pair.first;
-    n_usage = pair.second;
-  }
-
-  GST_LOG ("Using program with ID %u and usage %u", program->getId(), n_usage);
-
-  // Increase the usage count for this program.
-  engine->programs[program] += 1;
-
-  GST_AIC_UNLOCK (engine);
-
-  try {
-    object = ::qaic::rt::ExecObj::Factory(engine->context, program);
-
-    GST_AIC_LOCK (engine);
-    engine->objects.emplace(object, nullptr);
-    engine->buffers.emplace(object, qbuffers);
-    GST_AIC_UNLOCK (engine);
-
-    GST_LOG ("Created execution object for program ID %u", program->getId());
-  } catch (const ::qaic::rt::CoreExceptionInit &e) {
-    GST_ERROR ("Caught exception during object creation: %s", e.what());
-
-    GST_AIC_LOCK (engine);
-    engine->programs[program] -= 1;
-    GST_AIC_UNLOCK (engine);
-
-    return nullptr;
-  }
-
-  return object;
-}
-
-static void
-gst_ml_aic_internal_maps_cleanup (GstMLAicEngine * engine,
-    ::qaic::rt::shExecObj object)
-{
-  GST_AIC_LOCK (engine);
-
-  // Decrease the usage count for the activation associated with the object.
-  engine->queues[engine->objects[object]] -= 1;
-  // Erase the ExecObj associated with the give index.
-  engine->objects[object].reset();
-
-  GST_AIC_UNLOCK (engine);
-}
-
 // Helper function for AIC context.
 static void
 gst_ml_aic_log_callback (QLogLevel level, const char * message)
@@ -327,6 +246,26 @@ gst_ml_aic_error_handler (QAicContextID ctxid, const char * message,
 
   GST_ERROR ("Received Error for context ID: %d, type: %d, message: '%s'",
       ctxid, type, message);
+}
+
+GST_API GstMLAicExecObj *
+gst_ml_aic_execobj_new()
+{
+  GstMLAicExecObj *obj = NULL;
+
+  obj = new GstMLAicExecObj;
+  g_return_val_if_fail ( obj != NULL, NULL);
+  obj->shExecObjId = GST_ML_AIC_INVALID_ID;
+  return obj;
+}
+
+GST_API void
+gst_ml_aic_execobj_free (GstMLAicExecObj *obj)
+{
+  if (NULL == obj)
+    return;
+
+  delete obj;
 }
 
 GstMLAicEngine *
@@ -428,7 +367,7 @@ gst_ml_aic_engine_new (GstStructure * settings)
 
     QAicQueueProperties_t qprops;
     ::qaic::rt::Queue::initProperties(qprops);
-    qprops.numThreadsPerQueue = 4;
+    qprops.numThreadsPerQueue = 1;
 
     // Create program and queue for each activation.
     for (idx = 0; idx < n_activations; idx++) {
@@ -470,9 +409,19 @@ gst_ml_aic_engine_new (GstStructure * settings)
           queue->objNameCstr(), device_id);
 
       engine->programs.emplace(program, 0);
-      engine->queues.emplace(queue, 0);
+      engine->queues.emplace(program, queue);
+      std::map<::qaic::rt::shExecObj, uint32_t> obj;
+
+      for (uint32_t i = 0; i < MAX_EXEC_OBJECTS_OF_ONE_ACTIVATION; i++) {
+        ::qaic::rt::shExecObj execObj = ::qaic::rt::ExecObj::Factory(engine->context, program);
+        obj.emplace(execObj, 0);
+      }
+      engine->objects[program] = obj;
+      engine->maxExecObj = MAX_EXEC_OBJECTS_OF_ONE_ACTIVATION;
     }
 
+    GST_INFO ("program size = %lu, queue size = %lu, objects size = %lu",
+             engine->programs.size(), engine->queues.size(),  engine->objects.size());
     engine->bufferMappings = engine->qpc->getBufferMappings();
     size_t offset = 0;
     for (auto const &m : engine->bufferMappings) {
@@ -578,9 +527,9 @@ gst_ml_aic_engine_get_output_info  (GstMLAicEngine * engine)
   return (engine == NULL) ? NULL : engine->outinfo;
 }
 
-gint
+gboolean
 gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
-    GstMLFrame * inframe, GstMLFrame * outframe)
+    GstMLFrame * inframe, GstMLFrame * outframe, GstMLAicExecObj *obj)
 {
   g_return_val_if_fail (engine != NULL, GST_ML_AIC_INVALID_ID);
   g_return_val_if_fail (inframe != NULL, GST_ML_AIC_INVALID_ID);
@@ -598,40 +547,60 @@ gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
       qbuf.size = m.size;
       qbuf.buf = GST_ML_FRAME_BLOCK_DATA(inframe, 0);
     } else {
-      qbuf.buf = GST_ML_FRAME_BLOCK_DATA(outframe, 0) + engine->bufferOffset[offset_index];
+      qbuf.buf = GST_ML_FRAME_BLOCK_DATA(outframe, offset_index);
       qbuf.size = m.size;
+      offset_index++;
     }
-    offset_index++;
     qbuffers.push_back(qbuf);
   }
 
-  ::qaic::rt::shExecObj object =
-      gst_ml_aic_retrieve_execution_object (engine, qbuffers);
+  ::qaic::rt::shExecObj object;
+  ::qaic::rt::shProgram program;
+  // If we reach this point then there is no ExecObj that can be reused.
+  while (1) {
+    GST_AIC_LOCK (engine);
+
+    // Initialize the usage and program with the 1st activation before search.
+    program = engine->programs.begin()->first;
+    uint32_t n_usage = engine->programs.begin()->second;
+
+    // Find the least loaded program.
+    for (auto& pair : engine->programs) {
+      if (pair.second < n_usage) {
+        program = pair.first;
+        n_usage = pair.second;
+      }
+    }
+
+    if (n_usage >= engine->maxExecObj) {
+      GST_AIC_UNLOCK (engine);
+      GST_INFO ("Sleep to Wait for ExecObject avaiable..");
+      g_usleep(10000);
+      continue;
+    }
+
+    auto &local_obj = engine->objects[program];
+    for (auto &pair : local_obj) {
+      if (pair.second == 0) {
+         object = pair.first;
+         pair.second = 1;
+         break;
+      }
+    }
+
+    engine->programs[program] += 1;
+
+    GST_AIC_UNLOCK (engine);
+    GST_LOG ("Using program with ID %u and usage %u", program->getId(), n_usage);
+    break;
+  }
 
   GST_ML_RETURN_VAL_IF_FAIL (object, GST_ML_AIC_INVALID_ID,
       "Failed to retrieve ExecObj!");
 
   object->setData(qbuffers);
-  GST_AIC_LOCK (engine);
 
-  // Initialize the usage and queus with the 1st activation before search.
-  ::qaic::rt::shQueue queue = engine->queues.begin()->first;
-  uint32_t n_usage = engine->queues.begin()->second;
-
-  // Find the least loaded queue.
-  for (auto const& pair : engine->queues) {
-    queue = (pair.second < n_usage) ? pair.first : queue;
-    n_usage = (pair.second < n_usage) ? pair.second : n_usage;
-  }
-
-  GST_LOG ("Using queue %s with usage %u", queue->objNameCstr(), n_usage);
-
-  // Increase the usage count for this queue.
-  engine->queues[queue] += 1;
-  // Set the queue on which this object will be enqued.
-  engine->objects[object] = queue;
-
-  GST_AIC_UNLOCK (engine);
+  ::qaic::rt::shQueue queue = engine->queues[program];
 
   try {
     QStatus status = queue->enqueue(object);
@@ -639,48 +608,41 @@ gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
     if (status != QS_SUCCESS) {
       GST_ERROR ("Failed to enqueue AIC ExecObj with ID %u, status %d!",
           object->getId(), status);
-      gst_ml_aic_internal_maps_cleanup (engine, object);
-      return GST_ML_AIC_INVALID_ID;
+      return FALSE;
     }
 
-    GST_LOG ("Enqueued AIC ExecObj with ID: %u", object->getId());
+    // GST_ERROR ("Enqueued AIC ExecObj with ID: %u", object->getId());
   } catch (const ::qaic::rt::CoreExceptionRuntime &e) {
     GST_ERROR ("Caught exception during execution: %s", e.what());
-    gst_ml_aic_internal_maps_cleanup (engine, object);
-    return GST_ML_AIC_INVALID_ID;
-  }
-
-  return object->getId();
-}
-
-gboolean
-gst_ml_aic_engine_wait_request (GstMLAicEngine * engine, gint request_id)
-{
-  gboolean success = TRUE;
-
-  // Return immediately if request ID is invalid.
-  if (request_id == GST_ML_AIC_INVALID_ID)
-    return TRUE;
-
-  GST_AIC_LOCK (engine);
-
-  auto it = std::find_if(engine->objects.begin(), engine->objects.end(),
-      [&] (const std::pair<::qaic::rt::shExecObj, ::qaic::rt::shQueue> &pair)
-      { return pair.first->getId() == (uint32_t) request_id; } );
-
-  if (it == engine->objects.end()) {
-    GST_ERROR ("Unable to find object ID %x!", request_id);
     return FALSE;
   }
 
-  // Get the reference to ExecObj and the activation index used to enqueue it.
-  ::qaic::rt::shExecObj object = it->first;
+  obj->shExecObjId = object->getId();
+  obj->shExecObj = object;
+  obj->program = program;
 
-  GST_AIC_UNLOCK (engine);
+  return TRUE;
+}
 
-  GST_LOG ("Waiting ExecObj with ID %u", object->getId());
+gboolean
+gst_ml_aic_engine_wait_request (GstMLAicEngine * engine, GstMLAicExecObj *obj, GstMLFrame * outframe)
+{
+  gboolean success = TRUE;
+
+  if (obj == NULL) {
+    GST_ERROR ("Invalid Exec Object");
+    return FALSE;
+  }
+
+  if (obj->shExecObjId == GST_ML_AIC_INVALID_ID) {
+    GST_ERROR ("Invalid Exec Object ID");
+    return TRUE;
+  }
+
+  ::qaic::rt::shExecObj object = obj->shExecObj;
 
   try {
+    GST_TRACE ("Waiting ExecObj with ID %u Start", object->getId());
     QStatus status = object->waitForCompletion();
 
     if (status != QS_SUCCESS) {
@@ -688,13 +650,21 @@ gst_ml_aic_engine_wait_request (GstMLAicEngine * engine, gint request_id)
           object->getId(), status);
       success = FALSE;
     }
+    GST_TRACE ("Waiting ExecObj with ID %u Done", object->getId());
   } catch (const ::qaic::rt::CoreExceptionRuntime &e) {
     GST_ERROR ("Caught exception during execution: %s", e.what());
     success = FALSE;
   }
 
-  GST_LOG ("Finished waiting ExecObj with ID %u", object->getId());
-  gst_ml_aic_internal_maps_cleanup (engine, object);
+  GST_TRACE ("Finished waiting ExecObj with ID %u", object->getId());
+
+  GST_AIC_LOCK (engine);
+  auto &local_obj = engine->objects[obj->program];
+  local_obj[obj->shExecObj] = 0;
+  engine->programs[obj->program] -= 1;
+  GST_AIC_UNLOCK (engine);
+
+  GST_TRACE ("Finished waiting ExecObj with ID %u Done", object->getId());
 
   return success;
 }
