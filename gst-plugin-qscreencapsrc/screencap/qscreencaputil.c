@@ -48,7 +48,6 @@
 #include <dlfcn.h>
 #include <unistd.h> // for close
 #include "qscreencaputil.h"
-#include "vidc/media/msm_media_info.h"
 #include <gst/video/video.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_debug_qscreencap_src);
