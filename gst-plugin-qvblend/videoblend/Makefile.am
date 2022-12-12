@@ -7,13 +7,11 @@ libgstvideoblend_la_SOURCES = \
 nodist_libgstvideoblend_la_SOURCES =
 libgstvideoblend_la_CFLAGS = \
 							 -I ../c2d \
-							 -DUSE_GBM \
 							 $(GST_PLUGINS_BASE_CFLAGS) \
 							 $(GST_BASE_CFLAGS) \
 							 $(GST_CFLAGS)
 libgstvideoblend_la_CXXFLAGS = \
 							   -I ../c2d \
-							   -DUSE_GBM \
 							   $(GST_PLUGINS_BASE_CFLAGS) \
 							   $(GST_BASE_CFLAGS) \
 							   $(GST_CFLAGS)
@@ -24,7 +22,7 @@ libgstvideoblend_la_LIBADD = \
 							 $(LIBM)
 libgstvideoblend_la_LDFLAGS = \
 							  -lgstvideo-@GST_API_VERSION@ \
-							  -lc2dcolorconvert \
+							  -lC2D2 \
 							  $(GST_PLUGIN_LDFLAGS)
 libgstvideoblend_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)
 

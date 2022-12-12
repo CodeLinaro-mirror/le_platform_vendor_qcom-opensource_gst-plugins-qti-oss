@@ -34,17 +34,46 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include <stdint.h>
-
+#include <c2d2.h>
+#include <dlfcn.h>
 #include "gbm.h"
 #include "gbm_priv.h"
-#include "C2DColorConverter.h"
+#include <linux/msm_kgsl.h>
+#include <pthread.h>
+#include <stdint.h>
+
 #define ALIGN4K 4096
+#define ALIGN2K 2048
+#define ALIGN512 512
+#define ALIGN256 256
 #define ALIGN128 128
 #define ALIGN64 64
 #define ALIGN32 32
 #define ALIGN16 16
 #define ALIGN( num, to ) (((num) + (to-1)) & (~(to-1)))
+
+enum ColorConvertFormat {
+    RGB565 = 1,
+    YCbCr420Tile,
+    YCbCr420SP,
+    YCbCr420P,
+    YCrCb420P,
+    RGBA8888,
+    RGBA8888_UBWC,
+    NV12_2K,
+    NV12_128m,
+    NV12_UBWC,
+    TP10_UBWC,
+    YCbCr420_VENUS_P010,
+    P010,
+    VENUS_P010,
+    CbYCrY,
+    BGR888,
+    ARGB8888,
+    RGBA8888_NO_PREMULTIPLIED,
+    ARGB8888_NO_PREMULTIPLIED,
+    NO_COLOR_FORMAT
+};
 
 typedef struct C2DBuffer{
     int fd;
@@ -59,51 +88,48 @@ typedef struct C2DBuffer{
     void *ptr;
 }C2DBuffer;
 
-class C2DColorConverterBase {
-
-public:
-    virtual ~C2DColorConverterBase(){};
-    virtual int convertC2D(int srcFd, void *srcBase, void * srcData, int dstFd, void *dstBase, void * dstData) = 0;
-    virtual int32_t getBuffReq(int32_t port, C2DBuffReq *req) = 0;
-    virtual int32_t dumpOutput(char * filename, char mode) = 0;
-    virtual int SourceCrop(int x, int y, size_t srcWidth, size_t srcHeight) = 0;
-    virtual int SetSourceConfigFlags(int flags) = 0;
-    virtual int SetBlend(int x, int y, size_t srcWidth, size_t srcHeight, size_t dstWidth, size_t dstHeight, ColorConvertFormat srcFormat, ColorConvertFormat dstFormat) = 0;
-};
-
-typedef C2DColorConverterBase* createC2DColorConverter_t(size_t srcWidth, size_t srcHeight, size_t dstWidth, size_t dstHeight, ColorConvertFormat srcFormat, ColorConvertFormat dstFormat, int32_t flags, size_t srcStride);
-typedef void destroyC2DColorConverter_t(C2DColorConverterBase*);
+typedef enum {
+  C2D_INPUT = 0,
+  C2D_OUTPUT,
+} C2D_PORT;
 
 class c2d_blend
 {
 public:
     c2d_blend();
     ~c2d_blend();
-    bool Init();
-    bool Open(unsigned int src_height,unsigned int src_width,
-              unsigned int dst_height, unsigned int dst_width,
-              ColorConvertFormat src, ColorConvertFormat dest, unsigned int flag, unsigned int src_stride);
-    bool Convert(int src_fd, void *src_base, void *src_data,
-                 int dest_fd, void *dest_base, void *dest_data);
-    bool GetBufferSize(int port,unsigned int &buf_size);
-    int GetSrcFormat();
-    void Close();
-    bool AllocateBuffer(int port, struct C2DBuffer *buffer);
-    bool FreeBuffer(struct C2DBuffer *buffer);
-    int32_t DumpOutput(char * filename, char mode);
-    int32_t DumpInput(char * filename, char mode);
-    void SetInputCrop(int x, int y, int width, int height);
-    void Blend(int x, int y,
-               unsigned int src_width, unsigned int src_height,
-               unsigned int dst_width, unsigned int dst_height,
-               ColorConvertFormat src, ColorConvertFormat dest);
+    bool init();
+    void destroy();
+    bool configure(unsigned int srcHeight,unsigned int srcWidth,
+              unsigned int dstHeight, unsigned int dstWidth,
+              ColorConvertFormat srcFormat, ColorConvertFormat dstFormat, unsigned int flag, unsigned int srcStride);
+    bool convert(int srcFd, void *srcBase, void *srcData,
+                 int dstFd, void *dstBase, void *dstData);
+    int32_t dumpOutput(int fd);
+    int blend(int x, int y,
+               unsigned int srcWidth, unsigned int srcHeight,
+               unsigned int dstWidth, unsigned int dstHeight,
+               ColorConvertFormat srcFormat, ColorConvertFormat dstFormat);
+    bool allocateBuffer(int port, struct C2DBuffer *buffer);
+    bool freeBuffer(struct C2DBuffer *buffer);
 
 private:
-    C2DColorConverter *m_c2d_conv;
-    pthread_mutex_t m_lock;
+    uint32_t getC2DFormat(ColorConvertFormat format, bool isSource);
+    size_t calcSize(ColorConvertFormat format, size_t width, size_t height);
+    size_t calcYSize(ColorConvertFormat format, size_t width, size_t height);
+    size_t calcStride(ColorConvertFormat format, size_t width);
+    C2D_STATUS updateRGBSurface(uint8_t *gpuAddr, void * data, bool isSource);
+    C2D_STATUS updateYUVSurface(uint8_t *gpuAddr, void *base, void *data, bool isSource);
+    int32_t createSurface(ColorConvertFormat format, size_t width, size_t height, bool isSource);
+    bool isYUVSurface(ColorConvertFormat format);
+    void * mapGPUAddr(int bufFD, void *bufPtr, size_t bufLen);
+    bool unmapGPUAddr(unsigned long gAddr);
+    void clearSurfaces();
+
+private:
+    pthread_mutex_t mLock;
     void *m_gbmhandle;
-    ColorConvertFormat m_src_format;
-    int m_gbm_client_fd;
+    int mGbmClientFd;
     int (*gbm_bo_get_fd)(struct gbm_bo *bo);
     int (*gbm_perform )(int operation,...);
     struct gbm_bo * (*gbm_bo_create)(struct gbm_device *gbm,uint32_t width, uint32_t height,uint32_t format, uint32_t flags);
@@ -113,9 +139,109 @@ private:
     uint32_t (*gbm_bo_get_stride)(struct gbm_bo *bo);
     void (*gbm_device_destroy)(struct gbm_device *gbm);
     struct gbm_device * (*gbm_create_device)(int fd);
-    struct gbm_device *m_gbm_dev;
+    struct gbm_device *mGbmDev;
+    bool mInit; // gbm init flag
 
-    bool m_bInit;
+    bool mConfigured; // C2D2 init flag
+    C2D_OBJECT mBlit;
+    uint32_t mSrcSurface;
+    uint32_t mDstSurface;
+    void *mSrcSurfaceDef;
+    void *mDstSurfaceDef;
+
+    ColorConvertFormat mSrcFormat;
+    ColorConvertFormat mDstFormat;
+
+    size_t mSrcWidth;
+    size_t mSrcHeight;
+    size_t mSrcStride;
+    size_t mSrcSize;
+    size_t mSrcYSize;
+    size_t mDstWidth;
+    size_t mDstHeight;
+    size_t mDstSize;
+    size_t mDstYSize;
 };
+
+typedef void (*compute_fmt_aligned_width_and_height_t)
+  (int width, int height, int plane_id, int format, uint32_t num_samples,
+   int tile_mode, int raster_mode, int padding_threshold,
+   int *aligned_w, int *aligned_h);
+
+#define ADRENO_PIXELFORMAT_R8G8B8A8 28
+
+class AdrenoLibLoader {
+  public:
+    static AdrenoLibLoader* instance(void) {
+      static AdrenoLibLoader instance;
+      return &instance;
+    }
+
+    /* Add this interface to reach goal of unit test branch coverage. */
+    static void setAdrenoUtilsLibName(const char *name) {
+      if (name)
+        mAdrenoUtilsLibName = name;
+    }
+
+    compute_fmt_aligned_width_and_height_t mComputeAlignedWidthHeight;
+
+  private:
+    AdrenoLibLoader() {
+      if (!loadLibrary())
+        unloadLibrary();
+    }
+    AdrenoLibLoader(const AdrenoLibLoader&) = delete;
+    AdrenoLibLoader& operator=(const AdrenoLibLoader&) = delete;
+    ~AdrenoLibLoader() { unloadLibrary(); }
+
+    bool loadLibrary(void) {
+      const char *computeAlignedWidthHeight = "compute_fmt_aligned_width_and_height";
+
+      mAdrenoUtilsHandle = dlopen(mAdrenoUtilsLibName, RTLD_NOW);
+      if (nullptr == mAdrenoUtilsHandle) {
+        GST_ERROR ("dlopen error %s: %s", mAdrenoUtilsLibName, dlerror());
+        return false;
+      }
+
+      mComputeAlignedWidthHeight = (compute_fmt_aligned_width_and_height_t)
+        dlsym(mAdrenoUtilsHandle, computeAlignedWidthHeight);
+      if (nullptr == mComputeAlignedWidthHeight) {
+        GST_ERROR ("dlsym error %s: %s", computeAlignedWidthHeight, dlerror());
+        return false;
+      }
+
+      return true;
+    }
+
+    void unloadLibrary(void) {
+      mComputeAlignedWidthHeight = nullptr;
+      if (mAdrenoUtilsHandle) {
+        dlclose(mAdrenoUtilsHandle);
+        mAdrenoUtilsHandle = nullptr;
+      }
+    }
+
+    void *mAdrenoUtilsHandle;
+    static const char *mAdrenoUtilsLibName;
+};
+
+static inline void
+    computeFormatAlignedWidthHeight(int width, int height,
+    int format, int *aligned_w, int *aligned_h)
+{
+  AdrenoLibLoader *loader = AdrenoLibLoader::instance();
+
+  if (nullptr != loader->mComputeAlignedWidthHeight) {
+    int32_t tile_mode = 0;
+    int32_t raster_mode = 0;
+    int32_t padding_threshold = 512; /* hardcode for RGB formats */
+
+    loader->mComputeAlignedWidthHeight(width, height, 0, format,
+        1, tile_mode, raster_mode, padding_threshold,
+        aligned_w, aligned_h);
+  } else {
+    *aligned_w = *aligned_h = 0;
+  }
+}
 
 #endif

@@ -110,7 +110,7 @@ gst_videoblend_init_gbm_buffers (GstVideoBlend * blend)
     for (l = blend->sinkpads; l; l = l->next)
     {
         GstVideoBlendPad *bpad = (GstVideoBlendPad *)l->data;
-        GstVideoFormat pad_format = GST_VIDEO_INFO_FORMAT (&bpad->info);
+        GstVideoFormat pad_format = ((&bpad->info)->finfo == NULL) ? GST_VIDEO_FORMAT_UNKNOWN : GST_VIDEO_INFO_FORMAT (&bpad->info);
         gint width, height;
 
         width = GST_VIDEO_INFO_WIDTH (&bpad->info);
@@ -153,13 +153,13 @@ gst_videoblend_init_gbm_buffers (GstVideoBlend * blend)
 
         if (bpad->c2d_buffer.fd > 0)
         {
-            c2d->FreeBuffer(&bpad->c2d_buffer);
+            c2d->freeBuffer(&bpad->c2d_buffer);
             GST_DEBUG_OBJECT (blend, "%p Free c2d buffer done!", bpad);
         }
 
         if (bpad->type == 0)
         {
-            if (!c2d->AllocateBuffer(C2D_OUTPUT, &bpad->c2d_buffer))
+            if (!c2d->allocateBuffer(C2D_OUTPUT, &bpad->c2d_buffer))
             {
                 GST_DEBUG_OBJECT (blend, "Alocate c2d output buffer failed!");
             }
@@ -167,7 +167,7 @@ gst_videoblend_init_gbm_buffers (GstVideoBlend * blend)
         }
         else
         {
-            if (!c2d->AllocateBuffer(C2D_INPUT, &bpad->c2d_buffer))
+            if (!c2d->allocateBuffer(C2D_INPUT, &bpad->c2d_buffer))
             {
                 GST_DEBUG_OBJECT (blend, "Alocate c2d input buffer failed!");
             }
@@ -809,7 +809,7 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                 {
                     if (pad->c2d_buffer.fd)
                     {
-                      c2d->FreeBuffer(&pad->c2d_buffer);
+                      c2d->freeBuffer(&pad->c2d_buffer);
                     }
                 }
                 else
@@ -891,7 +891,7 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
 
                 if (blend->update_blend)
                 {
-                    c2d->Blend(pad->xpos, pad->ypos, source_width, source_height, target_width, target_height, source_format, target_format);
+                    c2d->blend(pad->xpos, pad->ypos, source_width, source_height, target_width, target_height, source_format, target_format);
                     blend->update_blend = FALSE;
                 }
 
@@ -900,14 +900,14 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                 {
                     if (pad->c2d_buffer.fd)
                     {
-                        c2d->FreeBuffer(&pad->c2d_buffer);
+                        c2d->freeBuffer(&pad->c2d_buffer);
                     }
                     ion_fd = FD_OF_QVMETA(meta);
                     ion_size = DATASZ_OF_QVMETA(meta);
                     ion_offset = 0;
                     ion_ptr = mmap(NULL, ion_size, PROT_READ|PROT_WRITE, MAP_SHARED, ion_fd, ion_offset);
                     GST_DEBUG_OBJECT(blend, "fd %d, size %d, offset %d, ptr %p", ion_fd, ion_size, ion_offset, ion_ptr);
-                    if (!c2d->Convert (ion_fd, ion_ptr, ion_ptr, blend->fd, blend->meta_ptr, blend->meta_ptr))
+                    if (!c2d->convert (ion_fd, ion_ptr, ion_ptr, blend->fd, blend->meta_ptr, blend->meta_ptr))
                     {
                         GST_ERROR_OBJECT (blend, "conversion failed");
                         goto exit1;
@@ -917,7 +917,7 @@ gst_videoblend_blend_buffers (GstVideoBlend * blend, GstClockTime output_start_t
                 {
                     GST_DEBUG_OBJECT(blend, "NO GBM buffer, do copy");
                     gst_videoblend_do_buffer_copy (blend, pad);
-                    if (!c2d->Convert (pad->c2d_buffer.fd, pad->c2d_buffer.ptr, pad->c2d_buffer.ptr, blend->fd, blend->meta_ptr, blend->meta_ptr))
+                    if (!c2d->convert (pad->c2d_buffer.fd, pad->c2d_buffer.ptr, pad->c2d_buffer.ptr, blend->fd, blend->meta_ptr, blend->meta_ptr))
                     {
                         GST_ERROR_OBJECT (blend, "conversion failed");
                         goto exit2;
@@ -1303,7 +1303,7 @@ gst_videoblend_finalize (GObject * o)
 
     if (blend->c2d != NULL)
     {
-        blend->c2d->Close();
+        blend->c2d->destroy();
         delete (blend->c2d);
         blend->c2d = NULL;
         blend->c2d_loaded = FALSE;
@@ -1331,7 +1331,7 @@ gst_videoblend_dispose (GObject * o)
 
             if (blendpad->c2d_buffer.fd)
             {
-                c2d->FreeBuffer(&blendpad->c2d_buffer);
+                c2d->freeBuffer(&blendpad->c2d_buffer);
             }
         }
     }
@@ -1443,7 +1443,7 @@ gst_videoblend_init (GstVideoBlend * blend)
 
     GST_DEBUG_OBJECT (blend, "get c2d_conv instance %p", c2d);
 
-    if (!c2d->Init())
+    if (!c2d->init())
     {
         GST_ERROR_OBJECT (blend, "failed to initialize color converter");
         delete c2d;
@@ -1453,7 +1453,7 @@ gst_videoblend_init (GstVideoBlend * blend)
     }
 
     /* open c2d with default params */
-    c2d->Open(300, 100, 800, 480, RGBA8888, NV12_128m, 0, 0);
+    c2d->configure(300, 100, 800, 480, RGBA8888, NV12_128m, 0, 0);
 
     blend->c2d = c2d;
     blend->c2d_loaded = TRUE;
