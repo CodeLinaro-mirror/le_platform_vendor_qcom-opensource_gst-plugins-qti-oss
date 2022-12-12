@@ -197,7 +197,6 @@ struct _GstQmmfContext {
 
 static G_DEFINE_QUARK(QmmfBufferQDataQuark, qmmf_buffer_qdata);
 
-
 static gboolean
 update_structure (GQuark id, const GValue * value, gpointer data)
 {
@@ -1134,7 +1133,13 @@ gst_qmmf_context_open (GstQmmfContext * context)
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const android::CameraMetadata& result) {
-    context->metacb (camera_id, &result, context->userdata);
+
+    // Timestamp cannot exist in urgent metadata because at time urgent meta
+    // is created frame is not exposed. This is why we use that to detect
+    // result callback is for urgent or full metadata.
+    gboolean isurgent = !result.exists (ANDROID_SENSOR_TIMESTAMP);
+
+    context->metacb (camera_id, &result, isurgent, context->userdata);
   };
 
   status = recorder->StartCamera (context->camera_id, 30, xtraparam, result_cb);
@@ -1222,11 +1227,32 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
+  if (vpad->compression != GST_VIDEO_COMPRESSION_NONE &&
+      vpad->format != GST_VIDEO_FORMAT_NV12 &&
+      vpad->format != GST_VIDEO_FORMAT_NV12_10LE32) {
+    GST_ERROR ("Compresion is not supported for %s format!",
+        gst_qmmf_video_format_to_string (vpad->format));
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+    return FALSE;
+  }
+
   switch (vpad->format) {
     case GST_VIDEO_FORMAT_NV12:
       format = (vpad->compression == GST_VIDEO_COMPRESSION_UBWC) ?
           ::qmmf::recorder::VideoFormat::kNV12UBWC :
           ::qmmf::recorder::VideoFormat::kNV12;
+      break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      format = ::qmmf::recorder::VideoFormat::kP010;
+      break;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      if (vpad->compression != GST_VIDEO_COMPRESSION_UBWC) {
+        GST_ERROR ("Only UBWC commpresion is supported for %s format!",
+            gst_qmmf_video_format_to_string (vpad->format));
+        GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+        return FALSE;
+      }
+      format = ::qmmf::recorder::VideoFormat::kTP10UBWC;
       break;
     case GST_VIDEO_FORMAT_NV16:
       format = ::qmmf::recorder::VideoFormat::kNV16;
@@ -1264,7 +1290,8 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       // Encoded stream.
       break;
     default:
-      GST_ERROR ("Unsupported video format!");
+      GST_ERROR ("Unsupported %s format!",
+          gst_qmmf_video_format_to_string (vpad->format));
       GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
       return FALSE;
   }

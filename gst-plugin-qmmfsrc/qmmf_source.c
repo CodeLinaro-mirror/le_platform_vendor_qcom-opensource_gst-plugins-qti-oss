@@ -129,6 +129,7 @@ enum
   SIGNAL_CAPTURE_IMAGE,
   SIGNAL_CANCEL_CAPTURE,
   SIGNAL_RESULT_METADATA,
+  SIGNAL_URGENT_METADATA,
   LAST_SIGNAL
 };
 
@@ -183,26 +184,36 @@ static GstStaticPadTemplate qmmfsrc_video_src_template =
         GST_STATIC_CAPS (
             QMMFSRC_VIDEO_JPEG_CAPS "; "
             QMMFSRC_VIDEO_RAW_CAPS(
-#if defined(GST_VIDEO_UYVY_FORMAT_ENABLE) && defined(GST_VIDEO_YUY2_FORMAT_ENABLE)
-                "{ NV12, NV16, YUY2, UYVY }") "; "
-#elif defined(GST_VIDEO_YUY2_FORMAT_ENABLE)
-                "{ NV12, NV16, YUY2 }") "; "
-#elif defined(GST_VIDEO_UYVY_FORMAT_ENABLE)
-                "{ NV12, NV16, UYVY }") "; "
-#else
-                "{ NV12, NV16 }") "; "
-#endif
+                "{ NV12, NV16"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+                ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+                ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+                ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                " }") "; "
             QMMFSRC_VIDEO_RAW_CAPS_WITH_FEATURES(
                 GST_CAPS_FEATURE_MEMORY_GBM,
-#if defined(GST_VIDEO_UYVY_FORMAT_ENABLE) && defined(GST_VIDEO_YUY2_FORMAT_ENABLE)
-                "{ NV12, NV16, YUY2, UYVY }") "; "
-#elif defined(GST_VIDEO_YUY2_FORMAT_ENABLE)
-                "{ NV12, YUY2 }") "; "
-#elif defined(GST_VIDEO_UYVY_FORMAT_ENABLE)
-                "{ NV12, UYVY }") "; "
-#else
-                "{ NV12 }") "; "
-#endif
+                "{ NV12, NV16"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+                ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+                ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+                ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                " }") "; "
             QMMFSRC_VIDEO_BAYER_CAPS(
                 "{ bggr, rggb, gbrg, grbg, mono }",
                 "{ 8, 10, 12, 16 }")
@@ -543,10 +554,17 @@ qmmfsrc_event_callback (guint event, gpointer userdata)
 
 static void
 qmmfsrc_metadata_callback (gint camera_id, gconstpointer metadata,
-    gpointer userdata)
+    gboolean isurgent, gpointer userdata)
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (userdata);
-  g_signal_emit_by_name(qmmfsrc, "result-metadata", camera_id, metadata, NULL);
+
+  if (isurgent) {
+    g_signal_emit_by_name (qmmfsrc, "urgent-metadata", camera_id, metadata,
+        NULL);
+  } else {
+    g_signal_emit_by_name (qmmfsrc, "result-metadata", camera_id, metadata,
+        NULL);
+  }
 }
 
 static gboolean
@@ -1536,6 +1554,11 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
 
   signals[SIGNAL_RESULT_METADATA] =
       g_signal_new ("result-metadata", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 2, G_TYPE_INT,
+      G_TYPE_POINTER);
+
+  signals[SIGNAL_URGENT_METADATA] =
+      g_signal_new ("urgent-metadata", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 2, G_TYPE_INT,
       G_TYPE_POINTER);
 
