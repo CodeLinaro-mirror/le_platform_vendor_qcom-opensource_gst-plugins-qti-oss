@@ -169,6 +169,7 @@ enum
   PROP_CAMERA_NOISE_REDUCTION,
   PROP_CAMERA_NOISE_REDUCTION_TUNING,
   PROP_CAMERA_ZOOM,
+  PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH,
   PROP_CAMERA_DEFOG_TABLE,
   PROP_CAMERA_LOCAL_TONE_MAPPING,
   PROP_CAMERA_IR_MODE,
@@ -1105,6 +1106,10 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ZOOM, value);
       break;
+    case PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH, value);
+      break;
     case PROP_CAMERA_DEFOG_TABLE:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_DEFOG_TABLE, value);
@@ -1270,6 +1275,10 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_ZOOM:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ZOOM, value);
+      break;
+    case PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH, value);
       break;
     case PROP_CAMERA_DEFOG_TABLE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
@@ -1542,6 +1551,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           g_param_spec_int ("value", "Zoom Value",
               "One of X, Y, WIDTH or HEIGHT value.", 0, G_MAXINT, 0,
               G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
+  g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH,
+      gst_param_spec_array ("exposure-compensation-for-each", "Exposure Compensation For Each",
+          "Set camera capture images exposure for each capture image. Format such as:"
+          "<0,0,-2,2,-4,4,-6,6,10,-10>. ARRAY LENGTH SHOULD BE 10!!!",
+          g_param_spec_int ("value", "Exposure Value",
+              "One of exposure value.", -12, 12, DEFAULT_PROP_CAMERA_EXPOSURE_COMPENSATION,
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_DEFOG_TABLE,

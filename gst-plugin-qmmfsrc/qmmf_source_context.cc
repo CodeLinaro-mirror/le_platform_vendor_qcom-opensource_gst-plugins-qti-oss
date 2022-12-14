@@ -178,6 +178,8 @@ struct _GstQmmfContext {
   GstStructure      *nrtuning;
   /// Camera Zoom region property.
   GstVideoRectangle zoom;
+  /// Camera Exposure compensation FOR EACH property.
+  gint              exp_for_each[AE_EXPOSURE_FRAME_NUM];
   /// Camera Defog table property.
   GstStructure      *defogtable;
   /// Camera Local Tone Mapping property.
@@ -1043,6 +1045,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       delete context->recorder; g_slice_free (GstQmmfContext, context);,
       NULL, "QMMF Recorder Connect failed!");
 
+  for (gint check_exp = 0; check_exp < AE_EXPOSURE_FRAME_NUM; check_exp++)
+  {
+    context->exp_for_each[check_exp] = 0;
+  }
+
   context->defogtable = gst_structure_new_empty ("org.quic.camera.defog");
   context->exptable =
       gst_structure_new_empty ("org.codeaurora.qcamera3.exposuretable");
@@ -1621,7 +1628,7 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
   ::qmmf::recorder::SnapshotType type;
   std::vector<::android::CameraMetadata> metadata;
   gint status = 0;
-  guint idx = 0;
+  guint idx = 0, idx_create = 0;
 
   GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
 
@@ -1642,39 +1649,98 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
 
   GST_QMMFSRC_IMAGE_PAD_UNLOCK (ipad);
 
-  // Extract the capture metadata from the input argument if set.
-  while ((imgtype == STILL_CAPTURE_MODE) && (metas != NULL) && (idx < metas->len)) {
-    ::android::CameraMetadata *meta =
-        reinterpret_cast<::android::CameraMetadata*>(
-            g_ptr_array_index (metas, idx++));
-    metadata.push_back(*meta);
-  }
+  if (metas == NULL)
+  {
+    guint min_compensation = 0, max_compensation = 0;
 
-  // Fill the capture metadata for each image if not set via the input arguments.
-  while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
-    ::android::CameraMetadata meta;
+    // Create meta_for_update for each n_images
+    for (idx_create = 0; idx_create < n_images; idx_create++)
+    {
+      ::android::CameraMetadata meta_for_update;
 
-    status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      if (context->state >= GST_STATE_READY)
+      {
+        status = recorder->GetDefaultCaptureParam (context->camera_id, meta_for_update);
+        QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+      }
+
+      // Modify the capture meta_for_update in meta array.
+      if (idx_create < AE_EXPOSURE_FRAME_NUM)
+      {
+        meta_for_update.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, 
+            &(context->exp_for_each[idx_create]), 1);
+      }
+      else
+      {
+        g_printerr ("ERROR: idx[%d] >= %d\n", idx_create, AE_EXPOSURE_FRAME_NUM);
+      }
+
+      metadata.push_back(std::move(meta_for_update));
+    }
+
+    // Fill the capture metadata for each image if not set via the input arguments.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
+      ::android::CameraMetadata meta;
+
+      status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+
+      metadata.push_back(std::move(meta));
+    }
+
+    // If there is a bayer pad then send request to both RAW and regular stream.
+    if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
+    else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideo;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kStill;
+
+    status = recorder->CaptureImage (
+        context->camera_id, type, n_images, metadata, imagecb);
     QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
-        "QMMF Recorder GetDefaultCaptureParam Failed!");
-
-    metadata.push_back(std::move(meta));
+        "QMMF Recorder CaptureImage Failed!");
   }
+  else
+  {
+    // Extract the capture metadata from the input argument if set.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metas != NULL) && (idx < metas->len)) {
+      ::android::CameraMetadata *meta =
+          reinterpret_cast<::android::CameraMetadata*>(
+              g_ptr_array_index (metas, idx++));
+      metadata.push_back(*meta);
+    }
 
-  // If there is a bayer pad then send request to both RAW and regular stream.
-  if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
-    type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
-  else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
-    type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
-  else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
-    type = ::qmmf::recorder::SnapshotType::kVideo;
-  else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
-    type = ::qmmf::recorder::SnapshotType::kStill;
+    // Fill the capture metadata for each image if not set via the input arguments.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
+      ::android::CameraMetadata meta;
 
-  status = recorder->CaptureImage (
-      context->camera_id, type, n_images, metadata, imagecb);
-  QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
-      "QMMF Recorder CaptureImage Failed!");
+      status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+
+      metadata.push_back(std::move(meta));
+    }
+
+    // If there is a bayer pad then send request to both RAW and regular stream.
+    if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
+    else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideo;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kStill;
+
+    status = recorder->CaptureImage (
+        context->camera_id, type, n_images, metadata, imagecb);
+    QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+        "QMMF Recorder CaptureImage Failed!");
+  }
 
   return TRUE;
 }
@@ -2128,6 +2194,23 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(ANDROID_SCALER_CROP_REGION, crop, 4);
       break;
     }
+    case PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+    {
+      g_return_if_fail (gst_value_array_get_size (value) == AE_EXPOSURE_FRAME_NUM);
+
+      context->exp_for_each[0] = g_value_get_int (gst_value_array_get_value (value, 0));
+      context->exp_for_each[1] = g_value_get_int (gst_value_array_get_value (value, 1));
+      context->exp_for_each[2] = g_value_get_int (gst_value_array_get_value (value, 2));
+      context->exp_for_each[3] = g_value_get_int (gst_value_array_get_value (value, 3));
+      context->exp_for_each[4] = g_value_get_int (gst_value_array_get_value (value, 4));
+      context->exp_for_each[5] = g_value_get_int (gst_value_array_get_value (value, 5));
+      context->exp_for_each[6] = g_value_get_int (gst_value_array_get_value (value, 6));
+      context->exp_for_each[7] = g_value_get_int (gst_value_array_get_value (value, 7));
+      context->exp_for_each[8] = g_value_get_int (gst_value_array_get_value (value, 8));
+      context->exp_for_each[9] = g_value_get_int (gst_value_array_get_value (value, 9));
+
+      break;
+    }
     case PARAM_CAMERA_DEFOG_TABLE:
     {
       const gchar *input = g_value_get_string (value);
@@ -2402,6 +2485,44 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       gst_value_array_append_value (value, &val);
 
       g_value_set_int (&val, context->zoom.h);
+      gst_value_array_append_value (value, &val);
+      break;
+    }
+    case PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+    {
+      // Value len is 0 HERE.
+
+      GValue val = G_VALUE_INIT;
+      g_value_init (&val, G_TYPE_INT);
+
+      g_value_set_int (&val, context->exp_for_each[0]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[1]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[2]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[3]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[4]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[5]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[6]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[7]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[8]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[9]);
       gst_value_array_append_value (value, &val);
       break;
     }
