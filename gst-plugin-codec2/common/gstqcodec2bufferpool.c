@@ -429,6 +429,16 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
         GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo), offset,
         stride);
 
+    /* Attach QTI video decoder meta */
+    GstCustomMeta *qvd_meta = gst_buffer_add_custom_meta (gst_buf, "GstQVDMeta");
+    if (qvd_meta) {
+      GstStructure *s = gst_custom_meta_get_structure (qvd_meta);
+      if (s) {
+        gst_structure_set (s, "gbm-meta-fd", G_TYPE_INT, param_ext->meta_fd, NULL);
+        GST_DEBUG_OBJECT (bpool, "attach QVDMeta, add meta-fd:%d", param_ext->meta_fd);
+      }
+    }
+
     /* lock all metadata and mark as pooled, we want this to remain on the buffer */
     gst_buffer_foreach_meta (gst_buf, mark_meta_data_pooled, NULL);
 

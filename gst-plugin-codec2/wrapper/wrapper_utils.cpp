@@ -257,6 +257,10 @@ uint32_t toC2PixelFormat(PIXEL_FORMAT_TYPE pixel)
         result = C2_PIXEL_FORMAT_VENUS_NV12_UBWC;
         break;
     }
+    case PIXEL_FORMAT_NV12_512:{
+        result = C2_PIXEL_FORMAT_VENUS_NV12_512;
+        break;
+    }
     case PIXEL_FORMAT_RGBA_8888: {
         result = C2_PIXEL_FORMAT_RGBA8888;
         break;

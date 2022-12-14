@@ -127,6 +127,9 @@ struct _Gstqticodec2venc
   char *roi_rect_payload;
   char *roi_rect_payload_ext;
   BITRATE_SAVING_MODE bitrate_saving_mode;
+  gboolean is_heic;
+  guint32 interval_intraframes;
+  gboolean inline_sps_pps_headers;
 };
 
 /*
@@ -136,8 +139,11 @@ struct _Gstqticodec2vencClass
 {
   GstVideoEncoderClass parent_class;
 
-    gboolean (*set_format) (Gstqticodec2venc * encoder,
-      GstVideoCodecState * state);
+  gboolean (*set_format) (Gstqticodec2venc * encoder,
+    GstVideoCodecState * state);
+
+  /* actions */
+  GstFlowReturn (*force_idr) (Gstqticodec2venc * encoder);
 };
 
 GType gst_qticodec2venc_get_type (void);

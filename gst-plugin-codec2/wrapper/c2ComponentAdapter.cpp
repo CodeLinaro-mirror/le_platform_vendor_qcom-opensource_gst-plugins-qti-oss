@@ -42,6 +42,7 @@ GST_DEBUG_CATEGORY_EXTERN(gst_qticodec2wrapper_debug);
  * If count of pending works are more than 6, it causes queue overflow issue.
  */
 #define MAX_PENDING_WORK 6
+#define GBM_BO_USAGE_NV12_512_QTI 0x40000000
 
 using namespace std::chrono_literals;
 
@@ -284,13 +285,20 @@ c2_status_t C2ComponentAdapter::prepareC2Buffer(std::shared_ptr<C2Buffer>* c2Buf
             buf = createLinearBuffer(linear_block);
         } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
             if (mGraphicPool) {
-                if (buffer->format == GST_VIDEO_FORMAT_NV12
-                    && buffer->ubwc_flag) {
-                    LOG_MESSAGE("NV12: usage add UBWC");
-                    usage = {
-                        C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
-                        C2MemoryUsage::CPU_WRITE
-                    };
+                if (buffer->format == GST_VIDEO_FORMAT_NV12) {
+                    if (buffer->ubwc_flag) {
+                        LOG_MESSAGE("NV12: usage add UBWC");
+                        usage = {
+                            C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+                            C2MemoryUsage::CPU_WRITE
+                        };
+                    } else if (buffer->heic_flag) {
+                        LOG_MESSAGE("NV12: usage add NV12 512 QTI");
+                        usage = {
+                            C2MemoryUsage::CPU_READ | GBM_BO_USAGE_NV12_512_QTI,
+                            C2MemoryUsage::CPU_WRITE
+                        };
+                    }
                 }
 
                 err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
@@ -463,9 +471,14 @@ std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
     if (buffer->pool_type == BUFFER_POOL_BASIC_GRAPHIC) {
         std::shared_ptr<C2GraphicBlock> graphicBlock;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+
         if (mGraphicPool) {
             if (buffer->ubwc_flag) {
                 usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
+            }
+            else if (buffer->heic_flag) {
+                LOG_MESSAGE("NV12: usage add NV12 512 QTI");
+                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_NV12_512_QTI, C2MemoryUsage::CPU_WRITE };
             }
             err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                 gst_to_c2_gbmformat(buffer->format), usage, &graphicBlock);
@@ -751,7 +764,9 @@ c2_status_t C2ComponentAdapter::createBlockpool(C2BlockPool::local_id_t poolType
                 std::dynamic_pointer_cast<android::C2AllocatorGBM>(mC2Allocator);
             auto func = std::bind(&C2ComponentAdapter::acquireExtBuf, this,
                                   std::placeholders::_1, std::placeholders::_2);
-            allocatorGBM->setAcquireExtBufCb(func);
+            if (allocatorGBM) {
+                allocatorGBM->setAcquireExtBufCb(func);
+            }
         }
     }
 

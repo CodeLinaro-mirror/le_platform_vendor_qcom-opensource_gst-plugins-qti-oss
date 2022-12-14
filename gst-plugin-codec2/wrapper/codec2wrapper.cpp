@@ -108,6 +108,10 @@ std::unique_ptr<C2Param> setIntraRefresh(gpointer param);
 std::unique_ptr<C2Param> setDecLowLatency(gpointer param);
 std::unique_ptr<C2Param> setColorAspectsInfo(gpointer param);
 std::unique_ptr<C2Param> setVideoProfileLevel(gpointer param);
+std::unique_ptr<C2Param> setVideoFramerate (gpointer param);
+std::unique_ptr<C2Param> setIntraframesPeriod (gpointer param);
+std::unique_ptr<C2Param> setIntraVideoFrameRequest (gpointer param);
+std::unique_ptr<C2Param> setVideoHeaderMode (gpointer param);
 
 // Function for vendor parameter configuration
 std::unique_ptr<C2Param> setRotation(gpointer param, void* const comp_intf);
@@ -133,6 +137,10 @@ static configFunctionMap sConfigFunctionMap = {
     { CONFIG_FUNCTION_KEY_COLOR_ASPECTS_INFO, setColorAspectsInfo },
     { CONFIG_FUNCTION_KEY_INTRAREFRESH, setIntraRefresh },
     { CONFIG_FUNCTION_KEY_PROFILE_LEVEL, setVideoProfileLevel },
+    { CONFIG_FUNCTION_KEY_FRAMERATE, setVideoFramerate },
+    { CONFIG_FUNCTION_KEY_INTRAFRAMES_PERIOD, setIntraframesPeriod },
+    { CONFIG_FUNCTION_KEY_INTRA_VIDEO_FRAME_REQUEST, setIntraVideoFrameRequest },
+    { CONFIG_FUNCTION_KEY_VIDEO_HEADER_MODE, setVideoHeaderMode },
 };
 
 // Function map for vendor parameter configuration
@@ -606,6 +614,79 @@ std::unique_ptr<C2Param> setDeInterlace(gpointer param, void* const comp_intf)
     deinterlace = intf_wrapper->updateParamFromConfig(kvpairs);
 
     return deinterlace;
+}
+
+std::unique_ptr<C2Param> setVideoFramerate (gpointer param)
+{
+  if (param == NULL) {
+      return nullptr;
+  }
+
+  ConfigParams* config = (ConfigParams*)param;
+
+  if (config->isInput) {
+      LOG_WARNING("setVideoFramerate input not implemented");
+  } else {
+      C2StreamFrameRateInfo::output framerate;
+      framerate.value = config->framerate;
+      return C2Param::Copy(framerate);
+  }
+
+  return nullptr;
+}
+
+std::unique_ptr<C2Param> setIntraframesPeriod (gpointer param)
+{
+    if (param == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput) {
+        LOG_WARNING("setIntraframesPeriod input not implemented");
+    } else {
+        C2StreamSyncFrameIntervalTuning::output syncFrameInterval;
+        syncFrameInterval.value = config->val.i64;
+        return C2Param::Copy(syncFrameInterval);
+    }
+
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setIntraVideoFrameRequest (gpointer param)
+{
+    if (param == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    if (config->isInput) {
+        LOG_WARNING("setIntraVideoFrameRequest input not implemented");
+    } else if (config->force_idr) {
+        C2StreamRequestSyncFrameTuning::output frameRequest;
+        frameRequest.value = (uint32_t)C2Config::SYNC_FRAME;
+        return C2Param::Copy(frameRequest);
+    }
+
+    return nullptr;
+}
+
+std::unique_ptr<C2Param> setVideoHeaderMode(gpointer param)
+{
+    if (param == NULL) {
+        return nullptr;
+    }
+
+    ConfigParams* config = (ConfigParams*)param;
+
+    C2PrependHeaderModeSetting header_mode;
+    header_mode.value = config->inline_sps_pps_headers ?
+        C2Config::PREPEND_HEADER_TO_ALL_SYNC :
+        C2Config::PREPEND_HEADER_TO_NONE;
+
+    return C2Param::Copy(header_mode);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

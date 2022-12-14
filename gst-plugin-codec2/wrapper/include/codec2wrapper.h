@@ -98,6 +98,10 @@ extern "C" {
 #define CONFIG_FUNCTION_KEY_PROFILE_LEVEL "profile_level"
 #define CONFIG_FUNCTION_KEY_INTERLACE_INFO "interlace_info"
 #define CONFIG_FUNCTION_KEY_DEINTERLACE "deinterlace"
+#define CONFIG_FUNCTION_KEY_FRAMERATE "framerate"
+#define CONFIG_FUNCTION_KEY_INTRAFRAMES_PERIOD "intraframes_period"
+#define CONFIG_FUNCTION_KEY_INTRA_VIDEO_FRAME_REQUEST "intra_video_frame_request"
+#define CONFIG_FUNCTION_KEY_VIDEO_HEADER_MODE "video_header_mode"
 
 #define C2_TICKS_PER_SECOND 1000000
 
@@ -160,7 +164,8 @@ typedef enum {
     PIXEL_FORMAT_RGBA_8888,
     PIXEL_FORMAT_YV12,
     PIXEL_FORMAT_P010,
-    PIXEL_FORMAT_TP10_UBWC
+    PIXEL_FORMAT_TP10_UBWC,
+    PIXEL_FORMAT_NV12_512
 } PIXEL_FORMAT_TYPE;
 
 typedef enum {
@@ -172,6 +177,8 @@ typedef enum {
     C2_PIXEL_FORMAT_VENUS_NV12 = 0x7FA30C04,
     // NV12 EXT with UBWC compression
     C2_PIXEL_FORMAT_VENUS_NV12_UBWC = 0x7FA30C06,
+    // NV12 EXT with 512 width and height alignment (used by HEIC tile encoder)
+    C2_PIXEL_FORMAT_VENUS_NV12_512 = 0x116,
     // 10-bit Tightly-packed and compressed YUV
     C2_PIXEL_FORMAT_VENUS_TP10 = 0x7FA30C09,
     // Venus 10-bit YUV 4:2:0 Planar format
@@ -366,6 +373,7 @@ typedef struct {
     void* gbm_bo;
     gboolean secure;
     guint32 interlaceMode;
+    gboolean heic_flag;
 } BufferDescriptor;
 
 typedef struct {
@@ -380,6 +388,8 @@ typedef struct {
         gboolean low_latency_mode;
         gboolean color_space_conversion;
         gboolean deinterlace;
+        gboolean force_idr;
+        gboolean inline_sps_pps_headers;
 
         union {
             guint32 u32;
@@ -445,6 +455,8 @@ typedef struct {
             C2W_PROFILE_T profile;
             C2W_LEVEL_T level;
         } profileAndLevel;
+
+        gfloat framerate;
     };
 } ConfigParams;
 

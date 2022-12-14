@@ -1784,6 +1784,13 @@ plugin_init (GstPlugin * qticodec2vdec)
   GST_DEBUG_CATEGORY_INIT (gst_qticodec2vdec_debug, "qticodec2vdec",
       0, "QTI GST codec2.0 video decoder");
 
+  static gsize res = FALSE;
+  static const gchar *tags[] = { NULL };
+  if (g_once_init_enter (&res)) {
+    gst_meta_register_custom ("GstQVDMeta", tags, NULL, NULL, NULL);
+    g_once_init_leave (&res, TRUE);
+  }
+
   if (!gst_element_register (qticodec2vdec, "qcodec2h264dec",
           GST_RANK_PRIMARY + 10, GST_TYPE_QCODEC2_H264_DEC)) {
     GST_ERROR ("failed to register element qcodec2h264dec");
