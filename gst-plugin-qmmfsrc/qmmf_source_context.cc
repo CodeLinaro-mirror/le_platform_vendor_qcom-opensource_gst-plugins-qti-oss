@@ -103,7 +103,9 @@ struct _GstQmmfContext {
   GMutex            lock;
 
   /// User provided callback for signalling events.
-  GstQmmfCallback   callback;
+  GstCameraEventCb  eventcb;
+  /// User provided callback for signalling result metadata.
+  GstCameraMetaCb   metacb;
   /// User provided private data to be called with the callback.
   gpointer          userdata;
 
@@ -186,13 +188,14 @@ struct _GstQmmfContext {
   GstVideoRectangle sensorsize;
   /// Camera Sensor Mode.
   gint               sensormode;
+  /// Streams frame rate control mode
+  guchar            frc_mode;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
 };
 
 static G_DEFINE_QUARK(QmmfBufferQDataQuark, qmmf_buffer_qdata);
-
 
 static gboolean
 update_structure (GQuark id, const GValue * value, gpointer data)
@@ -832,11 +835,12 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     }
 
     // Set GStreamer buffer video metadata.
-    gst_buffer_add_video_meta_full (
-        gstbuffer, GST_VIDEO_FRAME_FLAG_NONE,
+    gst_buffer_add_video_meta_full (gstbuffer, GST_VIDEO_FRAME_FLAG_NONE,
         (GstVideoFormat)vpad->format, vpad->width, vpad->height,
-        numplanes, offset, stride
-    );
+        numplanes, offset, stride);
+
+    // Propagate original camera timestamp in media dependent OFFSET_END field.
+    GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
 
     GST_QMMF_CONTEXT_LOCK (context);
     // Initialize the timestamp base value for buffer synchronization.
@@ -887,6 +891,9 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
       "Failed to create GST buffer!");
 
   GST_BUFFER_FLAG_SET (gstbuffer, GST_BUFFER_FLAG_LIVE);
+
+  // Propagate original camera timestamp in media dependent OFFSET_END field.
+  GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
 
   GST_QMMF_CONTEXT_LOCK (context);
   // Initialize the timestamp base value for buffer synchronization.
@@ -1007,11 +1014,12 @@ camera_event_callback (GstQmmfContext * context,
       break;
   }
 
-  context->callback (event, context->userdata);
+  context->eventcb (event, context->userdata);
 }
 
 GstQmmfContext *
-gst_qmmf_context_new (GstQmmfCallback callback, gpointer userdata)
+gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
+    gpointer userdata)
 {
   GstQmmfContext *context = NULL;
   ::qmmf::recorder::RecorderCb cbs;
@@ -1047,7 +1055,8 @@ gst_qmmf_context_new (GstQmmfCallback callback, gpointer userdata)
 
   context->state = GST_STATE_NULL;
 
-  context->callback = callback;
+  context->eventcb = eventcb;
+  context->metacb = metacb;
   context->userdata = userdata;
 
   GST_INFO ("Created QMMF context: %p", context);
@@ -1113,7 +1122,27 @@ gst_qmmf_context_open (GstQmmfContext * context)
   forcesensormode.mode = context->sensormode;
   xtraparam.Update(::qmmf::recorder::QMMF_FORCE_SENSOR_MODE, forcesensormode);
 
-  status = recorder->StartCamera (context->camera_id, 30, xtraparam);
+  // FrameRateControl
+  ::qmmf::recorder::FrameRateControl frc;
+  if (context->frc_mode == FRAME_SKIP) {
+    frc.mode = ::qmmf::recorder::FrameRateControlMode::kFrameSkip;
+  } else {
+    frc.mode = ::qmmf::recorder::FrameRateControlMode::kCaptureRequest;
+  }
+  xtraparam.Update(::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
+
+  qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
+      const android::CameraMetadata& result) {
+
+    // Timestamp cannot exist in urgent metadata because at time urgent meta
+    // is created frame is not exposed. This is why we use that to detect
+    // result callback is for urgent or full metadata.
+    gboolean isurgent = !result.exists (ANDROID_SENSOR_TIMESTAMP);
+
+    context->metacb (camera_id, &result, isurgent, context->userdata);
+  };
+
+  status = recorder->StartCamera (context->camera_id, 30, xtraparam, result_cb);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
       "QMMF Recorder StartCamera Failed!");
 
@@ -1198,11 +1227,32 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
+  if (vpad->compression != GST_VIDEO_COMPRESSION_NONE &&
+      vpad->format != GST_VIDEO_FORMAT_NV12 &&
+      vpad->format != GST_VIDEO_FORMAT_NV12_10LE32) {
+    GST_ERROR ("Compresion is not supported for %s format!",
+        gst_qmmf_video_format_to_string (vpad->format));
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+    return FALSE;
+  }
+
   switch (vpad->format) {
     case GST_VIDEO_FORMAT_NV12:
       format = (vpad->compression == GST_VIDEO_COMPRESSION_UBWC) ?
           ::qmmf::recorder::VideoFormat::kNV12UBWC :
           ::qmmf::recorder::VideoFormat::kNV12;
+      break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      format = ::qmmf::recorder::VideoFormat::kP010;
+      break;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      if (vpad->compression != GST_VIDEO_COMPRESSION_UBWC) {
+        GST_ERROR ("Only UBWC commpresion is supported for %s format!",
+            gst_qmmf_video_format_to_string (vpad->format));
+        GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+        return FALSE;
+      }
+      format = ::qmmf::recorder::VideoFormat::kTP10UBWC;
       break;
     case GST_VIDEO_FORMAT_NV16:
       format = ::qmmf::recorder::VideoFormat::kNV16;
@@ -1240,7 +1290,8 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       // Encoded stream.
       break;
     default:
-      GST_ERROR ("Unsupported video format!");
+      GST_ERROR ("Unsupported %s format!",
+          gst_qmmf_video_format_to_string (vpad->format));
       GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
       return FALSE;
   }
@@ -1620,6 +1671,119 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
 }
 
 void
+gst_qmmf_context_update_local_props (GstQmmfContext * context,
+    ::android::CameraMetadata *meta)
+{
+  gint temp = 0;
+  guint tag_id = 0;
+
+  // Update local camera parameters
+  if (meta->exists(ANDROID_CONTROL_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_MODE).data.u8[0];
+    context->controlmode = gst_qmmfsrc_android_value_control_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_EFFECT_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_EFFECT_MODE).data.u8[0];
+    context->effect = gst_qmmfsrc_android_value_effect_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_SCENE_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_SCENE_MODE).data.u8[0];
+    context->scene = gst_qmmfsrc_android_value_scene_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AE_ANTIBANDING_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_AE_ANTIBANDING_MODE).data.u8[0];
+    context->antibanding = gst_qmmfsrc_android_value_antibanding (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AE_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_AE_MODE).data.u8[0];
+    context->expmode = gst_qmmfsrc_android_value_exposure_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AWB_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_AWB_MODE).data.i32[0];
+    context->wbmode = gst_qmmfsrc_android_value_white_balance_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AF_MODE)) {
+    temp = meta->find(ANDROID_CONTROL_AF_MODE).data.u8[0];
+    context->afmode = gst_qmmfsrc_android_value_focus_mode (temp);
+  }
+
+  if (meta->exists(ANDROID_NOISE_REDUCTION_MODE)) {
+    temp = meta->find(ANDROID_NOISE_REDUCTION_MODE).data.u8[0];
+    context->nrmode = gst_qmmfsrc_android_value_noise_reduction (temp);
+  }
+
+  if (meta->exists(ANDROID_SCALER_CROP_REGION)) {
+    context->zoom.x = meta->find(ANDROID_SCALER_CROP_REGION).data.i32[0];
+    context->zoom.y = meta->find(ANDROID_SCALER_CROP_REGION).data.i32[1];
+    context->zoom.w = meta->find(ANDROID_SCALER_CROP_REGION).data.i32[2];
+    context->zoom.h = meta->find(ANDROID_SCALER_CROP_REGION).data.i32[3];
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AE_LOCK)) {
+    context->explock = meta->find(ANDROID_CONTROL_AE_LOCK).data.u8[0];
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION)) {
+    context->expcompensation =
+        meta->find(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION).data.i32[0];
+  }
+
+  if (meta->exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
+    context->exptime = meta->find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
+  }
+
+  if (meta->exists(ANDROID_CONTROL_AWB_LOCK)) {
+    context->wblock = meta->find(ANDROID_CONTROL_AWB_LOCK).data.u8[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.saturation", "use_saturation");
+  if (meta->exists(ANDROID_CONTROL_AWB_LOCK)) {
+    context->saturation = meta->find(tag_id).data.i32[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
+  if (meta->exists(tag_id)) {
+    context->isomode = meta->find(tag_id).data.i64[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
+  if (meta->exists(tag_id)) {
+    context->isovalue = meta->find(tag_id).data.i32[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.exposure_metering", "exposure_metering_mode");
+  if (meta->exists(tag_id)) {
+    context->expmetering = meta->find(tag_id).data.i32[0];
+  }
+
+  tag_id = get_vendor_tag_by_name ("org.codeaurora.qcamera3.ir_led", "mode");
+  if (meta->exists(tag_id)) {
+    context->irmode = meta->find(tag_id).data.i32[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.sharpness", "strength");
+  if (meta->exists(tag_id)) {
+    context->sharpness = meta->find(tag_id).data.i32[0];
+  }
+
+  tag_id = get_vendor_tag_by_name ("org.codeaurora.qcamera3.contrast", "level");
+  if (meta->exists(tag_id)) {
+    context->contrast = meta->find(tag_id).data.i32[0];
+  }
+}
+
+void
 gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     const GValue * value)
 {
@@ -1654,9 +1818,13 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_SENSOR_MODE:
       context->sensormode = g_value_get_int (value);
       return;
+    case PARAM_CAMERA_FRC_MODE:
+      context->frc_mode = g_value_get_enum (value);
+      return;
   }
 
-  if (context->state >= GST_STATE_READY)
+  if (context->state >= GST_STATE_READY &&
+      param_id != PARAM_CAMERA_CAPTURE_METADATA)
     recorder->GetCameraParam (context->camera_id, meta);
 
   switch (param_id) {
@@ -2073,8 +2241,18 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
   }
 
-  if (!context->slave && (context->state >= GST_STATE_READY))
-    recorder->SetCameraParam (context->camera_id, meta);
+  if (!context->slave && (context->state >= GST_STATE_READY)) {
+    if (param_id == PARAM_CAMERA_CAPTURE_METADATA) {
+      ::android::CameraMetadata *meta_ptr =
+          (::android::CameraMetadata *) g_value_get_pointer (value);
+      recorder->SetCameraParam (context->camera_id, *meta_ptr);
+
+      // Update all local props from external metadata
+      gst_qmmf_context_update_local_props (context, meta_ptr);
+    } else {
+      recorder->SetCameraParam (context->camera_id, meta);
+    }
+  }
 }
 
 void
@@ -2082,10 +2260,6 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     GValue * value)
 {
   ::qmmf::recorder::Recorder *recorder = context->recorder;
-  ::android::CameraMetadata meta;
-
-  if (context->state >= GST_STATE_READY)
-    recorder->GetCameraParam (context->camera_id, meta);
 
   switch (param_id) {
     case PARAM_CAMERA_ID:
@@ -2160,9 +2334,16 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_SENSOR_MODE:
       g_value_set_int (value, context->sensormode);
       break;
+    case PARAM_CAMERA_FRC_MODE:
+      g_value_set_enum (value, context->frc_mode);
+      return;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
       gchar *string = NULL;
+      ::android::CameraMetadata meta;
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, meta);
 
       get_vendor_tags ("org.codeaurora.qcamera3.manualWB",
           gst_camera_manual_wb_settings,
@@ -2183,6 +2364,10 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_NOISE_REDUCTION_TUNING:
     {
       gchar *string = NULL;
+      ::android::CameraMetadata meta;
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, meta);
 
       get_vendor_tags ("org.quic.camera.anr_tuning",
           gst_camera_nr_tuning_data, G_N_ELEMENTS (gst_camera_nr_tuning_data),
@@ -2214,6 +2399,10 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_DEFOG_TABLE:
     {
       gchar *string = NULL;
+      ::android::CameraMetadata meta;
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, meta);
 
       get_vendor_tags ("org.quic.camera.defog",
           gst_camera_defog_table, G_N_ELEMENTS (gst_camera_defog_table),
@@ -2227,6 +2416,10 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_EXPOSURE_TABLE:
     {
       gchar *string = NULL;
+      ::android::CameraMetadata meta;
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, meta);
 
       get_vendor_tags ("org.codeaurora.qcamera3.exposuretable",
           gst_camera_exposure_table, G_N_ELEMENTS (gst_camera_exposure_table),
@@ -2240,6 +2433,10 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_LOCAL_TONE_MAPPING:
     {
       gchar *string = NULL;
+      ::android::CameraMetadata meta;
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, meta);
 
       get_vendor_tags ("org.quic.camera.ltmDynamicContrast",
           gst_camera_ltm_data, G_N_ELEMENTS (gst_camera_ltm_data),
@@ -2269,6 +2466,26 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
 
       g_value_set_int (&val, context->sensorsize.h);
       gst_value_array_append_value (value, &val);
+      break;
+    }
+    case PARAM_CAMERA_CAPTURE_METADATA:
+    {
+      ::android::CameraMetadata *meta = new ::android::CameraMetadata();
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraParam (context->camera_id, *meta);
+
+      g_value_set_pointer (value, meta);
+      break;
+    }
+    case PARAM_CAMERA_CHARACTERISTICS:
+    {
+      ::android::CameraMetadata *meta = new ::android::CameraMetadata();
+
+      if (context->state >= GST_STATE_READY)
+        recorder->GetCameraCharacteristics (context->camera_id, *meta);
+
+      g_value_set_pointer (value, meta);
       break;
     }
   }

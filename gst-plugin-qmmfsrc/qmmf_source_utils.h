@@ -27,10 +27,47 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+ *  Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ *  Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted (subject to the limitations in the
+ *  disclaimer below) provided that the following conditions are met:
+ *
+ *      * Redistributions of source code must retain the above copyright
+ *        notice, this list of conditions and the following disclaimer.
+ *
+ *      * Redistributions in binary form must reproduce the above
+ *        copyright notice, this list of conditions and the following
+ *        disclaimer in the documentation and/or other materials provided
+ *        with the distribution.
+ *
+ *      * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *        contributors may be used to endorse or promote products derived
+ *        from this software without specific prior written permission.
+ *
+ *  NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ *  GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ *  HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ *   WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ *  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ *  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ *  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ *  GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ *  IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ *  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ *  IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #ifndef __GST_QMMFSRC_UTILS_H__
 #define __GST_QMMFSRC_UTILS_H__
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
 #include <glib/gtypes.h>
 
 G_BEGIN_DECLS
@@ -89,6 +126,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_ISO_MODE (gst_qmmfsrc_iso_mode_get_type())
 #define GST_TYPE_QMMFSRC_NOISE_REDUCTION \
     (gst_qmmfsrc_noise_reduction_get_type())
+#define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -221,6 +259,12 @@ enum
   NOISE_REDUCTION_HIGH_QUALITY,
 };
 
+enum
+{
+  FRAME_SKIP,
+  CAPTURE_REQUEST,
+};
+
 GType gst_qmmfsrc_control_mode_get_type (void);
 
 GType gst_qmmfsrc_effect_mode_get_type (void);
@@ -243,21 +287,41 @@ GType gst_qmmfsrc_iso_mode_get_type (void);
 
 GType gst_qmmfsrc_noise_reduction_get_type (void);
 
+GType gst_qmmfsrc_frc_mode_get_type (void);
+
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_control_mode (const guchar value);
 
 guchar gst_qmmfsrc_effect_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_effect_mode (const guchar value);
+
 guchar gst_qmmfsrc_scene_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_scene_mode (const guchar value);
 
 guchar gst_qmmfsrc_antibanding_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_antibanding (const guchar value);
+
 guchar gst_qmmfsrc_exposure_mode_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_exposure_mode (const guchar value);
 
 guchar gst_qmmfsrc_white_balance_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_white_balance_mode (const guchar value);
+
 guchar gst_qmmfsrc_focus_mode_android_value (const guint value);
 
+guint gst_qmmfsrc_android_value_focus_mode (const guchar value);
+
 guchar gst_qmmfsrc_noise_reduction_android_value (const guint value);
+
+guint gst_qmmfsrc_android_value_noise_reduction (const guchar value);
+
+const char * gst_qmmf_video_format_to_string (gint format);
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =
@@ -290,6 +354,8 @@ static const gchar * gst_camera_defog_table[] =
     "dcc_dark_str",
     "dcc_bright_str",
     "ce_trig_params",
+    "ates_enable",
+    "ates_strength"
 };
 
 /// org.codeaurora.qcamera3.exposuretable

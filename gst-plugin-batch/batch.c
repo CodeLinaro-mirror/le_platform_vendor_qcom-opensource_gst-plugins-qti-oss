@@ -307,6 +307,8 @@ gst_batch_update_src_caps (GstBatch * batch)
     return FALSE;
   }
 
+  length = gst_caps_get_size (srccaps);
+
   // Update the framerate field for video caps.
   for (idx = 0; idx < length; idx++) {
     structure = gst_caps_get_structure (srccaps, idx);
@@ -746,7 +748,7 @@ gst_batch_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
   GstBatch *batch = GST_BATCH (parent);
 
-  GST_LOG_OBJECT (pad, "Received %s query: %" GST_PTR_FORMAT,
+  GST_TRACE_OBJECT (pad, "Received %s query: %" GST_PTR_FORMAT,
       GST_QUERY_TYPE_NAME (query), query);
 
   switch (GST_QUERY_TYPE (query)) {
@@ -792,7 +794,7 @@ gst_batch_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstBatch *batch = GST_BATCH (parent);
 
-  GST_LOG_OBJECT (pad, "Received %s event: %" GST_PTR_FORMAT,
+  GST_TRACE_OBJECT (pad, "Received %s event: %" GST_PTR_FORMAT,
       GST_EVENT_TYPE_NAME (event), event);
 
   switch (GST_EVENT_TYPE (event)) {

@@ -36,34 +36,102 @@
 #include <dfs_factory.h>
 #include <rvDFS.h>
 
-#define GST_DFS_USE_IN_WORK_BUFFER
+#include<iomanip>
+#include<iostream>
 
 // DFS lib is looking for those symbols
 int RV_LOG_LEVEL = 0;
 bool RV_STDERR_LOGGING = true;
 
-struct _GstDfsEngine {
-  rvDFS          *handle;
-  void           *out_work_buffer;
-  gint           mode;
+struct _GstDfsEngine
+{
+  rvDFS *handle;
+  gint mode;
+  void *out_work_buffer;
   GstVideoFormat format;
-  uint32_t       width;
-  uint32_t       height;
-
-  // below mebers are needed only for input copy. Todo remove.
-  void           *left_frame;
-  void           *right_frame;
-  uint32_t       src_stride;
-  uint32_t       dfs_stride;
+  guint32 width;
+  guint32 height;
+  guint32 stride;
+  guint point_cloud_size;
 };
 
+static void
+fill_stereo_params (rvStereoConfiguration * rv_stereo_param,
+    stereoConfiguration * stereo_param)
+{
+  g_assert (sizeof (rv_stereo_param->translation) ==
+      sizeof (stereo_param->translation));
+  memcpy (rv_stereo_param->translation, stereo_param->translation,
+      sizeof (stereo_param->translation));
+
+  g_assert (sizeof (rv_stereo_param->rotation) ==
+      sizeof (stereo_param->rotation));
+  memcpy (rv_stereo_param->rotation, stereo_param->rotation,
+      sizeof (stereo_param->rotation));
+
+  rv_stereo_param->camera[0].pixelWidth = stereo_param->camera[0].pixelWidth;
+  rv_stereo_param->camera[1].pixelWidth = stereo_param->camera[1].pixelWidth;
+  rv_stereo_param->camera[0].pixelHeight = stereo_param->camera[0].pixelHeight;
+  rv_stereo_param->camera[1].pixelHeight = stereo_param->camera[1].pixelHeight;
+
+  rv_stereo_param->camera[0].memoryStride =
+      stereo_param->camera[0].memoryStride;
+  rv_stereo_param->camera[1].memoryStride =
+      stereo_param->camera[1].memoryStride;
+  rv_stereo_param->camera[0].uvOffset = stereo_param->camera[0].uvOffset;
+  rv_stereo_param->camera[1].uvOffset = stereo_param->camera[1].uvOffset;
+
+  g_assert (sizeof (rv_stereo_param->camera[0].principalPoint) ==
+      sizeof (stereo_param->camera[0].principalPoint));
+  g_assert (sizeof (rv_stereo_param->camera[1].principalPoint) ==
+      sizeof (stereo_param->camera[1].principalPoint));
+  memcpy (rv_stereo_param->camera[0].principalPoint,
+      stereo_param->camera[0].principalPoint,
+      sizeof (stereo_param->camera[0].principalPoint));
+  memcpy (rv_stereo_param->camera[1].principalPoint,
+      stereo_param->camera[1].principalPoint,
+      sizeof (stereo_param->camera[1].principalPoint));
+
+  g_assert (sizeof (rv_stereo_param->camera[0].focalLength) ==
+      sizeof (stereo_param->camera[0].focalLength));
+  g_assert (sizeof (rv_stereo_param->camera[1].focalLength) ==
+      sizeof (stereo_param->camera[1].focalLength));
+  memcpy (rv_stereo_param->camera[0].focalLength,
+      stereo_param->camera[0].focalLength,
+      sizeof (stereo_param->camera[0].focalLength));
+  memcpy (rv_stereo_param->camera[1].focalLength,
+      stereo_param->camera[1].focalLength,
+      sizeof (stereo_param->camera[1].focalLength));
+
+  g_assert (sizeof (rv_stereo_param->camera[0].distortion) ==
+      sizeof (stereo_param->camera[0].distortion));
+  g_assert (sizeof (rv_stereo_param->camera[1].distortion) ==
+      sizeof (stereo_param->camera[1].distortion));
+  memcpy (rv_stereo_param->camera[0].distortion,
+      stereo_param->camera[0].distortion,
+      sizeof (stereo_param->camera[0].distortion));
+  memcpy (rv_stereo_param->camera[1].distortion,
+      stereo_param->camera[1].distortion,
+      sizeof (stereo_param->camera[1].distortion));
+
+  rv_stereo_param->camera[0].distortionModel =
+      stereo_param->camera[0].distortionModel;
+  rv_stereo_param->camera[1].distortionModel =
+      stereo_param->camera[1].distortionModel;
+
+  g_assert (sizeof (rv_stereo_param->correctionFactors) ==
+      sizeof (stereo_param->correctionFactors));
+  memcpy (rv_stereo_param->correctionFactors, stereo_param->correctionFactors,
+      sizeof (stereo_param->correctionFactors));
+}
+
 GstDfsEngine *
-gst_dfs_engine_new (DfsInitSettings *settings)
+gst_dfs_engine_new (DfsInitSettings * settings)
 {
   rvDFSParameter dfs_param;
-  rvStereoConfiguration stereo_param = {};
+  rvStereoConfiguration stereo_param;
 
-  GstDfsEngine *engine = (GstDfsEngine *)g_malloc0 (sizeof (GstDfsEngine));
+  GstDfsEngine *engine = (GstDfsEngine *) g_malloc0 (sizeof (GstDfsEngine));
   if (!engine) {
     GST_ERROR ("Failed to allocate memory");
     return NULL;
@@ -71,67 +139,49 @@ gst_dfs_engine_new (DfsInitSettings *settings)
 
   engine->mode = settings->mode;
   engine->format = settings->format;
-  engine->width = settings->stereo_frame_widht / 2;
+  engine->width = settings->stereo_frame_width / 2;
   engine->height = settings->stereo_frame_height;
+  engine->stride = settings->stride;
 
-  if (settings->mode == OUTPUT_MODE_VIDEO) {
-    posix_memalign (reinterpret_cast<void**>(&engine->out_work_buffer), 128,
-        engine->width * engine->height * sizeof (float));
-    if (!engine->out_work_buffer) {
-      GST_ERROR ("Failed to allocate memory for output work buffer");
-      goto cleanup;
-    }
+
+  posix_memalign (reinterpret_cast < void **>(&engine->out_work_buffer), 128,
+      engine->width * engine->height * sizeof (float));
+  if (!engine->out_work_buffer) {
+    GST_ERROR ("Failed to allocate memory for output work buffer");
+    goto cleanup;
   }
 
   dfs_param.filterWidth = settings->filter_width;
   dfs_param.filterHeight = settings->filter_height;
-  dfs_param.minDisparity = settings->min_disparity;
-  dfs_param.numDisparityLevels = settings->num_disparity_levels;
+  dfs_param.disparity.minDisparity = settings->min_disparity;
+  dfs_param.disparity.numDisparityLevels = settings->num_disparity_levels;
   dfs_param.doRectification = settings->rectification;
   dfs_param.doGpuRect = settings->gpu_rect;
 
-  GST_INFO ("Filter: %dx%d min_disp: %d num_levels: %d doRectification: %s doGPURect: %s",
+  fill_stereo_params (&stereo_param, &settings->stereo_parameter);
+
+  GST_INFO
+      ("Filter: %dx%d min_disp: %d num_levels: %d doRectification: %s doGPURect: %s",
       dfs_param.filterWidth, dfs_param.filterHeight,
-      dfs_param.minDisparity,dfs_param.numDisparityLevels,
+      dfs_param.disparity.minDisparity, dfs_param.disparity.numDisparityLevels,
       dfs_param.doRectification ? "enable" : "disable",
       dfs_param.doGpuRect ? "enable" : "disable");
 
-  if (settings->do_copy) {
-    size_t size = engine->width * engine->height;
-    posix_memalign (reinterpret_cast<void**>(&engine->left_frame), 128, size);
-    posix_memalign (reinterpret_cast<void**>(&engine->right_frame), 128, size);
-    if (!engine->left_frame || !engine->right_frame) {
-      GST_ERROR ("Failed to allocate memory for input buffers");
-      goto cleanup;
-    }
-
-    engine->src_stride = settings->stride;
-    engine->dfs_stride = engine->width;
-  } else {
-    engine->dfs_stride = settings->stride;
-  }
-
-  engine->handle = rvDFS_Initialize ((rvDFSMode)settings->dfs_mode, engine->width,
-     engine->height, engine->dfs_stride, dfs_param, stereo_param);
+  engine->handle =
+      rvDFS_Initialize ((rvDFSMode) settings->dfs_mode, engine->width,
+      engine->height, engine->stride, dfs_param, stereo_param);
   if (!engine->handle) {
     GST_ERROR ("Failed to initialize DFS");
     goto cleanup;
   }
 
+
   GST_INFO ("DFS mode: %d dimension: %dx%d stride: %d", settings->dfs_mode,
-      engine->width , engine->height, engine->dfs_stride);
+      engine->width, engine->height, engine->stride);
 
   return engine;
 
 cleanup:
-  if (engine->left_frame) {
-    free (engine->left_frame);
-    engine->left_frame = NULL;
-  }
-  if (engine->right_frame) {
-    free (engine->right_frame);
-    engine->right_frame = NULL;
-  }
   if (engine->handle) {
     rvDFS_Deinitialize (engine->handle);
     engine->handle = NULL;
@@ -145,8 +195,8 @@ cleanup:
 }
 
 static void
-gst_dfs_normalize_disparity_map (GstDfsEngine * engine, float * disparity_map,
-  gpointer output)
+gst_dfs_normalize_disparity_map (GstDfsEngine * engine, float *disparity_map,
+    gpointer output)
 {
   float min = disparity_map[0];
   float max = disparity_map[0];
@@ -160,18 +210,18 @@ gst_dfs_normalize_disparity_map (GstDfsEngine * engine, float * disparity_map,
   }
   float scale = 255.0 / (max - min);
 
-  uint8_t * dst = output ? (uint8_t *)output : (uint8_t *)disparity_map;
+  uint8_t *dst = output ? (uint8_t *) output : (uint8_t *) disparity_map;
   for (int x = 0; x < engine->width * engine->height; x++) {
     dst[x] = (uint8_t) (((disparity_map[x]) - min) * scale);
   }
 }
 
 static void
-gst_dfs_convert_to_rgb_image (GstDfsEngine * engine, float * map,
+gst_dfs_convert_to_rgb_image (GstDfsEngine * engine, float *map,
     gpointer output)
 {
-  uint8_t * dst = (uint8_t *)output;
-  uint8_t * src = (uint8_t *)map;
+  uint8_t *dst = (uint8_t *) output;
+  uint8_t *src = (uint8_t *) map;
 
   for (int x = 0; x < engine->width * engine->height; x++) {
     uint8_t r = 0, g = 0, b = 0;
@@ -221,14 +271,14 @@ gst_dfs_convert_to_rgb_image (GstDfsEngine * engine, float * map,
         dst += 3;
         break;
       default:
-        GST_ERROR("Error: unsupported format %d", engine->format);
+        GST_ERROR ("Error: unsupported format %d", engine->format);
         return;
     }
   }
 }
 
 static void
-gst_dfs_convert_disparity_map_to_image (GstDfsEngine * engine, float * map,
+gst_dfs_convert_disparity_map_to_image (GstDfsEngine * engine, float *map,
     gpointer output)
 {
   if (engine->format == GST_VIDEO_FORMAT_GRAY8) {
@@ -239,48 +289,88 @@ gst_dfs_convert_disparity_map_to_image (GstDfsEngine * engine, float * map,
   }
 }
 
-gboolean
-gst_dfs_engine_execute (GstDfsEngine * engine,
-    const GstVideoFrame * inframe, gpointer output)
-{
-  gboolean ret;
-  float * disparity_map = NULL;
-  gpointer img_left = GST_VIDEO_FRAME_PLANE_DATA (inframe, 0);
-  gpointer img_right = (guint8 *)img_left + engine->width;
 
-  if (engine->mode == OUTPUT_MODE_VIDEO) {
-    disparity_map = (float *)engine->out_work_buffer;
-  }else {
-    GST_ERROR("Unsupported mode %d", engine->mode);
+
+gboolean
+write_point_cloud_ply (GstDfsEngine * engine, PointCloudType * pcl,
+    gpointer output, gsize size)
+{
+  std::stringstream ply_content;
+  uint8_t *dst = (uint8_t *) output;
+  ply_content << "ply" << std::endl;
+  ply_content << "format ascii 1.0" << std::endl;
+  ply_content << "element vertex " << pcl->size () << std::endl;
+  ply_content << "property float x" << std::endl;
+  ply_content << "property float y" << std::endl;
+  ply_content << "property float z" << std::endl;
+  ply_content << "end_header" << std::endl;
+  for (const auto& pc : *pcl) {
+    ply_content << std::fixed << std::
+        setprecision (2) << pc[0] << " " << pc[1] << " " << pc[2] << std::endl;
+  }
+
+  std::string ply_content_str = ply_content.str();
+  if (ply_content_str.size() > size) {
+    GST_ERROR ("Error: point cloud buffer overflow(%ld:%ld)",
+              ply_content_str.size(), size);
     return FALSE;
   }
 
-  if (engine->left_frame && engine->right_frame) {
-    for (int y = 0; y < engine->height; y++) {
-      memcpy (&((uint8_t *)engine->left_frame)[y * engine->dfs_stride],
-              &((uint8_t *)img_left)[y * engine->src_stride],
-              engine->width);
-    }
-    for (int y = 0; y < engine->height; y++) {
-      memcpy (&((uint8_t *)engine->right_frame)[y * engine->dfs_stride],
-              &((uint8_t *)img_right)[y * engine->src_stride],
-              engine->width);
-    }
-  } else {
-    engine->left_frame = img_left;
-    engine->right_frame = img_right;
+  for (int i = 0; i < (int) ply_content_str.size(); i++) {
+    dst[i] = ply_content_str[i];
   }
+  return TRUE;
+}
 
-  ret = rvDFS_CalculateDisparity(engine->handle,
-      (uint8_t *)engine->left_frame, (uint8_t *)engine->right_frame,
-      disparity_map);
-  if (!ret) {
-    GST_ERROR ("Error in DFS process function");
-    return ret;
-  }
+
+gboolean
+gst_dfs_engine_execute (GstDfsEngine * engine,
+    const GstVideoFrame * inframe, gpointer output, gsize size)
+{
+  gboolean ret;
+  float *disparity_map = NULL;
+  gpointer img_left = GST_VIDEO_FRAME_PLANE_DATA (inframe, 0);
 
   if (engine->mode == OUTPUT_MODE_VIDEO) {
+    disparity_map = (float *) engine->out_work_buffer;
+    ret = rvDFS_CalculateDisparity (engine->handle,
+        (uint8_t *) img_left, nullptr, disparity_map);
+    if (!ret) {
+      GST_ERROR ("Error in DFS process function");
+      return ret;
+    }
+
     gst_dfs_convert_disparity_map_to_image (engine, disparity_map, output);
+
+  } else if (engine->mode == OUTPUT_MODE_DISPARITY) {
+
+    disparity_map = (float *) output;
+    ret = rvDFS_CalculateDisparity (engine->handle,
+        (uint8_t *) img_left, nullptr, disparity_map);
+    if (!ret) {
+      GST_ERROR ("Error in DFS process function");
+      return ret;
+    }
+
+  } else if (engine->mode == OUTPUT_MODE_POINT_CLOUD) {
+
+    PointCloudType pcl;
+    ret = rvDFS_CalculatePointCloud (engine->handle,
+        (uint8_t *) img_left, nullptr, &pcl);
+    if (!ret) {
+      GST_ERROR ("Error in DFS process function");
+      return ret;
+    }
+
+    ret = write_point_cloud_ply (engine, &pcl, output, size);
+    if (!ret) {
+      GST_ERROR ("Error: point cloud buffer overflow");
+      return ret;
+    }
+
+  } else {
+    GST_ERROR ("Error invalid output mode");
+    ret = FALSE;
   }
 
   return ret;
@@ -292,18 +382,9 @@ gst_dfs_engine_free (GstDfsEngine * engine)
   if (NULL == engine)
     return;
 
-  if (engine->left_frame){
-    free (engine->left_frame);
-    engine->left_frame = NULL;
-  }
-
-  if (engine->right_frame){
-    free (engine->right_frame);
-    engine->right_frame = NULL;
-  }
-  if (engine->handle){
+  if (engine->handle)
     rvDFS_Deinitialize (engine->handle);
-    engine->handle = NULL;
-  }
+  engine->handle = NULL;
+
   g_free (engine);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -43,9 +43,11 @@
 #include <gst/video/video.h>
 #include <gst/audio/audio.h>
 
+#include "metamuxpads.h"
+
 G_BEGIN_DECLS
 
-#define GST_TYPE_METAMUX (gst_meta_mux_get_type())
+#define GST_TYPE_METAMUX (gst_metamux_get_type())
 #define GST_METAMUX(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_METAMUX,GstMetaMux))
 #define GST_METAMUX_CLASS(klass) \
@@ -63,35 +65,47 @@ G_BEGIN_DECLS
 typedef struct _GstMetaMux GstMetaMux;
 typedef struct _GstMetaMuxClass GstMetaMuxClass;
 
+typedef enum {
+  GST_METAMUX_MODE_ASYNC,
+  GST_METAMUX_MODE_SYNC,
+} GstMetaMuxMode;
+
 struct _GstMetaMux
 {
   /// Inherited parent structure.
-  GstElement     parent;
+  GstElement        parent;
 
   /// Global mutex lock.
-  GMutex         lock;
+  GMutex            lock;
 
   /// Next available index for the sink pads.
-  guint          nextidx;
+  guint             nextidx;
 
-  /// Convenient local reference to media sink pad.
-  GstPad         *sinkpad;
   /// Convenient local reference to data sink pads.
-  GList          *metapads;
+  GList             *metapads;
+  /// Convenient local reference to media sink pad.
+  GstMetaMuxSinkPad *sinkpad;
   /// Convenient local reference to source pad.
-  GstPad         *srcpad;
-
-  /// Source segment.
-  GstSegment     segment;
+  GstMetaMuxSrcPad  *srcpad;
 
   /// Info regarding the negotiated audio/video caps.
-  GstVideoInfo   *vinfo;
-  GstAudioInfo   *ainfo;
+  GstVideoInfo      *vinfo;
+  GstAudioInfo      *ainfo;
 
+  /// Worker task.
+  GstTask           *worktask;
+  /// Worker task mutex.
+  GRecMutex         worklock;
+  // Indicates whether the worker task is active or not.
+  gboolean          active;
   /// Condition for push/pop buffers from the queues.
-  GCond          wakeup;
-  /// Indicates whether we should continue processing input buffers.
-  gboolean       active;
+  GCond             wakeup;
+  /// The timestamp until which the worker task will wait for synced data.
+  gint64            timeout;
+
+  /// Properties.
+  GstMetaMuxMode    mode;
+  GstClockTime      latency;
 };
 
 struct _GstMetaMuxClass {
@@ -99,7 +113,7 @@ struct _GstMetaMuxClass {
   GstElementClass parent;
 };
 
-GType gst_meta_mux_get_type (void);
+GType gst_metamux_get_type (void);
 
 G_END_DECLS
 
