@@ -1,5 +1,5 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+# GStreamer camera capture-image example
+set(GST_EXAMPLE_BIN gst-camera-capture-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
