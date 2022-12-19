@@ -9,6 +9,26 @@
 #include <gst/base/gstbasetransform.h>
 
 G_BEGIN_DECLS
+#define COMMON_VIDEO_CAPS(min, max) \
+    "width = (int) [" #min ", " #max "], "    \
+    "height = (int) [" #min ", " #max "]"
+#define H264_CAPS \
+    "video/x-h264, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+#define H265_CAPS \
+    "video/x-h265, " \
+    "stream-format = (string) { byte-stream }, " \
+    "alignment = (string) { au }, " \
+    COMMON_VIDEO_CAPS(96, 8192)
+#define VP9_CAPS \
+    "video/x-vp9, " \
+    COMMON_VIDEO_CAPS(96, 4096)
+#define MPEG2_CAPS \
+    "video/mpeg, " \
+    "mpegversion = (int)2, " \
+    COMMON_VIDEO_CAPS(96, 1920)
 
 #define GST_TYPE_VESDELIVER \
   (gst_vesdeliver_get_type())
@@ -23,12 +43,31 @@ G_BEGIN_DECLS
 
 typedef struct _GstVesDeliver GstVesDeliver;
 typedef struct _GstVesDeliverClass GstVesDeliverClass;
+typedef struct _QSEECom_handle QSEECom_handle;
+
+typedef int (*Content_Protection_Set_AppName_Func) (const char *name);
+typedef int (*Content_Protection_Copy_Init_Func) (void **handle);
+typedef int (*Content_Protection_Copy_Func) (void *handle,
+      uint8_t *non_sec_buf, uint32_t non_sec_buf_len, uint32_t sec_buf_fd,
+      uint32_t sec_buf_offset, uint32_t *sec_buf_len, int copy_dir);
+typedef int (*Content_Protection_Copy_Terminate_Func) (void **handle);
+
+struct _QSEECom_handle
+{
+  unsigned char *ion_sbuffer;
+};
 
 struct _GstVesDeliver
 {
   GstBaseTransform parent;
-
-  GstBufferPool *outpool;
+  GstAllocator* allocator;
+  gboolean secure;
+  QSEECom_handle *secure_handle;
+  void *crypto_handle;
+  Content_Protection_Set_AppName_Func Content_Protection_Set_AppName;
+  Content_Protection_Copy_Init_Func Content_Protection_Copy_Init;
+  Content_Protection_Copy_Func Content_Protection_Copy;
+  Content_Protection_Copy_Terminate_Func Content_Protection_Copy_Terminate;
 };
 
 struct _GstVesDeliverClass
