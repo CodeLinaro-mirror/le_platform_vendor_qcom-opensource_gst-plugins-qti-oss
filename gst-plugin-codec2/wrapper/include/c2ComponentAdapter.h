@@ -104,8 +104,8 @@ public:
     c2_status_t setDataCopyFunc(void* func, void* param);
     c2_status_t setCompStore(std::weak_ptr<C2ComponentStore> store);
     c2_status_t freeOutputBuffer(uint64_t bufferIdx);
-    c2_status_t attachExternalFd(int fd);
-    c2_status_t setUseExternalBuffer(bool useExternal);
+    c2_status_t attachExternalFd(BUFFER_POOL_TYPE type, int fd);
+    c2_status_t setUseExternalBuffer(BUFFER_POOL_TYPE type, bool useExternal);
     void acquireExtBuf(uint32_t width, uint32_t height);
 
 private:
@@ -119,7 +119,8 @@ private:
     void unregisterTrackBufferAll();
     void onBufferDestroyed(const C2Buffer* buf, void* arg);
     static void onDestroyNotify(const C2Buffer* buf, void* arg);
-    bool isUseExternalBuffer();
+    bool isUseExternalBuffer(BUFFER_POOL_TYPE type);
+    c2_status_t importExternalBuf(std::shared_ptr<C2Buffer>& c2Buf, int fd, uint32_t size);
 
     std::weak_ptr<C2ComponentStore> mStore;
     std::shared_ptr<C2Component> mComp;
@@ -146,7 +147,8 @@ private:
     std::map<uint64_t, std::shared_ptr<C2GraphicBlock> > mInPendingBuffer;
     std::map<uint64_t, std::shared_ptr<C2Buffer> > mOutPendingBuffer;
     std::set<TrackBuffer*> mTrackBuffers;
-    std::shared_ptr<C2Allocator> mC2Allocator;
+    std::shared_ptr<C2Allocator> mC2AllocatorGBM;
+    std::shared_ptr<C2Allocator> mC2AllocatorIon;
 
     uint32_t mNumPendingWorks;
     std::mutex mLock;

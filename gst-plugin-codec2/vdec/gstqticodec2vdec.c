@@ -456,7 +456,7 @@ gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec * decoder)
 
   /* Set to use external pool */
   if (dec->use_external_buf) {
-    ret = c2component_setUseExternalBuffer (dec->comp, TRUE);
+    ret = c2component_setUseExternalBuffer (dec->comp, BUFFER_POOL_BASIC_GRAPHIC, TRUE);
     if (ret == FALSE) {
       GST_ERROR_OBJECT (dec, "Failed to set component use external buffer");
       return FALSE;
@@ -962,7 +962,7 @@ acquire_external_buf_callback (GstVideoDecoder * decoder)
               buffer, dec->out_port_pool);
 
           /* Attach the fd to c2component */
-          if (!c2component_attachExternalFd (dec->comp, fd)) {
+          if (!c2component_attachExternalFd (dec->comp, BUFFER_POOL_BASIC_GRAPHIC, fd)) {
             GST_ERROR_OBJECT (dec, "Failed to attach fd to Codec2");
           }
           /* Insert the corresponding gstbuffer to hashtable */
@@ -1597,6 +1597,7 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
   GstMapInfo mapinfo = { 0, };
   GstBuffer *buf = NULL;
+  GstMemory *mem = NULL;
   BufferDescriptor inBuf;
   gboolean status = FALSE;
   GstFlowReturn ret = GST_FLOW_OK;
@@ -1605,21 +1606,29 @@ gst_qticodec2vdec_decode (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   memset (&inBuf, 0, sizeof (BufferDescriptor));
 
-  buf = frame->input_buffer;
-  gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
-  inBuf.fd = -1;
-  inBuf.data = mapinfo.data;
-  inBuf.size = mapinfo.size;
-  inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
-
-  GST_INFO_OBJECT (dec, "frame->pts (%" G_GUINT64_FORMAT ")", frame->pts);
-
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+
+  buf = frame->input_buffer;
+  mem = gst_buffer_peek_memory (buf, 0);
+  if (gst_is_dmabuf_memory (mem)) {
+    inBuf.fd = gst_dmabuf_memory_get_fd (mem);
+    inBuf.data = NULL;
+    inBuf.size = gst_memory_get_sizes (mem, NULL, NULL);
+    GST_DEBUG_OBJECT (dec, "Input dma buffer with fd=%d, size=%d",
+                      inBuf.fd, inBuf.size);
+  } else {
+    gst_buffer_map (buf, &mapinfo, GST_MAP_READ);
+    inBuf.fd = -1;
+    inBuf.data = mapinfo.data;
+    inBuf.size = mapinfo.size;
+  }
+  GST_INFO_OBJECT (dec, "frame->pts (%" G_GUINT64_FORMAT ")", frame->pts);
 
   /* Keep track of queued frame */
   dec->queued_frame[(dec->frame_index) % MAX_QUEUED_FRAME] =
       frame->system_frame_number;
 
+  inBuf.pool_type = BUFFER_POOL_BASIC_LINEAR;
   inBuf.timestamp = NANO_TO_MILLI (frame->pts);
   inBuf.index = frame->system_frame_number;
   inBuf.secure = dec->secure;
