@@ -24,7 +24,7 @@
 
 #include <gst/video/video.h>
 #include <gst/allocators/gstdmabuf.h>
-#include <linux-msm/vidc/media/msm_media_info.h>
+#include <vidc/media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY (gst_qvdeinterlace_debug);
 #define GST_CAT_DEFAULT gst_qvdeinterlace_debug
