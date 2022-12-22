@@ -195,6 +195,9 @@ struct _GstQmmfContext {
   gint               selecttscp;
   /// HFR Sync Mode
   gboolean           hfr_sync_mode;
+  /// rotation angle
+  gint               rotation;
+
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
 };
@@ -571,6 +574,10 @@ initialize_camera_param (GstQmmfContext * context)
 
   meta.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
               &(context)->expcompensation, 1);
+
+  meta.update(ANDROID_JPEG_ORIENTATION,
+              &(context)->rotation, 1);
+
 
   numvalue = gst_qmmfsrc_exposure_mode_android_value (context->expmode);
   meta.update(ANDROID_CONTROL_AE_MODE, &numvalue, 1);
@@ -2300,6 +2307,14 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(tag_id, &(context)->selecttscp, 1);
       break;
     }
+    case PARAM_CAMERA_SELECT_ROTATION:
+    {
+      gint rotation;
+      context->rotation = g_value_get_int (value);
+
+      meta.update(ANDROID_JPEG_ORIENTATION, &(context)->rotation, 1);
+      break;
+    }
   }
 
   if (!context->slave && (context->state >= GST_STATE_READY)) {
@@ -2555,6 +2570,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       g_value_set_pointer (value, meta);
       break;
     }
+    case PARAM_CAMERA_SELECT_ROTATION:
+      g_value_set_int (value, context->rotation);
+      break;
   }
 }
 
