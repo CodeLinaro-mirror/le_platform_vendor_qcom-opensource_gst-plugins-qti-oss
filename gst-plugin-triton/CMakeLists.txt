@@ -39,6 +39,7 @@ add_library(${GST_QTI_TRITON} SHARED
   triton.c
   tritonpads.c
   tritoninfer.cc
+  shm_utils.cc
   labels/label_mark.cc
 )
 
@@ -54,6 +55,7 @@ target_link_libraries(${GST_QTI_TRITON} PRIVATE
   grpcclient
   httpclient
   protobuf
+  rt
 )
 
 install(

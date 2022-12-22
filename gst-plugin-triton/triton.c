@@ -60,12 +60,14 @@ GST_DEFINE_MINI_OBJECT_TYPE (GstTritonRequest, gst_triton_request);
 #define DEFAULT_PROP_MODEL_NAME NULL
 #define DEFAULT_PROP_MODEL_VERSION NULL
 #define DEFAULT_PROP_LABELS NULL
+#define DEFAULT_PROP_SHARE_MEMORY_KEY NULL
+#define DEFAULT_PROP_BATCH_SIZE 1
 #define DEFAULT_PROP_THRESHOLD 10.0F
 #define DEFAULT_PROP_KEEP_RATIO TRUE
 
 #define START_REQUEST_COUNT 1
-#define MAX_REQUEST_COUNT 100
-#define MIN_REQUEST_COUNT 50
+#define MAX_REQUEST_COUNT 30
+#define MIN_REQUEST_COUNT 10
 #define GST_BINARY_8BIT_FORMAT "%c%c%c%c%c%c%c%c"
 #define GST_BINARY_8BIT_STRING(x) \
   (x & 0x80 ? '1' : '0'), (x & 0x40 ? '1' : '0'), (x & 0x20 ? '1' : '0'), \
@@ -94,6 +96,8 @@ enum
   PROP_MODEL_NAME,
   PROP_MODEL_VERSION,
   PROP_LABELS,
+  PROP_SHARE_MEMORY_KEY,
+  PROP_BATCH_SIZE,
   PROP_THRESHOLD,
   PROP_KEEP_RATIO,
 };
@@ -124,9 +128,6 @@ gst_triton_mode_get_type (void)
     { GRPC_MODE,
         "Communicate with Triton Server using gRPC.", "gRPC"
     },
-    { C_API_MODE,
-        "Using C API to do inference in Triton Server", "cAPI"
-    },
     { 0, NULL, NULL },
   };
 
@@ -150,6 +151,9 @@ gst_triton_task_get_type (void)
     },
     { SEGMENTATION,
         "Segmentation", "segmentation"
+    },
+    { DAISYCHAIN,
+        "Daisy chain", "daisychain"
     },
     { 0, NULL, NULL },
   };
@@ -186,8 +190,6 @@ gst_triton_request_free (GstTritonRequest * request)
     gst_buffer_unref (buffer);
   }
   delete_result (request->result);
-  g_list_foreach (request->outputs, (GFunc)gst_free_output, NULL);
-  g_list_free (request->outputs);
   g_free (request);
 }
 
@@ -203,8 +205,9 @@ gst_triton_request_new ()
   request->done = FALSE;
   request->id = 0;
   request->result = NULL;
-  request->outputs = NULL;
   request->inbuffer = NULL;
+  request->prepare_input_delta = GST_CLOCK_TIME_NONE;
+  request->inf_start = GST_CLOCK_TIME_NONE;
 
   return request;
 }
@@ -374,129 +377,156 @@ gst_triton_sink_setcaps (GstTriton * triton, GstPad * pad, GstCaps * caps)
 }
 
 static void
+gst_demux_video_frame (GstTriton *triton, GstBuffer *inbuffer)
+{
+  GstBuffer *outbuffer = NULL;
+  GstDataQueueItem *item = NULL;
+  GstProtectionMeta *pmeta = NULL;
+  GList *list = NULL;
+  gchar *name = NULL;
+  guint channel = 0, mem_indx = 0;
+
+  for (list = triton->srcpads; list != NULL; list = g_list_next (list)) {
+    GstTritonSrcPad *srcpad = GST_TRITON_SRCPAD (list->data);
+    GstClockTime timestamp = GST_CLOCK_TIME_NONE, duration = GST_CLOCK_TIME_NONE;
+    guint flags = 0;
+
+    channel = g_list_index (triton->srcpads, srcpad);
+    // Check if a inference was done for this channel.
+    if ((GST_BUFFER_OFFSET (inbuffer) & (1 << channel)) == 0)
+      continue;
+
+    // Create a new buffer wrapper to hold a reference to input buffer.
+    outbuffer = gst_buffer_new ();
+
+    name = g_strdup_printf ("channel-%u", channel);
+
+    // Transfer the proper GstProtectionMeta into the new buffer if available.
+    if ((pmeta = gst_buffer_get_protection_meta_id (inbuffer, name)) != NULL)
+      pmeta = gst_buffer_add_protection_meta (outbuffer,
+          gst_structure_copy (pmeta->info));
+
+    g_free (name);
+
+    if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "timestamp")) {
+      gst_structure_get_uint64 (pmeta->info, "timestamp", &timestamp);
+      gst_structure_remove_field (pmeta->info, "timestamp");
+    }
+
+    if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "duration")) {
+      gst_structure_get_uint64 (pmeta->info, "duration", &duration);
+      gst_structure_remove_field (pmeta->info, "duration");
+    }
+
+    if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "flags")) {
+      gst_structure_get_uint (pmeta->info, "flags", &flags);
+      gst_structure_remove_field (pmeta->info, "flags");
+    } else {
+      flags = GST_BUFFER_FLAGS (inbuffer);
+    }
+
+    GST_BUFFER_TIMESTAMP (outbuffer) = (timestamp != GST_CLOCK_TIME_NONE) ?
+        timestamp : GST_BUFFER_TIMESTAMP (inbuffer);
+    GST_BUFFER_DURATION (outbuffer) = (duration != GST_CLOCK_TIME_NONE) ?
+        duration : GST_BUFFER_DURATION (inbuffer);
+
+    gst_buffer_set_flags (outbuffer, flags);
+    gst_buffer_append_memory (outbuffer, gst_buffer_get_memory (inbuffer, mem_indx));
+
+    // Initialize and send the source segment for synchronization.
+    if (GST_FORMAT_UNDEFINED == srcpad->segment.format) {
+      gst_segment_init (&(srcpad)->segment, GST_FORMAT_TIME);
+
+      srcpad->segment.start = GST_BUFFER_TIMESTAMP (outbuffer);
+      srcpad->segment.position = GST_BUFFER_TIMESTAMP (outbuffer);
+
+      gst_pad_push_event (GST_PAD (srcpad),
+          gst_event_new_segment (&(srcpad)->segment));
+    }
+
+    // Adjust the source pad segment position.
+    srcpad->segment.position = GST_BUFFER_TIMESTAMP (outbuffer) +
+        GST_BUFFER_DURATION (outbuffer);
+
+    GstMapInfo mapinfo;
+    gst_buffer_map (outbuffer, &mapinfo, GST_MAP_READWRITE);
+    draw_result (triton, &mapinfo, channel);
+    gst_buffer_unmap (outbuffer, &mapinfo);
+
+    item = g_slice_new0 (GstDataQueueItem);
+    item->object = GST_MINI_OBJECT (outbuffer);
+    item->size = gst_buffer_get_size (outbuffer);
+    item->duration = GST_BUFFER_DURATION (outbuffer);
+    item->visible = TRUE;
+    item->destroy = gst_data_queue_free_item;
+
+    // Push the buffer into the queue or free it on failure.
+    if (!gst_data_queue_push (srcpad->buffers, item)) {
+      item->destroy (item);
+    } else {
+    }
+    mem_indx ++;
+  }
+}
+
+static void
 gst_triton_wait_request_task (gpointer userdata)
 {
   GstTriton *triton = GST_TRITON (userdata);
-  GList *list = NULL;
   GstBuffer *inbuffer = NULL;
-  GstBuffer *outbuffer = NULL;
-  GstDataQueueItem *item = NULL;
   GstTritonRequest *request = NULL;
-  GstProtectionMeta *pmeta = NULL;
-  gchar *name = NULL;
-  guint channel = 0, n_memory = 0, mem_indx = 0;
+  GstDataQueueItem *item = NULL;
+  GstClockTime inf_end = GST_CLOCK_TIME_NONE;
+  GstClockTimeDiff inf_delta = GST_CLOCK_TIME_NONE;
+  GstClockTime deal_result_end = GST_CLOCK_TIME_NONE;
+  GstClockTimeDiff deal_result_delta = GST_CLOCK_TIME_NONE;
 
   GST_TRITON_LOCK (triton);
   if (gst_data_queue_is_empty (triton->requests)) {
-    g_cond_wait (&triton->wakeup, GST_TRITON_GET_LOCK (triton));
-    GST_TRITON_UNLOCK (triton);
-    return;
+    if (triton->active == FALSE) {
+      GST_TRITON_UNLOCK (triton);
+      return;
+    } else {
+      g_cond_wait (&triton->wakeup, GST_TRITON_GET_LOCK (triton));
+      GST_TRITON_UNLOCK (triton);
+      return;
+    }
   }
   GST_TRITON_UNLOCK (triton);
 
+  GST_DEALING_LOCK (triton);
   if (gst_data_queue_pop (triton->requests, &item)) {
     request = GST_TRITON_REQUEST (gst_mini_object_ref (item->object));
     item->destroy (item);
     inbuffer = request->inbuffer;
-    n_memory = gst_buffer_n_memory (inbuffer);
 
     while (TRUE) {
       if (request->done == TRUE) {
         break;
       } else {
-        g_usleep (30000);
+        g_usleep (10000);
       }
     }
-    triton_parse_output (userdata, request);
-    for (list = triton->srcpads; list != NULL; list = g_list_next (list)) {
-      GstTritonSrcPad *srcpad = GST_TRITON_SRCPAD (list->data);
-      GstClockTime timestamp = GST_CLOCK_TIME_NONE, duration = GST_CLOCK_TIME_NONE;
-      guint flags = 0;
 
-      if (GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP)) {
-        GST_ERROR_OBJECT (triton, "Incompatible number of memory blocks (%u) and ", n_memory);
-        continue;
-      }
-
-      channel = g_list_index (triton->srcpads, srcpad);
-
-      // Check if a inference was done for this channel.
-      if ((GST_BUFFER_OFFSET (inbuffer) & (1 << channel)) == 0)
-        continue;
-
-      // Create a new buffer wrapper to hold a reference to input buffer.
-      outbuffer = gst_buffer_new ();
-
-      name = g_strdup_printf ("channel-%u", channel);
-
-      // Transfer the proper GstProtectionMeta into the new buffer if available.
-      if ((pmeta = gst_buffer_get_protection_meta_id (inbuffer, name)) != NULL)
-        pmeta = gst_buffer_add_protection_meta (outbuffer,
-            gst_structure_copy (pmeta->info));
-
-      g_free (name);
-
-      if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "timestamp")) {
-        gst_structure_get_uint64 (pmeta->info, "timestamp", &timestamp);
-        gst_structure_remove_field (pmeta->info, "timestamp");
-      }
-
-      if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "duration")) {
-        gst_structure_get_uint64 (pmeta->info, "duration", &duration);
-        gst_structure_remove_field (pmeta->info, "duration");
-      }
-
-      if ((pmeta != NULL) && gst_structure_has_field (pmeta->info, "flags")) {
-        gst_structure_get_uint (pmeta->info, "flags", &flags);
-        gst_structure_remove_field (pmeta->info, "flags");
-      } else {
-        flags = GST_BUFFER_FLAGS (inbuffer);
-      }
-
-      GST_BUFFER_TIMESTAMP (outbuffer) = (timestamp != GST_CLOCK_TIME_NONE) ?
-          timestamp : GST_BUFFER_TIMESTAMP (inbuffer);
-      GST_BUFFER_DURATION (outbuffer) = (duration != GST_CLOCK_TIME_NONE) ?
-          duration : GST_BUFFER_DURATION (inbuffer);
-
-      gst_buffer_set_flags (outbuffer, flags);
-      gst_buffer_append_memory (outbuffer, gst_buffer_get_memory (inbuffer, mem_indx));
-
-      // Initialize and send the source segment for synchronization.
-      if (GST_FORMAT_UNDEFINED == srcpad->segment.format) {
-        gst_segment_init (&(srcpad)->segment, GST_FORMAT_TIME);
-
-        srcpad->segment.start = GST_BUFFER_TIMESTAMP (outbuffer);
-        srcpad->segment.position = GST_BUFFER_TIMESTAMP (outbuffer);
-
-        gst_pad_push_event (GST_PAD (srcpad),
-            gst_event_new_segment (&(srcpad)->segment));
-      }
-
-      // Adjust the source pad segment position.
-      srcpad->segment.position = GST_BUFFER_TIMESTAMP (outbuffer) +
-          GST_BUFFER_DURATION (outbuffer);
-
-      GstMapInfo mapinfo;
-      gst_buffer_map (outbuffer, &mapinfo, GST_MAP_READWRITE);
-      draw_result (userdata, request, &mapinfo, channel);
-      gst_buffer_unmap (outbuffer, &mapinfo);
-
-      item = g_slice_new0 (GstDataQueueItem);
-      item->object = GST_MINI_OBJECT (outbuffer);
-      item->size = gst_buffer_get_size (outbuffer);
-      item->duration = GST_BUFFER_DURATION (outbuffer);
-      item->visible = TRUE;
-      item->destroy = gst_data_queue_free_item;
-
-      // Push the buffer into the queue or free it on failure.
-      if (!gst_data_queue_push (srcpad->buffers, item)) {
-        item->destroy (item);
-      } else {
-      }
-      mem_indx ++;
-    }
-
+    inf_end = gst_util_get_timestamp ();
+    inf_delta = GST_CLOCK_DIFF (request->inf_start, inf_end);
+    triton->triton_result = request->result;
+    triton_parse_output (triton);
+    gst_demux_video_frame (triton, inbuffer);
+    triton->triton_result = NULL;
     gst_triton_request_unref (request);
+    deal_result_end = gst_util_get_timestamp ();
+    deal_result_delta = GST_CLOCK_DIFF (inf_end, deal_result_end);
+
+    GST_LOG_OBJECT (triton, "Prepare input took: %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT "ms. Sync Infer took: %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT "ms. Deal result took: %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT "ms", GST_TIME_AS_MSECONDS (request->prepare_input_delta),
+      (GST_TIME_AS_USECONDS (request->prepare_input_delta) % 1000),
+      GST_TIME_AS_MSECONDS (inf_delta),
+      (GST_TIME_AS_USECONDS (inf_delta) % 1000),
+      GST_TIME_AS_MSECONDS (deal_result_delta),
+      (GST_TIME_AS_USECONDS (deal_result_delta) % 1000));
 
     gst_data_queue_get_level (triton->requests, triton->queue_size);
     if (triton->queue_size->visible < MIN_REQUEST_COUNT) {
@@ -513,6 +543,7 @@ gst_triton_wait_request_task (gpointer userdata)
   } else {
     GST_DEBUG_OBJECT (triton, "Paused worker thread");
   }
+  GST_DEALING_UNLOCK (triton);
 }
 
 static gboolean
@@ -545,7 +576,9 @@ gst_triton_stop_worker_task (GstTriton * triton)
   if (NULL == triton->worktask)
     return TRUE;
 
-  GST_INFO_OBJECT (triton, "Stopping task %p", triton->worktask);
+
+  GST_DEALING_LOCK (triton);
+  GST_DEALING_UNLOCK (triton);
 
   if (!gst_task_stop (triton->worktask)) {
     GST_WARNING_OBJECT (triton, "Failed to stop worker task!");
@@ -561,7 +594,6 @@ gst_triton_stop_worker_task (GstTriton * triton)
   // Make sure task is not running.
   g_rec_mutex_lock (&triton->worklock);
   g_rec_mutex_unlock (&triton->worklock);
-
 
   if (!gst_task_join (triton->worktask)) {
     GST_ERROR_OBJECT (triton, "Failed to join worker task!");
@@ -611,8 +643,21 @@ gst_triton_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
   GstTritonRequest *request = NULL;
   GstMemory *memory = NULL;
   GstMapInfo mapinfo;
+  GstClockTime prepare_input_start = GST_CLOCK_TIME_NONE, prepare_input_end = GST_CLOCK_TIME_NONE;
+  GstClockTimeDiff prepare_input_delta = GST_CLOCK_TIME_NONE;
+  GstClockTimeDiff interval_delta = GST_CLOCK_TIME_NONE;
   guint num = 0, n_memory = 0, size = 0, batch_size = 0, idx = 0;
-  static guint id = 0;
+
+  if (triton->infer_count == 0) {
+    triton->start_time_stamp = gst_util_get_timestamp ();
+    triton->last_time_stamp = gst_util_get_timestamp ();
+  } else {
+    interval_delta = GST_CLOCK_DIFF (triton->last_time_stamp, gst_util_get_timestamp ());
+    GST_LOG_OBJECT (triton, "Interval time took: %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT "ms", GST_TIME_AS_MSECONDS (interval_delta),
+      (GST_TIME_AS_USECONDS (interval_delta) % 1000));
+    triton->last_time_stamp = gst_util_get_timestamp ();
+  }
 
   batch_size = g_list_length (triton->srcpads);
   n_memory = gst_buffer_n_memory (inbuffer);
@@ -628,15 +673,7 @@ gst_triton_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
 
   GST_TRITON_LOCK (triton);
 
-  gst_data_queue_get_level (triton->requests, triton->queue_size);
-  if (triton->queue_size->visible >= MAX_REQUEST_COUNT)
-    g_cond_wait(GST_TRITON_REQUESTS_COND (triton), GST_TRITON_GET_LOCK (triton));
-
-  // Create new triton request.
-  request = gst_triton_request_new ();
-  request->inbuffer = inbuffer;
-  request->id = id;
-
+  prepare_input_start = gst_util_get_timestamp ();
   for (idx = 0; idx < batch_size; idx++) {
     if ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0)
       continue;
@@ -647,6 +684,18 @@ gst_triton_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
     gst_memory_unref (memory);
     num++;
   }
+  prepare_input_end = gst_util_get_timestamp ();
+  prepare_input_delta = GST_CLOCK_DIFF (prepare_input_start, prepare_input_end);
+
+  gst_data_queue_get_level (triton->requests, triton->queue_size);
+  if (triton->queue_size->visible >= MAX_REQUEST_COUNT)
+    g_cond_wait(GST_TRITON_REQUESTS_COND (triton), GST_TRITON_GET_LOCK (triton));
+
+  // Create new triton request.
+  request = gst_triton_request_new ();
+  request->inbuffer = inbuffer;
+  request->prepare_input_delta = prepare_input_delta;
+  request->inf_start = gst_util_get_timestamp ();
   triton_infer (parent, request);
 
   // push output to queue
@@ -657,13 +706,13 @@ gst_triton_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
 
   if (!gst_data_queue_push (triton->requests, item))
     item->destroy (item);
-  id ++;
 
   gst_data_queue_get_level (triton->requests, triton->queue_size);
   if (triton->queue_size->visible == START_REQUEST_COUNT)
     g_cond_signal (&(triton)->wakeup);
-  GST_TRITON_UNLOCK (triton);
+  triton->infer_count ++;
 
+  GST_TRITON_UNLOCK (triton);
   return GST_FLOW_OK;
 }
 
@@ -785,6 +834,9 @@ gst_triton_sink_pad_event (GstPad * pad, GstObject * parent, GstEvent * event)
       return success;
     }
     case GST_EVENT_EOS:
+    {
+      GstClockTimeDiff total_delta = GST_CLOCK_TIME_NONE;
+
       GST_TRITON_LOCK (triton);
       while (!gst_data_queue_is_empty (triton->requests)) {
         g_cond_wait (&triton->queue_is_empty, GST_TRITON_GET_LOCK (triton));
@@ -796,10 +848,17 @@ gst_triton_sink_pad_event (GstPad * pad, GstObject * parent, GstEvent * event)
       while (!gst_triton_all_src_pads_empty (triton, event)) {
         g_cond_wait (&triton->queue_is_empty, GST_TRITON_GET_LOCK (triton));
       }
-      GST_TRITON_UNLOCK (triton);
 
+      total_delta = GST_CLOCK_DIFF (triton->start_time_stamp, gst_util_get_timestamp ());
+      GST_LOG_OBJECT (triton, "Total inference count: %" G_GUINT64_FORMAT
+        " .Inference speed: %.2f inf/s.", triton->infer_count,
+        triton->infer_count / (GST_TIME_AS_MSECONDS (total_delta) / 1000.0));
+
+      GST_TRITON_UNLOCK (triton);
       gst_event_unref (event);
+      free_inputbuf (triton);
       return TRUE;
+    }
     default:
       break;
   }
@@ -1009,7 +1068,7 @@ gst_triton_change_state (GstElement * element, GstStateChange transition)
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
-      triton->client = create_client(element, triton->url);
+      create_client_and_inferio (element, triton->url);
       get_model_info(element);
       gst_triton_start_worker_task (triton);
       break;
@@ -1071,6 +1130,17 @@ gst_triton_set_property (GObject * object, guint prop_id,
       triton->labels = g_strdup (g_value_get_string (value));
       break;
     }
+    case PROP_SHARE_MEMORY_KEY:
+    {
+      g_free (triton->shm_key);
+      triton->shm_key = g_strdup (g_value_get_string (value));
+      break;
+    }
+    case PROP_BATCH_SIZE:
+    {
+      triton->batch_size = g_value_get_uint (value);
+      break;
+    }
     case PROP_THRESHOLD:
     {
       triton->threshold = g_value_get_double (value);
@@ -1081,7 +1151,7 @@ gst_triton_set_property (GObject * object, guint prop_id,
       triton->keep_ratio = g_value_get_boolean (value);
       break;
     }
-      default:
+    default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
@@ -1124,6 +1194,16 @@ gst_triton_get_property (GObject * object, guint prop_id,
       g_value_set_string (value, triton->labels);
       break;
     }
+    case PROP_SHARE_MEMORY_KEY:
+    {
+      g_value_set_string (value, triton->shm_key);
+      break;
+    }
+    case PROP_BATCH_SIZE:
+    {
+      g_value_set_uint (value, triton->batch_size);
+      break;
+    }
     case PROP_THRESHOLD:
     {
       g_value_set_double (value, triton->threshold);
@@ -1150,10 +1230,12 @@ gst_triton_finalize (GObject * object)
   g_free (triton->model_name);
   g_free (triton->model_version);
   g_free (triton->labels);
-  g_rec_mutex_clear (&(triton)->worklock);
+  g_free (triton->shm_key);
   g_mutex_clear (&(triton)->lock);
+  g_mutex_clear (&(triton)->dealing_async_result);
   g_cond_clear (&(triton)->wakeup);
   g_cond_clear (&(triton)->queue_is_empty);
+  g_rec_mutex_clear (&(triton)->worklock);
 
   gst_data_queue_set_flushing (triton->requests, TRUE);
   gst_data_queue_flush (triton->requests);
@@ -1203,6 +1285,14 @@ gst_triton_class_init (GstTritonClass * klass)
       g_param_spec_string ("labels", "Labels",
           "Labels filename",
           DEFAULT_PROP_LABELS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (object, PROP_SHARE_MEMORY_KEY,
+      g_param_spec_string ("shm-key", "Share Memory Key",
+          "Share memory key for register input buffer",
+          DEFAULT_PROP_SHARE_MEMORY_KEY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (object, PROP_BATCH_SIZE,
+      g_param_spec_uint ("batch-size", "Batch Size",
+          "Batch Size", 1, 16, DEFAULT_PROP_BATCH_SIZE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (object, PROP_THRESHOLD,
       g_param_spec_double ("threshold", "Threshold",
           "Confidence threshold", 10.0F, 100.0F, DEFAULT_PROP_THRESHOLD,
@@ -1230,14 +1320,20 @@ gst_triton_init (GstTriton * triton)
 {
   GstPadTemplate *template = NULL;
 
-  g_rec_mutex_init (&(triton)->worklock);
   g_mutex_init (&(triton)->lock);
+  g_mutex_init (&(triton)->dealing_async_result);
   g_cond_init (&(triton)->wakeup);
   g_cond_init (&(triton)->queue_is_empty);
+  g_rec_mutex_init (&(triton)->worklock);
 
   triton->nextidx = 0;
   triton->srcpads = NULL;
   triton->client = NULL;
+  triton->triton_result = NULL;
+  triton->outputs = NULL;
+  triton->infer_count=0;
+  triton->start_time_stamp  = GST_CLOCK_TIME_NONE;
+  triton->last_time_stamp  = GST_CLOCK_TIME_NONE;
   triton->requests = gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
   triton->queue_size = g_new0 (GstDataQueueSize, 1);
   triton->infer_mode = DEFAULT_PROP_TRITON_MODE;
@@ -1246,6 +1342,8 @@ gst_triton_init (GstTriton * triton)
   triton->model_name = DEFAULT_PROP_MODEL_NAME;
   triton->model_version = DEFAULT_PROP_MODEL_VERSION;
   triton->labels = DEFAULT_PROP_LABELS;
+  triton->shm_key = DEFAULT_PROP_SHARE_MEMORY_KEY;
+  triton->batch_size = DEFAULT_PROP_BATCH_SIZE;
   triton->threshold = DEFAULT_PROP_THRESHOLD;
   triton->keep_ratio = DEFAULT_PROP_KEEP_RATIO;
 

@@ -39,7 +39,6 @@
 #define MAX_CLS_NUM 5
 typedef struct
 {
-  int64_t batchsize;
   float *output;
   size_t output_bytesize;
   float *num;
@@ -55,9 +54,11 @@ typedef struct
 typedef struct
 {
   std::vector<std::string> input_names;
-  std::vector<std::string> output_names;
-  std::vector<label_info> labels;
   std::vector<int64_t> input_shape;
+  std::vector<std::string> output_names;
+  std::vector<int64_t> output_sizes;
+  std::vector<label_info> labels;
+  std::string input_datatype;
 } model_info;
 
 enum
@@ -91,24 +92,23 @@ int get_batch_result_offset(int32_t *detect_num, guint channel)
   return offset;
 }
 
-tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_mat, gint src_w, gint src_h, guint channel)
+tc::Error cv_mark(GstTriton *triton, tc::InferResult *results, GList* outputs, cv::Mat &input_mat, gint src_w, gint src_h, guint channel)
 {
   tc::Error err;
   model_info *info = (model_info *) triton->model_info;
   GstTritonTask task = triton->task;
-  tc::InferResult *output = (tc::InferResult *)request->result;
   int input_w = info->input_shape[WIDTH];
   int input_h = info->input_shape[HEIGHT];
   double scale = 1.0;
   cv::Scalar color = cv::Scalar(255, 0, 0);
   int thickness = (src_w > 500) ? 2 : 1;
-
-  result_info * result = (result_info *)request->outputs->data;
-  if (output != NULL) {
+  result_info * result;
+  if (results != NULL) {
     switch (task)
     {
       case DETECTION:
       {
+        result = (result_info *)outputs->data;
         int32_t detect_num = ((int32_t *) result->num)[channel];
         float *detect_results = ((float *) result->output)
           + get_batch_result_offset((int32_t *) result->num, channel) * DETECT_RESULT_SIZE;
@@ -147,8 +147,9 @@ tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_m
       }
       case CLASSIFICATION:
       {
-        int32_t detect_num = ((int32_t *) result->num)[channel];
-        detect_num = detect_num < MAX_CLS_NUM ? detect_num : MAX_CLS_NUM;
+        result = (result_info *)outputs->data;
+        int32_t cls_num = ((int32_t *) result->num)[channel];
+        cls_num = cls_num < MAX_CLS_NUM ? cls_num : MAX_CLS_NUM;
         float *cls_results = ((float *) result->output)
           + get_batch_result_offset((int32_t *) result->num, channel) * CLS_RESULT_SIZE;
         uint32_t text_top = 5, text_left = 5;
@@ -156,7 +157,7 @@ tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_m
         scale *= src_w / ((src_w > 500) ? 800.0 : 500.0);
         std::string label;
 
-        for (int i=0; i < detect_num; i++)
+        for (int i=0; i < cls_num; i++)
         {
           if (!info->labels.empty() && size_t(i) <= info->labels.size())
           {
@@ -174,6 +175,7 @@ tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_m
       }
       case SEGMENTATION:
       {
+        result = (result_info *)outputs->data;
         uint8_t *result_data = ((uint8_t *) (result->output))
           + (input_h * input_w * 3 * sizeof(uint8_t) * channel);
         cv::Mat result_mat(input_h, input_w, CV_8UC3, result_data);
@@ -183,6 +185,64 @@ tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_m
         addWeighted(input_mat, 0.2, resized_mat, 0.8, 0.0, dst);
         dst.copyTo(input_mat);
         return tc::Error::Success;
+      }
+      case DAISYCHAIN:
+      {
+        int bbox_w, bbox_h;
+        result_info * detect_info = (result_info *)outputs->data;
+        result_info * cls_info = (result_info *)outputs->next->data;
+	int detect_offset = get_batch_result_offset((int32_t *) detect_info->num, channel);
+        std::string label;
+
+	// get detection result for corresponding input
+        int32_t detect_num = ((int32_t *) detect_info->num)[channel];
+        float *detect_results = ((float *) detect_info->output)
+          + detect_offset * DETECT_RESULT_SIZE;
+        float top, left, bottom, right, score;
+
+	// get classfication result for corresponding input
+        int32_t *cls_num = ((int32_t *) cls_info->num) + detect_offset;
+        float *cls_results = ((float *) cls_info->output)
+          + get_batch_result_offset((int32_t *) cls_info->num,
+          detect_offset) * CLS_RESULT_SIZE;
+
+        for (int32_t i=0; i< detect_num; i++)
+        {
+          top = detect_results[DETECT_RESULT_SIZE * i + TOP];
+          left = detect_results[DETECT_RESULT_SIZE * i + LEFT];
+          bottom = detect_results[DETECT_RESULT_SIZE * i + BOTTOM];
+          right = detect_results[DETECT_RESULT_SIZE * i + RIGHT];
+          score = detect_results[DETECT_RESULT_SIZE * i + SCORE];
+          if (score < 0.4) {
+            continue;
+          }
+
+          bbox_h = (bottom - top) < 240 ? (bottom - top) : 240;
+	  bbox_w = (right - left) < 240 ? (right - left) : 240;
+
+          cv::rectangle(input_mat, cv::Point(left, top),
+            cv::Point(right, bottom), color, thickness, cv::LINE_AA);
+
+          float *current_cls_results = cls_results + i * cls_num[i] * CLS_RESULT_SIZE;
+          int current_cls_num = *(cls_num + i) < MAX_CLS_NUM ? *(cls_num + i) : MAX_CLS_NUM;
+          uint32_t text_top_offset = bbox_h / 14;
+          scale *= bbox_w / 400.0;
+          for (int j=0; j < current_cls_num; j++)
+          {
+            if (!info->labels.empty() && size_t(j) <= info->labels.size())
+            {
+              color = info->labels[int(current_cls_results[j*CLS_RESULT_SIZE])+1].color;
+              label = info->labels[int(current_cls_results[j*CLS_RESULT_SIZE])+1].name
+                + ": " + float2string(current_cls_results[j*CLS_RESULT_SIZE+1]) + "%";
+            } else {
+              label = "ClassID " + std::to_string(int(current_cls_results[j*CLS_RESULT_SIZE])) + ": "
+                + float2string(current_cls_results[j*CLS_RESULT_SIZE+1]) + "%";
+            }
+            cv::putText(input_mat, label, cv::Point(left, top + text_top_offset * (j + 1)),
+              cv::FONT_HERSHEY_SIMPLEX, scale, color, 1, cv::LINE_AA);
+          }
+        }
+	return tc::Error::Success;
       }
       default:
         return tc::Error("The task type is invalid. ");

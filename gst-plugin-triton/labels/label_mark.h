@@ -59,4 +59,4 @@ enum ClassificationResult
   CLS_RESULT_SIZE,
 };
 
-tc::Error cv_mark(GstTriton *triton, GstTritonRequest *request, cv::Mat &input_mat, gint src_w, gint src_h, guint channel);
+tc::Error cv_mark(GstTriton *triton, tc::InferResult *results, GList* outputs, cv::Mat &input_mat, gint src_w, gint src_h, guint channel);
