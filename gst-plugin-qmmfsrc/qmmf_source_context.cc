@@ -193,7 +193,8 @@ struct _GstQmmfContext {
   guchar            frc_mode;
   /// Camera timestamp select.
   gint               selecttscp;
-
+  /// HFR Sync Mode
+  gboolean           hfr_sync_mode;
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
 };
@@ -1198,6 +1199,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
   }
   xtraparam.Update(::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
 
+  // HFRSyncMode_
+  ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
+  hfr_sync_mode.enable = context->hfr_sync_mode;
+  xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
+
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const android::CameraMetadata& result) {
     context->metacb (camera_id, &result, context->userdata);
@@ -1864,6 +1870,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_FRC_MODE:
       context->frc_mode = g_value_get_enum (value);
       return;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      context->hfr_sync_mode = g_value_get_boolean (value);
+      return;
   }
 
   if (context->state >= GST_STATE_READY &&
@@ -2391,6 +2400,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_SELECT_TSCP:
       g_value_set_int (value, context->selecttscp);
+      break;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      g_value_set_boolean (value, context->hfr_sync_mode);
       break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
