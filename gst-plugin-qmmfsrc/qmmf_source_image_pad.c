@@ -263,6 +263,8 @@ image_pad_update_params (GstPad * pad, GstStructure *structure)
   if (gst_structure_has_name (structure, "image/jpeg")) {
     codec = GST_IMAGE_CODEC_JPEG;
     format = GST_VIDEO_FORMAT_ENCODED;
+  } if (gst_structure_has_name (structure, "image/x-heic")) {
+    codec = GST_IMAGE_CODEC_HEIC;
   } else if (gst_structure_has_name (structure, "video/x-raw")) {
     codec = GST_IMAGE_CODEC_NONE;
     format = gst_video_format_from_string (

@@ -1499,6 +1499,9 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
   if (ipad->codec == GST_IMAGE_CODEC_JPEG) {
     imgparam.format = ::qmmf::recorder::ImageFormat::kJPEG;
     gst_structure_get_uint (ipad->params, "quality", &imgparam.quality);
+  } else if (ipad->codec == GST_IMAGE_CODEC_HEIC) {
+    imgparam.format = ::qmmf::recorder::ImageFormat::kNV12;
+    gst_structure_get_uint (ipad->params, "quality", &imgparam.quality);
   } else if (ipad->codec == GST_IMAGE_CODEC_NONE) {
     switch (ipad->format) {
       case GST_VIDEO_FORMAT_NV12:
@@ -1654,7 +1657,8 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
         if (bayerpad == NULL)
           image_data_callback (context, pad, buffer, meta);
         else {
-          if (meta.format == ::qmmf::BufferFormat::kBLOB)
+          if (meta.format == ::qmmf::BufferFormat::kBLOB ||
+            meta.format == ::qmmf::BufferFormat::kNV12)
             image_data_callback (context, pad, buffer, meta);
           else
             image_data_callback (context, bayerpad, buffer, meta);

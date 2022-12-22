@@ -45,6 +45,11 @@ G_BEGIN_DECLS
     "image/jpeg, "              \
     QMMFSRC_COMMON_IMAGE_CAPS
 
+#define QMMFSRC_IMAGE_HEIC_CAPS(formats) \
+    "image/x-heic, "                     \
+    "format = (string) " formats ", "    \
+    QMMFSRC_COMMON_IMAGE_CAPS
+
 #define QMMFSRC_IMAGE_RAW_CAPS(formats) \
     "video/x-raw, "                     \
     "format = (string) " formats ", "   \
@@ -84,6 +89,7 @@ typedef enum {
   GST_IMAGE_CODEC_UNKNOWN,
   GST_IMAGE_CODEC_NONE,
   GST_IMAGE_CODEC_JPEG,
+  GST_IMAGE_CODEC_HEIC,
 } GstImageCodec;
 
 typedef enum {
