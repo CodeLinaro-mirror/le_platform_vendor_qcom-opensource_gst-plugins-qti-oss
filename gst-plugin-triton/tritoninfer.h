@@ -38,15 +38,12 @@
 
 G_BEGIN_DECLS
 
-GST_API void
-gst_free_output (gpointer data, gpointer user_data);
-
 GST_API gint
 calcuate_border(gint src_w, gint src_h, gint dst_w, gint dst_h,
     gint *lr_pad, gint *tb_pad, gint *img_width, gint *img_height);
 
-GST_API gpointer
-create_client(GstElement *element, gchar *url);
+GST_API void
+create_client_and_inferio (GstElement *element, gchar *url);
 
 GST_API void
 get_model_info(GstElement *element);
@@ -58,12 +55,15 @@ GST_API gboolean
 triton_infer (GstObject *parent, GstTritonRequest *request);
 
 GST_API void
-draw_result (void *parent, GstTritonRequest *request, GstMapInfo *mapinfo, guint channel);
+draw_result (GstTriton *triton, GstMapInfo *mapinfo, guint channel);
 
 GST_API void
-triton_parse_output (void *parent, GstTritonRequest *request);
+triton_parse_output (GstTriton *triton);
 
 GST_API void
 delete_result (void *result);
+
+GST_API void
+free_inputbuf (GstTriton *triton);
 
 G_END_DECLS

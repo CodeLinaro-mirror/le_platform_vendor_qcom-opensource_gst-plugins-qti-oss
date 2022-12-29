@@ -53,6 +53,8 @@ G_BEGIN_DECLS
 #define GST_TRITON_GET_LOCK(obj)   (&GST_TRITON(obj)->lock)
 #define GST_TRITON_LOCK(obj)       g_mutex_lock(GST_TRITON_GET_LOCK(obj))
 #define GST_TRITON_UNLOCK(obj)     g_mutex_unlock(GST_TRITON_GET_LOCK(obj))
+#define GST_DEALING_LOCK(obj)       g_mutex_lock(&obj->dealing_async_result)
+#define GST_DEALING_UNLOCK(obj)     g_mutex_unlock(&obj->dealing_async_result)
 #define GST_TRITON_MODE (gst_triton_mode_get_type())
 #define GST_TRITON_TASK (gst_triton_task_get_type())
 #define GST_TYPE_TRITON_REQUEST  (gst_triton_request_get_type())
@@ -68,13 +70,13 @@ typedef struct _InputBuf InputBuf;
 typedef enum {
   HTTP_MODE,
   GRPC_MODE,
-  C_API_MODE,
 } GstTritonMode;
 
 typedef enum {
   DETECTION,
   CLASSIFICATION,
   SEGMENTATION,
+  DAISYCHAIN,
 } GstTritonTask;
 
 struct _GstTritonRequest {
@@ -82,8 +84,9 @@ struct _GstTritonRequest {
   gboolean done;
   guint id;
   gpointer result;
-  GList *outputs;
   GstBuffer *inbuffer;
+  GstClockTimeDiff prepare_input_delta;
+  GstClockTime inf_start;
 };
 
 struct _InputBuf
@@ -114,15 +117,25 @@ struct _GstTriton
   GRecMutex   worklock;
   // Indicates whether the worker task is active or not.
   gboolean    active;
+  guint64     infer_count;
+  GstClockTime start_time_stamp;
+  GstClockTime last_time_stamp;
 
   InputBuf   *input_buf;
   guint      block_size;
   gint       src_height;
   gint       src_width;
+  gpointer   infer_inputs;
+  gpointer   infer_outputs;
+  gpointer   output_buf;
 
   GstDataQueue *requests;
   GstDataQueueSize *queue_size;
   GCond      queue_is_empty;
+  GMutex     dealing_async_result;
+
+  gpointer triton_result;
+  GList* outputs;
 
   /// Triton properties
   GstTritonMode infer_mode;
@@ -131,8 +144,11 @@ struct _GstTriton
   gchar      *model_name;
   gchar      *model_version;
   gchar      *labels;
+  gchar      *shm_key;
+  guint      batch_size;
   gdouble    threshold;
   gboolean   keep_ratio;
+
   gpointer   client;
   gpointer   model_info;
 };

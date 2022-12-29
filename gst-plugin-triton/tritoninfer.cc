@@ -48,14 +48,26 @@
 #include "common.h"
 #include "grpc_client.h"
 #include "http_client.h"
+#include "shm_utils.h"
 #include "tritoninfer.h"
 #include "labels/label_mark.h"
+
+namespace tc = triton::client;
 
 #define RGB_CHENNEL_NUM 3
 #define EXTRACT_RED_COLOR(color)   ((color >> 24) & 0xFF)
 #define EXTRACT_GREEN_COLOR(color) ((color >> 16) & 0xFF)
 #define EXTRACT_BLUE_COLOR(color)  ((color >> 8) & 0xFF)
 #define EXTRACT_ALPHA_COLOR(color) ((color) & 0xFF)
+
+#define FAIL_IF_ERR(RES, MSG)                                      \
+  {                                                                \
+    tc::Error err = (RES);                                         \
+    if (!err.IsOk()) {                                             \
+      std::cerr << "error: " << (MSG) << ": " << err << std::endl; \
+      exit(1);                                                     \
+    }                                                              \
+  }
 
 enum
 {
@@ -74,27 +86,137 @@ typedef struct
 typedef struct
 {
   std::vector<std::string> input_names;
-  std::vector<std::string> output_names;
-  std::vector<label_info> labels;
   std::vector<int64_t> input_shape;
+  std::vector<std::string> output_names;
+  std::vector<int64_t> output_sizes;
+  std::vector<label_info> labels;
   std::string input_datatype;
 } model_info;
 
 typedef struct
 {
-  int64_t batchsize;
   float *output;
   size_t output_bytesize;
   float *num;
   size_t num_bytesize;
 } result_info;
 
-namespace tc = triton::client;
+union TritonClient {
+  TritonClient()
+  {
+    new (&http_client_) std::unique_ptr<tc::InferenceServerHttpClient>{};
+  }
+  ~TritonClient() {}
+
+  std::unique_ptr<tc::InferenceServerHttpClient> http_client_;
+  std::unique_ptr<tc::InferenceServerGrpcClient> grpc_client_;
+};
+
+gboolean
+create_input (GstTriton *triton)
+{
+  tc::InferInput* input;
+  tc::Error err;
+  model_info *info = (model_info *) triton->model_info;
+  std::string datatype = info->input_datatype;
+  err = tc::InferInput::Create(&input, info->input_names[0], info->input_shape, datatype);
+  if (!err.IsOk()) {
+    GST_ERROR_OBJECT (triton, "unable to get input: %s!", err.Message().c_str());
+    return FALSE;
+  }
+
+  ((std::vector<tc::InferInput*> *)(triton->infer_inputs))->push_back(input);
+  if (triton->shm_key == NULL) {
+    err = input->AppendRaw((const uint8_t* )(triton->input_buf->buf), triton->input_buf->size);
+    if (!err.IsOk()) {
+      GST_ERROR_OBJECT (triton, "failed setting input: %s!", err.Message().c_str());
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
 
 void
-gst_free_output (gpointer data, gpointer user_data)
+register_share_memory (GstTriton *triton)
 {
-  g_free ((result_info *)data);
+  TritonClient *triton_client = (TritonClient *)triton->client;
+  model_info *info = (model_info *) triton->model_info;
+  std::string datatype = info->input_datatype;
+  std::vector<std::string> output_names = info->output_names;
+  std::vector<int64_t> output_sizes = info->output_sizes;
+  tc::InferInput* input;
+
+  int shm_fd_ip;
+  std::string suffix = std::string(triton->shm_key);
+  std::string input_shm_key = "/input" + suffix;
+  std::string register_input_name = info->input_names[0] + suffix;
+  size_t input_byte_size = triton->input_buf->size;
+
+  // Great input share memory
+  FAIL_IF_ERR(
+    tc::CreateSharedMemoryRegion(input_shm_key, input_byte_size, &shm_fd_ip)
+    , "");
+
+  FAIL_IF_ERR(
+      tc::MapSharedMemory(
+          shm_fd_ip, 0, input_byte_size, (void**) &(triton->input_buf->buf)),
+      "");
+  FAIL_IF_ERR(tc::CloseSharedMemory(shm_fd_ip), "");
+
+  if (triton->infer_mode == HTTP_MODE) {
+    FAIL_IF_ERR(
+      triton_client->http_client_->UnregisterSystemSharedMemory(register_input_name),
+        "unable to unregister shared memory input region");
+    FAIL_IF_ERR(
+        triton_client->http_client_->RegisterSystemSharedMemory(
+            register_input_name, input_shm_key, input_byte_size),
+        "failed to register input shared memory region");
+  } else if (triton->infer_mode == GRPC_MODE) {
+    FAIL_IF_ERR(
+      triton_client->grpc_client_->UnregisterSystemSharedMemory(register_input_name),
+        "unable to unregister shared memory input region");
+    FAIL_IF_ERR(
+        triton_client->grpc_client_->RegisterSystemSharedMemory(
+            register_input_name, input_shm_key, input_byte_size),
+        "failed to register input shared memory region");
+  }
+
+  FAIL_IF_ERR(
+      tc::InferInput::Create(&input, info->input_names[0], info->input_shape, datatype),
+      "unable to creat input");
+
+  FAIL_IF_ERR(
+      input->SetSharedMemory(
+          register_input_name, triton->input_buf->size, 0 /* offset */),
+          "unable to set shared memory for INPUT0");
+
+  ((std::vector<tc::InferInput*> *)(triton->infer_inputs))->push_back(input);
+}
+
+void
+unregister_share_memory (GstTriton *triton)
+{
+  TritonClient *triton_client = (TritonClient *)triton->client;
+  model_info *info = (model_info *) triton->model_info;
+  std::string suffix = std::string(triton->shm_key);
+  std::string input_shm_key = "/input" + suffix;
+  std::string register_input_name = info->input_names[0] + suffix;
+  size_t input_byte_size = triton->input_buf->size;
+
+  // Unregister shared memory
+  if (triton->infer_mode == HTTP_MODE) {
+    FAIL_IF_ERR(
+        triton_client->http_client_->UnregisterSystemSharedMemory(register_input_name),
+        "unable to unregister shared memory input region");
+  } else if (triton->infer_mode == GRPC_MODE) {
+    FAIL_IF_ERR(
+        triton_client->grpc_client_->UnregisterSystemSharedMemory(register_input_name),
+        "unable to unregister shared memory input region");
+  }
+
+  // Cleanup shared memory
+  FAIL_IF_ERR(tc::UnmapSharedMemory(triton->input_buf->buf, input_byte_size), "");
+  FAIL_IF_ERR(tc::UnlinkSharedMemoryRegion(input_shm_key), "");
 }
 
 gint
@@ -132,17 +254,6 @@ calcuate_border (gint src_w, gint src_h, gint dst_w, gint dst_h,
     }
     return 0;
 }
-
-union TritonClient {
-  TritonClient()
-  {
-    new (&http_client_) std::unique_ptr<tc::InferenceServerHttpClient>{};
-  }
-  ~TritonClient() {}
-
-  std::unique_ptr<tc::InferenceServerHttpClient> http_client_;
-  std::unique_ptr<tc::InferenceServerGrpcClient> grpc_client_;
-};
 
 gboolean
 gst_load_labels (const gchar * input, std::vector<label_info> &labels)
@@ -298,7 +409,7 @@ void parse_model_http (const rapidjson::Document& model_metadata,
 
 }
 
-void parse_model_grpc (const inference::ModelMetadataResponse& model_metadata,
+void parse_model_grpc (GstTriton *triton, const inference::ModelMetadataResponse& model_metadata,
     const inference::ModelConfigResponse& model_config, model_info* info)
 {
   if (model_metadata.inputs().size() != 1) {
@@ -328,8 +439,17 @@ void parse_model_grpc (const inference::ModelMetadataResponse& model_metadata,
 
   for(int i=0; i < model_metadata.outputs().size(); i++)
   {
+    size_t output_size = 4;
     auto output_metadata = model_metadata.outputs(i);
     info->output_names.push_back(output_metadata.name());
+    for (int j=0; j < output_metadata.shape().size(); j++) {
+      if (j == 0 && output_metadata.shape(j) <= 0) {
+        output_size *= triton->batch_size;
+      } else {
+        output_size *= output_metadata.shape(j);
+      }
+    }
+    info->output_sizes.push_back(output_size);
   }
 
   for(int n=0; n<input_metadata.shape().size(); n++)
@@ -390,7 +510,7 @@ get_model_info (GstElement *element)
     if (!err.IsOk()) {
       std::cerr << "error: failed to get model config: " << err << std::endl;
     }
-    parse_model_grpc(model_metadata, model_config, info);
+    parse_model_grpc(triton, model_metadata, model_config, info);
   } else {
     std::cerr << "error: failed to parse " << triton->infer_mode
               << "mode model config: " << std::endl;
@@ -398,21 +518,43 @@ get_model_info (GstElement *element)
   if (triton->labels != NULL)
     gst_load_labels (triton->labels, info->labels);
 
+  if (info->input_shape[BATCH_SIZE] <= 0) {
+    if (triton->batch_size > 0) {
+      info->input_shape[BATCH_SIZE] = triton->batch_size;
+    } else {
+      std::cerr << "error: Input batch size less than 0. "
+        << "Please set batch size with 'batch-size' paramerter " << std::endl;
+    }
+  }
+
   block_size = info->input_shape[HEIGHT] * info->input_shape[WIDTH]
                * info->input_shape[CHANNEL];
   buf_size = info->input_shape[BATCH_SIZE] * block_size;
   triton->model_info = (void *)info;
   triton->input_buf = new(InputBuf);
-  triton->input_buf->buf = (void *)calloc(1, buf_size);
-  triton->input_buf->size = buf_size;
   triton->block_size = block_size;
+  triton->input_buf->size = buf_size;
+  // init output buffer
+  for (size_t i = 0; i < info->output_names.size(); i++) {
+    if (info->output_names[i].find("results") != std::string::npos)
+      triton->outputs = g_list_append (triton->outputs, g_new0 (result_info, 1));
+  }
+
+  if (triton->shm_key == NULL) {
+    triton->input_buf->buf = (void *)calloc(1, buf_size);
+    create_input (triton);
+  } else {
+    register_share_memory (triton);
+  }
 }
 
-gpointer
-create_client (GstElement * element, gchar *url)
+void
+create_client_and_inferio (GstElement * element, gchar *url)
 {
   GstTriton *triton = GST_TRITON (element);
   TritonClient *triton_client = new TritonClient;
+  triton->infer_inputs = (gpointer) new std::vector<tc::InferInput*>;
+
   if (triton->infer_mode == HTTP_MODE) {
     tc::InferenceServerHttpClient::Create(&triton_client->http_client_, url, false);
   } else if (triton->infer_mode == GRPC_MODE) {
@@ -421,7 +563,7 @@ create_client (GstElement * element, gchar *url)
     std::cerr << "error: Fail to crate triton client with "
               << triton->infer_mode << " mode" << std::endl;
   }
-  return (gpointer) triton_client;
+  triton->client = (gpointer) triton_client;
 }
 
 gint
@@ -454,7 +596,11 @@ frame_to_inputbuf (GstMapInfo *mapinfo, GstObject * parent, guint idx)
     calcuate_border(vwidth, vheight, input_width, input_height,
                    &lr_pad, &tb_pad, &img_width, &img_height);
     cv::Mat resized_mat;
-    cv::resize(input_mat, resized_mat, cv::Size(img_width, img_height));
+    if (vwidth == img_width && vheight == img_height) {
+      resized_mat = input_mat;
+    } else {
+      cv::resize(input_mat, resized_mat, cv::Size(img_width, img_height));
+    }
     if (info->input_datatype.compare("UINT8") == 0) {
       cv::copyMakeBorder(resized_mat, output_mat, tb_pad, tb_pad, lr_pad, lr_pad,
                          cv::BORDER_CONSTANT, cv::Scalar(0,0,0));
@@ -469,7 +615,11 @@ frame_to_inputbuf (GstMapInfo *mapinfo, GstObject * parent, guint idx)
       cv::resize(input_mat, output_mat, cv::Size(input_width, input_height));
     } else if (info->input_datatype.compare("INT8") == 0) {
       cv::Mat resized_mat;
-      cv::resize(input_mat, resized_mat, cv::Size(input_width, input_height));
+      if (vwidth == input_width && vheight == input_height) {
+        resized_mat = input_mat;
+      } else {
+        cv::resize(input_mat, resized_mat, cv::Size(input_width, input_height));
+      }
       resized_mat.convertTo(output_mat, dtype, 1, -128);
     }
   }
@@ -483,33 +633,12 @@ triton_infer (GstObject *parent, GstTritonRequest *request)
   std::string datatype = info->input_datatype;
   tc::Error err;
   TritonClient *triton_client = (TritonClient *)triton->client;
+  std::vector<tc::InferInput*> *inputs = (std::vector<tc::InferInput*> *) triton->infer_inputs;
 
-  // Prepare inputs
-  tc::InferInput* input;
-  err = tc::InferInput::Create(&input, info->input_names[0], info->input_shape, datatype);
-  if (!err.IsOk()) {
-    GST_ERROR_OBJECT (triton, "unable to get input: %s!", err.Message().c_str());
-    return FALSE;
-  }
-
-  std::shared_ptr<tc::InferInput> input_ptr(input);
-  std::vector<tc::InferInput*> inputs = {input_ptr.get()};
   tc::InferOptions options(triton->model_name);
   options.model_version_ = triton->model_version;
+  options.request_id_  = std::to_string(triton->infer_count);
 
-  err = input_ptr->Reset();
-  if (!err.IsOk()) {
-    GST_ERROR_OBJECT (triton, "failed resetting input: %s!", err.Message().c_str());
-    return FALSE;
-  }
-
-  err = input_ptr->AppendRaw((const uint8_t* )(triton->input_buf->buf), triton->input_buf->size);
-  if (!err.IsOk()) {
-    GST_ERROR_OBJECT (triton, "failed setting input: %s!", err.Message().c_str());
-    return FALSE;
-  }
-
-  options.request_id_  = std::to_string(request->id);
   if (triton->infer_mode == HTTP_MODE) {
     triton_client->http_client_->AsyncInfer(
       [request](tc::InferResult* result) {
@@ -523,7 +652,7 @@ triton_infer (GstObject *parent, GstTritonRequest *request)
             exit(1);
           }
         }
-      }, options, inputs);
+      }, options, *inputs);
     usleep(10000);
   } else if (triton->infer_mode == GRPC_MODE) {
     triton_client->grpc_client_->AsyncInfer(
@@ -538,13 +667,22 @@ triton_infer (GstObject *parent, GstTritonRequest *request)
             exit(1);
           }
         }
-      }, options, inputs);
+      }, options, *inputs);
   }
   return TRUE;
 }
 
 void
-bbox_mapping(float *detect_results, int in_num, int src_w, int src_h, int input_w,
+bbox_check_value (float* point, float max)
+{
+  if (*point < 0)
+    *point = 0;
+  if (*point > max)
+    *point = max;
+}
+
+void
+bbox_mapping (float *detect_results, int in_num, int src_w, int src_h, int input_w,
      int input_h, int image_w, int image_h, int lr_pad, int tb_pad, bool keep_ratio)
 {
   float *top, *left, *buttom, *right;
@@ -556,16 +694,21 @@ bbox_mapping(float *detect_results, int in_num, int src_w, int src_h, int input_
     right = &detect_results[DETECT_RESULT_SIZE * i + RIGHT];
 
     if (keep_ratio) {
-      *top = (*top - tb_pad) / image_w * src_w;
-      *left = (*left - lr_pad) / image_h * src_h;
-      *buttom = (*buttom - tb_pad) / image_w * src_w;
-      *right = (*right - lr_pad) / image_h * src_h;
+      *top = (*top - tb_pad) / image_h * src_h;
+      *left = (*left - lr_pad) / image_w * src_w;
+      *buttom = (*buttom - tb_pad) / image_h * src_h;
+      *right = (*right - lr_pad) / image_w * src_w;
     } else {
-      *top = round(*top / input_w * src_w);
-      *left = round(*left / input_h * src_h);
-      *buttom = round(*buttom / input_w * src_w);
-      *right = round(*right / input_h * src_h);
+      *top = round(*top / input_h * src_h);
+      *left = round(*left / input_w * src_w);
+      *buttom = round(*buttom / input_h * src_h);
+      *right = round(*right / input_w * src_w);
     }
+
+    bbox_check_value (top, src_h);
+    bbox_check_value (left, src_w);
+    bbox_check_value (buttom, src_h);
+    bbox_check_value (right, src_w);
   }
 }
 
@@ -599,41 +742,45 @@ fill_to_result_info (GstTriton *triton, std::string output_name,
 }
 
 void
-triton_parse_output (void *parent, GstTritonRequest *request)
+triton_parse_output (GstTriton *triton)
 {
-  GstTriton *triton = GST_TRITON (parent);
+  tc::InferResult *result = (tc::InferResult *) triton->triton_result;
   result_info *result_temp;
+  GList* outputs_temp_list = triton->outputs;
   model_info * info = (model_info *) triton->model_info;
   std::vector<std::string> output_names = info->output_names;
+  std::vector<int64_t> output_sizes = info->output_sizes;
   float *output;
   size_t byte_size;
-  for (auto it = output_names.begin(); it != output_names.end(); it++)
+  for (size_t i = 0; i < output_names.size(); i++)
   {
-    result_temp = g_new0 (result_info, 1);
-    result_temp->batchsize = info->input_shape[BATCH_SIZE];
-    ((tc::InferResult *) request->result)->RawData (*it, (const uint8_t **)&output, &byte_size);
-    fill_to_result_info (triton, *it, result_temp, output, byte_size);
-    if (++it != output_names.end())
+    result_temp = (result_info *)outputs_temp_list->data;
+    result->RawData (output_names[i], (const uint8_t **)&output, &byte_size);
+    fill_to_result_info (triton, output_names[i], result_temp, output, byte_size);
+    if (++i < output_names.size())
     {
-      ((tc::InferResult *) request->result)->RawData (*it, (const uint8_t **)&output, &byte_size);
-      fill_to_result_info (triton, *it, result_temp, output, byte_size);
+      result->RawData (output_names[i], (const uint8_t **)&output, &byte_size);
+      fill_to_result_info (triton, output_names[i], result_temp, output, byte_size);
     } else {
-      request->outputs = g_list_append (request->outputs, result_temp);
       break;
     }
-    request->outputs = g_list_append (request->outputs, result_temp);
+    if (outputs_temp_list->next != NULL)
+    {
+      outputs_temp_list = outputs_temp_list->next;
+    }
   }
 }
 
 void
-draw_result (void *parent, GstTritonRequest *request, GstMapInfo *mapinfo, guint channel)
+draw_result (GstTriton *triton, GstMapInfo *mapinfo, guint channel)
 {
-  GstTriton *triton = GST_TRITON (parent);
+  tc::InferResult *result = (tc::InferResult *) triton->triton_result;
+  GList* outputs = triton->outputs;
   gint vheight = triton->src_height;
   gint vwidth = triton->src_width;
   tc::Error err;
   cv::Mat input_mat(vheight, vwidth, CV_8UC3, mapinfo->data);
-  err = cv_mark(triton, request, input_mat, vwidth, vheight, channel);
+  err = cv_mark(triton, result, outputs, input_mat, vwidth, vheight, channel);
   if (!err.IsOk()) {
     std::cerr << "The result is invalid. " << err
       << std::endl;
@@ -645,4 +792,14 @@ void delete_result (void *result)
 {
   delete (tc::InferResult* )result;
   result = NULL;
+}
+
+void
+free_inputbuf (GstTriton *triton)
+{
+  if (triton->shm_key == NULL) {
+    free (triton->input_buf->buf);
+  } else {
+    unregister_share_memory (triton);
+  }
 }
