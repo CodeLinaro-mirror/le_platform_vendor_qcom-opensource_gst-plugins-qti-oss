@@ -3,6 +3,7 @@ project(gst-x86-ai)
 
 add_compile_options(-Wall -Werror)
 set(CMAKE_CXX_STANDARD 17)
+option(TRITON_INFERENCE "option for Triton inference." OFF)
 
 set(GST_PLUGINS_QTI_OSS_INSTALL "/usr/lib/x86_64-linux-gnu")
 set(GST_PLUGINS_QTI_OSS_INSTALL_INCDIR "/usr/include")
@@ -37,19 +38,24 @@ link_directories(
     ${QTI_AIC_DEV_LIBDIR}
 )
 
-# add_subdirectory(gst-ml-metadata)
-add_subdirectory(gst-plugin-base)
-add_subdirectory(gst-plugin-mlaic)
-add_subdirectory(gst-plugin-batch)
-add_subdirectory(gst-plugin-metamux)
-add_subdirectory(gst-plugin-mldemux)
-add_subdirectory(gst-plugin-mlvdetection)
-add_subdirectory(gst-plugin-mlvclassification)
-add_subdirectory(gst-plugin-mlvsegmentation)
-add_subdirectory(gst-plugin-mlvconverter)
-add_subdirectory(gst-plugin-vsplit)
-add_subdirectory(gst-plugin-videomark)
-
+if (TRITON_INFERENCE)
+  add_subdirectory(gst-plugin-batch)
+  add_subdirectory(gst-plugin-triton)
+else ()
+  # add_subdirectory(gst-ml-metadata)
+  add_subdirectory(gst-plugin-base)
+  add_subdirectory(gst-plugin-mlaic)
+  add_subdirectory(gst-plugin-batch)
+  add_subdirectory(gst-plugin-metamux)
+  add_subdirectory(gst-plugin-mldemux)
+  add_subdirectory(gst-plugin-mlvdetection)
+  add_subdirectory(gst-plugin-mlvclassification)
+  add_subdirectory(gst-plugin-mlvsegmentation)
+  add_subdirectory(gst-plugin-mlvconverter)
+  add_subdirectory(gst-plugin-triton)
+  add_subdirectory(gst-plugin-vsplit)
+  add_subdirectory(gst-plugin-videomark)
+endif ()
 
 ############################################################
 # Create Debian package

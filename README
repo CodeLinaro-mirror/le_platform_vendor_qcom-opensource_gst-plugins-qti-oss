@@ -9,6 +9,10 @@ Before run below instructions,please make sure uninstall
 the debian packge previous build
 =========================================================
 
+"TRITON_INFERENCE" in CMakeList.txt is a switch for Triton
+inference. If you want to do inference with Triton server,
+please put this switch to ON. Otherwise, set it to off.
+
 $ mkdir build
 $ cd build
 $ cmake ..
