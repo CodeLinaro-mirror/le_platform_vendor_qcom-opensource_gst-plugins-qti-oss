@@ -72,6 +72,7 @@ G_BEGIN_DECLS
     "GstMLAicEngine.num-activations"
 
 typedef struct _GstMLAicEngine GstMLAicEngine;
+typedef struct _GstMLAicExecObj GstMLAicExecObj;
 
 GST_API GstMLAicEngine *
 gst_ml_aic_engine_new              (GstStructure * settings);
@@ -85,14 +86,20 @@ gst_ml_aic_engine_get_input_info   (GstMLAicEngine * engine);
 GST_API const GstMLInfo *
 gst_ml_aic_engine_get_output_info  (GstMLAicEngine * engine);
 
-GST_API gint
+GST_API gboolean
 gst_ml_aic_engine_submit_request   (GstMLAicEngine * engine,
                                     GstMLFrame * inframe,
-                                    GstMLFrame * outframe);
+                                    GstMLFrame * outframe, GstMLAicExecObj * obj);
 
 GST_API gboolean
 gst_ml_aic_engine_wait_request     (GstMLAicEngine * engine,
-                                    gint request_id);
+                                    GstMLAicExecObj *obj, GstMLFrame * outframe);
+
+GST_API GstMLAicExecObj *
+gst_ml_aic_execobj_new             ();
+
+GST_API void
+gst_ml_aic_execobj_free            (GstMLAicExecObj *obj);
 
 G_END_DECLS
 

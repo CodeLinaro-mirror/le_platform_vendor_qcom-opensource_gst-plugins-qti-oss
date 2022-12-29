@@ -74,6 +74,10 @@ G_BEGIN_DECLS
 #define GST_ML_AIC_SRCPAD_UNLOCK(obj) \
   g_mutex_unlock(GST_ML_AIC_SRCPAD_GET_LOCK(obj))
 
+#ifndef MLAIC_PERF_DEBUG
+#define MLAIC_PERF_DEBUG  1
+#endif
+
 typedef struct _GstMLAicSinkPad GstMLAicSinkPad;
 typedef struct _GstMLAicSinkPadClass GstMLAicSinkPadClass;
 typedef struct _GstMLAicSrcPad GstMLAicSrcPad;
@@ -91,8 +95,12 @@ struct _GstMLAicSinkPad {
 
   /// Buffer pool.
   GstBufferPool *pool;
-  /// Map of input and output buffers that are paired together.
-  GHashTable    *bufpairs;
+#if MLAIC_PERF_DEBUG
+  GstClockTime  timestamp;
+  GstClockTimeDiff time_latency;
+  GstClockTimeDiff time_process;
+  guint         count;
+#endif
 };
 
 struct _GstMLAicSinkPadClass {
@@ -114,6 +122,14 @@ struct _GstMLAicSrcPad {
   GMutex       lock;
 
   GCond        cond;
+
+#if MLAIC_PERF_DEBUG
+  GstClockTime  timestamp;
+  GstClockTimeDiff time_latency;
+  GstClockTimeDiff time_process;
+  GstClockTimeDiff time_queue;
+  guint         count;
+#endif
 };
 
 struct _GstMLAicSrcPadClass {

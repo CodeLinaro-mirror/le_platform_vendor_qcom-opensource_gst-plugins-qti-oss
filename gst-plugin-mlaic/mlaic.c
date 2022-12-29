@@ -84,9 +84,7 @@ typedef struct _GstEngineRequest GstEngineRequest;
 struct _GstEngineRequest {
   GstMiniObject parent;
 
-  // Request ID.
-  gint          id;
-
+  GstMLAicExecObj *obj;
   // Input frame submitted with provided ID.
   GstMLFrame    inframe;
   // Output frame submitted with provided ID.
@@ -115,6 +113,11 @@ gst_engine_request_free (GstEngineRequest * request)
     gst_buffer_unref (buffer);
   }
 
+  if (request->obj != NULL) {
+    gst_ml_aic_execobj_free (request->obj);
+    request->obj = NULL;
+  }
+
   g_free (request);
 }
 
@@ -127,8 +130,8 @@ gst_engine_request_new ()
       GST_TYPE_ENGINE_REQUEST, NULL, NULL,
       (GstMiniObjectFreeFunction) gst_engine_request_free);
 
-  request->id = GST_ML_AIC_INVALID_ID;
   request->time = GST_CLOCK_TIME_NONE;
+  request->obj = gst_ml_aic_execobj_new ();
 
   return request;
 }
@@ -257,9 +260,6 @@ gst_ml_aic_create_pool (GstPad * pad, GstCaps * caps)
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (
       config, GST_ML_BUFFER_POOL_OPTION_TENSOR_META);
-  gst_buffer_pool_config_add_option (
-      config, GST_ML_BUFFER_POOL_OPTION_CONTINUOUS);
-
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (pad, "Failed to set pool configuration!");
     g_object_unref (pool);
@@ -391,7 +391,6 @@ gst_ml_aic_prepare_output_buffer (GstPad * pad, GstBuffer * inbuffer,
     GstBuffer ** outbuffer)
 {
   GstBufferPool *pool = GST_ML_AIC_SINKPAD (pad)->pool;
-  GHashTable *bufpairs = GST_ML_AIC_SINKPAD (pad)->bufpairs;
 
   if (!gst_buffer_pool_is_active (pool) &&
       !gst_buffer_pool_set_active (pool, TRUE)) {
@@ -403,36 +402,11 @@ gst_ml_aic_prepare_output_buffer (GstPad * pad, GstBuffer * inbuffer,
       GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP)) {
     // Input is marked as GAP, nothing to process. Create a GAP output buffer.
     *outbuffer = gst_buffer_new ();
-  } else if (!g_hash_table_contains (bufpairs, inbuffer)) {
-    // Retrieve new output buffer from the pool.
+  } else {
     if (gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
       GST_ERROR_OBJECT (pad, "Failed to acquire output buffer!");
       return FALSE;
     }
-
-    g_hash_table_insert (bufpairs, inbuffer, *outbuffer);
-  } else {
-    GstBufferList *blist = gst_buffer_list_new ();
-    GstBuffer *buffer = NULL;
-
-    // Get the corresponding output buffer from the buffer pair hash table.
-    buffer =  g_hash_table_lookup (bufpairs, inbuffer);
-
-    // Retrieve output buffer from the pool until the right one is found.
-    while (buffer != *outbuffer) {
-      if (gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
-        GST_ERROR_OBJECT (pad, "Failed to acquire output buffer!");
-
-        gst_buffer_list_unref (blist);
-        return FALSE;
-      }
-
-      gst_buffer_list_insert (blist, -1, *outbuffer);
-    }
-
-    // Increase the reference count of the found buffer.
-    *outbuffer = gst_buffer_ref (buffer);
-    gst_buffer_list_unref (blist);
   }
 
   // Copy the flags and timestamps from the input buffer.
@@ -467,6 +441,7 @@ gst_ml_aic_push_request (GstPad * sinkpad, GstEngineRequest * request)
   // Retrieve the corresponding source pad.
   srcpad = gst_ml_aic_other_pad (sinkpad);
 
+  request->time = gst_util_get_timestamp ();
   // Push the request into the queue or free it on failure.
   if (!gst_data_queue_push (GST_ML_AIC_SRCPAD (srcpad)->requests, item))
     item->destroy (item);
@@ -482,33 +457,42 @@ gst_ml_aic_src_worker_task (gpointer userdata)
   GstMLAic *mlaic = GST_ML_AIC (gst_pad_get_parent (pad));
   GstDataQueueItem *item = NULL;
   GstEngineRequest *request = NULL;
-  GstBuffer *buffer = NULL, *outbuffer = NULL;
+  GstBuffer *buffer = NULL;
+
+#if MLAIC_PERF_DEBUG
+  GstClockTime ts0, ts1, ts2, ts3, ts4;
+  GstClockTimeDiff diff0, diff1, diff2, diff3, diff4, diff_queue;
+
+  ts0 = gst_util_get_timestamp ();
+  ts1 = ts0;
+  ts2 = ts0;
+  ts3 = ts0;
+  ts4 = ts0;
+#endif
 
   if (gst_data_queue_pop (GST_ML_AIC_SRCPAD (pad)->requests, &item)) {
-    const GstMLInfo *mlinfo = NULL;
-    GstMemory *memory = NULL;
-    guint idx = 0, offset = 0, size = 0;
-
+    GST_ML_AIC_SRCPAD (pad)->in_use = TRUE;
+#if MLAIC_PERF_DEBUG
+    ts1 = gst_util_get_timestamp ();
+#endif
     // Increase the request reference count to indicate that it is in use.
     request = GST_ENGINE_REQUEST (gst_mini_object_ref (item->object));
     item->destroy (item);
 
-    GST_TRACE_OBJECT (pad, "Waiting request %d", request->id);
-
-    GST_ML_AIC_SRCPAD (pad)->in_use = TRUE;
-    if (!gst_ml_aic_engine_wait_request (mlaic->engine, request->id)) {
-      GST_DEBUG_OBJECT (pad, " Waiting request %d failed!", request->id);
+    GST_TRACE_OBJECT (pad, "Waiting request");
+#if MLAIC_PERF_DEBUG
+    diff_queue = GST_CLOCK_DIFF (request->time, ts1);
+#endif
+    if (!gst_ml_aic_engine_wait_request (mlaic->engine, request->obj, &(request)->outframe)) {
+      GST_ERROR_OBJECT (pad, " Waiting request failed!");
       gst_engine_request_unref (request);
       gst_object_unref (mlaic);
       return;
     }
 
-    // Get time difference between current time and start.
-    request->time = GST_CLOCK_DIFF (request->time, gst_util_get_timestamp ());
-
-    GST_LOG_OBJECT (pad, "Request %d took %" G_GINT64_FORMAT ".%03"
-        G_GINT64_FORMAT " ms", request->id, GST_TIME_AS_MSECONDS (request->time),
-        (GST_TIME_AS_USECONDS (request->time) % 1000));
+#if MLAIC_PERF_DEBUG
+    ts2 = gst_util_get_timestamp ();
+#endif
 
     // Take a reference to the processed buffer for later use.
     buffer = gst_buffer_ref (request->outframe.buffer);
@@ -525,50 +509,45 @@ gst_ml_aic_src_worker_task (gpointer userdata)
       return;
     }
 
-    // Create a new buffer wrapper to hold a reference to processed buffer.
-    outbuffer = gst_buffer_new ();
+#if MLAIC_PERF_DEBUG
+    ts3 = gst_util_get_timestamp ();
+#endif
 
-    mlinfo = gst_ml_aic_engine_get_output_info (mlaic->engine);
-    memory = gst_buffer_peek_memory (buffer, 0);
-
-    gst_object_unref (mlaic);
-
-    // Share memory blocks from processed buffer with the new buffer.
-    for (idx = 0; idx < GST_ML_INFO_N_TENSORS (mlinfo); idx++) {
-      GstMLTensorMeta *mlmeta = NULL;
-
-      // Set the size of memory that needs to be shared.
-      size = gst_ml_info_tensor_size (mlinfo, idx);
-
-      gst_buffer_append_memory (outbuffer,
-          gst_memory_copy (memory, offset, size));
-
-      // Set the offset to the next piece of memory that needs to be shared.
-      offset += size;
-
-      mlmeta = gst_buffer_add_ml_tensor_meta (outbuffer, mlinfo->type,
-          mlinfo->n_dimensions[idx], mlinfo->tensors[idx]);
-      mlmeta->id = idx;
-    }
-
-    // Copy the flags and timestamps from the processed buffer.
-    gst_buffer_copy_into (outbuffer, buffer, GST_BUFFER_COPY_FLAGS |
-        GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
-
-    // Copy the offset field as it may contain channels data for batched buffers.
-    GST_BUFFER_OFFSET (outbuffer) = GST_BUFFER_OFFSET (buffer);
-
-    // Transfer the GstProtectionMeta into the new buffer.
-    gst_buffer_copy_protection_meta (outbuffer, buffer);
-
-    // Reduce the reference count of the main buffer, it is no longer needed.
-    gst_buffer_unref (buffer);
-
-    GST_TRACE_OBJECT (pad, "Send buffer %p of size %" G_GSIZE_FORMAT,
-        outbuffer, gst_buffer_get_size (outbuffer));
-
-    gst_pad_push (pad, outbuffer);
+    gst_pad_push (pad, buffer);
     GST_ML_AIC_SRCPAD (pad)->in_use = FALSE;
+
+#if MLAIC_PERF_DEBUG
+    ts4 = gst_util_get_timestamp ();
+
+    diff0 = GST_CLOCK_DIFF (ts0, ts1); // diff0: latency of GstDataQueue Pop
+    diff1 = GST_CLOCK_DIFF (ts1, ts2); // diff1: latency of waiting Object Infer complete
+    diff2 = GST_CLOCK_DIFF (ts2, ts3); // diff2: other
+    diff3 = GST_CLOCK_DIFF (ts3, ts4); // diff3: latency of gst_pad_push
+    diff4 = GST_CLOCK_DIFF (ts0, ts4); // diff4: latency of Total for onetime processing
+
+    GST_LOG_OBJECT (pad, "Latency of srcpad task: "
+      "GstDataQueuePop = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+      "WaitInfer = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+      "Other = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+      "GstPadPush = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+      "TotalOneTime = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, ",
+      GST_TIME_AS_MSECONDS (diff0), (GST_TIME_AS_USECONDS (diff0) % 1000),
+      GST_TIME_AS_MSECONDS (diff1), (GST_TIME_AS_USECONDS (diff1) % 1000),
+      GST_TIME_AS_MSECONDS (diff2), (GST_TIME_AS_USECONDS (diff2) % 1000),
+      GST_TIME_AS_MSECONDS (diff3), (GST_TIME_AS_USECONDS (diff3) % 1000),
+      GST_TIME_AS_MSECONDS (diff4), (GST_TIME_AS_USECONDS (diff4) % 1000));
+
+    if (GST_ML_AIC_SRCPAD (pad)->timestamp == GST_CLOCK_TIME_NONE) {
+      GST_ML_AIC_SRCPAD (pad)->timestamp = gst_util_get_timestamp ();
+    } else {
+      GstClockTime ts_now = gst_util_get_timestamp ();
+      GST_ML_AIC_SRCPAD (pad)->time_latency += GST_CLOCK_DIFF (GST_ML_AIC_SRCPAD (pad)->timestamp, ts_now);
+      GST_ML_AIC_SRCPAD (pad)->time_process += diff4;
+      GST_ML_AIC_SRCPAD (pad)->time_queue += diff_queue;
+      GST_ML_AIC_SRCPAD (pad)->timestamp = gst_util_get_timestamp ();
+      GST_ML_AIC_SRCPAD (pad)->count++;
+    }
+#endif
   } else {
     GST_DEBUG_OBJECT (pad, "Paused worker thread");
     gst_pad_pause_task (pad);
@@ -576,12 +555,13 @@ gst_ml_aic_src_worker_task (gpointer userdata)
     GST_ML_AIC_SRCPAD (pad)->in_use = FALSE;
   }
 
-  GST_ML_AIC_SRCPAD_LOCK (pad);
   if (GST_ML_AIC_SRCPAD (pad)->eos && gst_data_queue_is_empty (GST_ML_AIC_SRCPAD (pad)->requests)) {
+    GST_ML_AIC_SRCPAD_LOCK (pad);
     g_cond_broadcast (&GST_ML_AIC_SRCPAD (pad)->cond);
+    GST_ML_AIC_SRCPAD_UNLOCK (pad);
     GST_DEBUG_OBJECT (pad, "Broadcast eos condition!");
   }
-  GST_ML_AIC_SRCPAD_UNLOCK (pad);
+
 }
 
 static GstCaps *
@@ -894,7 +874,7 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstDataQueueSize qsize;
 
       timeout.tv_sec = 0;
-      timeout.tv_nsec = 100000000; //100ms
+      timeout.tv_nsec = 10000000; //10ms
       to = GST_TIMESPEC_TO_TIME (timeout);
       end_time = g_get_monotonic_time () + GST_TIME_AS_USECONDS (to);
 
@@ -909,6 +889,7 @@ gst_ml_aic_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
           GST_DEBUG_OBJECT (pad, "EOS wait condition timeout, queue size = %u", qsize.visible);
         }
       }
+      gst_data_queue_set_flushing (GST_ML_AIC_SRCPAD (srcpad)->requests, TRUE);
       GST_DEBUG_OBJECT (pad, "EOS wait condition end");
 
       gst_segment_init (&(GST_ML_AIC_SINKPAD (pad))->segment,
@@ -945,17 +926,23 @@ gst_ml_aic_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
   GstEngineRequest *request = NULL;
   GstBuffer *outbuffer = NULL;
   const GstMLInfo * info = NULL;
+  gboolean success = FALSE;
+#if MLAIC_PERF_DEBUG
+  GstClockTime ts0, ts1, ts2, ts3, ts4;
+  GstClockTimeDiff diff0, diff1, diff2, diff3, diff4;
+
+  ts0 = gst_util_get_timestamp ();
+#endif
 
   if (!gst_ml_aic_prepare_output_buffer (pad, inbuffer, &outbuffer)) {
     GST_ERROR_OBJECT (pad, "Failed to prepare output buffer!");
     return GST_FLOW_ERROR;
   }
 
-  // Create new engine request.
+#if MLAIC_PERF_DEBUG
+  ts1 = gst_util_get_timestamp ();
+#endif
   request = gst_engine_request_new ();
-
-  // Get start time for performance measurements.
-  request->time = gst_util_get_timestamp ();
 
   // GAP buffer, nothing further to do. Push GAP request to worker task.
   if (gst_buffer_get_size (outbuffer) == 0 &&
@@ -988,19 +975,56 @@ gst_ml_aic_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuffer)
     return GST_FLOW_ERROR;
   }
 
-  request->id = gst_ml_aic_engine_submit_request (mlaic->engine,
-      &(request)->inframe, &(request)->outframe);
-
-  if (request->id == GST_ML_AIC_INVALID_ID) {
+#if MLAIC_PERF_DEBUG
+  ts2 = gst_util_get_timestamp ();
+#endif
+  success = gst_ml_aic_engine_submit_request (mlaic->engine,
+      &(request)->inframe, &(request)->outframe, request->obj);
+  if (!success) {
     GST_WARNING_OBJECT (pad, "Failed to submit request to engine!");
 
     gst_engine_request_unref (request);
     return GST_FLOW_ERROR;
   }
 
-  GST_TRACE_OBJECT (pad, "Submitted request %d", request->id);
+#if MLAIC_PERF_DEBUG
+  ts3 = gst_util_get_timestamp ();
+#endif
 
   gst_ml_aic_push_request (pad, request);
+
+#if MLAIC_PERF_DEBUG
+  ts4 = gst_util_get_timestamp ();
+
+
+  diff0 = GST_CLOCK_DIFF (ts0, ts1); // diff0: latency of GstBuffer allocation
+  diff1 = GST_CLOCK_DIFF (ts1, ts2); // diff1: latency of GstBuffer map
+  diff2 = GST_CLOCK_DIFF (ts2, ts3); // diff2: latency of Submit Objects
+  diff3 = GST_CLOCK_DIFF (ts3, ts4); // diff3: latency of GstDataQueue push
+  diff4 = GST_CLOCK_DIFF (ts0, ts4); // diff4: latency of onetime processing of sink chain
+
+  GST_LOG_OBJECT (pad, "Latency of sinkpad chain: "
+    "GstBufferAllocate = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+    "GstBufferMap = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+    "SubmitExecObject = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+    "GstDataQueuePush = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, "
+    "TotalOneTime = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT" ms, ",
+    GST_TIME_AS_MSECONDS (diff0), (GST_TIME_AS_USECONDS (diff0) % 1000),
+    GST_TIME_AS_MSECONDS (diff1), (GST_TIME_AS_USECONDS (diff1) % 1000),
+    GST_TIME_AS_MSECONDS (diff2), (GST_TIME_AS_USECONDS (diff2) % 1000),
+    GST_TIME_AS_MSECONDS (diff3), (GST_TIME_AS_USECONDS (diff3) % 1000),
+    GST_TIME_AS_MSECONDS (diff4), (GST_TIME_AS_USECONDS (diff4) % 1000));
+
+  if (GST_ML_AIC_SINKPAD (pad)->timestamp == GST_CLOCK_TIME_NONE) {
+    GST_ML_AIC_SINKPAD (pad)->timestamp = gst_util_get_timestamp ();
+  } else {
+    GstClockTime ts_now = gst_util_get_timestamp ();
+    GST_ML_AIC_SINKPAD (pad)->time_latency += GST_CLOCK_DIFF (GST_ML_AIC_SINKPAD (pad)->timestamp, ts_now);
+    GST_ML_AIC_SINKPAD (pad)->time_process += diff4;
+    GST_ML_AIC_SINKPAD (pad)->timestamp = gst_util_get_timestamp ();
+    GST_ML_AIC_SINKPAD (pad)->count++;
+  }
+#endif
   return GST_FLOW_OK;
 }
 
@@ -1014,23 +1038,23 @@ gst_ml_aic_src_activate_mode (GstPad * pad, GstObject * parent,
     case GST_PAD_MODE_PUSH:
       if (active) {
         // Disable requests queue in flushing state to enable normal work.
+
         gst_data_queue_set_flushing (GST_ML_AIC_SRCPAD (pad)->requests, FALSE);
         gst_data_queue_flush (GST_ML_AIC_SRCPAD (pad)->requests);
 
         success = gst_pad_start_task (pad, gst_ml_aic_src_worker_task, pad,
             NULL);
       } else {
+
         gint64 end_time;
         struct timespec timeout;
         GstClockTime to;
         gboolean res;
         GstDataQueueSize qsize;
-
         timeout.tv_sec = 0;
-        timeout.tv_nsec = 100000000; //100ms
+        timeout.tv_nsec = 10000000; //10ms
         to = GST_TIMESPEC_TO_TIME (timeout);
         end_time = g_get_monotonic_time () + GST_TIME_AS_USECONDS (to);
-
         GST_DEBUG_OBJECT (pad, "Deactivate worker task start!");
         while (!gst_data_queue_is_empty (GST_ML_AIC_SRCPAD (pad)->requests) || (GST_ML_AIC_SRCPAD (pad)->in_use)) {
           GST_ML_AIC_SRCPAD_LOCK (pad);
@@ -1196,6 +1220,8 @@ gst_ml_aic_change_state (GstElement * element, GstStateChange transition)
 {
   GstMLAic *mlaic = GST_ML_AIC (element);
   GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+  GstClockTime start, end;
+  GstClockTimeDiff diff;
 
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
@@ -1229,10 +1255,16 @@ gst_ml_aic_change_state (GstElement * element, GstStateChange transition)
 
       gst_ml_aic_engine_free (mlaic->engine);
 
+      start = gst_util_get_timestamp ();
       if ((mlaic->engine = gst_ml_aic_engine_new (settings)) == NULL) {
         GST_ERROR_OBJECT (mlaic, "Failed to create engine!");
         return GST_STATE_CHANGE_FAILURE;
       }
+      end = gst_util_get_timestamp ();
+      diff = GST_CLOCK_DIFF (start, end);
+      GST_INFO_OBJECT (mlaic, "SetUp took %" G_GINT64_FORMAT ".%03"
+        G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (diff),
+        (GST_TIME_AS_USECONDS (diff) % 1000));
       break;
     }
     default:

@@ -52,14 +52,29 @@ static void
 gst_ml_aic_sinkpad_finalize (GObject * object)
 {
   GstMLAicSinkPad *pad = GST_ML_AIC_SINKPAD (object);
-
-  if (pad->bufpairs != NULL)
-    g_hash_table_destroy(pad->bufpairs);
+#if MLAIC_PERF_DEBUG
+  GstClockTime average_latency, average_process, average_wait;
+#endif
 
   if (pad->pool != NULL) {
     gst_buffer_pool_set_active (pad->pool, FALSE);
     gst_object_unref (pad->pool);
   }
+
+#if MLAIC_PERF_DEBUG
+  if (pad->count) {
+    average_latency = pad->time_latency / pad->count;
+    average_process = pad->time_process / pad->count;
+    average_wait = average_latency - average_process;
+    GST_INFO_OBJECT (GST_PAD (pad), "SINKPAD average "
+    "latency = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,"
+    "process = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,"
+    "wait = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,",
+    GST_TIME_AS_MSECONDS (average_latency), (GST_TIME_AS_USECONDS (average_latency) % 1000),
+    GST_TIME_AS_MSECONDS (average_process), (GST_TIME_AS_USECONDS (average_process) % 1000),
+    GST_TIME_AS_MSECONDS (average_wait), (GST_TIME_AS_USECONDS (average_wait) % 1000));
+  }
+#endif
 
   g_mutex_clear (&pad->lock);
 
@@ -84,13 +99,21 @@ gst_ml_aic_sinkpad_init (GstMLAicSinkPad * pad)
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
 
   pad->pool = NULL;
-  pad->bufpairs = g_hash_table_new (NULL, NULL);
+#if MLAIC_PERF_DEBUG
+  pad->timestamp = GST_CLOCK_TIME_NONE;
+  pad->time_latency = 0;
+  pad->time_process = 0;
+  pad->count = 0;
+#endif
 }
 
 static void
 gst_ml_aic_srcpad_finalize (GObject * object)
 {
   GstMLAicSrcPad *pad = GST_ML_AIC_SRCPAD (object);
+#if MLAIC_PERF_DEBUG
+  GstClockTime average_latency, average_process, average_wait, average_queue;
+#endif
 
   gst_data_queue_set_flushing (pad->requests, TRUE);
   gst_data_queue_flush (pad->requests);
@@ -101,6 +124,23 @@ gst_ml_aic_srcpad_finalize (GObject * object)
   pad->eos = TRUE;
   pad->in_use = FALSE;
 
+#if MLAIC_PERF_DEBUG
+  if (pad->count) {
+    average_latency = pad->time_latency / pad->count;
+    average_process = pad->time_process / pad->count;
+    average_queue = pad->time_queue / pad->count;
+    average_wait = average_latency - average_process;
+    GST_INFO_OBJECT (GST_PAD (pad), "SRCPAD average "
+    "latency = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,"
+    "process = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,"
+    "queue = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,"
+    "wait = %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT " ms,",
+    GST_TIME_AS_MSECONDS (average_latency), (GST_TIME_AS_USECONDS (average_latency) % 1000),
+    GST_TIME_AS_MSECONDS (average_process), (GST_TIME_AS_USECONDS (average_process) % 1000),
+    GST_TIME_AS_MSECONDS (average_queue), (GST_TIME_AS_USECONDS (average_queue) % 1000),
+    GST_TIME_AS_MSECONDS (average_wait), (GST_TIME_AS_USECONDS (average_wait) % 1000));
+  }
+#endif
   G_OBJECT_CLASS (gst_ml_aic_srcpad_parent_class)->finalize(object);
 }
 
@@ -123,5 +163,12 @@ gst_ml_aic_srcpad_init (GstMLAicSrcPad * pad)
   pad->eos = FALSE;
   g_mutex_init (&pad->lock);
   g_cond_init (&pad->cond);
+#if MLAIC_PERF_DEBUG
+  pad->timestamp = GST_CLOCK_TIME_NONE;
+  pad->time_latency = 0;
+  pad->time_process = 0;
+  pad->time_queue = 0;
+  pad->count = 0;
+#endif
 }
 
