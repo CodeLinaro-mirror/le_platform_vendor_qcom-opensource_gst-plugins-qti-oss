@@ -32,6 +32,26 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Application:
+* GStreamer use the depth data to assist auto focus
+*
+* Description:
+* This application demonstrate the ability of the qmmfsrc to use the
+* dummy depth data to assist auto focus via camera vendor tags. to
+* simulate the depth sensor works progress , add thread to continuce
+* send the dummy depth data to camera hal layer in 30fps by default.
+* the dummy depth data input with command line and keyboard.
+*
+* The auto focus position output in the camera hal layer and checked
+* it wiht relevant log.
+*
+*
+* Usage:
+* gst-depth-assist-autofocus-example
+*
+*/
+
 #include <glib.h>
 #include <glib-unix.h>
 #include <glib/gstdio.h>
@@ -124,6 +144,9 @@ gst_app_context_free (GstAppContext * ctx)
   if (ctx->pipeline != NULL)
     gst_object_unref (ctx->pipeline);
 
+  if(ctx->qtiqmmfsrc != NULL)
+    gst_object_unref (ctx->qtiqmmfsrc);
+
   g_async_queue_unref (ctx->messages);
   g_free (ctx);
 
@@ -172,6 +195,7 @@ extract_integer_value (const gchar * input, gint64 min, gint64 max, gint64 * val
   }
 
   *value = newvalue;
+  return TRUE;
 }
 
 static void
@@ -355,8 +379,7 @@ handle_stdin_source (GIOChannel * source, GIOCondition condition,
   return TRUE;
 }
 
-// Process thread functions which takes all depth data via persist property
-// and send it to qmmfsrc via metadata
+// update the depth data with vendor tag at the default speed
 static gpointer
 metadata_update_thread (gpointer userdata)
 {
@@ -364,22 +387,22 @@ metadata_update_thread (gpointer userdata)
   gint64   timestamp = 0;
   guint    tag_id = 0;
 
-  GstAppContext *metadata_update = GST_APP_CONTEXT_CAST(userdata);
+  GstAppContext *appctx = GST_APP_CONTEXT_CAST(userdata);
 
-  while (!metadata_update->finish) {
-    g_mutex_lock (&metadata_update->update_lock);
+  g_mutex_lock (&appctx->update_lock);
+  while (!appctx->finish) {
 
     //waiting to timeout
     gint64 wait_time = g_get_monotonic_time () +
         DEFAULT_30_FPS* G_TIME_SPAN_MILLISECOND;
-    gboolean timeout = g_cond_wait_until (&metadata_update->update_signal,
-        &metadata_update->update_lock, wait_time);
-    if ((!timeout) && (!metadata_update->finish)) {
+    gboolean timeout = g_cond_wait_until (&appctx->update_signal,
+        &appctx->update_lock, wait_time);
+    if ((!timeout) && (!appctx->finish)) {
 
-      // Get capture metadata
+      // Get video metadata
       ::android::CameraMetadata *meta = nullptr;
-      g_object_get (G_OBJECT (metadata_update->qtiqmmfsrc),
-          "capture-metadata", &meta, NULL);
+      g_object_get (G_OBJECT (appctx->qtiqmmfsrc),
+          "video-metadata", &meta, NULL);
       if (meta) {
 
         // Set auto focus mode
@@ -390,49 +413,55 @@ metadata_update_thread (gpointer userdata)
         value = depthafops.enable;
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "isvalid");
-        meta->update(tag_id, &value, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &value, 1);
 
         // Calculated object distance in mm
         value = depthafops.distance;
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "distanceInMilliMeters");
-        meta->update(tag_id, &value, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &value, 1);
 
         //Set object distance confidence level
         value = depthafops.confidence;
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "confidence");
-        meta->update(tag_id, &value, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &value, 1);
 
         //Set min object distance measured
         value = depthafops.nearLimitation;
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "nearLimitation");
-        meta->update(tag_id, &value, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &value, 1);
 
         //Set max distanc measured
         value = depthafops.farLimitation;
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "farLimitation");
-        meta->update(tag_id, &value, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &value, 1);
 
         // Set timestamp of arrival of the laser data
         timestamp = g_get_monotonic_time ();
         tag_id = get_vendor_tag_by_name (
             "org.codeaurora.qcamera3.depthassistafinput", "timestamp");
-        meta->update(tag_id, &timestamp, 1);
+        if (tag_id != 0)
+          meta->update(tag_id, &timestamp, 1);
 
-        g_object_set (G_OBJECT (metadata_update->qtiqmmfsrc),
-            "capture-metadata", meta, NULL);
+        g_object_set (G_OBJECT (appctx->qtiqmmfsrc),
+            "video-metadata", meta, NULL);
       } else {
-        g_print ("Get capture-metadata failed!\n");
+        g_print ("Get video-metadata failed!\n");
       }
     }
 
-    g_mutex_unlock (&metadata_update->update_lock);
   }
+  g_mutex_unlock (&appctx->update_lock);
 
-  g_print ("Thread exit\n");
+  g_print ("Meta update thread exit\n");
   return NULL;
 }
 
@@ -546,7 +575,7 @@ depth_ops_menu (GAsyncQueue * messages)
 
 
 static gpointer
- main_menu(gpointer userdata)
+main_menu(gpointer userdata)
 {
   GstAppContext *appctx = GST_APP_CONTEXT_CAST (userdata);
   gboolean active = TRUE;
@@ -555,7 +584,6 @@ static gpointer
     active = depth_ops_menu (appctx->messages);
   }
 
-  g_main_loop_quit (appctx->mloop);
   return NULL;
 }
 
@@ -566,7 +594,7 @@ main (gint argc, gchar *argv[])
 
   GIOChannel *iostdin = NULL;
   GThread *mthread = NULL;
-  guint bus_watch_id = 0, intrpt_watch_id = 0, stdin_watch_id = 0;
+  guint intrpt_watch_id = 0, stdin_watch_id = 0;
 
   g_set_prgname ("gst-depth-assist-autofocus-example");
 
@@ -613,8 +641,7 @@ main (gint argc, gchar *argv[])
     if ((bus = gst_pipeline_get_bus (GST_PIPELINE (appctx->pipeline))) == NULL) {
       g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
 
-      g_main_loop_unref (appctx->mloop);
-      gst_object_unref (appctx->pipeline);
+      gst_app_context_free (appctx);
 
       return -1;
     }
@@ -655,7 +682,6 @@ main (gint argc, gchar *argv[])
       g_print ("ERROR: Failed to create event loop thread!appctx - %p\n",appctx);
       return -1;
     }
-
   }
 
   // Connect a callback to the new-sample signal.
@@ -684,22 +710,11 @@ main (gint argc, gchar *argv[])
   // Get instance to qmmfsrc
   GstElement *qtiqmmfsrc = gst_bin_get_by_name (GST_BIN (appctx->pipeline), "camera");
 
-  // Get static metadata
-  ::android::CameraMetadata *st_meta_ptr = nullptr;
-  g_object_get (G_OBJECT (qtiqmmfsrc), "camera-characteristics",
-      &st_meta_ptr, NULL);
-  if (st_meta_ptr) {
-    g_print ("Get static-metadata entries - %ld\n", st_meta_ptr->entryCount());
-    delete st_meta_ptr;
-  } else {
-    g_printerr ("Get static-metadata failed\n");
-  }
-
-  // Get capture metadata
+  // Get video metadata
   ::android::CameraMetadata *meta_ptr = nullptr;
-  g_object_get (G_OBJECT (qtiqmmfsrc), "capture-metadata", &meta_ptr, NULL);
+  g_object_get (G_OBJECT (qtiqmmfsrc), "video-metadata", &meta_ptr, NULL);
   if (meta_ptr) {
-    g_print ("Get capture-metadata entries - %ld\n", meta_ptr->entryCount());
+    g_print ("Get video-metadata entries - %ld\n", meta_ptr->entryCount());
 
     // Set auto focus mode metadata
     guchar afmode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
@@ -710,7 +725,9 @@ main (gint argc, gchar *argv[])
     // Release metadata
     delete meta_ptr;
   } else {
-    g_printerr ("Get capture-metadata failed\n");
+    g_printerr ("Get video-metadata failed\n");
+    gst_app_context_free (appctx);
+    return -1;
   }
 
   // Initiate the metadata update thread.
@@ -742,7 +759,6 @@ main (gint argc, gchar *argv[])
 
   g_source_remove (stdin_watch_id);
   g_source_remove (intrpt_watch_id);
-  g_source_remove (bus_watch_id);
 
   gst_app_context_free (appctx);
 
@@ -750,3 +766,4 @@ main (gint argc, gchar *argv[])
 
   return 0;
 }
+

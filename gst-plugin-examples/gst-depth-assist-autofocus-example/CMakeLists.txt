@@ -1,8 +1,6 @@
 # GStreamer depth-assist-autofocus-example example
 set(GST_EXAMPLE_BIN gst-depth-assist-autofocus-example)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
-
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
 )
@@ -14,6 +12,8 @@ target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   $<$<BOOL:${CAMERA_CLIENT_DISABLED}>:camera_metadata>
   $<$<NOT:$<BOOL:${CAMERA_CLIENT_DISABLED}>>:camera_client>
+  $<$<NOT:$<BOOL:${CAMERA_CLIENT_DISABLED}>>:binder>
+  $<$<NOT:$<BOOL:${CAMERA_CLIENT_DISABLED}>>:cutils>
   ${GST_LIBRARIES}
   utils
 )
