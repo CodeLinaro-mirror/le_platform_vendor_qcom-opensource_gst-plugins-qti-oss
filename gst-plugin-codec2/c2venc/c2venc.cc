@@ -62,7 +62,7 @@ G_DEFINE_TYPE (GstC2_VENCEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT (0xffffffff)
 
 // Caps formats.
-#define GST_VIDEO_FORMATS "{ NV12, NV21, NV12_10LE32, P010_10LE }"
+#define GST_VIDEO_FORMATS "{ NV12, NV21 }"
 
 #define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
   ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
@@ -92,9 +92,7 @@ GST_STATIC_PAD_TEMPLATE ("src",
         ";"
         "video/x-heic,"
         "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }"
-        ";"
-        "image/x-heic")
+        "alignment = (string) { au }")
     );
 
 // Function will be named gst_c2_venc_qdata_quark()
@@ -151,12 +149,6 @@ gst_to_c2_pixelformat (GstVideoEncoder * encoder, GstVideoFormat format)
       } else {
         result = PIXEL_FORMAT_NV12_LINEAR;
       }
-      break;
-    case GST_VIDEO_FORMAT_P010_10LE:
-        result = PIXEL_FORMAT_P010;
-      break;
-    case GST_VIDEO_FORMAT_NV12_10LE32:
-        result = PIXEL_FORMAT_TP10_UBWC;
       break;
     default:
       break;
@@ -408,25 +400,26 @@ make_request_sync_frame_param (bool request)
   return param;
 }
 
-static config_params_t*
+static config_params_t
 make_roi_encoding (gint64 timestampUs, char *rectPayload, char *rectPayloadExt)
 {
-  config_params_t* param;
-  param = (config_params_t*)g_malloc(sizeof(config_params_t));
+  config_params_t param;
+  memset (&param, 0, sizeof (config_params_t));
 
-  param->config_name = CONFIG_FUNCTION_KEY_ROI_ENCODING;
-  param->roi.timestampUs = timestampUs;
+  param.config_name = CONFIG_FUNCTION_KEY_ROI_ENCODING;
+  param.roi.timestampUs = timestampUs;
 
-  param->roi.rectPayload = rectPayload;
-  param->roi.rectPayloadExt = rectPayloadExt;
+  param.roi.rectPayload = rectPayload;
+  param.roi.rectPayloadExt = rectPayloadExt;
 
   return param;
 }
 
-static gpointer
+static void
 config_roi_encoding (GstC2_VENCEncoder *c2venc, GstVideoCodecFrame * frame)
 {
-  config_params_t* roi_encoding;
+  GPtrArray *config = NULL;
+  config_params_t roi_encoding;
   GstMeta *meta = NULL;
   gpointer state = NULL;
   gint idx = 0, qpdelta = 0;
@@ -437,7 +430,7 @@ config_roi_encoding (GstC2_VENCEncoder *c2venc, GstVideoCodecFrame * frame)
 
   /* ROI mode is disabled, nothing to do except to return immediately */
   if (!c2venc->roi_quant_mode)
-    return NULL;
+    return;
 
   while ((meta =
           gst_buffer_iterate_meta_filtered (frame->input_buffer, &state,
@@ -518,6 +511,7 @@ config_roi_encoding (GstC2_VENCEncoder *c2venc, GstVideoCodecFrame * frame)
   }
 
   if (apply_roi) {
+    config = g_ptr_array_new ();
 
     if (strlen (rectPayloadExt) == 0) {
       g_stpcpy (rectPayloadExt, rectPayload);
@@ -525,9 +519,15 @@ config_roi_encoding (GstC2_VENCEncoder *c2venc, GstVideoCodecFrame * frame)
 
     roi_encoding =
         make_roi_encoding (frame->pts / 1000, rectPayload, rectPayloadExt);
-    return (gpointer)roi_encoding;
+    g_ptr_array_add (config, &roi_encoding);
+
+    // Config component
+    if (!gst_c2_wrapper_config_component (c2venc->wrapper, config)) {
+      GST_ERROR_OBJECT (c2venc, "Failed to config interface");
+    }
+
+    g_ptr_array_free (config, FALSE);
   }
-  return NULL;
 }
 
 static config_params_t
@@ -635,20 +635,6 @@ make_rotate_param (rotate_t rotate)
   return param;
 }
 
-static config_params_t
-make_csdmode_param (csdmode_t csdmode)
-{
-  config_params_t param;
-
-  memset (&param, 0, sizeof (config_params_t));
-
-  param.config_name = CONFIG_FUNCTION_KEY_CSDMODE;
-  param.csdmode = csdmode;
-
-  return param;
-}
-
-
 static gboolean
 gst_c2_venc_trigger_iframe (GstC2_VENCEncoder *c2venc)
 {
@@ -677,8 +663,6 @@ gst_c2_venc_get_c2_comp_name (GstStructure * structure)
   } else if (gst_structure_has_name (structure, "video/x-h265")) {
     ret = g_strdup ("c2.qti.hevc.encoder");
   } else if (gst_structure_has_name (structure, "video/x-heic")) {
-    ret = g_strdup ("c2.qti.heic.encoder");
-  } else if (gst_structure_has_name (structure, "image/x-heic")) {
     ret = g_strdup ("c2.qti.heic.encoder");
   }
 
@@ -745,10 +729,6 @@ gst_c2_venc_setup_output (GstVideoEncoder * encoder,
       gst_caps_unref (outcaps);
       g_free(comp_name);
       return GST_FLOW_ERROR;
-    }
-
-    if (gst_structure_has_name (structure, "image/x-heic")) {
-      c2venc->csdmode = CSD_PREPEND_HEADER_ALL;
     }
     c2venc->output_setup = TRUE;
   }
@@ -932,12 +912,7 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
     frame->output_buffer = outbuf;
 
     gst_video_codec_frame_unref (frame);
-    if (encode_buf->flag & FLAG_TYPE_INCOMPLETE) {
-      GST_DEBUG_OBJECT (c2venc, "INCOMPLETE Buffer received");
-      ret = gst_pad_push(encoder->srcpad, outbuf);
-    } else {
-      ret = gst_video_encoder_finish_frame (encoder, frame);
-    }
+    ret = gst_video_encoder_finish_frame (encoder, frame);
     if (ret != GST_FLOW_OK) {
       GST_ERROR_OBJECT (c2venc, "Failed to finish frame, outbuf: %p", outbuf);
       return GST_FLOW_ERROR;
@@ -1031,7 +1006,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   config_params_t pixelformat;
   config_params_t rate_control;
   config_params_t sync_frame_int;
-  config_params_t* roi_encoding;
+  config_params_t roi_encoding;
   config_params_t intra_refresh;
   config_params_t bitrate;
   config_params_t slice_mode;
@@ -1043,7 +1018,6 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   config_params_t num_ltr_frames;
   config_params_t profileLevel;
   config_params_t rotate;
-  config_params_t csdmode;
 
   structure = gst_caps_get_structure (state->caps, 0);
   retval = gst_structure_get_int (structure, "width", &width);
@@ -1253,13 +1227,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     g_stpcpy (rectPayload, "0,0-0,0=0;");
     g_stpcpy (rectPayloadExt, "0,0-0,0=0;");
     roi_encoding = make_roi_encoding (0, rectPayload, rectPayloadExt);
-    g_ptr_array_add (config, roi_encoding);
-  }
-
-  if (c2venc->csdmode != CSD_PREPEND_HEADER_NONE) {
-    csdmode = make_csdmode_param(c2venc->csdmode);
-    g_ptr_array_add (config, &csdmode);
-    GST_DEBUG_OBJECT (c2venc, "set csdmde - %d", 1);
+    g_ptr_array_add (config, &roi_encoding);
   }
 
   // Config component
@@ -1354,8 +1322,6 @@ gst_c2_venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstBuffer *buf = NULL;
   GstMemory *mem;
   GstMapInfo mapinfo = { 0, };
-  GPtrArray *configs = g_ptr_array_new ();
-  g_ptr_array_set_free_func(configs, [](gpointer data){g_free(data);});
 
   if (!frame) {
     GST_WARNING_OBJECT (c2venc, "frame is NULL, ret GST_FLOW_EOS");
@@ -1404,11 +1370,7 @@ gst_c2_venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   c2venc->queued_frame[(c2venc->frame_index) % MAX_QUEUED_FRAME] =
       frame->system_frame_number;
 
-  gpointer roi_config = config_roi_encoding (c2venc, frame);
-  if(roi_config) {
-    g_ptr_array_add(configs, roi_config);
-    inBuf.config_data = reinterpret_cast<guint8 *>(configs);
-  }
+  config_roi_encoding (c2venc, frame);
 
   // Queue buffer to Codec2
   if (!gst_c2_wrapper_component_queue (c2venc->wrapper, &inBuf)) {
@@ -1425,7 +1387,6 @@ gst_c2_venc_encode (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   g_mutex_lock (&(c2venc->pending_lock));
   c2venc->frame_index += 1;
   g_mutex_unlock (&(c2venc->pending_lock));
-  g_ptr_array_free (configs, TRUE);
 
   // Lock the mutex again and return to the base class
   GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
@@ -2049,7 +2010,6 @@ gst_c2_venc_init (GstC2_VENCEncoder * c2venc)
   c2venc->quant_b_frames = GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT;
   c2venc->num_ltr_frames = GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT;
   c2venc->rotate = ROTATE_NONE;
-  c2venc->csdmode = CSD_PREPEND_HEADER_NONE;
   c2venc->is_ubwc = FALSE;
 
   memset (c2venc->queued_frame, 0, sizeof (c2venc->queued_frame));
