@@ -115,7 +115,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_IR_MODE                   IR_MODE_OFF
 #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
 #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
-#define DEFAULT_PROP_CAMERA_YUVCALLBACK               FALSE
+#define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
 #define DEFAULT_PROP_CAMERA_HFR_SYNC_MODE             FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
@@ -178,7 +178,7 @@ enum
   PROP_CAMERA_IMAGE_METADATA,
   PROP_CAMERA_STATIC_METADATA,
   PROP_CAMERA_FRC_MODE,
-  PROP_CAMERA_YUVCALLBACK,
+  PROP_CAMERA_IFE_DIRECT_STREAM,
   PROP_CAMERA_HFR_SYNC_MODE,
 };
 
@@ -1133,9 +1133,9 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
       break;
-    case PROP_CAMERA_YUVCALLBACK:
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_YUVCALLBACK, value);
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
       break;
     case PROP_CAMERA_HFR_SYNC_MODE:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
@@ -1307,9 +1307,9 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
       break;
-    case PROP_CAMERA_YUVCALLBACK:
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_YUVCALLBACK, value);
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
       break;
     case PROP_CAMERA_HFR_SYNC_MODE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
@@ -1600,10 +1600,10 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "Stream frame rate control mode.",
           GST_TYPE_QMMFSRC_FRC_MODE, DEFAULT_PROP_CAMERA_FRC_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject, PROP_CAMERA_YUVCALLBACK,
-      g_param_spec_boolean ("YUV-callback", "YUV callback stream flag",
-          "support YUV callback stream from IPE Displayfull port",
-          DEFAULT_PROP_CAMERA_YUVCALLBACK,
+  g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
+      g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
+          "IFE direct stream support",
+          DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject, PROP_CAMERA_HFR_SYNC_MODE,
