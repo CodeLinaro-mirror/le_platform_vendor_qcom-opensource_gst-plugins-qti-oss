@@ -65,6 +65,8 @@
 #define CONFIG_FUNCTION_KEY_PROFILE_LEVEL "profile_level"
 #define CONFIG_FUNCTION_KEY_ROTATE "rotate"
 #define CONFIG_FUNCTION_KEY_CSDMODE "csdmode"
+#define CONFIG_FUNCTION_KEY_B_PRECONDITIONS "b_precondition"
+#define CONFIG_FUNCTION_KEY_GOP_TUNING "gop_tuning"
 
 typedef enum {
   INTERLACE_MODE_PROGRESSIVE = 0,
