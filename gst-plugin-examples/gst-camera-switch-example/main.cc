@@ -235,8 +235,9 @@ static void *
 thread_fn (gpointer user_data)
 {
   GstCameraSwitchCtx *cameraswitchctx = (GstCameraSwitchCtx *) user_data;
+  guint switchcount = 0;
 
- while (true) {
+  while (true) {
     sleep (5);
     g_mutex_lock (&cameraswitchctx->lock);
     if (cameraswitchctx->exit) {
@@ -246,7 +247,13 @@ thread_fn (gpointer user_data)
     g_mutex_unlock (&cameraswitchctx->lock);
 
     switch_camera (cameraswitchctx);
+    switchcount++;
+    if (switchcount == 4) {
+      break;
+    }
   }
+
+  g_main_loop_quit (cameraswitchctx->mloop);
 
   return NULL;
 }

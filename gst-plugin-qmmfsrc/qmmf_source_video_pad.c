@@ -594,6 +594,9 @@ video_pad_finalize (GObject * object)
     pad->buffers = NULL;
   }
 
+  g_cond_clear (&pad->deletecond);
+  g_mutex_clear (&pad->deletemutex);
+
   G_OBJECT_CLASS (qmmfsrc_video_pad_parent_class)->finalize(object);
 }
 
@@ -660,7 +663,10 @@ static void
 qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
+  g_mutex_init (&pad->deletemutex);
+  g_cond_init (&pad->deletecond);
 
+  pad->buffersholding = 0;
   pad->session_id   = 0;
   pad->index        = -1;
   pad->srcidx       = -1;
