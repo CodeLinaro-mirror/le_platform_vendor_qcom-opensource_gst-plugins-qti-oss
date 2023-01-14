@@ -65,9 +65,6 @@
 #include "config.h"
 #endif
 
-#include <mutex>
-#include <condition_variable>
-
 #include "qmmf_source_context.h"
 
 #include <gst/allocators/allocators.h>
@@ -199,11 +196,6 @@ struct _GstQmmfContext {
   gboolean          ife_direct_stream;
   /// HFR Sync Mode
   gboolean          hfr_sync_mode;
-
-  /// Buffers number in using.
-  gint              buffersholding;
-  std::mutex        deletelock;
-  std::condition_variable deletecondition;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -703,7 +695,7 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
   std::vector<::qmmf::BufferDescriptor> buffers;
   ::qmmf::recorder::Recorder *recorder = NULL;
   ::qmmf::BufferDescriptor buffer;
-  GstQmmfContext * context = NULL;
+  GstQmmfSrcVideoPad * vpad = NULL;
 
   GST_TRACE (" %s", gst_structure_to_string (structure));
 
@@ -732,17 +724,19 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
     gst_structure_get_uint (structure, "track", &track_id);
     recorder->ReturnTrackBuffer (session_id, track_id, buffers);
 
-    gst_structure_get (structure, "ctxt", G_TYPE_ULONG, &value, NULL);
-    context = (GstQmmfContext *) (GSIZE_TO_POINTER (value));
-    GST_QMMF_CONTEXT_LOCK (context);
-    std::unique_lock<std::mutex> ul (context->deletelock);
-    context->buffersholding --;
-    GST_TRACE ("QMMF returnTrackbuffer %d", context->buffersholding);
-    if (context->buffersholding < 0) {
-      GST_ERROR ("QMMF holds bufferNum < 0");
+    gst_structure_get (structure, "pad", G_TYPE_ULONG, &value, NULL);
+
+    vpad = (GstQmmfSrcVideoPad *) (GSIZE_TO_POINTER (value));
+    g_mutex_lock (&vpad->deletemutex);
+    vpad->buffersholding--;
+    GST_TRACE ("QMMF session %d returnTrackbuffer %d",
+        vpad->session_id, vpad->buffersholding);
+    if (vpad->buffersholding < 0) {
+      GST_ERROR ("QMMF session %d holds bufferNum < 0", vpad->session_id);
     }
-    context->deletecondition.notify_one ();
-    GST_QMMF_CONTEXT_UNLOCK (context);
+    g_cond_signal (&vpad->deletecond);
+    g_mutex_unlock (&vpad->deletemutex);
+
   } else {
     recorder->ReturnImageCaptureBuffer (camera_id, buffer);
   }
@@ -801,7 +795,7 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
     gst_structure_set (structure,
       "session", G_TYPE_UINT, GST_QMMFSRC_VIDEO_PAD (pad)->session_id,
       "track", G_TYPE_UINT, GST_QMMFSRC_VIDEO_PAD (pad)->id,
-      "ctxt", G_TYPE_ULONG, GPOINTER_TO_SIZE (context),
+      "pad", G_TYPE_ULONG, GPOINTER_TO_SIZE (pad),
       NULL
     );
   }
@@ -903,10 +897,11 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     item->visible = TRUE;
     item->destroy = (GDestroyNotify) qmmfsrc_free_queue_item;
 
-    GST_QMMF_CONTEXT_LOCK (context);
-    context->buffersholding++;
-    GST_TRACE ("QMMF holds %d buffers", context->buffersholding);
-    GST_QMMF_CONTEXT_UNLOCK (context);
+    g_mutex_lock (&vpad->deletemutex);
+    vpad->buffersholding++;
+    GST_TRACE ("QMMF session %d holds %d buffers",
+        vpad->session_id, vpad->buffersholding);
+    g_mutex_unlock (&vpad->deletemutex);
 
     // Push the buffer into the queue or free it on failure.
     if (!gst_data_queue_push (vpad->buffers, item))
@@ -1449,11 +1444,12 @@ gst_qmmf_context_delete_video_stream (GstQmmfContext * context, GstPad * pad)
 
   GST_TRACE ("Delete QMMF context video stream");
 
-  std::unique_lock<std::mutex> ul (context->deletelock);
-  GST_TRACE ("QMMF context holds %d video buffers", context->buffersholding);
-  while (context->buffersholding > 0) {
-    context->deletecondition.wait (ul);
+  GST_TRACE ("QMMF session %d holds %d video buffers",
+      vpad->session_id, vpad->buffersholding);
+  while (vpad->buffersholding > 0) {
+    g_cond_wait (&vpad->deletecond, &vpad->deletemutex);
   }
+
   status = recorder->DeleteVideoTrack (vpad->session_id, vpad->id);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
       "QMMF Recorder DeleteVideoTrack Failed!");

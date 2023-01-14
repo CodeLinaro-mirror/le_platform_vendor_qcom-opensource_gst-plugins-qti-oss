@@ -137,6 +137,11 @@ struct _GstQmmfSrcVideoPad {
   /// QMMF Recorder track buffers duration, calculated from framerate.
   GstClockTime        duration;
 
+  /// Buffers number in using, sync with qmmf-sdk.
+  gint                buffersholding;
+  GMutex              deletemutex;
+  GCond               deletecond;
+
   /// Queue for GStreamer buffers wrappers around QMMF Recorder buffers.
   GstDataQueue        *buffers;
 };
