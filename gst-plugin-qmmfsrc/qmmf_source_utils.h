@@ -67,6 +67,7 @@
 #define __GST_QMMFSRC_UTILS_H__
 
 #include <gst/gst.h>
+#include <gst/video/video.h>
 #include <glib/gtypes.h>
 
 G_BEGIN_DECLS
@@ -125,6 +126,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_ISO_MODE (gst_qmmfsrc_iso_mode_get_type())
 #define GST_TYPE_QMMFSRC_NOISE_REDUCTION \
     (gst_qmmfsrc_noise_reduction_get_type())
+#define GST_TYPE_QMMFSRC_CAPTURE_MODE (gst_qmmfsrc_capture_mode_get_type())
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
@@ -260,6 +262,12 @@ enum
 
 enum
 {
+  VIDEO_CAPTURE_MODE,
+  STILL_CAPTURE_MODE,
+};
+
+enum
+{
   FRAME_SKIP,
   CAPTURE_REQUEST,
 };
@@ -285,6 +293,8 @@ GType gst_qmmfsrc_ir_mode_get_type (void);
 GType gst_qmmfsrc_iso_mode_get_type (void);
 
 GType gst_qmmfsrc_noise_reduction_get_type (void);
+
+GType gst_qmmfsrc_capture_mode_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
 
@@ -319,6 +329,8 @@ guint gst_qmmfsrc_android_value_focus_mode (const guchar value);
 guchar gst_qmmfsrc_noise_reduction_android_value (const guint value);
 
 guint gst_qmmfsrc_android_value_noise_reduction (const guchar value);
+
+const char * gst_qmmf_video_format_to_string (gint format);
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =

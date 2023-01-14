@@ -45,23 +45,26 @@ gst_c2_venc_context_debug_category (void)
   static gsize catgonce = 0;
 
   if (g_once_init_enter (&catgonce)) {
-    gsize catdone = (gsize) _gst_debug_category_new ("qtic2venc", 0,
+    gsize catdone = (gsize) _gst_debug_category_new ("qtic2engine", 0,
         "C2 encoder context");
     g_once_init_leave (&catgonce, catdone);
   }
   return (GstDebugCategory *) catgonce;
 }
 
-std::shared_ptr<C2Buffer> createLinearBuffer(const std::shared_ptr<C2LinearBlock>& block)
+std::shared_ptr<C2Buffer>
+createLinearBuffer(const std::shared_ptr<C2LinearBlock>& block)
 {
-  return C2Buffer::CreateLinearBuffer(block->share(block->offset(), block->size(), ::C2Fence()));
+  return C2Buffer::CreateLinearBuffer(
+      block->share(block->offset(), block->size(), ::C2Fence()));
 }
 
-std::shared_ptr<C2Buffer> createGraphicBuffer(const std::shared_ptr<C2GraphicBlock>& block)
+std::shared_ptr<C2Buffer>
+createGraphicBuffer(const std::shared_ptr<C2GraphicBlock>& block)
 {
-  return C2Buffer::CreateGraphicBuffer(block->share(C2Rect(block->width(), block->height()), ::C2Fence()));
+  return C2Buffer::CreateGraphicBuffer(
+      block->share(C2Rect(block->width(), block->height()), ::C2Fence()));
 }
-
 
 C2ComponentWrapper::C2ComponentWrapper (
     std::shared_ptr<C2ComponentStore> compstore, const char * name)
@@ -619,6 +622,22 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
   if (C2FrameData::FLAG_CODEC_CONFIG & flag) {
     flag_res |= FLAG_TYPE_CODEC_CONFIG;
   }
+
+  if (buffer) {
+    C2BufferData::type_t buf_type = buffer->data ().type ();
+    if (buf_type == C2BufferData::LINEAR) {
+      // check for sync frame
+      auto picTypeInfo =
+          std::static_pointer_cast<const C2StreamPictureTypeInfo::output> (
+          buffer->getInfo (C2StreamPictureTypeInfo::output::PARAM_TYPE));
+      if (picTypeInfo) {
+        if (picTypeInfo->value == C2Config::SYNC_FRAME) {
+          flag_res |= FLAG_TYPE_SYNC_FRAME;
+        }
+      }
+    }
+  }
+
   flag_type = static_cast<FLAG_TYPE> (flag_res);
 
   if (buffer) {
