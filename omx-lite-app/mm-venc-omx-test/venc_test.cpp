@@ -604,7 +604,7 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
   int size = nSize;
   size = (size + 4096 - 1) & ~(4096 - 1);
 
-  D("use gbm\n");
+  D("use gbm!\n");
   ion_data_ptr->ion_device_fd = m_device_fd;
   if(ion_data_ptr->ion_device_fd < 0)
   {
@@ -624,8 +624,7 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
   }
   ion_data_ptr->bo = bo;
 
-  //bo_fd = gbm_bo_get_fd(bo); //gbm_bo_get_fd() dup original fd, which lose pairing relationship between fd and metadata fd, lead to issue
-  bo_fd = bo->ion_fd;
+  bo_fd = gbm_bo_get_fd(bo);//gbm_bo_get_fd() returned fd need to be closed manually.
   if(bo_fd < 0) {
     E("Get bo fd failed \n");
     goto error_handle;
@@ -686,9 +685,14 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
 error_handle:
 #ifdef USE_ION
 #ifdef USE_GBM
-    if (ion_data_ptr->bo)
+    if (ion_data_ptr->bo) {
+      if (bo_fd >= 0) {
+        close(bo_fd);
+      }
       gbm_bo_destroy(ion_data_ptr->bo);
+    }
     ion_data_ptr->bo = NULL;
+    ion_data_ptr->data_fd = -1;
     ion_data_ptr->meta_fd = -1;
 #else
     close(ion_data_ptr->data_fd);
@@ -707,9 +711,14 @@ int PmemFree(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, void* pvirt, int nSize, 
   munmap(pvirt, nSize);
 #ifdef USE_ION
 #ifdef USE_GBM
-  if (ion_data_ptr->bo)
+  if (ion_data_ptr->bo) {
+    if (ion_data_ptr->data_fd >= 0) {
+      close(ion_data_ptr->data_fd);
+    }
     gbm_bo_destroy(ion_data_ptr->bo);
+  }
   ion_data_ptr->bo = NULL;
+  ion_data_ptr->data_fd = -1;
   ion_data_ptr->meta_fd = -1;
 #else
   close(ion_data_ptr->data_fd);
