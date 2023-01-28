@@ -131,7 +131,7 @@ void* AllocVideoBuffer(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* p_mem, int size, str
     align_size = (align_size + 4096 - 1) & ~(4096 - 1);
     uint32_t flags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
 
-    VLOGD("use gbm\n");
+    VLOGD("use gbm !\n");
     ion_data_ptr->ion_device_fd = m_DeviceFd;
     if(ion_data_ptr->ion_device_fd < 0)
     {
@@ -153,7 +153,7 @@ void* AllocVideoBuffer(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* p_mem, int size, str
       goto error_handle;
     }
     ion_data_ptr->bo = bo;
-    bo_fd = gbm_bo_get_fd(bo);
+    bo_fd = gbm_bo_get_fd(bo);//fd returned from gbm_bo_get_fd() must be closed manually.
     if(bo_fd < 0) {
       VLOGE("Get bo fd failed \n");
       goto error_handle;
@@ -220,9 +220,13 @@ void* AllocVideoBuffer(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* p_mem, int size, str
 error_handle:
   if (!strncasecmp(m_MemoryMode, "gbm", 3)) {
     if (ion_data_ptr->bo) {
+      if (ion_data_ptr->data_fd >= 0) {
+        close(ion_data_ptr->data_fd);
+      }
       gbm_bo_destroy(ion_data_ptr->bo);
     }
     ion_data_ptr->bo = NULL;
+    ion_data_ptr->data_fd = -1;
     ion_data_ptr->meta_fd = -1;
   } else if (!strncasecmp(m_MemoryMode, "ion", 3)) {
     close(ion_data_ptr->data_fd);
@@ -242,9 +246,13 @@ int FreeVideoBuffer(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* p_mem, void* p_virt, in
 
   if (!strncasecmp(m_MemoryMode, "gbm", 3)) {
     if (ion_data_ptr->bo) {
+      if (ion_data_ptr->data_fd >= 0) {
+        close(ion_data_ptr->data_fd);
+      }
       gbm_bo_destroy(ion_data_ptr->bo);
     }
     ion_data_ptr->bo = NULL;
+    ion_data_ptr->data_fd = -1;
     ion_data_ptr->meta_fd = -1;
   } else if (!strncasecmp(m_MemoryMode, "ion", 3)) {
     close(ion_data_ptr->data_fd);
