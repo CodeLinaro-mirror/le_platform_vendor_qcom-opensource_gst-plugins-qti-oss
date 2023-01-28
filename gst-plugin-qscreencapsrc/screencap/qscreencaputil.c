@@ -1036,9 +1036,7 @@ QGbm_info * gbm_memory_alloc(GstQCtx * qctx,int w,int h)
       return NULL;
     }
 
-    /* TODO: won't use gbm_bo_get_fd() till it's redefined definitely. */
-    //bo_fd = qctx->gbm_bo_get_fd(bo);
-    /* Interim solution, just for smooth switch to new interface. */
+    //bo_fd = qctx->gbm_bo_get_fd(bo); //gbm_bo_get_fd() dup original fd, which lose pairing relationship between fd and metadata fd, lead to issue
     bo_fd = bo->ion_fd;
     if (bo_fd < 0) {
       GST_ERROR("Get bo fd failed");
