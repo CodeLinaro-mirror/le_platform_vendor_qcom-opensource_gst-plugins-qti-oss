@@ -1101,6 +1101,7 @@ qmmfsrc_set_property (GObject * object, guint property_id,
     case PROP_CAMERA_HFR_SYNC_MODE:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_HFR_SYNC_MODE, value);
+      break;
     case PROP_CAMERA_ROTATION:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_SELECT_ROTATION, value);
