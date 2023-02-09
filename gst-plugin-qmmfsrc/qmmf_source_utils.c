@@ -588,6 +588,30 @@ gst_qmmfsrc_noise_reduction_get_type (void)
 }
 
 GType
+gst_qmmfsrc_capture_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { VIDEO_CAPTURE_MODE,
+        "Snapshot requests will be submitted together with any existing video "
+        "stream. Any request metadata passed as arguments will be ignored and "
+        "instead the video stream metadata will be used.", "video"
+    },
+    { STILL_CAPTURE_MODE,
+        "Snapshot requests will be interleaved with the requests for any "
+        "existing video stream. In this mode any metadata passed as aguments "
+        "will be used for the requests.", "still"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstImageCaptureMode", variants);
+
+  return gtype;
+}
+
+GType
 gst_qmmfsrc_frc_mode_get_type (void)
 {
   static GType gtype = 0;
@@ -808,4 +832,27 @@ gst_qmmfsrc_android_value_noise_reduction (const guchar value)
       return noise_reduction_map[idx].value;
   }
   return UINT_MAX;
+}
+
+const char *
+gst_qmmf_video_format_to_string (gint format)
+{
+  if (gst_video_format_to_string ((GstVideoFormat)format)) {
+    return gst_video_format_to_string ((GstVideoFormat)format);
+  }
+
+  switch (format) {
+    case GST_BAYER_FORMAT_BGGR:
+      return "RGGB";
+    case GST_BAYER_FORMAT_RGGB:
+      return "RGGB";
+    case GST_BAYER_FORMAT_GBRG:
+      return "GBRG";
+    case GST_BAYER_FORMAT_GRBG:
+      return "GRBG";
+    case GST_BAYER_FORMAT_MONO:
+      return "MONO";
+    default:
+      return "unknown";
+  }
 }
