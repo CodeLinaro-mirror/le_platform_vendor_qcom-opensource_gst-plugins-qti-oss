@@ -124,8 +124,9 @@ enum
   PARAM_CAMERA_IR_MODE,
   PARAM_CAMERA_ACTIVE_SENSOR_SIZE,
   PARAM_CAMERA_SENSOR_MODE,
-  PARAM_CAMERA_CAPTURE_METADATA,
-  PARAM_CAMERA_CHARACTERISTICS,
+  PARAM_CAMERA_VIDEO_METADATA,
+  PARAM_CAMERA_IMAGE_METADATA,
+  PARAM_CAMERA_STATIC_METADATA,
   PARAM_CAMERA_FRC_MODE,
 };
 
@@ -153,7 +154,7 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
                                       GstPad * bayerpad);
 
 GST_API gboolean
-gst_qmmf_context_delete_image_stream (GstQmmfContext * context, GstPad * pad);
+gst_qmmf_context_delete_image_stream (GstQmmfContext * context, gboolean cache);
 
 GST_API gboolean
 gst_qmmf_context_start_video_stream (GstQmmfContext * context, GstPad * pad);
@@ -166,7 +167,8 @@ gst_qmmf_context_pause_video_stream (GstQmmfContext * context, GstPad * pad);
 
 GST_API gboolean
 gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
-                                GstPad * bayerpad);
+                                GstPad * bayerpad, guint imgtype, guint n_images,
+                                GPtrArray * metas);
 
 GST_API void
 gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,

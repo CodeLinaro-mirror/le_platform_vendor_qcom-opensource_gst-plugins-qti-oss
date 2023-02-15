@@ -365,6 +365,18 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 
     work->worklets.clear ();
     work->worklets.emplace_back (new C2Worklet);
+
+    if (buffer->config_data) {
+      auto& worklet = work->worklets.front ();
+
+      std::list<std::unique_ptr<C2Param>> settings;
+      push_to_settings (buffer->config_data, &settings);
+      std::for_each (settings.begin (), settings.end (),
+          [&] (std::unique_ptr<C2Param>& param) {
+              worklet->tunings.push_back (std::unique_ptr<C2Tuning> (
+                  reinterpret_cast<C2Tuning *> (param.release())));
+          });
+    }
     workList.push_back (std::move (work));
 
     if (!isEOSFrame) {
@@ -541,9 +553,11 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
         callback_->onOutputBufferAvailable (buffer, bufferIdx, timestamp,
             outputFrameFlag, NULL);
       }
-      std::unique_lock<std::mutex> ul (component_wrapper->lock_);
-      component_wrapper->numpendingworks_--;
-      component_wrapper->workcondition_.notify_one ();
+      if (not (C2FrameData::FLAG_INCOMPLETE & outputFrameFlag)) {
+        std::unique_lock<std::mutex> ul (component_wrapper->lock_);
+        component_wrapper->numpendingworks_--;
+        component_wrapper->workcondition_.notify_one ();
+      }
     } else {
       if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
         GST_INFO ("Component(%p) reached EOS on output", this);
@@ -666,7 +680,8 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
         csd->flexCount (), (guint8*) csd->m.value);
         outBuf.config_data = (guint8*) &csd->m.value;
         outBuf.config_size = csd->flexCount ();
-        outBuf.flag = FLAG_TYPE_CODEC_CONFIG;
+        outBuf.flag = static_cast<FLAG_TYPE> (static_cast<uint32_t> (
+            FLAG_TYPE_CODEC_CONFIG) | static_cast<uint32_t> (outBuf.flag));
       }
       callback_ (EVENT_OUTPUTS_DONE, &outBuf, userdata_);
     } else if (buf_type == C2BufferData::GRAPHIC) {

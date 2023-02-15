@@ -40,11 +40,14 @@
 
 #define GST_CAMERA_PIPELINE "qtiqmmfsrc name=camera " \
     "camera.video_0 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
-    "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false"
+    "queue ! waylandsink sync=false fullscreen=true enable-last-sample=false " \
+    "camera.image_1 ! image/jpeg,width=1920,height=1080,framerate=30/1 ! " \
+    "appsink name=sink emit-signals=true sync=false async=false enable-last-sample=false"
 
-#define TERMINATE_MESSAGE      "APP_TERMINATE_MSG"
-#define PIPELINE_STATE_MESSAGE "APP_PIPELINE_STATE_MSG"
-#define PIPELINE_EOS_MESSAGE   "APP_PIPELINE_EOS_MSG"
+#define TERMINATE_MESSAGE          "APP_TERMINATE_MSG"
+#define PIPELINE_STATE_MESSAGE     "APP_PIPELINE_STATE_MSG"
+#define PIPELINE_EOS_MESSAGE       "APP_PIPELINE_EOS_MSG"
+#define IMAGE_CAPTURE_DONE_MESSAGE "APP_IMG_CAPTURE_DONE_MSG"
 
 #define GST_APP_CONTEXT_CAST(obj)           ((GstAppContext*)(obj))
 
@@ -64,6 +67,8 @@ struct _GstAppContext
 
 /// Command line option variables.
 static gboolean eos_on_shutdown = TRUE;
+static gint     n_images        = 7;
+static gint     imgtype         = 0;
 
 static GstAppContext *
 gst_app_context_new ()
@@ -99,6 +104,13 @@ gst_sample_release (GstSample * sample)
 #if GST_VERSION_MAJOR >= 1 && GST_VERSION_MINOR > 14
     gst_sample_set_buffer (sample, NULL);
 #endif
+}
+
+static void
+gst_camera_metadata_release (gpointer data)
+{
+  ::android::CameraMetadata *meta = (::android::CameraMetadata*) data;
+  delete meta;
 }
 
 static guint
@@ -259,10 +271,13 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 static GstFlowReturn
 new_sample (GstElement * element, gpointer userdata)
 {
+  GstAppContext *appctx = GST_APP_CONTEXT_CAST (userdata);
   GstSample *sample = NULL;
   GstBuffer *buffer = NULL;
+  GError *error = NULL;
+  GstMapInfo memmap;
+  gchar *filename = NULL;
   guint64 timestamp = 0;
-  GstMapInfo info;
 
   // New sample is available, retrieve the buffer from the sink.
   g_signal_emit_by_name (element, "pull-sample", &sample);
@@ -278,158 +293,60 @@ new_sample (GstElement * element, gpointer userdata)
     return GST_FLOW_ERROR;
   }
 
-  if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
+  if (!gst_buffer_map (buffer, &memmap, GST_MAP_READ)) {
     g_printerr ("ERROR: Failed to map the pulled buffer!\n");
     gst_sample_release (sample);
     return GST_FLOW_ERROR;
+  }
+
+  // Decrease the number of images that we wait to receive.
+  if ((--n_images) == 0) {
+    // Signal work task that we have received all images.
+    g_async_queue_push (appctx->messages,
+        gst_structure_new_empty (IMAGE_CAPTURE_DONE_MESSAGE));
   }
 
   // Extract the original camera timestamp from GstBuffer OFFSET_END field
   timestamp = GST_BUFFER_OFFSET_END (buffer);
   g_print ("Camera timestamp: %" G_GUINT64_FORMAT "\n", timestamp);
 
-  gst_buffer_unmap (buffer, &info);
+  filename = g_strdup_printf ("/data/frame_%" G_GUINT64_FORMAT ".jpg", timestamp);
+
+  if (!g_file_set_contents (filename, (const gchar*) memmap.data, memmap.size,
+          &error)) {
+    g_printerr ("ERROR: Writing to %s failed: %s\n", filename, error->message);
+    g_clear_error (&error);
+  } else {
+    g_print ("Buffer written to file system: %s\n", filename);
+  }
+
+  g_free (filename);
+  gst_buffer_unmap (buffer, &memmap);
   gst_sample_release (sample);
 
   return GST_FLOW_OK;
 }
 
-static void
-result_metadata (GstElement * element, gpointer metadata, gpointer userdata)
+static gboolean
+wait_image_capture_done_message (GAsyncQueue * messages)
 {
-  ::android::CameraMetadata *meta = (::android::CameraMetadata*) metadata;
-  guint tag_id = 0;
+  GstStructure *message = NULL;
 
-  if (meta == nullptr)
-    return;
-
-  g_print ("\nResult metadata ... entries - %ld\n", meta->entryCount());
-
-  // Exposure time
-  if (meta->exists(ANDROID_SENSOR_EXPOSURE_TIME)) {
-    gint64 exptime = meta->find(ANDROID_SENSOR_EXPOSURE_TIME).data.i64[0];
-    g_print ("Result Sensor Exposure Time - %" G_GINT64_FORMAT "\n", exptime);
-  }
-
-  // Sensor Timestamp
-  if (meta->exists(ANDROID_SENSOR_TIMESTAMP)) {
-    gint64 timestamp = meta->find(ANDROID_SENSOR_TIMESTAMP).data.i64[0];
-    g_print ("Result timestamp - %" G_GINT64_FORMAT "\n", timestamp);
-  }
-
-  // AE mode for manual control
-  if (meta->exists(ANDROID_CONTROL_AE_MODE)) {
-    gint mode = meta->find(ANDROID_CONTROL_AE_MODE).data.u8[0];
-    g_print ("Result Auto Exposure Mode - %d\n", mode);
-  }
-
-  // AE Target
-  if (meta->exists(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION)) {
-    gint compensation =
-      meta->find(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION).data.i32[0];
-    g_print ("Result Exposure Compensation - %d\n", compensation);
-  }
-
-  // AE Lock
-  if (meta->exists(ANDROID_CONTROL_AE_LOCK)) {
-    gint lock = meta->find(ANDROID_CONTROL_AE_LOCK).data.u8[0];
-    g_print ("Result Exposure Lock - %s\n", (lock > 0) ? "ON" : "OFF");
-  }
-
-  // sensor analog + digital gain
-  if (meta->exists(ANDROID_SENSOR_SENSITIVITY)) {
-    gint32 sensitivity = meta->find(ANDROID_SENSOR_SENSITIVITY).data.i32[0];
-    g_print ("Result Sensor Sensitivity - %d\n", sensitivity);
-  }
-
-  // Sensor analog gain
-  if (meta->exists(ANDROID_SENSOR_MAX_ANALOG_SENSITIVITY)) {
-    gint32 max = meta->find(ANDROID_SENSOR_MAX_ANALOG_SENSITIVITY).data.i32[0];
-    g_print ("Result Sensor Max Sensitivity - %d\n", max);
-  }
-
-  // EV mode
-  if (meta->exists(ANDROID_CONTROL_AE_COMPENSATION_RANGE)) {
-    gint32 min = meta->find(ANDROID_CONTROL_AE_COMPENSATION_RANGE).data.i32[0];
-    gint32 max = meta->find(ANDROID_CONTROL_AE_COMPENSATION_RANGE).data.i32[1];
-    g_print ("Result AE Compensation Range - %d - %d\n", min, max);
-  }
-
-    // EV steps
-  if (meta->exists(ANDROID_CONTROL_AE_COMPENSATION_STEP)) {
-    gint numerator =
-      meta->find(ANDROID_CONTROL_AE_COMPENSATION_STEP).data.r[0].numerator;
-    gint denominator =
-      meta->find(ANDROID_CONTROL_AE_COMPENSATION_STEP).data.r[0].denominator;
-    g_print ("Result AE Compensation Step - %d/%d\n", numerator, denominator);
-  }
-
-  // Sensor Read Result
-  gboolean result = 0;
-  tag_id = get_vendor_tag_by_name (
-      "org.codeaurora.qcamera3.sensorreadoutput", "SensorReadResult");
-  if (meta->exists(tag_id)) {
-    result = meta->find(tag_id).data.u8[0];
-    g_print ("Sensor Read Result: %d\n", result);
-  }
-
-  if (result) {
-    // Sensor Read Output
-    tag_id = get_vendor_tag_by_name (
-        "org.codeaurora.qcamera3.sensorreadoutput", "SensorReadOutput");
-    if (meta->exists(tag_id)) {
-      guint value =
-          (meta->find(tag_id).data.u8[0]) | (meta->find(tag_id).data.u8[1] << 8);
-      g_print ("Sensor Read Output: %d\n", value);
+  // Wait for either a PIPELINE_EOS or TERMINATE message.
+  while ((message = (GstStructure*) g_async_queue_pop (messages)) != NULL) {
+    if (gst_structure_has_name (message, TERMINATE_MESSAGE)) {
+      gst_structure_free (message);
+      return FALSE;
     }
-  }
-}
 
-static void
-urgent_metadata (GstElement * element, gpointer metadata, gpointer userdata)
-{
-  ::android::CameraMetadata *meta = (::android::CameraMetadata*) metadata;
+    if (gst_structure_has_name (message, IMAGE_CAPTURE_DONE_MESSAGE))
+      break;
 
-  if (meta == nullptr)
-    return;
-
-  g_print ("\nUrgent metadata ... entries - %ld\n", meta->entryCount());
-
-  // AWB Mode
-  if (meta->exists(ANDROID_CONTROL_AWB_MODE)) {
-    gint8 mode = meta->find(ANDROID_CONTROL_AWB_MODE).data.u8[0];
-    g_print ("Urgent AWB Mode - %d\n", mode);
+    gst_structure_free (message);
   }
 
-  // AWB State
-  if (meta->exists(ANDROID_CONTROL_AWB_STATE)) {
-    gint8 state = meta->find(ANDROID_CONTROL_AWB_STATE).data.u8[0];
-    g_print ("Urgent AWB state - %d\n", state);
-  }
-
-  // AF Mode
-  if (meta->exists(ANDROID_CONTROL_AF_MODE)) {
-    gint8 mode = meta->find(ANDROID_CONTROL_AF_MODE).data.u8[0];
-    g_print ("Urgent AF mode - %d\n", mode);
-  }
-
-  // AF State
-  if (meta->exists(ANDROID_CONTROL_AF_STATE)) {
-    gint8 state = meta->find(ANDROID_CONTROL_AF_STATE).data.u8[0];
-    g_print ("Urgent AF state - %d\n", state);
-  }
-
-  // AE Mode
-  if (meta->exists(ANDROID_CONTROL_AE_MODE)) {
-    gint8 mode = meta->find(ANDROID_CONTROL_AE_MODE).data.u8[0];
-    g_print ("Urgent AE mode - %d\n", mode);
-  }
-
-  // AE State
-  if (meta->exists(ANDROID_CONTROL_AE_STATE)) {
-    gint8 state = meta->find(ANDROID_CONTROL_AE_STATE).data.u8[0];
-    g_print ("Urgent AE state - %d\n", state);
-  }
+  gst_structure_free (message);
+  return TRUE;
 }
 
 static gboolean
@@ -559,8 +476,10 @@ work_task (gpointer userdata)
 {
   GstAppContext *appctx = GST_APP_CONTEXT_CAST (userdata);
   GstElement *camsrc = NULL;
+  GPtrArray *metas = NULL;
   ::android::CameraMetadata *smeta = nullptr, *meta = nullptr;
   gboolean success = FALSE;
+
 
   // Transition to READY state in order to initilize the camera.
   if (!update_pipeline_state (appctx->pipeline, appctx->messages, GST_STATE_READY)) {
@@ -576,17 +495,82 @@ work_task (gpointer userdata)
 
   if (smeta == nullptr) {
     g_printerr ("ERROR: Failed to fetch static camera metadata!\n");
+
     gst_object_unref (camsrc);
+    g_main_loop_quit (appctx->mloop);
+
     return NULL;
   }
 
   g_print ("\nGot static-metadata entries - %ld\n", smeta->entryCount());
 
+  // Transition to PLAYING state.
+  if (!update_pipeline_state (appctx->pipeline, appctx->messages, GST_STATE_PLAYING)) {
+
+    gst_object_unref (camsrc);
+    g_main_loop_quit (appctx->mloop);
+
+    return NULL;
+  }
+
+  // Get high quality metadata, which will be used for submitting capture-image.
+  g_object_get (G_OBJECT (camsrc), "image-metadata", &meta, NULL);
+
+  if (meta == nullptr) {
+    g_printerr ("ERROR: Failed to fetch camera capture metadata!\n");
+
+    delete smeta;
+    gst_object_unref (camsrc);
+    g_main_loop_quit (appctx->mloop);
+
+    return NULL;
+  }
+
+  g_print ("\nGot capture-metadata entries - %ld\n", meta->entryCount());
+
+  metas = g_ptr_array_new_full (0, gst_camera_metadata_release);
+
+  // Capture burst of images with AE bracketing.
+  if (smeta->exists(ANDROID_CONTROL_AE_COMPENSATION_RANGE)) {
+    camera_metadata_entry entry = {};
+    gint32 idx = 0, compensation = 0, step = 0;
+
+    entry = smeta->find(ANDROID_CONTROL_AE_COMPENSATION_RANGE);
+
+    compensation = entry.data.i32[1];
+    step = (entry.data.i32[0] - entry.data.i32[1]) / (n_images - 1);
+
+    g_print ("\nCapturing images with bracketing from %d to %d step %d\n",
+        entry.data.i32[1], entry.data.i32[0], step);
+
+    // Modify a copy of the capture metadata and add it to the meta array.
+    for (idx = 0; idx < n_images; idx++) {
+      ::android::CameraMetadata *metadata = new ::android::CameraMetadata(*meta);
+
+      metadata->update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &compensation, 1);
+      compensation += step;
+
+      g_ptr_array_add (metas, (gpointer) metadata);
+    }
+
+    imgtype = 1; // 1 - Still image capture mode.
+
+    g_signal_emit_by_name (camsrc, "capture-image", imgtype, n_images, metas,
+        &success);
+
+    // Remove the metadatas as they are no longer needed.
+    g_ptr_array_remove_range (metas, 0, n_images);
+  } else {
+    g_printerr ("ERROR: EV Compensation not supported!\n");
+  }
+
+  // Delete the high quality image metadata, no longer needed.
+  delete meta;
   // Delete the static metadata, no longer needed.
   delete smeta;
 
-  // Transition to PAUSED state in order to prepare the camera streams.
-  if (!update_pipeline_state (appctx->pipeline, appctx->messages, GST_STATE_PAUSED)) {
+  // Wait until all images are received or terimnate is received.
+  if (!wait_image_capture_done_message (appctx->messages)) {
     gst_object_unref (camsrc);
     g_main_loop_quit (appctx->mloop);
     return NULL;
@@ -599,22 +583,21 @@ work_task (gpointer userdata)
   guchar mode = ANDROID_CONTROL_AWB_MODE_CLOUDY_DAYLIGHT;
   meta->update(ANDROID_CONTROL_AWB_MODE, &mode, 1);
 
-  // Sensor Read Input
-  guchar flag = 1;
-  guint tag_id = get_vendor_tag_by_name (
-      "org.codeaurora.qcamera3.sensorreadinput", "SensorReadFlag");
-  meta->update(tag_id, &flag, 1);
-
   g_object_set (G_OBJECT (camsrc), "video-metadata", meta, NULL);
+
+  g_print ("\nSwitching to continuously capturing images\n");
+
+  n_images = 0; // 0 - Continously capture images until canceled.
+  imgtype = 0; // 0 - Video image capture mode.
+
+  g_signal_emit_by_name (camsrc, "capture-image", imgtype, n_images, metas,
+      &success);
+
+  // Free the metadatas array as it's no longer needed.
+  g_ptr_array_free (metas, TRUE);
 
   // Decrease the reference count to the camera element, no longer needed.
   gst_object_unref (camsrc);
-
-  // Transition to PLAYING state.
-  if (!update_pipeline_state (appctx->pipeline, appctx->messages, GST_STATE_PLAYING)) {
-    g_main_loop_quit (appctx->mloop);
-    return NULL;
-  }
 
   // Run the pipeline for 15 more seconds.
   sleep(15);
@@ -669,19 +652,7 @@ main (gint argc, gchar *argv[])
 
   // Connect a callback to the new-sample signal.
   element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), "sink");
-  g_signal_connect (element, "new-sample", G_CALLBACK (new_sample), NULL);
-  gst_object_unref (element);
-
-  // Get a reference to the camera plugin.
-  element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), "camera");
-
-  // Connect a callbacks to the qtiqmmfsrc metadata signals.
-  g_signal_connect (element, "result-metadata",
-      G_CALLBACK (result_metadata), NULL);
-  g_signal_connect (element, "urgent-metadata",
-      G_CALLBACK (urgent_metadata), NULL);
-
-  // Decrease the reference count to the camera element.
+  g_signal_connect (element, "new-sample", G_CALLBACK (new_sample), appctx);
   gst_object_unref (element);
 
   // Initialize main loop.
