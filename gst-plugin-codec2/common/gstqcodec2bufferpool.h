@@ -53,6 +53,16 @@ typedef struct _GstQcodec2BufferPool GstQcodec2BufferPool;
 typedef struct _GstQcodec2BufferPoolClass GstQcodec2BufferPoolClass;
 typedef struct _GstBufferPoolInitParam GstBufferPoolInitParam;
 
+/* Gst C2 Comp functions */
+#define GST_TYPE_C2_COMP                  (gst_c2_comp_get_type ())
+#define GST_C2_COMP(obj)                  (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_C2_COMP, GstC2Comp))
+#define GST_IS_C2_COMP(obj)               (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_C2_COMP))
+#define GST_C2_COMP_CLASS(klass)          (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_C2_COMP, GstC2CompClass))
+#define GST_IS_C2_COMP_CLASS(klass)       (G_TYPE_CHECK_CLASS_TYPE ((klass), GST_TYPE_C2_COMP))
+#define GST_C2_COMP_GET_CLASS(obj)        (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_C2_COMP, GstC2CompClass))
+typedef struct _GstC2Comp GstC2Comp;
+typedef struct _GstC2CompClass GstC2CompClass;
+
 #define GST_BUFFER_POOL_OPTION_VIDEO_C2BUF_META "GstVideoC2BufMeta"
 
 typedef enum
@@ -66,8 +76,7 @@ typedef enum
 struct _GstBufferPoolInitParam
 {
   GstVideoInfo info;
-  void *c2_comp;
-  GHashTable *buffer_table;
+  GstC2Comp *gst_c2_comp;
   gboolean is_ubwc;
   PoolMode mode;
 };
@@ -76,8 +85,10 @@ struct _GstQcodec2BufferPool
 {
   GstBufferPool bufferpool;
   GstAllocator *allocator;
-  GstBufferPoolInitParam param;
   gboolean add_c2bufmeta;
+  GHashTable *buffer_table; /* only used in DMA/FD wrap mode */
+
+  GstBufferPoolInitParam param;
 };
 
 struct _GstQcodec2BufferPoolClass
@@ -121,6 +132,22 @@ const GstMetaInfo *gst_video_c2buf_meta_get_info (void);
 
 #define gst_buffer_get_video_c2buf_meta(b) ((GstVideoC2BufMeta*)gst_buffer_get_meta((b),GST_VIDEO_C2BUF_META_API_TYPE))
 #define gst_buffer_add_video_c2buf_meta(b) ((GstVideoC2BufMeta*)gst_buffer_add_meta((b),GST_VIDEO_C2BUF_META_INFO, NULL))
+
+struct _GstC2Comp
+{
+  GObject parent_instance;
+
+  void *comp;
+};
+
+struct _GstC2CompClass
+{
+  GObjectClass parent_class;
+};
+
+GType gst_c2_comp_get_type (void);
+
+GstC2Comp * gst_c2_comp_create (void * comp);
 
 G_END_DECLS
 #endif /* __GST_QCODEC2BUFFERPOOL_H__ */

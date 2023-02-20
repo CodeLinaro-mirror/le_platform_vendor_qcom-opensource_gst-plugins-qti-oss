@@ -38,12 +38,69 @@
 #include <media/msm_media_info.h>
 #include "codec2wrapper.h"
 
-GST_DEBUG_CATEGORY_STATIC (qcodec2bufferpool_debug);
-#define GST_CAT_DEFAULT qcodec2bufferpool_debug
+GST_DEBUG_CATEGORY_STATIC (qcodec2common_debug);
+#define GST_CAT_DEFAULT qcodec2common_debug
 
 G_DEFINE_TYPE (GstQcodec2BufferPool, gst_qcodec2_buffer_pool,
     GST_TYPE_BUFFER_POOL);
+G_DEFINE_TYPE (GstC2Comp, gst_c2_comp, G_TYPE_OBJECT);
 
+static void
+gst_c2_comp_finalize (GObject * gobject)
+{
+  GstC2Comp *self = GST_C2_COMP (gobject);
+
+  GST_LOG_OBJECT (self, "finalize");
+
+  if (self->comp) {
+    c2component_delete (self->comp);
+    GST_DEBUG_OBJECT (self, "destroy c2 comp");
+  }
+
+  G_OBJECT_CLASS (gst_c2_comp_parent_class)->finalize (gobject);
+}
+
+static void
+gst_c2_comp_class_init (GstC2CompClass * klass)
+{
+  GObjectClass *object_class = (GObjectClass *) klass;
+
+  object_class->finalize = gst_c2_comp_finalize;
+}
+
+static void
+gst_c2_comp_init (GstC2Comp * self)
+{
+  GST_DEBUG_CATEGORY_INIT (qcodec2common_debug,
+      "qcodec2common", 0, "GST Qcodec2.0 common utils");
+
+  self->comp = NULL;
+}
+
+GstC2Comp *
+gst_c2_comp_create (void * comp)
+{
+  GstC2Comp *gst_c2_comp = NULL;
+
+  gst_c2_comp = g_object_new (GST_TYPE_C2_COMP, NULL);
+  if (gst_c2_comp) {
+    gst_c2_comp->comp = comp;
+  }
+
+  return gst_c2_comp;
+}
+
+static void *
+get_c2_comp (GstC2Comp * gst_c2_comp)
+{
+  void *c2_comp = NULL;
+
+  if (gst_c2_comp) {
+    c2_comp = gst_c2_comp->comp;
+  }
+
+  return c2_comp;
+}
 
 #define parent_class gst_qcodec2_buffer_pool_parent_class
 
@@ -103,8 +160,6 @@ print_gst_buf (gpointer key, gpointer value, gpointer data)
 static void
 gst_qcodec2_buffer_pool_init (GstQcodec2BufferPool * pool)
 {
-  GST_DEBUG_CATEGORY_INIT (qcodec2bufferpool_debug,
-      "qcodec2pool", 0, "QTI GST codec2.0 decoder buffer pool");
 }
 
 static const gchar **
@@ -151,7 +206,8 @@ static void
 gst_qcodec2_buffer_pool_finalize (GObject * obj)
 {
   GstQcodec2BufferPool *pool = GST_QCODEC2_BUFFER_POOL_CAST (obj);
-  GHashTable *buffer_table = pool->param.buffer_table;
+  GHashTable *buffer_table = pool->buffer_table;
+  GstC2Comp *gst_c2_comp = pool->param.gst_c2_comp;
 
   GST_DEBUG_OBJECT (pool, "finalize buffer pool:%p", pool);
 
@@ -164,6 +220,10 @@ gst_qcodec2_buffer_pool_finalize (GObject * obj)
     GST_DEBUG_OBJECT (pool, "finalize allocator:%p ref cnt:%d", pool->allocator,
         GST_OBJECT_REFCOUNT (pool->allocator));
     gst_object_unref (pool->allocator);
+  }
+
+  if (gst_c2_comp) {
+    gst_object_unref (gst_c2_comp);
   }
 
   G_OBJECT_CLASS (parent_class)->finalize (obj);
@@ -198,7 +258,7 @@ _gst_qcodec2_alloc_buf (GstBufferPool * bpool)
   GstVideoInfo *info = NULL;
   GstVideoFormat format;
   BufferDescriptor buffer;
-  void *c2_comp = pool->param.c2_comp;
+  void *c2_comp = get_c2_comp (pool->param.gst_c2_comp);
   GstBuffer *gst_buf = NULL;
   PoolMode mode = pool->param.mode;
 
@@ -334,9 +394,9 @@ _buffer_pool_acquire_buffer_wrap (GstBufferPool * bpool,
   GstQcodec2BufferPool *pool = GST_QCODEC2_BUFFER_POOL_CAST (bpool);
 
   GstVideoInfo *vinfo = &pool->param.info;
-  GHashTable *buffer_table = pool->param.buffer_table;
   gboolean is_ubwc = pool->param.is_ubwc;
   PoolMode mode = pool->param.mode;
+  GHashTable *buffer_table = pool->buffer_table;
 
   gint64 key = ((gint64) param_ext->fd << 32) | param_ext->meta_fd;
   gint64 *buf_key = NULL;
@@ -475,7 +535,7 @@ _buffer_pool_release_buffer_wrap (GstBufferPool * bpool, GstBuffer * buffer)
 {
   GstBufferPoolClass *bp_class = GST_BUFFER_POOL_CLASS (parent_class);
   GstQcodec2BufferPool *pool = GST_QCODEC2_BUFFER_POOL_CAST (bpool);
-  void *c2_comp = pool->param.c2_comp;
+  void *c2_comp = get_c2_comp (pool->param.gst_c2_comp);
 
   guint64 index = 0;
   GstStructure *structure = (GstStructure *) gst_mini_object_get_qdata
@@ -578,14 +638,14 @@ gst_qcodec2_buffer_pool_new (GstBufferPoolInitParam * param)
       buffer_table =
           g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free,
           destroy_gst_buffer);
-      pool->param.buffer_table = buffer_table;
+      pool->buffer_table = buffer_table;
       break;
     case FDBUF_WRAP_MODE:
       pool->allocator = gst_fd_allocator_new ();
       buffer_table =
           g_hash_table_new_full (g_int64_hash, g_int64_equal, g_free,
           destroy_gst_buffer);
-      pool->param.buffer_table = buffer_table;
+      pool->buffer_table = buffer_table;
       break;
     default:
       GST_ERROR_OBJECT (pool, "pool mode %d is not supported", param->mode);

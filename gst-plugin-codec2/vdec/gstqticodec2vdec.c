@@ -77,7 +77,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 
 #include "gstqticodec2vdec.h"
-#include "gstqcodec2bufferpool.h"
 #include <dlfcn.h>
 #include <libdrm/drm_fourcc.h>
 #include <media/msm_media_info.h>
@@ -137,7 +136,6 @@ static void gst_qticodec2vdec_get_property (GObject * object, guint prop_id,
 static void gst_qticodec2vdec_finalize (GObject * object);
 
 static gboolean gst_qticodec2vdec_create_component (GstVideoDecoder * decoder);
-static gboolean gst_qticodec2vdec_destroy_component (GstVideoDecoder * decoder);
 static void handle_video_event (const void *handle, EVENT_TYPE type,
     void *data);
 
@@ -413,6 +411,25 @@ gst_qticodec2vdec_create_component (GstVideoDecoder * decoder)
     GST_ERROR_OBJECT (dec, "Component store is Null");
   }
 
+  if (TRUE == ret) {
+    if (G_UNLIKELY (dec->gst_c2_comp)) {
+      gst_object_unref (dec->gst_c2_comp);
+      GST_DEBUG_OBJECT (dec, "unref previous gst c2 component");
+    }
+
+    dec->gst_c2_comp = gst_c2_comp_create (dec->comp);
+    if (!dec->gst_c2_comp) {
+      ret = FALSE;
+      GST_ERROR_OBJECT (dec, "failed to create gst c2 comp");
+    }
+  } else {
+    if (dec->comp) {
+      c2component_delete (dec->comp);
+      dec->comp = NULL;
+      GST_ERROR_OBJECT (dec, "clean up c2 comp adapter since error happened");
+    }
+  }
+
   return ret;
 }
 
@@ -445,22 +462,6 @@ gst_qticodec2vdec_start_comp_and_config_pool (Gstqticodec2vdec * decoder)
     GST_ERROR_OBJECT (dec,
         "Failed to let component use graphic pool created by client");
     return FALSE;
-  }
-
-  return ret;
-}
-
-static gboolean
-gst_qticodec2vdec_destroy_component (GstVideoDecoder * decoder)
-{
-  gboolean ret = TRUE;
-  Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-
-  GST_DEBUG_OBJECT (dec, "destroy_component");
-
-  if (dec->comp) {
-    c2component_delete (dec->comp);
-    dec->comp = NULL;
   }
 
   return ret;
@@ -800,6 +801,7 @@ gst_qticodec2vdec_open (GstVideoDecoder * decoder)
   dec->out_port_pool = NULL;
   dec->is_10bit = FALSE;
   dec->delay_start = FALSE;
+  dec->gst_c2_comp = NULL;
 
   memset (dec->queued_frame, 0, MAX_QUEUED_FRAME);
   memset (&dec->start_time, 0, sizeof (struct timeval));
@@ -853,8 +855,9 @@ gst_qticodec2vdec_close (GstVideoDecoder * decoder)
     gst_object_unref (dec->out_port_pool);
   }
 
-  if (!gst_qticodec2vdec_destroy_component (decoder)) {
-    GST_ERROR_OBJECT (dec, "Failed to delete component");
+  if (dec->gst_c2_comp) {
+    gst_object_unref (dec->gst_c2_comp);
+    dec->gst_c2_comp = NULL;
   }
 
   if (dec->comp_name) {
@@ -998,7 +1001,7 @@ gst_qticodec2vdec_decide_allocation (GstVideoDecoder * decoder,
 
   param.is_ubwc = dec->is_ubwc;
   param.info = dec->output_state->info;
-  param.c2_comp = dec->comp;
+  param.gst_c2_comp = gst_object_ref (dec->gst_c2_comp);
   param.mode = use_dmabuf ? DMABUF_WRAP_MODE : FDBUF_WRAP_MODE;
   pool = gst_qcodec2_buffer_pool_new (&param);
 

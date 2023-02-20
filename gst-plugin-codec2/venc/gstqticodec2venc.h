@@ -82,6 +82,9 @@ struct _Gstqticodec2venc
   void *comp_intf;
   gchar *comp_name;
 
+  /* manage the lifetime of C2 component adapter */
+  GstC2Comp *gst_c2_comp;
+
   guint64 queued_frame[MAX_QUEUED_FRAME];
 
   GstBufferPool *pool;

@@ -159,7 +159,6 @@ static void gst_qticodec2venc_get_property (GObject * object, guint prop_id,
 static void gst_qticodec2venc_finalize (GObject * object);
 
 static gboolean gst_qticodec2venc_create_component (GstVideoEncoder * encoder);
-static gboolean gst_qticodec2venc_destroy_component (GstVideoEncoder * encoder);
 static void handle_video_event (const void *handle, EVENT_TYPE type,
     void *data);
 
@@ -903,20 +902,23 @@ gst_qticodec2venc_create_component (GstVideoEncoder * encoder)
     GST_DEBUG_OBJECT (enc, "Component store is Null");
   }
 
-  return ret;
-}
+  if (TRUE == ret) {
+    if (G_UNLIKELY (enc->gst_c2_comp)) {
+      gst_object_unref (enc->gst_c2_comp);
+      GST_DEBUG_OBJECT (enc, "unref previous gst c2 component");
+    }
 
-static gboolean
-gst_qticodec2venc_destroy_component (GstVideoEncoder * encoder)
-{
-  gboolean ret = FALSE;
-  Gstqticodec2venc *enc = GST_QTICODEC2VENC (encoder);
-
-  GST_DEBUG_OBJECT (enc, "destroy_component");
-
-  if (enc->comp) {
-    c2component_delete (enc->comp);
-    enc->comp = NULL;
+    enc->gst_c2_comp = gst_c2_comp_create (enc->comp);
+    if (!enc->gst_c2_comp) {
+      ret = FALSE;
+      GST_ERROR_OBJECT (enc, "failed to create gst c2 comp");
+    }
+  } else {
+    if (enc->comp) {
+      c2component_delete (enc->comp);
+      enc->comp = NULL;
+      GST_ERROR_OBJECT (enc, "clean up c2 comp adapter since error happened");
+    }
   }
 
   return ret;
@@ -1365,6 +1367,7 @@ gst_qticodec2venc_open (GstVideoEncoder * encoder)
   enc->frame_index = 0;
   enc->num_input_queued = 0;
   enc->num_output_done = 0;
+  enc->gst_c2_comp = NULL;
 
   memset (enc->queued_frame, 0, MAX_QUEUED_FRAME);
 
@@ -1382,7 +1385,10 @@ gst_qticodec2venc_close (GstVideoEncoder * encoder)
 
   GST_DEBUG_OBJECT (enc, "qticodec2venc_close");
 
-  gst_qticodec2venc_destroy_component (GST_VIDEO_ENCODER (enc));
+  if (enc->gst_c2_comp) {
+    gst_object_unref (enc->gst_c2_comp);
+    enc->gst_c2_comp = NULL;
+  }
 
   if (enc->comp_store) {
     c2componentStore_delete (enc->comp_store);
@@ -1460,7 +1466,7 @@ gst_qticodec2venc_propose_allocation (GstVideoEncoder * encoder,
   /* Propose GBM backed memory if upstream has dmabuf feature */
   if (gst_qticodec2_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_DMABUF)) {
     param.is_ubwc = enc->is_ubwc;
-    param.c2_comp = enc->comp;
+    param.gst_c2_comp = gst_object_ref (enc->gst_c2_comp);
     param.info = info;
     param.mode = DMABUF_MODE;
     enc->pool = gst_qcodec2_buffer_pool_new (&param);
