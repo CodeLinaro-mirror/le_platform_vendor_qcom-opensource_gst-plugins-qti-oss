@@ -9,7 +9,7 @@ plugins_pkgconfig_install_dir = join_paths(plugins_install_dir, 'pkgconfig')
 
 gstvesdeliver_sources = [
   'gstvesdeliver.c',
-  'gstvesdeliverpool.c'
+  'gstvesdeliverallocator.c'
 ]
 
 gstvesdeliver_c_args = ['-DHAVE_CONFIG_H']
@@ -32,12 +32,19 @@ gstallocators_dep = dependency('gstreamer-allocators-1.0',
   fallback : ['gst-plugins-base', 'allocators_dep'])
 glib_dep = dependency('glib-2.0', version: '>= 2.44', required: false)
 
+gstvesdeliver_dep = [glib_dep, gst_dep, gstbase_dep, gstvideo_dep, gstallocators_dep]
+
+use_dmaheap = get_option('usedmaheap')
+if use_dmaheap
+  gstvesdeliver_c_args += ['-DUSE_DMAHEAP']
+endif
+
 gstvesdeliver = library('gstvesdeliver',
   gstvesdeliver_sources,
   c_args : [gstvesdeliver_c_args, '-Wall'],
   link_args : [gstvesdeliver_link_args, '-ldl'],
   include_directories : [configinc],
-  dependencies : [glib_dep, gst_dep, gstbase_dep, gstvideo_dep, gstallocators_dep],
+  dependencies : gstvesdeliver_dep,
   install : true,
   install_dir : plugins_install_dir,
 )

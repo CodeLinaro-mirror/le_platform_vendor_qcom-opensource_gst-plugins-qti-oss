@@ -122,6 +122,7 @@ gst_qeavb_pcm_src_init (GstQeavbPcmSrc * qeavbpcmsrc)
   memset(&(qeavbpcmsrc->hdr), 0, sizeof(eavb_ioctl_hdr_t));
   memset(&(qeavbpcmsrc->stream_info), 0, sizeof(eavb_ioctl_stream_info_t));
   g_mutex_init (&qeavbpcmsrc->lock);
+  GST_LOG_OBJECT (qeavbpcmsrc, "eavb_fd addr %p off %u, hdr addr %p off %u, qeavbpcmsrc addr %p", &(qeavbpcmsrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbPcmSrc, eavb_fd), &(qeavbpcmsrc->hdr), G_STRUCT_OFFSET(GstQeavbPcmSrc, hdr), qeavbpcmsrc);
   kpi_place_marker("M - qeavbpcmsrc init");
 }
 
@@ -273,6 +274,7 @@ gst_qeavb_pcm_src_start (GstBaseSrc * basesrc)
   GST_INFO_OBJECT(qeavbpcmsrc,"qeavb pcm src start");
   kpi_place_marker("M - qeavbpcmsrc start");
   qeavbpcmsrc->eavb_fd = open("/dev/virt-eavb", O_RDWR);
+  GST_LOG_OBJECT (qeavbpcmsrc, "eavb_fd addr %p off %u val %d, hdr addr %p off %u, qeavbpcmsrc addr %p", &(qeavbpcmsrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbPcmSrc, eavb_fd), qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->hdr), G_STRUCT_OFFSET(GstQeavbPcmSrc, hdr), qeavbpcmsrc);
   if (qeavbpcmsrc->eavb_fd < 0) {
     GST_ERROR_OBJECT (qeavbpcmsrc,"open eavb fd error, exit!");
     return FALSE;

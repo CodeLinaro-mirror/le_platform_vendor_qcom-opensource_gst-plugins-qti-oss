@@ -55,6 +55,10 @@ using namespace QTI;
 
 int main()
 {
+#ifdef DISABLE_BOOT_CAPS
+  return 0;
+#endif
+
   void *lib = dlopen("libqcodec2_core.so", RTLD_NOW);
   const char* dlerr = nullptr;
   if (lib == nullptr) {

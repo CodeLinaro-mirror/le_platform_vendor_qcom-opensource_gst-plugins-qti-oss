@@ -60,6 +60,7 @@ static void (*_gbm_device_destroy) (struct gbm_device *gbm_dev);
 static struct gbm_bo *(*_gbm_bo_create) (struct gbm_device *gbm_dev,
         uint32_t width, uint32_t height, uint32_t format, uint32_t usage);
 static int (*_gbm_perform) (int operation, ...);
+static int (*_gbm_bo_get_fd) (struct gbm_bo *bo);
 static uint32_t (*_gbm_bo_get_width) (struct gbm_bo *bo);
 static uint32_t (*_gbm_bo_get_height) (struct gbm_bo *bo);
 static uint32_t (*_gbm_bo_get_stride) (struct gbm_bo *bo);
@@ -98,6 +99,7 @@ static gpointer _do_load_lib_symbols (gpointer data)
   LOAD_SYMBOL (handle_gbm, gbm_device_destroy);
   LOAD_SYMBOL (handle_gbm, gbm_bo_create);
   LOAD_SYMBOL (handle_gbm, gbm_perform);
+  LOAD_SYMBOL (handle_gbm, gbm_bo_get_fd);
   LOAD_SYMBOL (handle_gbm, gbm_bo_get_width);
   LOAD_SYMBOL (handle_gbm, gbm_bo_get_height);
   LOAD_SYMBOL (handle_gbm, gbm_bo_get_stride);
@@ -127,6 +129,7 @@ gboolean qvdein_dmabuf_load_libs_once (void)
 #define gbm_device_destroy _gbm_device_destroy
 #define gbm_bo_create _gbm_bo_create
 #define gbm_perform _gbm_perform
+#define gbm_bo_get_fd _gbm_bo_get_fd
 #define gbm_bo_get_width _gbm_bo_get_width
 #define gbm_bo_get_height _gbm_bo_get_height
 #define gbm_bo_get_stride _gbm_bo_get_stride
@@ -273,15 +276,14 @@ gbm_dmabuf_alloc (DmaBufDesc * desc)
   }
 
   desc->bo = bo;
-  //desc->fd = gbm_bo_get_fd (bo); //gbm_bo_get_fd() dup original fd, which lose pairing relationship between fd and metadata fd, lead to issue
-  desc->fd = bo->ion_fd;
+  desc->fd = gbm_bo_get_fd (bo);
   width = gbm_bo_get_width (bo);
   height = gbm_bo_get_height (bo);
   desc->stride = gbm_bo_get_stride (bo);
   desc->modifier = gbm_bo_get_modifier (bo);
 
   GST_DEBUG ("created gbm bo %p, fd %d, width %u, height %u, "
-      "stride %u, modifier %lx",
+      "stride %u, modifier %lx !",
       bo, desc->fd, width, height, desc->stride, desc->modifier);
 
 #ifdef QTI_PLATFORM
@@ -317,7 +319,8 @@ gbm_dmabuf_free (DmaBufDesc * desc)
   /* TODO: desc->data not mapped yet */
 
   if (desc->bo) {
-    //close (desc->fd);
+    if (desc->fd >= 0)
+      close (desc->fd);
     gbm_bo_destroy (desc->bo);
     desc->bo = NULL;
     desc->fd = -1;
@@ -576,13 +579,16 @@ qvdein_dmabuf_get_size (const DmaBufDesc * desc)
 guint64
 qvdein_dmabuf_get_modifier (const DmaBufDesc * desc)
 {
-  uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
+  uint64_t modifier = DRM_FORMAT_MOD_INVALID;
 
-  if (desc && desc->bo) {
+  if (desc) {
 #ifdef USE_GBM
-    modifier = gbm_bo_get_modifier (desc->bo);
+    if (desc->bo)
+      modifier = gbm_bo_get_modifier (desc->bo);
 #else
-    /* NOT implemented for Linux dmabuf heaps. */
+    /* Using Linux dmabuf heaps, assume only support linear format on x86. */
+    if ((int)desc->fd >= 0)
+      modifier = DRM_FORMAT_MOD_LINEAR;
 #endif
   }
 

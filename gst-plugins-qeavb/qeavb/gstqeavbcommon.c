@@ -36,6 +36,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_debug_qeavbutility);
 int qeavb_create_stream_remote(int eavb_fd, char* file_path, eavb_ioctl_hdr_t* hdr)
 {
   GST_INFO ("Calling %s() with par: fd %d, file %s, hdr %p", __func__, eavb_fd, file_path==NULL?"NULL":file_path, hdr);
+  GST_DEBUG ("data receiving retry total time %d", MIN_RETRY_TOTALTIME_US);
   if(file_path)
     return qavb_create_stream_remote(eavb_fd, file_path, hdr);
   else

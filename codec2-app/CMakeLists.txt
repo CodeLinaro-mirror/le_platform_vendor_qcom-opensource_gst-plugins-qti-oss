@@ -12,9 +12,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-error=deprecated-declarations -Wno-enum-compare")
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 set(ENABLE_INIT_CODEC2_SERVICE ON CACHE BOOL "Enable init_codec2.service : ON|OFF. Default [ON]")
+set(DISABLE_BOOT_CAPS OFF CACHE BOOL "Disable init_codec2.service when boot : ON|OFF. Default [OFF]")
+
 find_package(Threads REQUIRED)
 
 add_definitions(-D_AGL_LINUX_)
+
+if(DISABLE_BOOT_CAPS)
+    add_definitions(-DDISABLE_BOOT_CAPS)
+endif()
 
 # codec2-caps Source
 set(CODEC2_CAPS_SOURCE "codec2-caps.cc")

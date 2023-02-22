@@ -2513,7 +2513,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
   flags |= flag & GBM_BO_USAGE_PROTECTED_QTI;
   flags |= flag & GBM_BO_USAGE_UBWC_ALIGNED_QTI;
 
-  DEBUG_PRINT("create NV12 gbm_bo with width=%d, height=%d flags 0x%x",
+  DEBUG_PRINT("create NV12 gbm_bo with width=%d, height=%d flags 0x%x !",
               width, height, flags);
 
   bo = gbm_bo_create(gbm_dev, width, height, GBM_FORMAT_NV12, flags);
@@ -2522,7 +2522,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
     return false;
   }
 
-  bo_fd = bo->ion_fd;
+  bo_fd = gbm_bo_get_fd(bo);//gbm_bo_get_fd() returned fd need to be closed manually.
   if (bo_fd < 0) {
     DEBUG_PRINT_ERROR("Get bo fd failed");
     gbm_bo_destroy(bo);
@@ -2532,6 +2532,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
   gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &meta_fd);
   if (meta_fd < 0) {
     DEBUG_PRINT_ERROR("Get bo meta fd failed");
+    close(bo_fd);
     gbm_bo_destroy(bo);
     return false;
   }
@@ -2573,6 +2574,9 @@ static void free_gbm_memory(struct vdec_gbm *buf_gbm_info)
   }
 
   if (buf_gbm_info->bo) {
+    if (buf_gbm_info->bo_fd >= 0) {
+      close(buf_gbm_info->bo_fd);
+    }
     gbm_bo_destroy(buf_gbm_info->bo);
     buf_gbm_info->bo = NULL;
   }

@@ -12,7 +12,26 @@ cc = meson.get_compiler('c')
 cxx = meson.get_compiler('cpp')
 host_system = host_machine.system()
 
-gst_plugin_codec2_args = ['-DHAVE_CONFIG_H']
+use_mmmcolorfmt = get_option('mmmcolorfmt')
+if use_mmmcolorfmt
+  color_fmt_args = ['-DGST_USE_MMM_COLOR_FMT']
+else
+  color_fmt_args = []
+endif
+
+gst_plugin_codec2_args = ['-DHAVE_CONFIG_H'] + color_fmt_args
+
+if get_option('interlace').enabled()
+  gst_plugin_codec2_args += ['-DGST_SUPPORT_INTERLACE']
+endif
+
+if get_option('qprange').enabled()
+  gst_plugin_codec2_args += ['-DGST_SUPPORT_QPRANGE']
+endif
+
+if get_option('ir-cyclic').enabled()
+  gst_plugin_codec2_args += ['-DGST_SUPPORT_IR_CYCLIC']
+endif
 
 configinc = include_directories('.')
 
@@ -37,7 +56,4 @@ gstcodecparsers_dep = dependency('gstreamer-codecparsers-1.0',
 
 configure_file(output : 'config.h', configuration : core_conf)
 
-subdir('wrapper')
-subdir('common')
-subdir('vdec')
-subdir('venc')
+subdir('codec2')

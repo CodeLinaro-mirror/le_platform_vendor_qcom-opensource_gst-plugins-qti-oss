@@ -24,7 +24,7 @@
 #include <stdint.h>
 #include <dlfcn.h>
 #include "gstvesdeliver.h"
-#include "gstvesdeliverpool.h"
+#include "gstvesdeliverallocator.h"
 
 /* Dynamically load libs by dlopen. */
 static const char *crypto_lib_name  = "libcontentcopy.so";
@@ -242,8 +242,8 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   GstMapInfo input_map = {};
   gst_buffer_map (inbuf, &input_map, GST_MAP_READ);
   GST_DEBUG_OBJECT (vesdeliver,
-        "Input buffer %p (size %" G_GSIZE_FORMAT ", timestamp %" G_GUINT64_FORMAT
-        ", offset %" G_GUINT64_FORMAT "", inbuf, input_map.size,
+        "Input buffer %p with size: %" G_GSIZE_FORMAT ", timestamp: %" G_GUINT64_FORMAT
+        ", offset: %" G_GUINT64_FORMAT, inbuf, input_map.size,
         GST_BUFFER_TIMESTAMP (inbuf), GST_BUFFER_OFFSET (inbuf));
 
   out_mem = gst_buffer_peek_memory (outbuf, 0);
@@ -257,24 +257,23 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   if (vesdeliver->secure) {
     uint32_t bytes_copied = 0;
-    gsize input_size = gst_buffer_get_size (inbuf);
     int ret = SECURE_COPY_RETURN_SUCCESS;
 
     ret = vesdeliver->Content_Protection_Copy (vesdeliver->secure_handle, input_map.data,
-              input_size, buf_fd, 0, &bytes_copied, SECURE_COPY_NONSECURE_TO_SECURE);
+              input_map.size, buf_fd, 0, &bytes_copied, SECURE_COPY_NONSECURE_TO_SECURE);
     if (ret == SECURE_COPY_RETURN_SUCCESS) {
-      GST_DEBUG_OBJECT (vesdeliver, "secure copy input size: %u, sec buf_fd: %d, bytes copied: %u",
-          input_size, buf_fd, bytes_copied);
+      GST_DEBUG_OBJECT (vesdeliver, "secure copy input size: %" G_GSIZE_FORMAT ", sec buf_fd: %d, "
+            "bytes copied: %u", input_map.size, buf_fd, bytes_copied);
     } else {
       GST_ERROR ("Content_Protection_Copy failed with %d", ret);
     }
   } else {
     void *ptr = NULL;
     ptr = mmap (NULL, fd_memory_size, PROT_READ | PROT_WRITE, MAP_SHARED, buf_fd, 0);
-    if (ptr) {
+    if (ptr != MAP_FAILED) {
       memcpy (ptr, input_map.data, input_map.size);
-      GST_DEBUG_OBJECT (vesdeliver, "memcpy to %p with buf_fd: %d, size: %d,",
-              ptr, buf_fd, fd_memory_size);
+      GST_DEBUG_OBJECT (vesdeliver, "memcpy %" G_GSIZE_FORMAT " bytes to %p with buf_fd: %d, size: %"
+            G_GSIZE_FORMAT, input_map.size, ptr, buf_fd, fd_memory_size);
       munmap (ptr, fd_memory_size);
     }
   }

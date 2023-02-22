@@ -48,7 +48,6 @@
 #include <dlfcn.h>
 #include <unistd.h> // for close
 #include "qscreencaputil.h"
-#include "vidc/media/msm_media_info.h"
 #include <gst/video/video.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_debug_qscreencap_src);
@@ -1027,7 +1026,7 @@ QGbm_info * gbm_memory_alloc(GstQCtx * qctx,int w,int h)
         return NULL;
     }
 
-    GST_DEBUG("create rgba gbm_bo with width=%d, height=%d", w, h);
+    GST_DEBUG("create rgba gbm_bo with width=%d, height=%d !", w, h);
     bo = qctx->gbm_bo_create(qctx->gbm, w, h,GBM_FORMAT_ABGR8888,
               GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
 
@@ -1037,8 +1036,7 @@ QGbm_info * gbm_memory_alloc(GstQCtx * qctx,int w,int h)
       return NULL;
     }
 
-    //bo_fd = qctx->gbm_bo_get_fd(bo); //gbm_bo_get_fd() dup original fd, which lose pairing relationship between fd and metadata fd, lead to issue
-    bo_fd = bo->ion_fd;
+    bo_fd = qctx->gbm_bo_get_fd(bo);
     if (bo_fd < 0) {
       GST_ERROR("Get bo fd failed");
       qctx->gbm_bo_destroy(bo);
@@ -1048,7 +1046,8 @@ QGbm_info * gbm_memory_alloc(GstQCtx * qctx,int w,int h)
     qctx->gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &meta_fd);
     if (meta_fd < 0) {
       GST_ERROR("Get bo meta fd failed");
-     qctx->gbm_bo_destroy(bo);
+      close(bo_fd);
+      qctx->gbm_bo_destroy(bo);
       return NULL;
     }
     op_buf_gbm_info->bo = bo;
@@ -1067,8 +1066,12 @@ void gbm_memory_free(GstQCtx * qctx,QGbm_info *buf_gbm_info) {
      printf("free gbm bo fd meta fd  %p %d %d\n",
             buf_gbm_info->bo,buf_gbm_info->bo_fd,buf_gbm_info->meta_fd);
 
-     if (buf_gbm_info->bo)
+     if (buf_gbm_info->bo) {
+       if (buf_gbm_info->bo_fd >= 0) {
+         close(buf_gbm_info->bo_fd);
+       }
        qctx->gbm_bo_destroy(buf_gbm_info->bo);
+     }
      buf_gbm_info->bo = NULL;
      buf_gbm_info->bo_fd = -1;
      buf_gbm_info->meta_fd = -1;
