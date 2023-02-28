@@ -1192,21 +1192,17 @@ gst_element_menu (GstElement ** element, GAsyncQueue * messages)
   // If FALSE is returned termination signal has been issued.
   active = wait_stdin_message (messages, &input);
 
-  // work around prevent input = NULL
-  if (NULL == input)
-  {
+  // prevent input = NULL
+  if (NULL == input) {
     g_print ("After wait_stdin_message, NULL == input.\n");
 
-    if (active)
-    {
+    if (active) {
       g_print ("active = TRUE.\n");
-    }
-    else
-    {
+    } else {
       g_print ("active = FALSE.\n");
     }
 
-    // work around
+    // prevent NULL causes segment fault in g_str_equal()
     gst_structure_free (props);
     gst_structure_free (signals);
 

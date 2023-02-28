@@ -232,13 +232,11 @@ static GstStaticPadTemplate qmmfsrc_image_src_template =
         GST_PAD_REQUEST,
         GST_STATIC_CAPS (
             QMMFSRC_IMAGE_JPEG_CAPS "; "
-            QMMFSRC_IMAGE_HEIC_CAPS (
-                "{ NV12 }")  "; "
             QMMFSRC_IMAGE_RAW_CAPS (
-                "{ NV21 }") "; "
+                "{ NV12, NV21 }") "; "
             QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (
                 GST_CAPS_FEATURE_MEMORY_GBM,
-                "{ NV21 }") "; "
+                "{ NV12, NV21 }") "; "
             QMMFSRC_IMAGE_BAYER_CAPS (
                 "{ bggr, rggb, gbrg, grbg, mono }",
                 "{ 8, 10, 12, 16 }")
@@ -577,7 +575,7 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
 {
   gboolean success = FALSE;
   gpointer key;
-  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *heicpad = NULL;
+  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *rawpad = NULL;
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
@@ -608,19 +606,19 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_JPEG)
       jpegpad = pad;
 
-    if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_HEIC)
-      heicpad = pad;
+    if (GST_QMMFSRC_IMAGE_PAD (pad)->format == GST_VIDEO_FORMAT_NV12)
+      rawpad = pad;
 
     if (GST_QMMFSRC_IMAGE_PAD (pad)->format >= GST_BAYER_FORMAT_OFFSET)
       bayerpad = pad;
   }
 
-  // This is to check whether 2 image pad are of Jpeg/Heic and Bayer format or not.
-  qmmfsrc->jpegbayerenabled = ((jpegpad != NULL || heicpad != NULL)
+  // This is to check whether 2 image pad are of Jpeg/Raw and Bayer format or not.
+  qmmfsrc->jpegbayerenabled = ((jpegpad != NULL || rawpad != NULL)
         && bayerpad != NULL) ? TRUE : FALSE;
 
   QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc,
-      !(jpegpad != NULL && heicpad != NULL), FALSE,
+      !(jpegpad != NULL && rawpad != NULL), FALSE,
       "Image pad combination is not correct.");
 
   QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc,
@@ -629,7 +627,7 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
       "Image pad combination is not correct.");
 
   if (qmmfsrc->jpegbayerenabled) {
-    pad = (jpegpad != NULL) ? jpegpad : heicpad;
+    pad = (jpegpad != NULL) ? jpegpad : rawpad;
     success = gst_qmmf_context_create_image_stream (qmmfsrc->context,
         pad, bayerpad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -781,7 +779,7 @@ qmmfsrc_capture_image (GstQmmfSrc * qmmfsrc, guint imgtype, guint n_images,
   gpointer key;
   GList *list = NULL;
   gboolean success = FALSE;
-  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *heicpad = NULL;
+  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *rawpad = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Submit capture image/s");
 
@@ -793,13 +791,13 @@ qmmfsrc_capture_image (GstQmmfSrc * qmmfsrc, guint imgtype, guint n_images,
       if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_JPEG)
         jpegpad = pad;
 
-      if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_HEIC)
-        heicpad = pad;
+      if (GST_QMMFSRC_IMAGE_PAD (pad)->format == GST_VIDEO_FORMAT_NV12)
+        rawpad = pad;
 
       if (GST_QMMFSRC_IMAGE_PAD (pad)->format >= GST_BAYER_FORMAT_OFFSET)
         bayerpad = pad;
     }
-    pad = (jpegpad != NULL) ? jpegpad : heicpad;
+    pad = (jpegpad != NULL) ? jpegpad : rawpad;
     success = gst_qmmf_context_capture_image (qmmfsrc->context, pad,
         bayerpad, imgtype, n_images, metas);
 
@@ -1633,7 +1631,9 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
       g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
-          "IFE direct stream support",
+          "IFE direct stream support, with this param, ISP will generate"
+          "output stream from IFE directly and skip others ISP modules"
+          "like IPE",
           DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 

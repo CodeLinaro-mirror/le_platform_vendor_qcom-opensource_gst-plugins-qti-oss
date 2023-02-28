@@ -1167,8 +1167,10 @@ setVideoGopTuning (gpointer param)
   config_params_t *config = (config_params_t*) param;
 
   auto gop = C2StreamGopTuning::output::AllocUnique(2, 0u);
-  gop->m.values[0] = { P_FRAME, UINT32_MAX };
-  gop->m.values[1] = { C2Config::picture_type_t(P_FRAME | B_FRAME), config->val.u32 };
+
+  gop->m.values[0] = { P_FRAME, config->frame_num.p_frames };
+  gop->m.values[1] = { C2Config::picture_type_t (P_FRAME | B_FRAME),
+      config->frame_num.b_frames };
 
   return C2Param::Copy (*gop);
 }

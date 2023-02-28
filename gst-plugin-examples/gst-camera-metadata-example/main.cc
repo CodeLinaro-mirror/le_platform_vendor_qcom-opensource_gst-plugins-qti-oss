@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 - 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -390,33 +390,33 @@ result_metadata (GstElement * element, gpointer metadata, gpointer userdata)
   tag_id = get_vendor_tag_by_name (
       "org.quic.camera2.sensormode.info", "SATCameraId");
 
-  if (meta->exists(tag_id)) {
-    gint camera_id = meta->find(tag_id).data.i32[0];
+  if (meta->exists (tag_id)) {
+    gint camera_id = meta->find (tag_id).data.i32[0];
     g_print ("SAT Camera ID: %d\n", camera_id);
   }
 
   tag_id = get_vendor_tag_by_name (
       "org.quic.camera2.sensormode.info", "SATActiveSensorArray");
-  if (meta->exists(tag_id)) {
-    int activearray[4] = { 0 };
+  if (meta->exists (tag_id)) {
+    gint activearray[4] = { 0 };
     gint8 index = 0;
 
-    for (index = 0; index < 4; index++) {
-      activearray[index] = meta->find(tag_id).data.i32[index];
-    }
+    for (index = 0; index < 4; index++)
+      activearray[index] = meta->find (tag_id).data.i32[index];
+
     g_print ("SAT ActiveSensorArray: [%d,%d,%d,%d]\n", activearray[0],
         activearray[1], activearray[2], activearray[3]);
   }
 
   tag_id = get_vendor_tag_by_name (
       "org.quic.camera2.sensormode.info", "SATScalerCropRegion");
-  if (meta->exists(tag_id)) {
-    int cropregion[4] = { 0 };
+  if (meta->exists (tag_id)) {
+    gint cropregion[4] = { 0 };
     gint8 index = 0;
 
-    for (index = 0; index < 4; index++) {
-      cropregion[index] = meta->find(tag_id).data.i32[index];
-    }
+    for (index = 0; index < 4; index++)
+      cropregion[index] = meta->find (tag_id).data.i32[index];
+
     g_print ("SAT ScalerCropRegion: [%d,%d,%d,%d]\n", cropregion[0],
         cropregion[1], cropregion[2], cropregion[3]);
   }

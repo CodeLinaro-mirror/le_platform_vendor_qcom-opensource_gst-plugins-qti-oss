@@ -345,6 +345,11 @@ typedef struct {
     color_matrix_t matrix;
     color_range_t full_range;
   } color_aspects;
+
+    struct {
+    guint32 p_frames;
+    guint32 b_frames;
+  } frame_num;
 } config_params_t;
 
 void push_to_settings (gpointer data, gpointer user_data);

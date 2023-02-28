@@ -60,7 +60,7 @@ G_DEFINE_TYPE (GstC2_VENCEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_CODEC2_VIDEO_ENC_QUANT_P_FRAMES_DEFAULT (0xffffffff)
 #define GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT (0xffffffff)
-#define GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT (0)
 
 // Caps formats.
 #define GST_VIDEO_FORMATS "{ NV12, NV21, NV12_10LE32, P010_10LE }"
@@ -75,8 +75,7 @@ static GstStaticPadTemplate gst_c2_venc_sink_pad_template =
 GST_STATIC_PAD_TEMPLATE("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_C2_IMAGE_HEIC_CAPS ("{ NV12 }") ";"
-        GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES ("ANY", GST_VIDEO_FORMATS))
 );
 
@@ -156,10 +155,14 @@ gst_to_c2_pixelformat (GstVideoEncoder * encoder, GstVideoFormat format)
       }
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
-        result = PIXEL_FORMAT_P010;
+      result = PIXEL_FORMAT_P010;
       break;
     case GST_VIDEO_FORMAT_NV12_10LE32:
+      if (c2venc->is_ubwc) {
         result = PIXEL_FORMAT_TP10_UBWC;
+      } else {
+        GST_ERROR_OBJECT (c2venc, "TP10 without ubwc not supported");
+      }
       break;
     default:
       break;
@@ -386,14 +389,14 @@ make_rateControl_param (rc_mode_t mode)
 }
 
 static config_params_t
-make_sync_frame_interval_param (int64_t period_ms)
+make_sync_frame_interval_param (int64_t period_us)
 {
   config_params_t param;
 
   memset (&param, 0, sizeof (config_params_t));
 
   param.config_name = CONFIG_FUNCTION_KEY_SYNC_FRAME_INT;
-  param.val.i64 = period_ms;
+  param.val.i64 = period_us;
 
   return param;
 }
@@ -665,14 +668,15 @@ make_b_preconditions_param (gboolean enable)
 }
 
 static config_params_t
-make_b_frames_param (guint32 num_b_frames)
+make_pb_frames_param (guint32 num_p_frames, guint32 num_b_frames)
 {
   config_params_t param;
 
   memset (&param, 0, sizeof (config_params_t));
 
   param.config_name = CONFIG_FUNCTION_KEY_GOP_TUNING;
-  param.val.u32 = num_b_frames;
+  param.frame_num.p_frames = num_p_frames;
+  param.frame_num.b_frames = num_b_frames;
 
   return param;
 }
@@ -1073,7 +1077,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   config_params_t rotate;
   config_params_t csdmode;
   config_params_t b_precondition;
-  config_params_t b_frames;
+  config_params_t frame_num;
 
   structure = gst_caps_get_structure (state->caps, 0);
   retval = gst_structure_get_int (structure, "width", &width);
@@ -1209,8 +1213,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     g_ptr_array_add (config, &sync_frame_int);
     GST_DEBUG_OBJECT (c2venc, "I frame only mode");
   } else if (c2venc->idr_interval != 0) {
-    sync_frame_int =
-        make_sync_frame_interval_param (c2venc->idr_interval * 1000);
+    sync_frame_int = make_sync_frame_interval_param (
+        (c2venc->idr_interval + 1) * 1e6 / c2venc->rate_numerator);
     g_ptr_array_add (config, &sync_frame_int);
     GST_DEBUG_OBJECT (c2venc, "IDR frame interval - %d", c2venc->idr_interval);
   }
@@ -1286,7 +1290,6 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     if (roi_encoding) {
       g_ptr_array_add (config, roi_encoding);
     }
-<<<<<<< HEAD
   }
 
   if (c2venc->csdmode != CSD_PREPEND_HEADER_NONE) {
@@ -1295,14 +1298,22 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     GST_DEBUG_OBJECT (c2venc, "set csdmde - %d", 1);
   }
 
-  if (c2venc->b_frames != GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT) {
-    b_precondition = make_b_preconditions_param(TRUE);
+  if (!c2venc->iframe_only &&
+      c2venc->b_frames != GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT) {
+    b_precondition = make_b_preconditions_param (TRUE);
     g_ptr_array_add (config, &b_precondition);
-    b_frames = make_b_frames_param(c2venc->b_frames);
-    g_ptr_array_add (config, &b_frames);
-    GST_DEBUG_OBJECT (c2venc, "set B frames number - %d", c2venc->b_frames);
-=======
->>>>>>> 3783586a1a929e678126f2599be2bc3c10543964
+    guint p_frames = UINT32_MAX;
+    if (c2venc->idr_interval) {
+      p_frames = c2venc->idr_interval;
+    }
+    frame_num = make_pb_frames_param (p_frames, c2venc->b_frames);
+    g_ptr_array_add (config, &frame_num);
+    GST_DEBUG_OBJECT (c2venc, "set P frames number - %d, B frames number - %d",
+        p_frames, c2venc->b_frames);
+  } else {
+    b_precondition = make_b_preconditions_param (FALSE);
+    g_ptr_array_add (config, &b_precondition);
+    GST_DEBUG_OBJECT (c2venc, "disable B frames");
   }
 
   // Config component
@@ -1569,8 +1580,8 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->idr_interval = g_value_get_uint (value);
 
       if (c2venc->idr_interval != 0) {
-        sync_frame_int =
-            make_sync_frame_interval_param (c2venc->idr_interval * 1000);
+        sync_frame_int = make_sync_frame_interval_param (
+            (c2venc->idr_interval + 1) * 1e6 / c2venc->rate_numerator);
         g_ptr_array_add (config, &sync_frame_int);
         GST_DEBUG_OBJECT (c2venc, "IDR frame interval - %d", c2venc->idr_interval);
       }
@@ -2027,7 +2038,7 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
 
-  g_object_class_install_property (gobject, PROP_QUANT_P_FRAMES,
+  g_object_class_install_property (gobject, PROP_QUANT_B_FRAMES,
       g_param_spec_uint ("quant-b-frames", "B-Frame Quantization",
           "Quantization parameter for B-frames (0xffffffff=component default)",
           0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT,
@@ -2051,7 +2062,7 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
 
   g_object_class_install_property (gobject, PROP_B_FRAMES,
       g_param_spec_uint ("b-frames", "Number of B-frames",
-          "Number of B-frames between two consecutive P-frames (0xffffffff=component default)",
+          "Number of B-frames between two consecutive P-frames (0=component default)",
           0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT,
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));

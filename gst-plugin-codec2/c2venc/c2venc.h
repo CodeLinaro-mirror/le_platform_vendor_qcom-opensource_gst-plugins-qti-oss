@@ -42,13 +42,6 @@
 
 G_BEGIN_DECLS
 
-#define GST_C2_IMAGE_HEIC_CAPS(formats) \
-  "image/x-heic, "                      \
-  "format = (string) " formats ", "     \
-  "width = (int) [ 16, 9248 ], "        \
-  "height = (int) [ 16, 6944 ], "       \
-  "framerate = (fraction) [ 0/1, 30/1 ]"
-
 #define GST_TYPE_C2_VENC_ENC \
   (gst_c2_venc_get_type())
 #define GST_C2_VENC_ENC(obj) \

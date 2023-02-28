@@ -78,6 +78,11 @@
 #include "qmmf_source_image_pad.h"
 #include "qmmf_source_video_pad.h"
 
+#ifndef CAMERA_METADATA_1_0_NS
+namespace camera = android;
+#else
+namespace camera = android::hardware::camera::common::V1_0::helper;
+#endif
 #define GST_QMMF_CONTEXT_GET_LOCK(obj) (&GST_QMMF_CONTEXT_CAST(obj)->lock)
 #define GST_QMMF_CONTEXT_LOCK(obj) \
   g_mutex_lock(GST_QMMF_CONTEXT_GET_LOCK(obj))
@@ -235,6 +240,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
   camera_metadata_entry entry;
   gint width = 0, height = 0, format = 0;
   gboolean supported = FALSE;
+  guint idx = 0;
 
   if (GST_IS_QMMFSRC_VIDEO_PAD (pad)) {
     width = GST_QMMFSRC_VIDEO_PAD (pad)->width;
@@ -293,9 +299,9 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
 
   entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE);
 
-  for (uint32_t i = 0; i < entry.count; i += 3) {
-    if(width == static_cast<gint> (entry.data.i32[i+0]) &&
-      height == static_cast<gint> (entry.data.i32[i+1])) {
+  for (idx = 0; idx < entry.count; idx += 3) {
+    if (width == static_cast<gint> (entry.data.i32[idx+0]) &&
+      height == static_cast<gint> (entry.data.i32[idx+1])) {
       supported = true;
       break;
     }
@@ -727,13 +733,17 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
     gst_structure_get (structure, "pad", G_TYPE_ULONG, &value, NULL);
 
     vpad = (GstQmmfSrcVideoPad *) (GSIZE_TO_POINTER (value));
-    g_mutex_lock (&vpad->deletemutex);
+    GST_QMMFSRC_VIDEO_PAD_LOCK (vpad);
     vpad->buffersholding--;
     GST_TRACE ("QMMF session %d returnTrackbuffer %d",
         vpad->session_id, vpad->buffersholding);
+
     if (vpad->buffersholding < 0) {
       GST_ERROR ("QMMF session %d holds bufferNum < 0", vpad->session_id);
     }
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+
+    g_mutex_lock (&vpad->deletemutex);
     g_cond_signal (&vpad->deletecond);
     g_mutex_unlock (&vpad->deletemutex);
 
@@ -897,11 +907,11 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     item->visible = TRUE;
     item->destroy = (GDestroyNotify) qmmfsrc_free_queue_item;
 
-    g_mutex_lock (&vpad->deletemutex);
+    GST_QMMFSRC_VIDEO_PAD_LOCK (vpad);
     vpad->buffersholding++;
     GST_TRACE ("QMMF session %d holds %d buffers",
         vpad->session_id, vpad->buffersholding);
-    g_mutex_unlock (&vpad->deletemutex);
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
 
     // Push the buffer into the queue or free it on failure.
     if (!gst_data_queue_push (vpad->buffers, item))
@@ -1446,9 +1456,11 @@ gst_qmmf_context_delete_video_stream (GstQmmfContext * context, GstPad * pad)
 
   GST_TRACE ("QMMF session %d holds %d video buffers",
       vpad->session_id, vpad->buffersholding);
+  g_mutex_lock (&vpad->deletemutex);
   while (vpad->buffersholding > 0) {
     g_cond_wait (&vpad->deletecond, &vpad->deletemutex);
   }
+  g_mutex_unlock (&vpad->deletemutex);
 
   status = recorder->DeleteVideoTrack (vpad->session_id, vpad->id);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
@@ -1535,9 +1547,6 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
 
   if (ipad->codec == GST_IMAGE_CODEC_JPEG) {
     imgparam.format = ::qmmf::recorder::ImageFormat::kJPEG;
-    gst_structure_get_uint (ipad->params, "quality", &imgparam.quality);
-  } else if (ipad->codec == GST_IMAGE_CODEC_HEIC) {
-    imgparam.format = ::qmmf::recorder::ImageFormat::kNV12;
     gst_structure_get_uint (ipad->params, "quality", &imgparam.quality);
   } else if (ipad->codec == GST_IMAGE_CODEC_NONE) {
     switch (ipad->format) {
@@ -1680,7 +1689,7 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
   ::qmmf::recorder::Recorder *recorder = context->recorder;
   ::qmmf::recorder::ImageCaptureCb imagecb;
   ::qmmf::recorder::SnapshotType type;
-  std::vector<::android::CameraMetadata> metadata;
+  std::vector<::camera::CameraMetadata> metadata;
   gint status = 0;
   guint idx = 0, idx_create = 0;
 
@@ -1711,7 +1720,7 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
     // Create meta_for_update for each n_images
     for (idx_create = 0; idx_create < n_images; idx_create++)
     {
-      ::android::CameraMetadata meta_for_update;
+      ::camera::CameraMetadata meta_for_update;
 
       if (context->state >= GST_STATE_READY)
       {
@@ -1736,7 +1745,7 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
 
     // Fill the capture metadata for each image if not set via the input arguments.
     while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
-      ::android::CameraMetadata meta;
+      ::camera::CameraMetadata meta;
 
       status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
       QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
@@ -1764,15 +1773,15 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
   {
     // Extract the capture metadata from the input argument if set.
     while ((imgtype == STILL_CAPTURE_MODE) && (metas != NULL) && (idx < metas->len)) {
-      ::android::CameraMetadata *meta =
-          reinterpret_cast<::android::CameraMetadata*>(
+      ::camera::CameraMetadata *meta =
+          reinterpret_cast<::camera::CameraMetadata*>(
               g_ptr_array_index (metas, idx++));
       metadata.push_back(*meta);
     }
 
     // Fill the capture metadata for each image if not set via the input arguments.
     while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
-      ::android::CameraMetadata meta;
+      ::camera::CameraMetadata meta;
 
       status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
       QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
