@@ -1286,6 +1286,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     if (roi_encoding) {
       g_ptr_array_add (config, roi_encoding);
     }
+<<<<<<< HEAD
   }
 
   if (c2venc->csdmode != CSD_PREPEND_HEADER_NONE) {
@@ -1300,6 +1301,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     b_frames = make_b_frames_param(c2venc->b_frames);
     g_ptr_array_add (config, &b_frames);
     GST_DEBUG_OBJECT (c2venc, "set B frames number - %d", c2venc->b_frames);
+=======
+>>>>>>> 3783586a1a929e678126f2599be2bc3c10543964
   }
 
   // Config component
