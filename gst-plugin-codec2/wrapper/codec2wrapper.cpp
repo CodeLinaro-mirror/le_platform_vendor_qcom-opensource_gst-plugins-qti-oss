@@ -971,14 +971,14 @@ gboolean c2component_alloc(void* const comp, BufferDescriptor* buffer)
     LOG_MESSAGE("Comp %p allocate buffer type: %d", comp, buffer->pool_type);
 
     gboolean ret = FALSE;
-    std::shared_ptr<C2Buffer> buf = NULL;
+    std::shared_ptr<C2Buffer> buf = nullptr;
 
     if (comp) {
         C2ComponentAdapter* comp_wrapper = (C2ComponentAdapter*)comp;
 
         buf = comp_wrapper->alloc(buffer);
 
-        if (buf != NULL) {
+        if (buf != nullptr) {
             if (buffer->pool_type == BUFFER_POOL_BASIC_GRAPHIC) {
                 ret = TRUE;
             } else {

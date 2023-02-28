@@ -448,69 +448,68 @@ void C2ComponentAdapter::onBufferDestroyed(const C2Buffer* buf, void* arg)
 
 std::shared_ptr<C2Buffer> C2ComponentAdapter::alloc(BufferDescriptor* buffer)
 {
-    c2_status_t err = C2_OK;
-    std::shared_ptr<C2Buffer> buf;
+    c2_status_t ret = C2_OK;
+    std::shared_ptr<C2Buffer> buf = nullptr;
     gint32 fd = -1;
     guint32 size = 0;
 
-    /* TODO: add support for linear buffer */
     if (buffer->pool_type == BUFFER_POOL_BASIC_GRAPHIC) {
-        std::shared_ptr<C2GraphicBlock> graphicBlock;
+        std::shared_ptr<C2GraphicBlock> graphicBlock = nullptr;
         C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+
         if (mGraphicPool) {
             if (buffer->ubwc_flag) {
-                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI, C2MemoryUsage::CPU_WRITE };
+                usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
+                          C2MemoryUsage::CPU_WRITE };
             }
-            err = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
+
+            ret = mGraphicPool->fetchGraphicBlock(buffer->width, buffer->height,
                 gst_to_c2_gbmformat(buffer->format), usage, &graphicBlock);
-            C2GraphicView view(graphicBlock->map().get());
-            if (view.error() != C2_OK) {
-                LOG_ERROR("C2GraphicBlock::map failed: %d", view.error());
-                return NULL;
-            }
-            buf = createGraphicBuffer(graphicBlock);
-            if (err != C2_OK || buf == nullptr) {
+
+            if (ret != C2_OK || graphicBlock == nullptr) {
                 LOG_ERROR("Graphic pool failed to allocate input buffer");
-                return NULL;
+                ret = C2_NO_MEMORY;
             } else {
                 const C2Handle* handle = graphicBlock->handle();
                 if (nullptr == handle) {
-                    LOG_ERROR("C2GraphicBlock handle is null");
-                    return NULL;
-                }
+                    LOG_ERROR("C2GraphicBlock's C2 handle is invalid");
+                    ret = C2_CORRUPTED;
+                } else {
+                    buf = createGraphicBuffer(graphicBlock);
+                    fd = handle->data[0];
+                    /* ref the buffer and store it. When the fd is queued,
+                     * we can find the graphic block with the input fd */
+                    mInPendingBuffer[fd] = graphicBlock;
+                    buffer->fd = fd;
 
-                /* ref the buffer and store it. When the fd is queued,
-                 * we can find the graphic block with the input fd */
-                fd = handle->data[0];
-                mInPendingBuffer[fd] = graphicBlock;
-                buffer->fd = fd;
+                    guint32 stride = 0;
+                    guint32 height = 0;
+                    guint32 format = 0;
+                    guint64 usage = 0;
 
-                guint32 stride = 0;
-                guint32 height = 0;
-                guint32 format = 0;
-                guint64 usage = 0;
+                    _UnwrapNativeCodec2GBMMetadata(handle, nullptr,
+                            &height, &format, &usage, &stride, &size, nullptr);
+                    buffer->capacity = size;
+                    uint32_t y_scanlines = VENUS_Y_SCANLINES(
+                            gbmformat_to_colorformat(format, usage), height);
+                    buffer->stride[0] = buffer->stride[1] = stride;
+                    buffer->offset[0] = 0;
+                    buffer->offset[1] = stride * y_scanlines;
 
-                _UnwrapNativeCodec2GBMMetadata(handle, nullptr,
-                    &height, &format, &usage, &stride, &size, nullptr);
-                buffer->capacity = size;
-                uint32_t y_scanlines = VENUS_Y_SCANLINES(
-                    gbmformat_to_colorformat(format, usage), height);
-                buffer->stride[0] = buffer->stride[1] = stride;
-                buffer->offset[0] = 0;
-                buffer->offset[1] = stride * y_scanlines;
-
-                LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
+                    LOG_MESSAGE("allocated C2Buffer, fd: %d capacity: %d, ubwc: %d,"
                             " stride %u, offset %" G_GSIZE_FORMAT,
-                    fd, buffer->capacity, buffer->ubwc_flag,
-                    stride, buffer->offset[1]);
+                            fd, buffer->capacity, buffer->ubwc_flag,
+                            stride, buffer->offset[1]);
+                }
             }
         } else {
             LOG_ERROR("Graphic pool is not created");
-            return NULL;
+            ret = C2_NO_INIT;
         }
     } else {
+        /* TODO: support linear buffer */
         LOG_ERROR("Unsupported pool type: %u", buffer->pool_type);
-        return NULL;
+        ret = C2_OMITTED;
     }
 
     return buf;
