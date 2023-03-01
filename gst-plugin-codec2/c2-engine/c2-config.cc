@@ -353,15 +353,15 @@ toC2FullRange (color_range_t color_range)
 uint32_t
 toC2EntropyMode (entropy_mode_t mode)
 {
-  uint32_t entropy_mode = ENTROPYMODE_CAVLC;
+  uint32_t entropy_mode = qc2::ENTROPYMODE_CAVLC;
 
   switch (mode) {
     case entropy_mode_t::ENTROPY_MODE_CAVLC: {
-      entropy_mode = ENTROPYMODE_CAVLC;
+      entropy_mode = qc2::ENTROPYMODE_CAVLC;
       break;
     }
     case entropy_mode_t::ENTROPY_MODE_CABAC: {
-      entropy_mode = ENTROPYMODE_CABAC;
+      entropy_mode = qc2::ENTROPYMODE_CABAC;
       break;
     }
     default: {
@@ -375,19 +375,19 @@ toC2EntropyMode (entropy_mode_t mode)
 uint32_t
 toC2LoopFilterMode (loop_filter_mode_t mode)
 {
-  uint32_t loop_filter_mode = Qc2AvcLoopFilterEnable;
+  uint32_t loop_filter_mode = qc2::Qc2AvcLoopFilterEnable;
 
   switch (mode) {
     case loop_filter_mode_t::LOOP_FILTER_ENABLE: {
-      loop_filter_mode = Qc2AvcLoopFilterEnable;
+      loop_filter_mode = qc2::Qc2AvcLoopFilterEnable;
       break;
     }
     case loop_filter_mode_t::LOOP_FILTER_DISABLE: {
-      loop_filter_mode = Qc2AvcLoopFilterDisable;
+      loop_filter_mode = qc2::Qc2AvcLoopFilterDisable;
       break;
     }
     case loop_filter_mode_t::LOOP_FILTER_DISABLE_SLICE_BOUNDARY: {
-      loop_filter_mode = Qc2AvcLoopFilterDisableSliceBoundary;
+      loop_filter_mode = qc2::Qc2AvcLoopFilterDisableSliceBoundary;
       break;
     }
     default: {
@@ -401,23 +401,23 @@ toC2LoopFilterMode (loop_filter_mode_t mode)
 uint32_t
 toC2Rotate (rotate_t rotate)
 {
-  uint32_t rotate_type = ROTATION_NONE;
+  uint32_t rotate_type = qc2::ROTATION_NONE;
 
   switch (rotate) {
     case rotate_t::ROTATE_NONE: {
-      rotate_type = ROTATE_NONE;
+      rotate_type = qc2::ROTATION_NONE;
       break;
     }
     case rotate_t::ROTATE_90_CW: {
-      rotate_type = ROTATION_90;
+      rotate_type = qc2::ROTATION_90;
       break;
     }
     case rotate_t::ROTATE_180: {
-      rotate_type = ROTATION_180;
+      rotate_type = qc2::ROTATION_180;
       break;
     }
     case rotate_t::ROTATE_90_CCW: {
-      rotate_type = ROTATION_270;
+      rotate_type = qc2::ROTATION_270;
       break;
     }
     default: {
@@ -909,32 +909,17 @@ setQPRanges (gpointer param)
   if (param == NULL)
     return nullptr;
 
-#ifndef CODEC2_CONFIG_VERSION_2_0
   config_params_t *config = (config_params_t*) param;
-  qc2::C2VideoQPRangeSetting::output qp_ranges;
-  qp_ranges.miniqp = config->qp_ranges.miniqp;
-  qp_ranges.maxiqp = config->qp_ranges.maxiqp;
-  qp_ranges.minpqp = config->qp_ranges.minpqp;
-  qp_ranges.maxpqp = config->qp_ranges.maxpqp;
-  qp_ranges.minbqp = config->qp_ranges.minbqp;
-  qp_ranges.maxbqp = config->qp_ranges.maxbqp;
-
-  return C2Param::Copy (qp_ranges);
-#else
-  config_params_t *config = (config_params_t*) param;
-  auto qp_ranges = C2StreamPictureQuantizationTuning::output::AllocUnique(3,0u);
-  qp_ranges->m.values[0].type_ = I_FRAME;
-  qp_ranges->m.values[0].min  = config->qp_ranges.miniqp;
-  qp_ranges->m.values[0].max  = config->qp_ranges.maxiqp;
-  qp_ranges->m.values[1].type_ = P_FRAME;
-  qp_ranges->m.values[1].min  = config->qp_ranges.minpqp;
-  qp_ranges->m.values[1].max  = config->qp_ranges.maxpqp;
-  qp_ranges->m.values[2].type_ = B_FRAME;
-  qp_ranges->m.values[2].min  = config->qp_ranges.minbqp;
-  qp_ranges->m.values[2].max  = config->qp_ranges.maxbqp;
+  std::unique_ptr<C2StreamPictureQuantizationTuning::output> qp_ranges =
+    C2StreamPictureQuantizationTuning::output::AllocUnique(3 /* flexCount */, 0u /* stream */);
+  qp_ranges->m.values[0] = { C2Config::I_FRAME,
+    (int32_t)config->qp_ranges.miniqp, (int32_t)config->qp_ranges.maxiqp };
+  qp_ranges->m.values[1] = { C2Config::P_FRAME,
+    (int32_t)config->qp_ranges.minpqp, (int32_t)config->qp_ranges.maxpqp };
+  qp_ranges->m.values[2] = { C2Config::B_FRAME,
+    (int32_t)config->qp_ranges.minbqp, (int32_t)config->qp_ranges.maxbqp };
 
   return C2Param::Copy (*qp_ranges);
-#endif
 }
 
 std::unique_ptr<C2Param>

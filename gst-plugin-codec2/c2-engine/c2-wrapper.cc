@@ -116,7 +116,7 @@ gst_c2_wrapper_new ()
 void
 gst_c2_wrapper_free (GstC2Wrapper * wrapper)
 {
-  // dlclose(wrapper->dlhandle);
+  dlclose(wrapper->dlhandle);
   GST_INFO ("Destroyed C2 wrapper: %p", wrapper);
   g_free(wrapper);
 }

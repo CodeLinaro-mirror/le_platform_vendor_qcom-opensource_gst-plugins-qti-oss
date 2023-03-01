@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.5)
 project(GST_PLUGIN_QTI_OSS_CODEC2
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES CXX
@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories(${SYSROOT_INCDIR})
+include_directories(${KERNEL_DIR})
 link_directories(${SYSROOT_LIBDIR})
 
 find_package(PkgConfig)
