@@ -213,20 +213,20 @@ gst_qeavb_ts_src_start (GstBaseSrc * basesrc)
     goto error_close;
   }
 
+  GST_DEBUG_OBJECT (qeavbtssrc,"will get stream info");
+  err = qeavb_get_stream_info(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &(qeavbtssrc->stream_info));
+  if (0 != err) {
+    GST_ERROR_OBJECT (qeavbtssrc,"get stream info error %d, exit!", err);
+    goto error_destroy;
+  }
+
+  GST_DEBUG_OBJECT (qeavbtssrc, "QEAVB TS source stream info max_buffer_size %d, pkts_per_wake %d", qeavbtssrc->stream_info.max_buffer_size, qeavbtssrc->stream_info.pkts_per_wake);
+
   err = qeavb_connect_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
   if (0 != err) {
     GST_ERROR_OBJECT (qeavbtssrc,"connect stream error %d, exit!", err);
     goto error_destroy;
   }
-  GST_DEBUG_OBJECT (qeavbtssrc,"get stream info");
-
-  err = qeavb_get_stream_info(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &(qeavbtssrc->stream_info));
-  if (0 != err) {
-    GST_ERROR_OBJECT (qeavbtssrc,"get stream info error %d, exit!", err);
-    goto error_disconnect;
-  }
-
-  GST_DEBUG_OBJECT (qeavbtssrc, "QEAVB TS source stream info max_buffer_size %d, pkts_per_wake %d", qeavbtssrc->stream_info.max_buffer_size, qeavbtssrc->stream_info.pkts_per_wake);
 
   if (0 != qeavbtssrc->stream_info.max_buffer_size && 0 != qeavbtssrc->stream_info.pkts_per_wake)
     gst_base_src_set_blocksize (basesrc, qeavbtssrc->stream_info.max_buffer_size * qeavbtssrc->stream_info.pkts_per_wake);
