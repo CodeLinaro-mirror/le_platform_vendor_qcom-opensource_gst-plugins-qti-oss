@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2021, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,90 +61,60 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_QTI_VIDEO_TRANSFORM_H__
-#define __GST_QTI_VIDEO_TRANSFORM_H__
+#ifndef __GST_MEM_POOL_H__
+#define __GST_MEM_POOL_H__
 
-#include <gst/gst.h>
-#include <gst/base/gstbasetransform.h>
-#include <gst/video/video.h>
-
-#ifdef USE_C2D_CONVERTER
-#include <gst/video/c2d-video-converter.h>
-#endif // USE_C2D_CONVERTER
-#ifdef USE_GLES_CONVERTER
-#include <gst/video/gles-video-converter.h>
-#endif // USE_GLES_CONVERTER
+#include <gst/allocators/allocators.h>
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_VIDEO_TRANSFORM \
-  (gst_video_transform_get_type())
-#define GST_VIDEO_TRANSFORM(obj) \
-  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_VIDEO_TRANSFORM,GstVideoTransform))
-#define GST_VIDEO_TRANSFORM_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_VIDEO_TRANSFORM,GstVideoTransformClass))
-#define GST_IS_VIDEO_TRANSFORM(obj) \
-  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_VIDEO_TRANSFORM))
-#define GST_IS_VIDEO_TRANSFORM_CLASS(klass) \
-  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_VIDEO_TRANSFORM))
-#define GST_VIDEO_TRANSFORM_CAST(obj)       ((GstVideoTransform *)(obj))
+#define GST_TYPE_MEM_BUFFER_POOL (gst_mem_buffer_pool_get_type ())
+#define GST_MEM_BUFFER_POOL(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_MEM_BUFFER_POOL, \
+      GstMemBufferPool))
+#define GST_MEM_BUFFER_POOL_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST ((klass), GST_TYPE_MEM_BUFFER_POOL, \
+      GstMemBufferPoolClass))
+#define GST_IS_MEM_BUFFER_POOL(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_MEM_BUFFER_POOL))
+#define GST_IS_MEM_BUFFER_POOL_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE ((klass), GST_TYPE_MEM_BUFFER_POOL))
+#define GST_MEM_BUFFER_POOL_CAST(obj) ((GstMemBufferPool*)(obj))
 
-#define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-  ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-      : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-          : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-              : (state <= GST_STATE_NULL))))
+/**
+ * GST_MEMORY_BUFFER_POOL_TYPE_ION:
+ *
+ * Type of memory that the pool will use for allocating buffers.
+ */
+#define GST_MEMORY_BUFFER_POOL_TYPE_ION "GstBufferPoolTypeIonMemory"
 
-typedef enum {
-  GST_VIDEO_TRANSFORM_ROTATE_NONE,
-  GST_VIDEO_TRANSFORM_ROTATE_90_CW,
-  GST_VIDEO_TRANSFORM_ROTATE_90_CCW,
-  GST_VIDEO_TRANSFORM_ROTATE_180,
-} GstVideoTransformRotate;
+/**
+ * GST_MEMORY_BUFFER_POOL_TYPE_SYSTEM:
+ *
+ * Type of memory that the pool will use for allocating buffers.
+ */
+#define GST_MEMORY_BUFFER_POOL_TYPE_SYSTEM "GstBufferPoolTypeSystemMemory"
 
-typedef struct _GstVideoTransform GstVideoTransform;
-typedef struct _GstVideoTransformClass GstVideoTransformClass;
+typedef struct _GstMemBufferPool GstMemBufferPool;
+typedef struct _GstMemBufferPoolClass GstMemBufferPoolClass;
+typedef struct _GstMemBufferPoolPrivate GstMemBufferPoolPrivate;
 
-struct _GstVideoTransform {
-  GstBaseTransform        parent;
+struct _GstMemBufferPool
+{
+  GstBufferPool parent;
 
-  GstVideoInfo            *ininfo;
-  GstVideoInfo            *outinfo;
-
-  // Features of the negotiated input and output caps.
-  GQuark                  infeature;
-  GQuark                  outfeature;
-
-  // Whether input and output caps have UBWC compression.
-  gboolean                inubwc;
-  gboolean                outubwc;
-
-  // Output buffer pool
-  GstBufferPool           *outpool;
-
-  /// Supported converters.
-#ifdef USE_C2D_CONVERTER
-  GstC2dVideoConverter *c2dconvert;
-#endif // USE_C2D_CONVERTER
-#ifdef USE_GLES_CONVERTER
-  GstGlesVideoConverter *glesconvert;
-#endif // USE_GLES_CONVERTER
-
-  /// Properties.
-  gboolean                flip_v;
-  gboolean                flip_h;
-  GstVideoTransformRotate rotation;
-  GstVideoRectangle       crop;
-  GstVideoRectangle       destination;
-  guint                   background;
+  GstMemBufferPoolPrivate *priv;
 };
 
-struct _GstVideoTransformClass {
-  GstBaseTransformClass parent;
+struct _GstMemBufferPoolClass
+{
+  GstBufferPoolClass parent;
 };
 
-G_GNUC_INTERNAL GType gst_video_transform_get_type (void);
+GType gst_mem_buffer_pool_get_type (void);
+
+GstBufferPool * gst_mem_buffer_pool_new (const gchar * type);
 
 G_END_DECLS
 
-#endif // __GST_QTI_VIDEO_TRANSFORM_H__
+#endif /* __GST_MEM_POOL_H__ */
