@@ -1053,6 +1053,16 @@ OMX_ERRORTYPE ConfigureEncoder()
   /////////////////////////bitrate/////////////////////
   if (m_sProfile.eControlRate == OMX_Video_ControlRateDisable) {
     D("Setting vendor extended rate control mode RC_OFF");
+    OMX_VIDEO_PARAM_QUANTIZATIONTYPE frameQP;
+    OMX_INIT_STRUCT(&frameQP, OMX_VIDEO_PARAM_QUANTIZATIONTYPE);
+    frameQP.nPortIndex = (OMX_U32)PORT_INDEX_OUT;
+    frameQP.nQpI = 22;
+    //frameQP.nQpP = 22;
+    //frameQP.nQpB = 22;
+    D("Setting frameQP iQP: %d", frameQP.nQpI);
+
+    result = OMX_SetParameter(m_hHandle,
+        OMX_IndexParamVideoQuantization, (OMX_PTR)&frameQP);
     result = SetVendorRateControlMode(m_sProfile.eControlRate);
   }
   else if (m_sProfile.nBitrate != DEADVALUE &&
