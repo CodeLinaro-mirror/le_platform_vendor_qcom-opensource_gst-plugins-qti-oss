@@ -34,7 +34,17 @@
 
 #include "c2-component.h"
 
+#ifdef HAVE_MMM_COLOR_FMT_H
+#include <display/media/mmm_color_fmt.h>
+#else
 #include <vidc/media/msm_media_info.h>
+#define MMM_COLOR_FMT_NV12 COLOR_FMT_NV12
+#define MMM_COLOR_FMT_NV12_UBWC COLOR_FMT_NV12_UBWC
+#define MMM_COLOR_FMT_Y_STRIDE VENUS_Y_STRIDE
+#define MMM_COLOR_FMT_Y_SCANLINES VENUS_Y_SCANLINES
+#define MMM_COLOR_FMT_UV_STRIDE VENUS_UV_STRIDE
+#define MMM_COLOR_FMT_BUFFER_SIZE_USED VENUS_BUFFER_SIZE_USED
+#endif
 
 #define MAX_PENDING_WORK 6
 
@@ -228,7 +238,7 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
           uint8_t *src, *dest;
 
           if (buffer->ubwc_flag) {
-            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+            uint32_t buf_size = MMM_COLOR_FMT_BUFFER_SIZE_USED(MMM_COLOR_FMT_NV12_UBWC,
               buffer->width, buffer->height, 0);
 
             src = rawBuffer;
@@ -239,14 +249,14 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
             src_stride = buffer->width;
             for (i=0; i<2; i++) {
               if (0 == i){
-                dest_stride = VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width);
+                dest_stride = MMM_COLOR_FMT_Y_STRIDE (MMM_COLOR_FMT_NV12, buffer->width);
                 height = ((buffer->size / buffer->width) / 3) * 2;
                 dest = (uint8_t *)*data;
               } else {
-                dest_stride = VENUS_UV_STRIDE (COLOR_FMT_NV12, buffer->width);
+                dest_stride = MMM_COLOR_FMT_UV_STRIDE (MMM_COLOR_FMT_NV12, buffer->width);
                 height = (buffer->size / buffer->width) / 3;
-                dest = (uint8_t *)*data + VENUS_Y_STRIDE (COLOR_FMT_NV12,
-                       buffer->width) * VENUS_Y_SCANLINES(COLOR_FMT_NV12,
+                dest = (uint8_t *)*data + MMM_COLOR_FMT_Y_STRIDE (MMM_COLOR_FMT_NV12,
+                       buffer->width) * MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12,
                        buffer->height);
               }
 
@@ -311,15 +321,15 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
           gbm_handle->mInts.width = buffer->width;
           gbm_handle->mInts.height = buffer->height;
           if (buffer->ubwc_flag) {
-            gbm_handle->mInts.stride = VENUS_Y_STRIDE (
-              COLOR_FMT_NV12_UBWC, buffer->width);
-            gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
-              COLOR_FMT_NV12_UBWC, buffer->height);
+            gbm_handle->mInts.stride = MMM_COLOR_FMT_Y_STRIDE (
+              MMM_COLOR_FMT_NV12_UBWC, buffer->width);
+            gbm_handle->mInts.slice_height = MMM_COLOR_FMT_Y_SCANLINES (
+              MMM_COLOR_FMT_NV12_UBWC, buffer->height);
           } else {
-            gbm_handle->mInts.stride = VENUS_Y_STRIDE (
-              COLOR_FMT_NV12, buffer->width);
-            gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
-              COLOR_FMT_NV12, buffer->height);
+            gbm_handle->mInts.stride = MMM_COLOR_FMT_Y_STRIDE (
+              MMM_COLOR_FMT_NV12, buffer->width);
+            gbm_handle->mInts.slice_height = MMM_COLOR_FMT_Y_SCANLINES (
+              MMM_COLOR_FMT_NV12, buffer->height);
           }
           gbm_handle->mInts.format = gst_to_c2_gbmformat (buffer->format);
           gbm_handle->mInts.usage_lo = GBM_BO_USE_SCANOUT
@@ -365,6 +375,18 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 
     work->worklets.clear ();
     work->worklets.emplace_back (new C2Worklet);
+
+    if (buffer->config_data) {
+      auto& worklet = work->worklets.front ();
+
+      std::list<std::unique_ptr<C2Param>> settings;
+      push_to_settings (buffer->config_data, &settings);
+      std::for_each (settings.begin (), settings.end (),
+          [&] (std::unique_ptr<C2Param>& param) {
+              worklet->tunings.push_back (std::unique_ptr<C2Tuning> (
+                  reinterpret_cast<C2Tuning *> (param.release())));
+          });
+    }
     workList.push_back (std::move (work));
 
     if (!isEOSFrame) {
@@ -541,9 +563,11 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
         callback_->onOutputBufferAvailable (buffer, bufferIdx, timestamp,
             outputFrameFlag, NULL);
       }
-      std::unique_lock<std::mutex> ul (component_wrapper->lock_);
-      component_wrapper->numpendingworks_--;
-      component_wrapper->workcondition_.notify_one ();
+      if (not (C2FrameData::FLAG_INCOMPLETE & outputFrameFlag)) {
+        std::unique_lock<std::mutex> ul (component_wrapper->lock_);
+        component_wrapper->numpendingworks_--;
+        component_wrapper->workcondition_.notify_one ();
+      }
     } else {
       if (outputFrameFlag & C2FrameData::FLAG_END_OF_STREAM) {
         GST_INFO ("Component(%p) reached EOS on output", this);
@@ -666,7 +690,8 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
         csd->flexCount (), (guint8*) csd->m.value);
         outBuf.config_data = (guint8*) &csd->m.value;
         outBuf.config_size = csd->flexCount ();
-        outBuf.flag = FLAG_TYPE_CODEC_CONFIG;
+        outBuf.flag = static_cast<FLAG_TYPE> (static_cast<uint32_t> (
+            FLAG_TYPE_CODEC_CONFIG) | static_cast<uint32_t> (outBuf.flag));
       }
       callback_ (EVENT_OUTPUTS_DONE, &outBuf, userdata_);
     } else if (buf_type == C2BufferData::GRAPHIC) {
