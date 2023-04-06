@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *  
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -55,6 +55,7 @@ G_DEFINE_TYPE (GstJPEGEncoder, gst_jpeg_enc, GST_TYPE_VIDEO_ENCODER);
 
 #define DEFAULT_PROP_JPEG_QUALITY   85
 #define DEFAULT_PROP_ORIENTATION    GST_JPEG_ENC_ORIENTATION_0
+#define DEFAULT_PROP_MAX_REQUESTS     0
 
 #define DEFAULT_PROP_MIN_BUFFERS    2
 #define DEFAULT_PROP_MAX_BUFFERS    10
@@ -91,6 +92,7 @@ enum
   PROP_0,
   PROP_QUALITY,
   PROP_ORIENTATION,
+  PROP_MAX_REQUESTS,
 };
 
 struct _GstVideoFrameData {
@@ -163,14 +165,73 @@ gst_jpeg_enc_create_pool (GstJPEGEncoder * jpegenc, GstCaps * caps)
   return pool;
 }
 
+gboolean gst_jpeg_enc_submit_request(GstJPEGEncoder *jpegenc, GstDataQueueItem *item)
+{
+  gboolean ret = FALSE;
+
+  GstVideoFrameData *framedata = (GstVideoFrameData *) item->object;
+  GstVideoCodecFrame *frame = framedata->frame;
+
+  // Get new buffer from the pool
+  if (GST_FLOW_OK == gst_buffer_pool_acquire_buffer (jpegenc->outpool,
+      &frame->output_buffer, NULL)) {
+
+    // Copy the flags and timestamps from the input buffer.
+    gst_buffer_copy_into (frame->output_buffer, frame->input_buffer,
+        GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+    GST_DEBUG_OBJECT (jpegenc, "add one for compressing");
+
+    // Process the JPEG
+    if (!gst_jpeg_enc_context_execute (jpegenc->context, frame)) {
+      GST_ERROR_OBJECT (jpegenc, "Failed to execute Jpeg encoder!");
+      gst_buffer_unref (frame->output_buffer);
+      frame->output_buffer = NULL;
+      gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (jpegenc), frame);
+    } else {
+      ret = TRUE;
+    }
+  } else {
+    GST_ERROR_OBJECT (jpegenc, "Failed to acquire output buffer!");
+    gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (jpegenc), frame);
+  }
+
+  g_slice_free (GstVideoFrameData, framedata);
+  g_slice_free (GstDataQueueItem, item);
+
+  return ret;
+}
+
 static void
 gst_jpeg_enc_callback (GstVideoCodecFrame * frame, gpointer userdata)
 {
   GstJPEGEncoder *jpegenc = GST_JPEG_ENC (userdata);
+  gboolean status= FALSE;
 
   if (frame) {
     GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
     gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (jpegenc), frame);
+
+    if (jpegenc->max_requests != 0) {
+
+      if (!gst_data_queue_is_empty(jpegenc->wait_queue)) {
+        GstDataQueueItem *item = NULL;
+
+        if (gst_data_queue_pop(jpegenc->wait_queue, &item)) {
+          jpegenc->wait_cnt--;
+
+          GST_DEBUG_OBJECT(jpegenc, "refill one, wait_cnt=%d\n",
+                  jpegenc->wait_cnt);
+          status = gst_jpeg_enc_submit_request(jpegenc, item);
+        }
+      }
+
+      if (status != TRUE)
+        jpegenc->req_cnt--;
+
+      GST_DEBUG_OBJECT(jpegenc, "remain req_cnt=%d \n",
+         jpegenc->req_cnt);
+    }
   } else {
     GST_ERROR_OBJECT (jpegenc, "The received frame is NULL");
   }
@@ -181,34 +242,41 @@ gst_jpeg_enc_process_task_loop (gpointer userdata)
 {
   GstJPEGEncoder *jpegenc = GST_JPEG_ENC (userdata);
   GstDataQueueItem *item = NULL;
+  gboolean req_full = FALSE;
 
   if (gst_data_queue_pop (jpegenc->inframes, &item)) {
-    GstVideoFrameData *framedata = (GstVideoFrameData *) item->object;
-    GstVideoCodecFrame *frame = framedata->frame;
+    if (jpegenc->max_requests != 0) {
+      if (jpegenc->req_cnt >= jpegenc->max_requests) {
 
-    // Get new buffer from the pool
-    if (GST_FLOW_OK == gst_buffer_pool_acquire_buffer (jpegenc->outpool,
-        &frame->output_buffer, NULL)) {
+        // if requests reach max_requests, just hold items in wait_queue
+        // no need checking flashing here since inframes queue will do it
+        gst_data_queue_push(jpegenc->wait_queue, item);
+        jpegenc->wait_cnt++;
+        req_full = TRUE;
 
-      // Copy the flags and timestamps from the input buffer.
-      gst_buffer_copy_into (frame->output_buffer, frame->input_buffer,
-          GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+        GST_DEBUG_OBJECT(jpegenc, "req full(%d), wait_cnt=%d\n",
+            jpegenc->req_cnt, jpegenc->wait_cnt);
 
-      GST_DEBUG_OBJECT (jpegenc, "Start compressing");
-      // Process the JPEG
-      if (!gst_jpeg_enc_context_execute (jpegenc->context, frame)) {
-        GST_ERROR_OBJECT (jpegenc, "Failed to execute Jpeg encoder!");
-        gst_buffer_unref (frame->output_buffer);
-        frame->output_buffer = NULL;
-        gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (jpegenc), frame);
+      } else if (!gst_data_queue_is_empty(jpegenc->wait_queue)) {
+        // if requests not reach max_requests, get oldest item first
+        // no need checking flashing here since inframes queue will do it
+        gst_data_queue_push(jpegenc->wait_queue, item);
+        gst_data_queue_pop (jpegenc->wait_queue, &item);
+
+        GST_DEBUG_OBJECT(jpegenc, "in-out wait_cnt=%d\n",
+            jpegenc->wait_cnt);
       }
-    } else {
-      GST_ERROR_OBJECT (jpegenc, "Failed to acquire output buffer!");
-      gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (jpegenc), frame);
     }
 
-    g_slice_free (GstVideoFrameData, framedata);
-    g_slice_free (GstDataQueueItem, item);
+    if (req_full != TRUE ) {
+      gboolean status;
+      status = gst_jpeg_enc_submit_request(jpegenc, item);
+
+      if ((jpegenc->max_requests != 0) && (status == TRUE)) {
+        jpegenc->req_cnt++;
+        GST_DEBUG_OBJECT(jpegenc, "remain req_cnt=%d\n", jpegenc->req_cnt);
+      }
+    }
   } else {
     GST_DEBUG_OBJECT (jpegenc, "The queue is in flushing state");
   }
@@ -252,7 +320,7 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   params = gst_structure_new ("qtijpegenc",
       GST_JPEG_ENC_INPUT_WIDTH, G_TYPE_UINT, GST_VIDEO_INFO_WIDTH (info),
       GST_JPEG_ENC_INPUT_HEIGHT, G_TYPE_UINT, GST_VIDEO_INFO_HEIGHT (info),
-      GST_JPEG_ENC_INPUT_FORMAT, G_TYPE_UINT, HAL_PIXEL_FORMAT_YCBCR_420_888,
+      GST_JPEG_ENC_INPUT_FORMAT, G_TYPE_UINT, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
       GST_JPEG_ENC_OUTPUT_WIDTH, G_TYPE_UINT, GST_VIDEO_INFO_WIDTH (info),
       GST_JPEG_ENC_OUTPUT_HEIGHT, G_TYPE_UINT, GST_VIDEO_INFO_HEIGHT (info),
       GST_JPEG_ENC_OUTPUT_FORMAT, G_TYPE_UINT, HAL_PIXEL_FORMAT_BLOB,
@@ -339,6 +407,7 @@ gst_jpeg_enc_start (GstVideoEncoder * encoder)
 
   // Disable requests queue in flushing state to enable normal work.
   gst_data_queue_set_flushing (jpegenc->inframes, FALSE);
+  gst_data_queue_set_flushing (jpegenc->wait_queue, FALSE);
 
   return TRUE;
 }
@@ -355,12 +424,15 @@ gst_jpeg_enc_stop (GstVideoEncoder * encoder)
   // Set the inframes queue in flushing state.
   gst_data_queue_set_flushing (jpegenc->inframes, TRUE);
 
+  gst_data_queue_set_flushing (jpegenc->wait_queue, TRUE);
+
   if (!gst_task_join (jpegenc->worktask)) {
     GST_ERROR_OBJECT (jpegenc, "Failed to join worker task!");
     return FALSE;
   }
 
   gst_data_queue_flush (jpegenc->inframes);
+  gst_data_queue_flush (jpegenc->wait_queue);
 
   GST_INFO_OBJECT (jpegenc, "Removing task %p", jpegenc->worktask);
 
@@ -404,6 +476,9 @@ gst_jpeg_enc_set_property (GObject * object, guint prop_id,
     case PROP_ORIENTATION:
       jpegenc->orientation = g_value_get_enum (value);
       break;
+    case PROP_MAX_REQUESTS:
+      jpegenc->max_requests = g_value_get_int(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -426,6 +501,9 @@ gst_jpeg_enc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_ORIENTATION:
       g_value_set_enum (value, jpegenc->orientation);
+      break;
+    case PROP_MAX_REQUESTS:
+      g_value_set_int(value, jpegenc->max_requests);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -454,6 +532,12 @@ gst_jpeg_enc_finalize (GObject * object)
     gst_object_unref (GST_OBJECT_CAST(jpegenc->inframes));
   }
 
+  if (jpegenc->wait_queue != NULL) {
+    gst_data_queue_set_flushing (jpegenc->wait_queue, TRUE);
+    gst_data_queue_flush (jpegenc->wait_queue);
+    gst_object_unref (GST_OBJECT_CAST(jpegenc->wait_queue));
+  }
+
   g_rec_mutex_clear (&jpegenc->worklock);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (jpegenc));
@@ -474,10 +558,17 @@ gst_jpeg_enc_class_init (GstJPEGEncoderClass * klass)
       g_param_spec_int ("quality", "Quality", "Quality of encoding",
           0, 100, DEFAULT_PROP_JPEG_QUALITY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject, PROP_ORIENTATION,
       g_param_spec_enum ("orientation", "Orientation",
           "Orientation of Jpeg encoder",
           GST_TYPE_JPEG_ENC_ORIENTATION, DEFAULT_PROP_ORIENTATION,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject, PROP_MAX_REQUESTS,
+      g_param_spec_int ("max-req", "max pending requests allowed",
+          "Max request number allowed to submit to JPEGEncoder",
+          0, 10, DEFAULT_PROP_MAX_REQUESTS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,
@@ -513,8 +604,16 @@ gst_jpeg_enc_init (GstJPEGEncoder * jpegenc)
   jpegenc->worktask = NULL;
 
   jpegenc->inframes =
-      gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
+  gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
   gst_data_queue_set_flushing (jpegenc->inframes, FALSE);
+
+  jpegenc->req_cnt = 0;
+  jpegenc->max_requests = DEFAULT_PROP_MAX_REQUESTS;
+  jpegenc->wait_cnt = 0;
+  jpegenc->wait_queue=
+      gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
+  gst_data_queue_set_flushing (jpegenc->wait_queue, FALSE);
+
 
   GST_LOG_OBJECT (jpegenc, "Create Jpeg encoder context");
   jpegenc->context = gst_jpeg_enc_context_new (

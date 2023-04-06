@@ -280,13 +280,20 @@ gst_jpeg_enc_context_execute (GstJPEGEncoderContext * context,
   proc_params.in_buf_fd = gst_fd_memory_get_fd (inmemory);
   proc_params.out_buf_fd = gst_fd_memory_get_fd (outmemory);
 
-  if (context->recorder->EncodeOfflineJPEG(proc_params) != 0) {
-    GST_ERROR ("Failed to execute the Jpeg encoder");
-    return FALSE;
-  }
+  // calling EncodeOfflineJPEG() may cause thread context switch
+  // we need to insert (fd, frame) into hash table first, otherwise
+  // gst_jpeg_enc_callback() maybe called before
+  // context->recorder->EncodeOfflineJPEG(proc_params) return, which
+  // will cause memory leak
 
   g_hash_table_insert (context->requests,
       GINT_TO_POINTER (proc_params.out_buf_fd), frame);
+
+  if (context->recorder->EncodeOfflineJPEG(proc_params) != 0) {
+    GST_ERROR ("Failed to execute the Jpeg encoder");
+    g_hash_table_remove (context->requests, GINT_TO_POINTER (proc_params.out_buf_fd));
+    return FALSE;
+  }
 
   return TRUE;
 }
