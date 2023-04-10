@@ -59,12 +59,7 @@
 
 #define OUTPUT_WIDTH 1280
 #define OUTPUT_HEIGHT 720
-#define DEFAULT_POOL_MIN_BUFFERS 2
-#define DEFAULT_POOL_MAX_BUFFERS 5
 #define CAMERA_SWITCH_DELAY 5
-
-// Function will be named gst_cam_switch_qdata_quark()
-static G_DEFINE_QUARK (QtiCamswitchQuark, gst_cam_switch_qdata);
 
 typedef struct _GstCameraSwitchCtx GstCameraSwitchCtx;
 
@@ -94,19 +89,13 @@ struct _GstCameraSwitchCtx
   gboolean is_camera0;
   GMutex lock;
   gboolean exit;
+
   gboolean use_display;
   guint  camera0;
   guint  camera1;
   guint  width;
   guint  height;
   guint  switch_delay;
-
-  GstDataQueue *buffers_queue;
-  GstCaps *pool_caps;
-  GstBufferPool *pool;
-  gboolean pipeline_stopping;
-  guint camera_buffer_cnt;
-  GstClockTime last_camera_timestamp;
 };
 
 static void
@@ -116,72 +105,6 @@ gst_sample_release (GstSample * sample)
 #if GST_VERSION_MAJOR >= 1 && GST_VERSION_MINOR > 14
     gst_sample_set_buffer (sample, NULL);
 #endif
-}
-
-static gboolean
-create_image_pool (GstCameraSwitchCtx *cameraswitchctx)
-{
-  GstStructure *config = NULL;
-  GstAllocator *allocator = NULL;
-  GstVideoInfo info;
-
-  // Create caps
-  cameraswitchctx->pool_caps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, cameraswitchctx->width,
-      "height", G_TYPE_INT, cameraswitchctx->height,
-      "framerate", GST_TYPE_FRACTION, 30, 1,
-      NULL);
-  gst_caps_set_features (cameraswitchctx->pool_caps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
-
-  if (!gst_video_info_from_caps (&info, cameraswitchctx->pool_caps)) {
-    gst_printerr ("Invalid caps %" GST_PTR_FORMAT, cameraswitchctx->pool_caps);
-    return FALSE;
-  }
-
-  cameraswitchctx->pool =
-      gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
-  if (!cameraswitchctx->pool) {
-    gst_printerr ("Failed to ccreate a new pool!");
-    return FALSE;
-  }
-
-  config = gst_buffer_pool_get_config (cameraswitchctx->pool);
-  gst_buffer_pool_config_set_params (
-      config, cameraswitchctx->pool_caps, info.size,
-      DEFAULT_POOL_MIN_BUFFERS, DEFAULT_POOL_MAX_BUFFERS);
-
-  allocator = gst_fd_allocator_new ();
-  gst_buffer_pool_config_set_allocator (config, allocator, NULL);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-
-  if (!gst_buffer_pool_set_config (cameraswitchctx->pool, config)) {
-    gst_printerr ("Failed to set pool configuration!");
-    g_object_unref (cameraswitchctx->pool);
-    cameraswitchctx->pool = NULL;
-    return FALSE;
-  }
-
-  g_object_unref (allocator);
-  gst_buffer_pool_set_active (cameraswitchctx->pool, TRUE);
-
-  return TRUE;
-}
-
-static void
-destroy_image_pool (GstCameraSwitchCtx *cameraswitchctx)
-{
-  if (cameraswitchctx->pool_caps) {
-    gst_caps_unref (cameraswitchctx->pool_caps);
-    cameraswitchctx->pool_caps = NULL;
-  }
-
-  if (cameraswitchctx->pool) {
-    gst_buffer_pool_set_active (cameraswitchctx->pool, FALSE);
-    g_object_unref (cameraswitchctx->pool);
-    cameraswitchctx->pool = NULL;
-  }
 }
 
 // Hangles interrupt signals like Ctrl+C etc.
@@ -209,7 +132,6 @@ handle_interrupt_signal (gpointer userdata)
   }
 
   g_mutex_lock (&cameraswitchctx->lock);
-  cameraswitchctx->pipeline_stopping = TRUE;
   cameraswitchctx->exit = TRUE;
   g_mutex_unlock (&cameraswitchctx->lock);
 
@@ -294,27 +216,24 @@ eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 }
 
 static gboolean
-wait_for_state_change (GstElement * pipeline) {
+wait_for_state_change (GstElement * pipeline)
+{
   GstStateChangeReturn ret = GST_STATE_CHANGE_FAILURE;
   g_print ("Pipeline is PREROLLING ...\n");
 
-  ret = gst_element_get_state (pipeline,
-      NULL, NULL, GST_CLOCK_TIME_NONE);
+  ret = gst_element_get_state (pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
 
   if (ret == GST_STATE_CHANGE_FAILURE) {
     g_printerr ("Pipeline failed to PREROLL!\n");
     return FALSE;
   }
+
   return TRUE;
 }
 
-void
-switch_camera (GstCameraSwitchCtx *cameraswitchctx) {
-  GstElement *qmmf = NULL;
-  GstElement *qmmf_current = NULL;
-  GstElement *capsfilter = NULL;
-  GstStateChangeReturn ret = GST_STATE_CHANGE_FAILURE;
-
+static void
+switch_camera (GstCameraSwitchCtx *cameraswitchctx)
+{
   g_mutex_lock (&cameraswitchctx->lock);
   if (cameraswitchctx->exit) {
     g_mutex_unlock (&cameraswitchctx->lock);
@@ -324,61 +243,65 @@ switch_camera (GstCameraSwitchCtx *cameraswitchctx) {
 
   g_print ("\n\nSwitch_camera...\n");
   if (cameraswitchctx->is_camera0) {
-    // Send EOS
-    gst_element_send_event (cameraswitchctx->pipeline_cam0,
-        gst_event_new_eos ());
+    gst_element_send_event (cameraswitchctx->pipeline_cam0, gst_event_new_eos ());
 
-    g_mutex_lock (&cameraswitchctx->lock);
-    cameraswitchctx->pipeline_stopping = TRUE;
-    gst_data_queue_set_flushing (cameraswitchctx->buffers_queue, TRUE);
-    g_mutex_unlock (&cameraswitchctx->lock);
+    if (cameraswitchctx->use_display) {
+      gst_element_send_event (cameraswitchctx->pipeline_main,
+          gst_event_new_flush_start ());
+      gst_element_send_event (cameraswitchctx->pipeline_main,
+          gst_event_new_flush_stop (FALSE));
+    } else {
+      gint64 position = 0;
+
+      gst_element_query_position (cameraswitchctx->pipeline_main,
+          GST_FORMAT_TIME, &position);
+      g_print ("\nPosition %" G_GINT64_FORMAT"\n", position);
+
+      gst_element_seek_simple (cameraswitchctx->pipeline_main, GST_FORMAT_TIME,
+          GST_SEEK_FLAG_FLUSH, position);
+    }
 
     g_print ("Stopping pipeline_cam0\n");
     if (GST_STATE_CHANGE_ASYNC ==
-        gst_element_set_state (cameraswitchctx->pipeline_cam0,
-            GST_STATE_NULL)) {
+        gst_element_set_state (cameraswitchctx->pipeline_cam0, GST_STATE_NULL)) {
       wait_for_state_change (cameraswitchctx->pipeline_cam0);
     }
     g_print ("Stopped pipeline_cam0\n");
 
-    // Reset last camera timestamp since the camera will start from zero
-    g_mutex_lock (&cameraswitchctx->lock);
-    cameraswitchctx->last_camera_timestamp = 0;
-    g_mutex_unlock (&cameraswitchctx->lock);
-
     g_print ("Start pipeline_cam1\n");
     if (GST_STATE_CHANGE_ASYNC ==
-        gst_element_set_state (cameraswitchctx->pipeline_cam1,
-            GST_STATE_PLAYING)) {
+        gst_element_set_state (cameraswitchctx->pipeline_cam1, GST_STATE_PLAYING)) {
       wait_for_state_change (cameraswitchctx->pipeline_cam1);
     }
   } else {
-    // Send EOS
-    gst_element_send_event (cameraswitchctx->pipeline_cam1,
-        gst_event_new_eos ());
+    gst_element_send_event (cameraswitchctx->pipeline_cam1, gst_event_new_eos ());
 
-    g_mutex_lock (&cameraswitchctx->lock);
-    cameraswitchctx->pipeline_stopping = TRUE;
-    gst_data_queue_set_flushing (cameraswitchctx->buffers_queue, TRUE);
-    g_mutex_unlock (&cameraswitchctx->lock);
+    if (cameraswitchctx->use_display) {
+      gst_element_send_event (cameraswitchctx->pipeline_main,
+          gst_event_new_flush_start ());
+      gst_element_send_event (cameraswitchctx->pipeline_main,
+          gst_event_new_flush_stop (FALSE));
+    } else {
+      gint64 position = 0;
+
+      gst_element_query_position (cameraswitchctx->pipeline_main,
+          GST_FORMAT_TIME, &position);
+      g_print ("\nPosition %" G_GINT64_FORMAT"\n", position);
+
+      gst_element_seek_simple (cameraswitchctx->pipeline_main, GST_FORMAT_TIME,
+          GST_SEEK_FLAG_FLUSH, position);
+    }
 
     g_print ("Stopping pipeline_cam1\n");
     if (GST_STATE_CHANGE_ASYNC ==
-        gst_element_set_state (cameraswitchctx->pipeline_cam1,
-            GST_STATE_NULL)) {
+        gst_element_set_state (cameraswitchctx->pipeline_cam1, GST_STATE_NULL)) {
       wait_for_state_change (cameraswitchctx->pipeline_cam1);
     }
     g_print ("Stopped pipeline_cam1\n");
 
-    // Reset last camera timestamp since the camera will start from zero
-    g_mutex_lock (&cameraswitchctx->lock);
-    cameraswitchctx->last_camera_timestamp = 0;
-    g_mutex_unlock (&cameraswitchctx->lock);
-
     g_print ("Start pipeline_cam0\n");
     if (GST_STATE_CHANGE_ASYNC ==
-        gst_element_set_state (cameraswitchctx->pipeline_cam0,
-            GST_STATE_PLAYING)) {
+        gst_element_set_state (cameraswitchctx->pipeline_cam0, GST_STATE_PLAYING)) {
       wait_for_state_change (cameraswitchctx->pipeline_cam0);
     }
   }
@@ -397,167 +320,13 @@ worker_task_func (gpointer userdata)
   return;
 }
 
-static void
-buffer_release_notify (GstCameraSwitchCtx *cameraswitchctx)
-{
-  g_mutex_lock (&cameraswitchctx->lock);
-  cameraswitchctx->camera_buffer_cnt--;
-  if (cameraswitchctx->camera_buffer_cnt == 0 &&
-      cameraswitchctx->pipeline_stopping) {
-
-    cameraswitchctx->pipeline_stopping = FALSE;
-    gst_data_queue_set_flushing (cameraswitchctx->buffers_queue, FALSE);
-    g_print ("All buffers from camera are returned\n");
-  }
-  g_mutex_unlock (&cameraswitchctx->lock);
-}
-
-static void
-buffers_task_func (gpointer userdata)
-{
-  GstCameraSwitchCtx *cameraswitchctx = (GstCameraSwitchCtx *) userdata;
-  GstBuffer *buffer = NULL;
-  static GstClockTime local_timestamp = 0;
-  static GstClockTime duration = 0;
-
-  g_mutex_lock (&cameraswitchctx->lock);
-
-  if (cameraswitchctx->pipeline_stopping &&
-      gst_data_queue_is_empty (cameraswitchctx->buffers_queue)) {
-
-    // Acquiring blank buffers from the pool and push them to the appsrc
-    // until camera is stopped
-
-    g_mutex_unlock (&cameraswitchctx->lock);
-    usleep (duration / 1000);
-    g_mutex_lock (&cameraswitchctx->lock);
-
-    // Do not send dummy buffer if all buffers are returned during sleep
-    if (!cameraswitchctx->pipeline_stopping) {
-      g_mutex_unlock (&cameraswitchctx->lock);
-      return;
-    }
-
-    if (gst_buffer_pool_acquire_buffer (cameraswitchctx->pool, &buffer, NULL)
-        != GST_FLOW_OK) {
-      gst_printerr ("Failed to acquire output video buffer!\n");
-      g_mutex_unlock (&cameraswitchctx->lock);
-      return;
-    }
-
-    // Set time stamp of the outpput buffer
-    // Increase the timestamp with 1ns to prevent visible gap in the
-    // recorded video
-    local_timestamp += 1;
-    GST_BUFFER_DURATION (buffer) = duration;
-    GST_BUFFER_PTS (buffer) = local_timestamp;
-
-    g_print ("Push blank buffer\n");
-  } else {
-
-    // This is the normal operation when the camera is streaming
-    // It takes the buffers from the buffers queue and push them to the appsrc
-
-    GstDataQueueItem *item = NULL;
-    g_mutex_unlock (&cameraswitchctx->lock);
-    if (!gst_data_queue_pop (cameraswitchctx->buffers_queue, &item)) {
-      g_print ("buffers_queue flushing\n");
-      return;
-    }
-    buffer = gst_buffer_ref (GST_BUFFER (item->object));
-    item->destroy (item);
-    g_mutex_lock (&cameraswitchctx->lock);
-
-    // Get first timestamp
-    if (local_timestamp == 0) {
-      local_timestamp = GST_BUFFER_PTS (buffer);
-    } else if (cameraswitchctx->last_camera_timestamp == 0) {
-      local_timestamp += GST_BUFFER_DURATION (buffer);
-    } else {
-      local_timestamp +=
-          GST_BUFFER_PTS (buffer) - cameraswitchctx->last_camera_timestamp;
-    }
-
-    // Save last camera timestamp
-    cameraswitchctx->last_camera_timestamp = GST_BUFFER_PTS (buffer);
-    duration = GST_BUFFER_DURATION (buffer);
-    GST_BUFFER_PTS (buffer) = local_timestamp;
-
-    cameraswitchctx->camera_buffer_cnt++;
-    // Set a notification function to signal when the buffer is no longer used.
-    gst_mini_object_set_qdata (
-        GST_MINI_OBJECT (buffer), gst_cam_switch_qdata_quark (),
-        cameraswitchctx, (GDestroyNotify) buffer_release_notify
-    );
-  }
-
-  if (!cameraswitchctx->exit) {
-    // Push buffer to appsrc
-    GstFlowReturn ret =
-        gst_app_src_push_buffer (GST_APP_SRC (cameraswitchctx->appsrc), buffer);
-    if (ret != GST_FLOW_OK) {
-      g_printerr ("ERROR: gst_app_src_push_buffer!\n");
-    }
-  } else {
-    g_print ("EOS, release buffer\n");
-    gst_buffer_unref (buffer);
-  }
-
-  g_mutex_unlock (&cameraswitchctx->lock);
-
-  return;
-}
-
-static gpointer
-memset_all_buffers (gpointer userdata)
-{
-  GstCameraSwitchCtx *cameraswitchctx = (GstCameraSwitchCtx *) userdata;
-
-  GstBuffer *buff[DEFAULT_POOL_MAX_BUFFERS];
-  // Acquire and memset all buffers in the pool
-  for (guint i = 0; i < DEFAULT_POOL_MAX_BUFFERS; i++) {
-    GstMapInfo mapinfo;
-    if (gst_buffer_pool_acquire_buffer (cameraswitchctx->pool, &buff[i], NULL)
-        != GST_FLOW_OK) {
-      gst_printerr ("Failed to create output video buffer!");
-      return NULL;
-    }
-
-    if (!gst_buffer_map (buff[i], &mapinfo, GST_MAP_READWRITE)) {
-      gst_printerr ("ERROR: Failed to map the buffer!");
-      return NULL;
-    }
-
-    // memset only chroma plane with black
-    memset (mapinfo.data +
-        (mapinfo.size - mapinfo.size / 3), 0x80, mapinfo.size / 3);
-
-    gst_buffer_unmap (buff[i], &mapinfo);
-  }
-
-  // Free all buffers in the pool
-  for (guint i = 0; i < DEFAULT_POOL_MAX_BUFFERS; i++) {
-    gst_buffer_unref (buff[i]);
-  }
-
-  return NULL;
-}
-
-static void
-gst_free_queue_item (gpointer data)
-{
-  GstDataQueueItem *item = (GstDataQueueItem *) data;
-  gst_buffer_unref (GST_BUFFER (item->object));
-  g_slice_free (GstDataQueueItem, item);
-}
-
 static GstFlowReturn
 new_sample_cam (GstElement * sink, gpointer userdata)
 {
   GstCameraSwitchCtx *cameraswitchctx = (GstCameraSwitchCtx *) userdata;
-
   GstSample *sample = NULL;
   GstBuffer *buffer = NULL;
+  static GstClockTime timestamp = GST_CLOCK_TIME_NONE;
 
   // New sample is available, retrieve the buffer from the sink.
   g_signal_emit_by_name (sink, "pull-sample", &sample);
@@ -569,7 +338,7 @@ new_sample_cam (GstElement * sink, gpointer userdata)
 
   // Release on EOS or on stopping
   g_mutex_lock (&cameraswitchctx->lock);
-  if (cameraswitchctx->exit || cameraswitchctx->pipeline_stopping) {
+  if (cameraswitchctx->exit) {
     gst_sample_release (sample);
     g_mutex_unlock (&cameraswitchctx->lock);
     return GST_FLOW_OK;
@@ -582,22 +351,15 @@ new_sample_cam (GstElement * sink, gpointer userdata)
     return GST_FLOW_ERROR;
   }
 
-  // Increase ref of the bufffer and release the sample
-  // Use the buffer for the next plugin
-  gst_buffer_ref (buffer);
+  // Get first timestamp
+  if (timestamp == GST_CLOCK_TIME_NONE)
+    timestamp = GST_BUFFER_PTS (buffer);
+
+  GST_BUFFER_PTS (buffer) = timestamp;
+  timestamp += GST_BUFFER_DURATION (buffer);
+
+  gst_app_src_push_sample (GST_APP_SRC (cameraswitchctx->appsrc), sample);
   gst_sample_release (sample);
-
-  // Push the sample in the queue
-  GstDataQueueItem *item = NULL;
-  item = g_slice_new0 (GstDataQueueItem);
-  item->object = GST_MINI_OBJECT (buffer);
-  item->visible = TRUE;
-  item->destroy = gst_free_queue_item;
-  if (!gst_data_queue_push (cameraswitchctx->buffers_queue, item)) {
-    g_printerr ("ERROR: Cannot push data to the queue!\n");
-    item->destroy (item);
-  }
-
   return GST_FLOW_OK;
 }
 
@@ -633,7 +395,6 @@ main (gint argc, gchar * argv[])
   GstStateChangeReturn state_ret = GST_STATE_CHANGE_FAILURE;
   GstCameraSwitchCtx cameraswitchctx = {};
   cameraswitchctx.exit = FALSE;
-  cameraswitchctx.pipeline_stopping = FALSE;
   cameraswitchctx.use_display = FALSE;
   cameraswitchctx.camera0 = 0;
   cameraswitchctx.camera1 = 1;
@@ -641,8 +402,6 @@ main (gint argc, gchar * argv[])
   cameraswitchctx.height = OUTPUT_HEIGHT;
   cameraswitchctx.is_camera0 = TRUE;
   cameraswitchctx.switch_delay = CAMERA_SWITCH_DELAY;
-  cameraswitchctx.camera_buffer_cnt = 0;
-  cameraswitchctx.last_camera_timestamp = 0;
   g_mutex_init (&cameraswitchctx.lock);
 
   // Initialize GST library.
@@ -652,7 +411,7 @@ main (gint argc, gchar * argv[])
       { "display", 'd', 0, G_OPTION_ARG_NONE,
         &cameraswitchctx.use_display,
         "Enable display",
-        "Parameter for enable display output"
+        NULL
       },
       { "camera0", 'm', 0, G_OPTION_ARG_INT,
         &cameraswitchctx.camera0,
@@ -733,6 +492,7 @@ main (gint argc, gchar * argv[])
   // Set appsink properties
   g_object_set (G_OBJECT (appsink), "name", "appsink_0", NULL);
   g_object_set (G_OBJECT (appsink), "emit-signals", 1, NULL);
+  g_object_set (G_OBJECT (appsink), "enable-last-sample", FALSE, NULL);
 
   // Set caps
   filtercaps = gst_caps_new_simple ("video/x-raw",
@@ -777,6 +537,7 @@ main (gint argc, gchar * argv[])
   // Set appsink properties
   g_object_set (G_OBJECT (appsink), "name", "appsink_1", NULL);
   g_object_set (G_OBJECT (appsink), "emit-signals", 1, NULL);
+  g_object_set (G_OBJECT (appsink), "enable-last-sample", FALSE, NULL);
 
   // Set caps
   filtercaps = gst_caps_new_simple ("video/x-raw",
@@ -841,9 +602,9 @@ main (gint argc, gchar * argv[])
     g_object_set (G_OBJECT (waylandsink), "y", 0, NULL);
     g_object_set (G_OBJECT (waylandsink), "width", 600, NULL);
     g_object_set (G_OBJECT (waylandsink), "height", 400, NULL);
-    g_object_set (G_OBJECT (waylandsink), "async", true, NULL);
-    g_object_set (G_OBJECT (waylandsink), "sync", false, NULL);
-    g_object_set (G_OBJECT (waylandsink), "enable-last-sample", false, NULL);
+    g_object_set (G_OBJECT (waylandsink), "async", FALSE, NULL);
+    g_object_set (G_OBJECT (waylandsink), "sync", FALSE, NULL);
+    g_object_set (G_OBJECT (waylandsink), "enable-last-sample", FALSE, NULL);
   } else {
     g_object_set (G_OBJECT (h265parse), "name", "h265parse", NULL);
     g_object_set (G_OBJECT (mp4mux), "name", "mp4mux", NULL);
@@ -864,7 +625,7 @@ main (gint argc, gchar * argv[])
 
     g_object_set (G_OBJECT (filesink), "name", "filesink", NULL);
     g_object_set (G_OBJECT (filesink), "location", "/data/mux.mp4", NULL);
-    g_object_set (G_OBJECT (filesink), "enable-last-sample", false, NULL);
+    g_object_set (G_OBJECT (filesink), "enable-last-sample", FALSE, NULL);
   }
 
   // Set appsrc properties
@@ -938,20 +699,6 @@ main (gint argc, gchar * argv[])
     }
   }
 
-  // Create image pool
-  // Used for sending buffers during camera stop in order to
-  // return all camera buffer and stop correctly
-  if (!create_image_pool (&cameraswitchctx)) {
-    gst_printerr ("ERROR: Image pool is not created!");
-    return -1;
-  }
-  g_print ("Image pool is created successfully\n");
-
-  // Start thread to memset all buffer in the pool
-  // to remove the green frames
-  GThread *memsetthread = g_thread_new (
-      "MemsetThread", memset_all_buffers, &cameraswitchctx);
-
   // Initialize main loop.
   if ((mloop = g_main_loop_new (NULL, FALSE)) == NULL) {
     g_printerr ("ERROR: Failed to create Main loop!\n");
@@ -1021,27 +768,12 @@ main (gint argc, gchar * argv[])
   intrpt_watch_id =
       g_unix_signal_add (SIGINT, handle_interrupt_signal, &cameraswitchctx);
 
-  // Create buffers queue
-  cameraswitchctx.buffers_queue =
-      gst_data_queue_new (queue_is_full_cb, NULL, NULL, mloop);
-  gst_data_queue_set_flushing (cameraswitchctx.buffers_queue, FALSE);
-
   // Create camera switch task
   GRecMutex workerlock;
   g_rec_mutex_init (&workerlock);
   GstTask *workertask =
       gst_task_new (worker_task_func, &cameraswitchctx, NULL);
   gst_task_set_lock (workertask, &workerlock);
-
-  // Create buffer queue task
-  GRecMutex bufferslock;
-  g_rec_mutex_init (&bufferslock);
-  GstTask *bufferstask =
-      gst_task_new (buffers_task_func, &cameraswitchctx, NULL);
-  gst_task_set_lock (bufferstask, &bufferslock);
-
-  // Start buffer queue task
-  gst_task_start (bufferstask);
 
   g_print ("Set cam0 pipeline to GST_STATE_PLAYING state\n");
   gst_element_set_state (cameraswitchctx.pipeline_cam0, GST_STATE_PLAYING);
@@ -1057,29 +789,16 @@ main (gint argc, gchar * argv[])
   g_main_loop_run (mloop);
   g_print ("main loop ends\n");
 
-  // Disable buffers queue
-  gst_data_queue_set_flushing (cameraswitchctx.buffers_queue, TRUE);
-
   // Stop tasks
   gst_task_stop (workertask);
-  gst_task_stop (bufferstask);
 
   // Make sure task is not running.
   g_rec_mutex_lock (&workerlock);
   g_rec_mutex_unlock (&workerlock);
 
-  // Make sure task is not running.
-  g_rec_mutex_lock (&bufferslock);
-  g_rec_mutex_unlock (&bufferslock);
-
   gst_task_join (workertask);
-  gst_task_join (bufferstask);
   g_rec_mutex_clear (&workerlock);
-  g_rec_mutex_clear (&bufferslock);
   gst_object_unref (workertask);
-  gst_object_unref (bufferstask);
-
-  g_thread_join (memsetthread);
 
   g_print ("Setting MAIN pipeline to NULL state ...\n");
   if (GST_STATE_CHANGE_ASYNC ==
@@ -1091,6 +810,7 @@ main (gint argc, gchar * argv[])
   if (cameraswitchctx.is_camera0) {
     gst_element_send_event (cameraswitchctx.pipeline_cam0,
         gst_event_new_eos ());
+
     if (GST_STATE_CHANGE_ASYNC ==
         gst_element_set_state (cameraswitchctx.pipeline_cam0, GST_STATE_NULL)) {
       wait_for_state_change (cameraswitchctx.pipeline_cam0);
@@ -1098,6 +818,7 @@ main (gint argc, gchar * argv[])
   } else {
     gst_element_send_event (cameraswitchctx.pipeline_cam1,
         gst_event_new_eos ());
+
     if (GST_STATE_CHANGE_ASYNC ==
         gst_element_set_state (cameraswitchctx.pipeline_cam1, GST_STATE_NULL)) {
       wait_for_state_change (cameraswitchctx.pipeline_cam1);
@@ -1124,17 +845,12 @@ main (gint argc, gchar * argv[])
       cameraswitchctx.mp4mux, cameraswitchctx.filesink, NULL);
   }
 
-  // Destroy image pool
-  destroy_image_pool (&cameraswitchctx);
-
   // Unref all pipelines
   gst_object_unref (cameraswitchctx.pipeline_cam0);
   gst_object_unref (cameraswitchctx.pipeline_cam1);
   gst_object_unref (cameraswitchctx.pipeline_main);
 
   g_mutex_clear (&cameraswitchctx.lock);
-  gst_data_queue_flush (cameraswitchctx.buffers_queue);
-  gst_object_unref (GST_OBJECT_CAST(cameraswitchctx.buffers_queue));
 
   g_source_remove (intrpt_watch_id);
   g_main_loop_unref (mloop);
