@@ -787,6 +787,11 @@ C2VencBuffWrapper::C2VencBuffWrapper (uint32_t width, uint32_t height,
 {
 }
 
+C2VencBuffWrapper::~C2VencBuffWrapper ()
+{
+  delete (handle_);
+}
+
 c2_status_t
 C2VencBuffWrapper::map (C2Rect rect, C2MemoryUsage usage,
     C2Fence * fence, C2PlanarLayout * layout, uint8_t ** addr)

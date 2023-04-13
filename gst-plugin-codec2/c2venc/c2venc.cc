@@ -721,7 +721,7 @@ gst_c2_venc_trigger_iframe (GstC2_VENCEncoder *c2venc)
   if (!gst_c2_wrapper_config_component (c2venc->wrapper, config)) {
     GST_ERROR_OBJECT (c2venc, "Failed to config interface");
   }
-  g_ptr_array_free (config, FALSE);
+  g_ptr_array_free (config, TRUE);
 
   return TRUE;
 }
@@ -756,6 +756,8 @@ gst_c2_venc_setup_output (GstVideoEncoder * encoder,
 
   if (c2venc->output_state) {
     gst_video_codec_state_unref (c2venc->output_state);
+    c2venc->output_state = NULL;
+    c2venc->output_setup = FALSE;
   }
 
   outcaps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (encoder));
@@ -990,7 +992,6 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
 
     frame->output_buffer = outbuf;
 
-    gst_video_codec_frame_unref (frame);
     if (encode_buf->flag & FLAG_TYPE_INCOMPLETE) {
       GST_DEBUG_OBJECT (c2venc, "INCOMPLETE Buffer received");
       ret = gst_pad_push (encoder->srcpad, outbuf);
@@ -998,9 +999,11 @@ push_frame_downstream (GstVideoEncoder * encoder, BufferDescriptor * encode_buf)
       ret = gst_video_encoder_finish_frame (encoder, frame);
     }
     if (ret != GST_FLOW_OK) {
+      gst_video_codec_frame_unref (frame);
       GST_ERROR_OBJECT (c2venc, "Failed to finish frame, outbuf: %p", outbuf);
       return GST_FLOW_ERROR;
     }
+    gst_video_codec_frame_unref (frame);
 
     GST_INFO_OBJECT (c2venc, "Finish frame");
   } else {
@@ -1361,7 +1364,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   if (roi_encoding) {
     g_free (roi_encoding);
   }
-  g_ptr_array_free (config, FALSE);
+  g_ptr_array_free (config, TRUE);
 
   if (!gst_c2_wrapper_component_start (c2venc->wrapper)) {
     GST_ERROR_OBJECT (c2venc, "Failed to start component");
@@ -1737,7 +1740,7 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     }
   }
 
-  g_ptr_array_free (config, FALSE);
+  g_ptr_array_free (config, TRUE);
 
   GST_OBJECT_UNLOCK (c2venc);
 }
