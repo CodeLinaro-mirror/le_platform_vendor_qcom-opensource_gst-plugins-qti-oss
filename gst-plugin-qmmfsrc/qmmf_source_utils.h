@@ -106,6 +106,8 @@ G_BEGIN_DECLS
   } \
 }
 
+#define AE_EXPOSURE_FRAME_NUM 10
+
 #define QMMFSRC_IS_PROPERTY_MUTABLE_IN_CURRENT_STATE(pspec, state) \
     ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
         : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \

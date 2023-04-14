@@ -96,6 +96,9 @@ std::unique_ptr<C2Param> setQPInit (gpointer param);
 std::unique_ptr<C2Param> setNumLtrFrames (gpointer param);
 std::unique_ptr<C2Param> setProfileLevel (gpointer param);
 std::unique_ptr<C2Param> setRotate (gpointer param);
+std::unique_ptr<C2Param> setCSDMode (gpointer param);
+std::unique_ptr<C2Param> setBPreconditions (gpointer param);
+std::unique_ptr<C2Param> setVideoGopTuning (gpointer param);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -125,6 +128,9 @@ static configFunctionMap sConfigFunctionMap = {
   { CONFIG_FUNCTION_KEY_NUM_LTR_FRAMES, setNumLtrFrames },
   { CONFIG_FUNCTION_KEY_PROFILE_LEVEL, setProfileLevel },
   { CONFIG_FUNCTION_KEY_ROTATE, setRotate },
+  { CONFIG_FUNCTION_KEY_CSDMODE, setCSDMode },
+  { CONFIG_FUNCTION_KEY_B_PRECONDITIONS, setBPreconditions },
+  { CONFIG_FUNCTION_KEY_GOP_TUNING, setVideoGopTuning },
 };
 
 static const VideoProfileMapping video_profile[] = {
@@ -1120,6 +1126,53 @@ setRotate (gpointer param)
   rotate.angle = (qc2::RotationType)toC2Rotate(config->rotate);
 
   return C2Param::Copy (rotate);
+}
+
+std::unique_ptr<C2Param>
+setCSDMode (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  C2PrependHeaderModeSetting csdmode;
+  config_params_t *config = (config_params_t*) param;
+
+  csdmode.value = config->csdmode ?
+          C2Config::PREPEND_HEADER_TO_ALL_SYNC :
+          C2Config::PREPEND_HEADER_TO_NONE;
+
+  return C2Param::Copy (csdmode);
+}
+
+std::unique_ptr<C2Param>
+setBPreconditions (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  config_params_t *config = (config_params_t*) param;
+
+  qc2::C2StreamAdaptiveBPreconditions::output bprecondition;
+  bprecondition.value = config->val.bl;
+
+  return C2Param::Copy (bprecondition);
+}
+
+std::unique_ptr<C2Param>
+setVideoGopTuning (gpointer param)
+{
+  if (param == NULL)
+    return nullptr;
+
+  config_params_t *config = (config_params_t*) param;
+
+  auto gop = C2StreamGopTuning::output::AllocUnique(2, 0u);
+
+  gop->m.values[0] = { P_FRAME, config->frame_num.p_frames };
+  gop->m.values[1] = { C2Config::picture_type_t (P_FRAME | B_FRAME),
+      config->frame_num.b_frames };
+
+  return C2Param::Copy (*gop);
 }
 
 void

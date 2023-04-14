@@ -72,6 +72,14 @@ struct _GstJPEGEncoder {
   GstJPEGEncoderContext    *context;
   /// Jpeg encoder input frames queue
   GstDataQueue             *inframes;
+  /// Jpeg encoder wait queue
+  GstDataQueue             *wait_queue;
+  /// Jpeg encoder wait counter
+  gint                      wait_cnt;
+  /// Jpeg encoder request counter
+  gint                      req_cnt;
+  /// Jpeg encoder max request allowed
+  gint                      max_requests;
   /// Worker task.
   GstTask                  *worktask;
   /// Worker task mutex.

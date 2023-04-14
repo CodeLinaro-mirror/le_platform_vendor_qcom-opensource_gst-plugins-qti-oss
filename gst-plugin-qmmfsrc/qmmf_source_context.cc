@@ -78,6 +78,11 @@
 #include "qmmf_source_image_pad.h"
 #include "qmmf_source_video_pad.h"
 
+#ifndef CAMERA_METADATA_1_0_NS
+namespace camera = android;
+#else
+namespace camera = android::hardware::camera::common::V1_0::helper;
+#endif
 #define GST_QMMF_CONTEXT_GET_LOCK(obj) (&GST_QMMF_CONTEXT_CAST(obj)->lock)
 #define GST_QMMF_CONTEXT_LOCK(obj) \
   g_mutex_lock(GST_QMMF_CONTEXT_GET_LOCK(obj))
@@ -178,6 +183,8 @@ struct _GstQmmfContext {
   GstStructure      *nrtuning;
   /// Camera Zoom region property.
   GstVideoRectangle zoom;
+  /// Camera Exposure compensation FOR EACH property.
+  gint              exp_for_each[AE_EXPOSURE_FRAME_NUM];
   /// Camera Defog table property.
   GstStructure      *defogtable;
   /// Camera Local Tone Mapping property.
@@ -190,6 +197,10 @@ struct _GstQmmfContext {
   gint               sensormode;
   /// Streams frame rate control mode
   guchar            frc_mode;
+  /// Camera IFE direct stream enable
+  gboolean          ife_direct_stream;
+  /// HFR Sync Mode
+  gboolean          hfr_sync_mode;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -229,6 +240,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
   camera_metadata_entry entry;
   gint width = 0, height = 0, format = 0;
   gboolean supported = FALSE;
+  guint idx = 0;
 
   if (GST_IS_QMMFSRC_VIDEO_PAD (pad)) {
     width = GST_QMMFSRC_VIDEO_PAD (pad)->width;
@@ -287,7 +299,13 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
 
   entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE);
 
-  supported = (width == entry.data.i32[0]) && (height == entry.data.i32[1]);
+  for (idx = 0; idx < entry.count; idx += 3) {
+    if (width == static_cast<gint> (entry.data.i32[idx+0]) &&
+      height == static_cast<gint> (entry.data.i32[idx+1])) {
+      supported = true;
+      break;
+    }
+  }
 
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, supported, FALSE,
       "Invalid bayer resolution, expected %dx%d !", entry.data.i32[0],
@@ -683,6 +701,7 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
   std::vector<::qmmf::BufferDescriptor> buffers;
   ::qmmf::recorder::Recorder *recorder = NULL;
   ::qmmf::BufferDescriptor buffer;
+  GstQmmfSrcVideoPad * vpad = NULL;
 
   GST_TRACE (" %s", gst_structure_to_string (structure));
 
@@ -710,6 +729,24 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
     gst_structure_get_uint (structure, "session", &session_id);
     gst_structure_get_uint (structure, "track", &track_id);
     recorder->ReturnTrackBuffer (session_id, track_id, buffers);
+
+    gst_structure_get (structure, "pad", G_TYPE_ULONG, &value, NULL);
+
+    vpad = (GstQmmfSrcVideoPad *) (GSIZE_TO_POINTER (value));
+    GST_QMMFSRC_VIDEO_PAD_LOCK (vpad);
+    vpad->buffersholding--;
+    GST_TRACE ("QMMF session %d returnTrackbuffer %d",
+        vpad->session_id, vpad->buffersholding);
+
+    if (vpad->buffersholding < 0) {
+      GST_ERROR ("QMMF session %d holds bufferNum < 0", vpad->session_id);
+    }
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+
+    g_mutex_lock (&vpad->deletemutex);
+    g_cond_signal (&vpad->deletecond);
+    g_mutex_unlock (&vpad->deletemutex);
+
   } else {
     recorder->ReturnImageCaptureBuffer (camera_id, buffer);
   }
@@ -768,6 +805,7 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
     gst_structure_set (structure,
       "session", G_TYPE_UINT, GST_QMMFSRC_VIDEO_PAD (pad)->session_id,
       "track", G_TYPE_UINT, GST_QMMFSRC_VIDEO_PAD (pad)->id,
+      "pad", G_TYPE_ULONG, GPOINTER_TO_SIZE (pad),
       NULL
     );
   }
@@ -868,6 +906,12 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     item->duration = GST_BUFFER_DURATION (gstbuffer);
     item->visible = TRUE;
     item->destroy = (GDestroyNotify) qmmfsrc_free_queue_item;
+
+    GST_QMMFSRC_VIDEO_PAD_LOCK (vpad);
+    vpad->buffersholding++;
+    GST_TRACE ("QMMF session %d holds %d buffers",
+        vpad->session_id, vpad->buffersholding);
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
 
     // Push the buffer into the queue or free it on failure.
     if (!gst_data_queue_push (vpad->buffers, item))
@@ -1043,6 +1087,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       delete context->recorder; g_slice_free (GstQmmfContext, context);,
       NULL, "QMMF Recorder Connect failed!");
 
+  for (gint check_exp = 0; check_exp < AE_EXPOSURE_FRAME_NUM; check_exp++)
+  {
+    context->exp_for_each[check_exp] = 0;
+  }
+
   context->defogtable = gst_structure_new_empty ("org.quic.camera.defog");
   context->exptable =
       gst_structure_new_empty ("org.codeaurora.qcamera3.exposuretable");
@@ -1130,6 +1179,16 @@ gst_qmmf_context_open (GstQmmfContext * context)
     frc.mode = ::qmmf::recorder::FrameRateControlMode::kCaptureRequest;
   }
   xtraparam.Update(::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
+
+  // IFE Direct Stream
+  ::qmmf::recorder::IFEDirectStream qmmf_ife_direct_stream;
+  qmmf_ife_direct_stream.enable = context->ife_direct_stream;
+  xtraparam.Update(::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+
+  // HFRSyncMode
+  ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
+  hfr_sync_mode.enable = context->hfr_sync_mode;
+  xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const android::CameraMetadata& result) {
@@ -1395,6 +1454,14 @@ gst_qmmf_context_delete_video_stream (GstQmmfContext * context, GstPad * pad)
 
   GST_TRACE ("Delete QMMF context video stream");
 
+  GST_TRACE ("QMMF session %d holds %d video buffers",
+      vpad->session_id, vpad->buffersholding);
+  g_mutex_lock (&vpad->deletemutex);
+  while (vpad->buffersholding > 0) {
+    g_cond_wait (&vpad->deletecond, &vpad->deletemutex);
+  }
+  g_mutex_unlock (&vpad->deletemutex);
+
   status = recorder->DeleteVideoTrack (vpad->session_id, vpad->id);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
       "QMMF Recorder DeleteVideoTrack Failed!");
@@ -1434,6 +1501,9 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
 
     imgparam.mode = ::qmmf::recorder::ImageMode::kSnapshotPlusRaw;
     ::qmmf::recorder::SnapshotRawSetup rawparam;
+
+    rawparam.width = bpad->width;
+    rawparam.height = bpad->height;
 
     switch (bpad->format) {
       case GST_BAYER_FORMAT_BGGR:
@@ -1619,9 +1689,9 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
   ::qmmf::recorder::Recorder *recorder = context->recorder;
   ::qmmf::recorder::ImageCaptureCb imagecb;
   ::qmmf::recorder::SnapshotType type;
-  std::vector<::android::CameraMetadata> metadata;
+  std::vector<::camera::CameraMetadata> metadata;
   gint status = 0;
-  guint idx = 0;
+  guint idx = 0, idx_create = 0;
 
   GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
 
@@ -1633,7 +1703,8 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
         if (bayerpad == NULL)
           image_data_callback (context, pad, buffer, meta);
         else {
-          if (meta.format == ::qmmf::BufferFormat::kBLOB)
+          if (meta.format == ::qmmf::BufferFormat::kBLOB ||
+            meta.format == ::qmmf::BufferFormat::kNV12)
             image_data_callback (context, pad, buffer, meta);
           else
             image_data_callback (context, bayerpad, buffer, meta);
@@ -1642,39 +1713,98 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
 
   GST_QMMFSRC_IMAGE_PAD_UNLOCK (ipad);
 
-  // Extract the capture metadata from the input argument if set.
-  while ((imgtype == STILL_CAPTURE_MODE) && (metas != NULL) && (idx < metas->len)) {
-    ::android::CameraMetadata *meta =
-        reinterpret_cast<::android::CameraMetadata*>(
-            g_ptr_array_index (metas, idx++));
-    metadata.push_back(*meta);
-  }
+  if (metas == NULL)
+  {
+    guint min_compensation = 0, max_compensation = 0;
 
-  // Fill the capture metadata for each image if not set via the input arguments.
-  while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
-    ::android::CameraMetadata meta;
+    // Create meta_for_update for each n_images
+    for (idx_create = 0; idx_create < n_images; idx_create++)
+    {
+      ::camera::CameraMetadata meta_for_update;
 
-    status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      if (context->state >= GST_STATE_READY)
+      {
+        status = recorder->GetDefaultCaptureParam (context->camera_id, meta_for_update);
+        QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+      }
+
+      // Modify the capture meta_for_update in meta array.
+      if (idx_create < AE_EXPOSURE_FRAME_NUM)
+      {
+        meta_for_update.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, 
+            &(context->exp_for_each[idx_create]), 1);
+      }
+      else
+      {
+        g_printerr ("ERROR: idx[%d] >= %d\n", idx_create, AE_EXPOSURE_FRAME_NUM);
+      }
+
+      metadata.push_back(std::move(meta_for_update));
+    }
+
+    // Fill the capture metadata for each image if not set via the input arguments.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
+      ::camera::CameraMetadata meta;
+
+      status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+
+      metadata.push_back(std::move(meta));
+    }
+
+    // If there is a bayer pad then send request to both RAW and regular stream.
+    if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
+    else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideo;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kStill;
+
+    status = recorder->CaptureImage (
+        context->camera_id, type, n_images, metadata, imagecb);
     QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
-        "QMMF Recorder GetDefaultCaptureParam Failed!");
-
-    metadata.push_back(std::move(meta));
+        "QMMF Recorder CaptureImage Failed!");
   }
+  else
+  {
+    // Extract the capture metadata from the input argument if set.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metas != NULL) && (idx < metas->len)) {
+      ::camera::CameraMetadata *meta =
+          reinterpret_cast<::camera::CameraMetadata*>(
+              g_ptr_array_index (metas, idx++));
+      metadata.push_back(*meta);
+    }
 
-  // If there is a bayer pad then send request to both RAW and regular stream.
-  if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
-    type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
-  else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
-    type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
-  else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
-    type = ::qmmf::recorder::SnapshotType::kVideo;
-  else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
-    type = ::qmmf::recorder::SnapshotType::kStill;
+    // Fill the capture metadata for each image if not set via the input arguments.
+    while ((imgtype == STILL_CAPTURE_MODE) && (metadata.size() < n_images)) {
+      ::camera::CameraMetadata meta;
 
-  status = recorder->CaptureImage (
-      context->camera_id, type, n_images, metadata, imagecb);
-  QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
-      "QMMF Recorder CaptureImage Failed!");
+      status = recorder->GetDefaultCaptureParam (context->camera_id, meta);
+      QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+          "QMMF Recorder GetDefaultCaptureParam Failed!");
+
+      metadata.push_back(std::move(meta));
+    }
+
+    // If there is a bayer pad then send request to both RAW and regular stream.
+    if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideoPlusRaw;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad != NULL))
+      type = ::qmmf::recorder::SnapshotType::kStillPlusRaw;
+    else if ((imgtype == VIDEO_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kVideo;
+    else if ((imgtype == STILL_CAPTURE_MODE) && (bayerpad == NULL))
+      type = ::qmmf::recorder::SnapshotType::kStill;
+
+    status = recorder->CaptureImage (
+        context->camera_id, type, n_images, metadata, imagecb);
+    QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
+        "QMMF Recorder CaptureImage Failed!");
+  }
 
   return TRUE;
 }
@@ -1829,6 +1959,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_FRC_MODE:
       context->frc_mode = g_value_get_enum (value);
+      return;
+    case PARAM_CAMERA_IFE_DIRECT_STREAM:
+      context->ife_direct_stream = g_value_get_boolean (value);
+      return;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      context->hfr_sync_mode = g_value_get_boolean(value);
       return;
   }
 
@@ -2128,6 +2264,23 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(ANDROID_SCALER_CROP_REGION, crop, 4);
       break;
     }
+    case PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+    {
+      g_return_if_fail (gst_value_array_get_size (value) == AE_EXPOSURE_FRAME_NUM);
+
+      context->exp_for_each[0] = g_value_get_int (gst_value_array_get_value (value, 0));
+      context->exp_for_each[1] = g_value_get_int (gst_value_array_get_value (value, 1));
+      context->exp_for_each[2] = g_value_get_int (gst_value_array_get_value (value, 2));
+      context->exp_for_each[3] = g_value_get_int (gst_value_array_get_value (value, 3));
+      context->exp_for_each[4] = g_value_get_int (gst_value_array_get_value (value, 4));
+      context->exp_for_each[5] = g_value_get_int (gst_value_array_get_value (value, 5));
+      context->exp_for_each[6] = g_value_get_int (gst_value_array_get_value (value, 6));
+      context->exp_for_each[7] = g_value_get_int (gst_value_array_get_value (value, 7));
+      context->exp_for_each[8] = g_value_get_int (gst_value_array_get_value (value, 8));
+      context->exp_for_each[9] = g_value_get_int (gst_value_array_get_value (value, 9));
+
+      break;
+    }
     case PARAM_CAMERA_DEFOG_TABLE:
     {
       const gchar *input = g_value_get_string (value);
@@ -2346,6 +2499,12 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_FRC_MODE:
       g_value_set_enum (value, context->frc_mode);
       return;
+    case PARAM_CAMERA_IFE_DIRECT_STREAM:
+      g_value_set_boolean (value, context->ife_direct_stream);
+      break;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      g_value_set_boolean(value, context->hfr_sync_mode);
+      break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
       gchar *string = NULL;
@@ -2402,6 +2561,44 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       gst_value_array_append_value (value, &val);
 
       g_value_set_int (&val, context->zoom.h);
+      gst_value_array_append_value (value, &val);
+      break;
+    }
+    case PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+    {
+      // Value len is 0 HERE.
+
+      GValue val = G_VALUE_INIT;
+      g_value_init (&val, G_TYPE_INT);
+
+      g_value_set_int (&val, context->exp_for_each[0]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[1]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[2]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[3]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[4]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[5]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[6]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[7]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[8]);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->exp_for_each[9]);
       gst_value_array_append_value (value, &val);
       break;
     }

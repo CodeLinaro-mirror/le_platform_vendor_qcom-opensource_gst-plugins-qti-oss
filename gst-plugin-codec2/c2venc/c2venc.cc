@@ -60,9 +60,10 @@ G_DEFINE_TYPE (GstC2_VENCEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_CODEC2_VIDEO_ENC_QUANT_P_FRAMES_DEFAULT (0xffffffff)
 #define GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT (0xffffffff)
+#define GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT (0)
 
 // Caps formats.
-#define GST_VIDEO_FORMATS "{ NV12, NV21 }"
+#define GST_VIDEO_FORMATS "{ NV12, NV21, NV12_10LE32, P010_10LE }"
 
 #define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
   ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
@@ -92,7 +93,9 @@ GST_STATIC_PAD_TEMPLATE ("src",
         ";"
         "video/x-heic,"
         "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au }")
+        "alignment = (string) { au }"
+        ";"
+        "image/x-heic")
     );
 
 // Function will be named gst_c2_venc_qdata_quark()
@@ -125,6 +128,7 @@ enum
   PROP_QUANT_B_FRAMES,
   PROP_NUM_LTR_FRAMES,
   PROP_ROTATE,
+  PROP_B_FRAMES,
 };
 
 typedef struct _GstQuantRectangle GstQuantRectangle;
@@ -148,6 +152,16 @@ gst_to_c2_pixelformat (GstVideoEncoder * encoder, GstVideoFormat format)
         result = PIXEL_FORMAT_NV12_UBWC;
       } else {
         result = PIXEL_FORMAT_NV12_LINEAR;
+      }
+      break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      result = PIXEL_FORMAT_P010;
+      break;
+    case GST_VIDEO_FORMAT_NV12_10LE32:
+      if (c2venc->is_ubwc) {
+        result = PIXEL_FORMAT_TP10_UBWC;
+      } else {
+        GST_ERROR_OBJECT (c2venc, "TP10 without ubwc not supported");
       }
       break;
     default:
@@ -375,14 +389,14 @@ make_rateControl_param (rc_mode_t mode)
 }
 
 static config_params_t
-make_sync_frame_interval_param (int64_t period_ms)
+make_sync_frame_interval_param (int64_t period_us)
 {
   config_params_t param;
 
   memset (&param, 0, sizeof (config_params_t));
 
   param.config_name = CONFIG_FUNCTION_KEY_SYNC_FRAME_INT;
-  param.val.i64 = period_ms;
+  param.val.i64 = period_us;
 
   return param;
 }
@@ -627,6 +641,46 @@ make_rotate_param (rotate_t rotate)
   return param;
 }
 
+static config_params_t
+make_csdmode_param (csdmode_t csdmode)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_CSDMODE;
+  param.csdmode = csdmode;
+
+  return param;
+}
+
+static config_params_t
+make_b_preconditions_param (gboolean enable)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_B_PRECONDITIONS;
+  param.val.bl = enable;
+
+  return param;
+}
+
+static config_params_t
+make_pb_frames_param (guint32 num_p_frames, guint32 num_b_frames)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_GOP_TUNING;
+  param.frame_num.p_frames = num_p_frames;
+  param.frame_num.b_frames = num_b_frames;
+
+  return param;
+}
+
 static gboolean
 gst_c2_venc_trigger_iframe (GstC2_VENCEncoder *c2venc)
 {
@@ -655,6 +709,8 @@ gst_c2_venc_get_c2_comp_name (GstStructure * structure)
   } else if (gst_structure_has_name (structure, "video/x-h265")) {
     ret = g_strdup ("c2.qti.hevc.encoder");
   } else if (gst_structure_has_name (structure, "video/x-heic")) {
+    ret = g_strdup ("c2.qti.heic.encoder");
+  } else if (gst_structure_has_name (structure, "image/x-heic")) {
     ret = g_strdup ("c2.qti.heic.encoder");
   }
 
@@ -721,6 +777,10 @@ gst_c2_venc_setup_output (GstVideoEncoder * encoder,
       gst_caps_unref (outcaps);
       g_free (comp_name);
       return GST_FLOW_ERROR;
+    }
+
+    if (gst_structure_has_name (structure, "image/x-heic")) {
+      c2venc->csdmode = CSD_PREPEND_HEADER_ALL;
     }
     c2venc->output_setup = TRUE;
   }
@@ -1015,6 +1075,9 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   config_params_t num_ltr_frames;
   config_params_t profileLevel;
   config_params_t rotate;
+  config_params_t csdmode;
+  config_params_t b_precondition;
+  config_params_t frame_num;
 
   structure = gst_caps_get_structure (state->caps, 0);
   retval = gst_structure_get_int (structure, "width", &width);
@@ -1150,8 +1213,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     g_ptr_array_add (config, &sync_frame_int);
     GST_DEBUG_OBJECT (c2venc, "I frame only mode");
   } else if (c2venc->idr_interval != 0) {
-    sync_frame_int =
-        make_sync_frame_interval_param (c2venc->idr_interval * 1000);
+    sync_frame_int = make_sync_frame_interval_param (
+        (c2venc->idr_interval + 1) * 1e6 / c2venc->rate_numerator);
     g_ptr_array_add (config, &sync_frame_int);
     GST_DEBUG_OBJECT (c2venc, "IDR frame interval - %d", c2venc->idr_interval);
   }
@@ -1227,6 +1290,30 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     if (roi_encoding) {
       g_ptr_array_add (config, roi_encoding);
     }
+  }
+
+  if (c2venc->csdmode != CSD_PREPEND_HEADER_NONE) {
+    csdmode = make_csdmode_param(c2venc->csdmode);
+    g_ptr_array_add (config, &csdmode);
+    GST_DEBUG_OBJECT (c2venc, "set csdmde - %d", 1);
+  }
+
+  if (!c2venc->iframe_only &&
+      c2venc->b_frames != GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT) {
+    b_precondition = make_b_preconditions_param (TRUE);
+    g_ptr_array_add (config, &b_precondition);
+    guint p_frames = UINT32_MAX;
+    if (c2venc->idr_interval) {
+      p_frames = c2venc->idr_interval;
+    }
+    frame_num = make_pb_frames_param (p_frames, c2venc->b_frames);
+    g_ptr_array_add (config, &frame_num);
+    GST_DEBUG_OBJECT (c2venc, "set P frames number - %d, B frames number - %d",
+        p_frames, c2venc->b_frames);
+  } else {
+    b_precondition = make_b_preconditions_param (FALSE);
+    g_ptr_array_add (config, &b_precondition);
+    GST_DEBUG_OBJECT (c2venc, "disable B frames");
   }
 
   // Config component
@@ -1493,8 +1580,8 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->idr_interval = g_value_get_uint (value);
 
       if (c2venc->idr_interval != 0) {
-        sync_frame_int =
-            make_sync_frame_interval_param (c2venc->idr_interval * 1000);
+        sync_frame_int = make_sync_frame_interval_param (
+            (c2venc->idr_interval + 1) * 1e6 / c2venc->rate_numerator);
         g_ptr_array_add (config, &sync_frame_int);
         GST_DEBUG_OBJECT (c2venc, "IDR frame interval - %d", c2venc->idr_interval);
       }
@@ -1591,6 +1678,9 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       break;
     case PROP_ROTATE:
       c2venc->rotate = (rotate_t) g_value_get_enum (value);
+      break;
+    case PROP_B_FRAMES:
+      c2venc->b_frames = g_value_get_uint (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1724,6 +1814,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_ROTATE:
       g_value_set_enum (value, c2venc->rotate);
+      break;
+    case PROP_B_FRAMES:
+      g_value_set_uint (value, c2venc->b_frames);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1945,7 +2038,7 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
 
-  g_object_class_install_property (gobject, PROP_QUANT_P_FRAMES,
+  g_object_class_install_property (gobject, PROP_QUANT_B_FRAMES,
       g_param_spec_uint ("quant-b-frames", "B-Frame Quantization",
           "Quantization parameter for B-frames (0xffffffff=component default)",
           0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT,
@@ -1964,6 +2057,13 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           "Rotate video image",
           GST_TYPE_CODEC2_ENC_ROTATE,
           ROTATE_NONE,
+          static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY)));
+
+  g_object_class_install_property (gobject, PROP_B_FRAMES,
+      g_param_spec_uint ("b-frames", "Number of B-frames",
+          "Number of B-frames between two consecutive P-frames (0=component default)",
+          0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT,
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
 
@@ -2023,7 +2123,9 @@ gst_c2_venc_init (GstC2_VENCEncoder * c2venc)
   c2venc->quant_b_frames = GST_CODEC2_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT;
   c2venc->num_ltr_frames = GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT;
   c2venc->rotate = ROTATE_NONE;
+  c2venc->csdmode = CSD_PREPEND_HEADER_NONE;
   c2venc->is_ubwc = FALSE;
+  c2venc->b_frames = GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT;
 
   memset (c2venc->queued_frame, 0, sizeof (c2venc->queued_frame));
 

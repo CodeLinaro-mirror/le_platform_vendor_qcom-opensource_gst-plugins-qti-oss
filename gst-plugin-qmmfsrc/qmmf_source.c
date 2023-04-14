@@ -115,6 +115,8 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_IR_MODE                   IR_MODE_OFF
 #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
 #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
+#define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
+#define DEFAULT_PROP_CAMERA_HFR_SYNC_MODE             FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -167,6 +169,7 @@ enum
   PROP_CAMERA_NOISE_REDUCTION,
   PROP_CAMERA_NOISE_REDUCTION_TUNING,
   PROP_CAMERA_ZOOM,
+  PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH,
   PROP_CAMERA_DEFOG_TABLE,
   PROP_CAMERA_LOCAL_TONE_MAPPING,
   PROP_CAMERA_IR_MODE,
@@ -176,6 +179,8 @@ enum
   PROP_CAMERA_IMAGE_METADATA,
   PROP_CAMERA_STATIC_METADATA,
   PROP_CAMERA_FRC_MODE,
+  PROP_CAMERA_IFE_DIRECT_STREAM,
+  PROP_CAMERA_HFR_SYNC_MODE,
 };
 
 static GstStaticPadTemplate qmmfsrc_video_src_template =
@@ -184,7 +189,7 @@ static GstStaticPadTemplate qmmfsrc_video_src_template =
         GST_PAD_REQUEST,
         GST_STATIC_CAPS (
             QMMFSRC_VIDEO_JPEG_CAPS "; "
-            QMMFSRC_VIDEO_RAW_CAPS(
+            QMMFSRC_VIDEO_RAW_CAPS (
                 "{ NV12, NV16"
 #ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
                 ", YUY2"
@@ -199,7 +204,7 @@ static GstStaticPadTemplate qmmfsrc_video_src_template =
                 ", NV12_10LE32"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
                 " }") "; "
-            QMMFSRC_VIDEO_RAW_CAPS_WITH_FEATURES(
+            QMMFSRC_VIDEO_RAW_CAPS_WITH_FEATURES (
                 GST_CAPS_FEATURE_MEMORY_GBM,
                 "{ NV12, NV16"
 #ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
@@ -215,7 +220,7 @@ static GstStaticPadTemplate qmmfsrc_video_src_template =
                 ", NV12_10LE32"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
                 " }") "; "
-            QMMFSRC_VIDEO_BAYER_CAPS(
+            QMMFSRC_VIDEO_BAYER_CAPS (
                 "{ bggr, rggb, gbrg, grbg, mono }",
                 "{ 8, 10, 12, 16 }")
         )
@@ -227,12 +232,12 @@ static GstStaticPadTemplate qmmfsrc_image_src_template =
         GST_PAD_REQUEST,
         GST_STATIC_CAPS (
             QMMFSRC_IMAGE_JPEG_CAPS "; "
-            QMMFSRC_IMAGE_RAW_CAPS(
-                "{ NV21 }") "; "
-            QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES(
+            QMMFSRC_IMAGE_RAW_CAPS (
+                "{ NV12, NV21 }") "; "
+            QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (
                 GST_CAPS_FEATURE_MEMORY_GBM,
-                "{ NV21 }") "; "
-            QMMFSRC_IMAGE_BAYER_CAPS(
+                "{ NV12, NV21 }") "; "
+            QMMFSRC_IMAGE_BAYER_CAPS (
                 "{ bggr, rggb, gbrg, grbg, mono }",
                 "{ 8, 10, 12, 16 }")
         )
@@ -570,7 +575,7 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
 {
   gboolean success = FALSE;
   gpointer key;
-  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL;
+  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *rawpad = NULL;
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
@@ -601,13 +606,20 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_JPEG)
       jpegpad = pad;
 
+    if (GST_QMMFSRC_IMAGE_PAD (pad)->format == GST_VIDEO_FORMAT_NV12)
+      rawpad = pad;
+
     if (GST_QMMFSRC_IMAGE_PAD (pad)->format >= GST_BAYER_FORMAT_OFFSET)
       bayerpad = pad;
   }
 
-  // This is to check whether 2 image pad are of Jpeg and Bayer format or not.
-  qmmfsrc->jpegbayerenabled = (jpegpad != NULL && bayerpad != NULL) ?
-      TRUE : FALSE;
+  // This is to check whether 2 image pad are of Jpeg/Raw and Bayer format or not.
+  qmmfsrc->jpegbayerenabled = ((jpegpad != NULL || rawpad != NULL)
+        && bayerpad != NULL) ? TRUE : FALSE;
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc,
+      !(jpegpad != NULL && rawpad != NULL), FALSE,
+      "Image pad combination is not correct.");
 
   QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc,
       !(g_list_length (qmmfsrc->imgindexes) == 2 &&
@@ -615,8 +627,9 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
       "Image pad combination is not correct.");
 
   if (qmmfsrc->jpegbayerenabled) {
+    pad = (jpegpad != NULL) ? jpegpad : rawpad;
     success = gst_qmmf_context_create_image_stream (qmmfsrc->context,
-        jpegpad, bayerpad);
+        pad, bayerpad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Image stream creation failed!");
   } else {
@@ -766,7 +779,7 @@ qmmfsrc_capture_image (GstQmmfSrc * qmmfsrc, guint imgtype, guint n_images,
   gpointer key;
   GList *list = NULL;
   gboolean success = FALSE;
-  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL;
+  GstPad *pad = NULL, *jpegpad = NULL, *bayerpad = NULL, *rawpad = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Submit capture image/s");
 
@@ -778,11 +791,14 @@ qmmfsrc_capture_image (GstQmmfSrc * qmmfsrc, guint imgtype, guint n_images,
       if (GST_QMMFSRC_IMAGE_PAD (pad)->codec == GST_IMAGE_CODEC_JPEG)
         jpegpad = pad;
 
+      if (GST_QMMFSRC_IMAGE_PAD (pad)->format == GST_VIDEO_FORMAT_NV12)
+        rawpad = pad;
+
       if (GST_QMMFSRC_IMAGE_PAD (pad)->format >= GST_BAYER_FORMAT_OFFSET)
         bayerpad = pad;
     }
-
-    success = gst_qmmf_context_capture_image (qmmfsrc->context, jpegpad,
+    pad = (jpegpad != NULL) ? jpegpad : rawpad;
+    success = gst_qmmf_context_capture_image (qmmfsrc->context, pad,
         bayerpad, imgtype, n_images, metas);
 
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -1101,6 +1117,10 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ZOOM, value);
       break;
+    case PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH, value);
+      break;
     case PROP_CAMERA_DEFOG_TABLE:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_DEFOG_TABLE, value);
@@ -1128,6 +1148,14 @@ qmmfsrc_set_property (GObject * object, guint property_id,
     case PROP_CAMERA_FRC_MODE:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
+      break;
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
+      break;
+    case PROP_CAMERA_HFR_SYNC_MODE:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_HFR_SYNC_MODE, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1259,6 +1287,10 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ZOOM, value);
       break;
+    case PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH, value);
+      break;
     case PROP_CAMERA_DEFOG_TABLE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_DEFOG_TABLE, value);
@@ -1294,6 +1326,14 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_FRC_MODE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
+      break;
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
+      break;
+    case PROP_CAMERA_HFR_SYNC_MODE:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_HFR_SYNC_MODE, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1524,6 +1564,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
               G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+  g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_COMPENSATION_FOR_EACH,
+      gst_param_spec_array ("exposure-compensation-for-each", "Exposure Compensation For Each",
+          "Set camera capture images exposure for each capture image. Format such as:"
+          "<0,0,-2,2,-4,4,-6,6,10,-10>. ARRAY LENGTH SHOULD BE 10!!!",
+          g_param_spec_int ("value", "Exposure Value",
+              "One of exposure value.", -12, 12, DEFAULT_PROP_CAMERA_EXPOSURE_COMPENSATION,
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_DEFOG_TABLE,
       g_param_spec_string ("defog-table", "Defog Table",
           "A GstStructure describing defog table",
@@ -1579,6 +1628,19 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
     g_param_spec_enum ("frc-mode", "Frame rate control",
           "Stream frame rate control mode.",
           GST_TYPE_QMMFSRC_FRC_MODE, DEFAULT_PROP_CAMERA_FRC_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
+      g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
+          "IFE direct stream support, with this param, ISP will generate"
+          "output stream from IFE directly and skip others ISP modules"
+          "like IPE",
+          DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject, PROP_CAMERA_HFR_SYNC_MODE,
+      g_param_spec_boolean ("hfr-sync-mode", "HFR Sync Mode",
+          "HFR Sync mode for multiple streams",
+          DEFAULT_PROP_CAMERA_HFR_SYNC_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   signals[SIGNAL_CAPTURE_IMAGE] =

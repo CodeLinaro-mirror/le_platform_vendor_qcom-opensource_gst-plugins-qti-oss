@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022 - 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -38,9 +38,11 @@
 #include <camera/VendorTagDescriptor.h>
 
 
-#define GST_CAMERA_PIPELINE "qtiqmmfsrc name=camera " \
+#define GST_CAMERA_PIPELINE "qtiqmmfsrc camera=7 name=camera " \
     "camera.video_0 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
-    "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false"
+    "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false " \
+    "camera.video_1 ! video/x-raw\(memory:GBM\),width=3840,height=2160,framerate=30/1 ! " \
+    "queue ! appsink name=sink1 emit-signals=true async=false enable-last-sample=false"
 
 #define TERMINATE_MESSAGE      "APP_TERMINATE_MSG"
 #define PIPELINE_STATE_MESSAGE "APP_PIPELINE_STATE_MSG"
@@ -383,6 +385,41 @@ result_metadata (GstElement * element, gpointer metadata, gpointer userdata)
       g_print ("Sensor Read Output: %d\n", value);
     }
   }
+
+  // SATCameraId, SATActiveSensorArray and SATScalerCropRegion
+  tag_id = get_vendor_tag_by_name (
+      "org.quic.camera2.sensormode.info", "SATCameraId");
+
+  if (meta->exists (tag_id)) {
+    gint camera_id = meta->find (tag_id).data.i32[0];
+    g_print ("SAT Camera ID: %d\n", camera_id);
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.quic.camera2.sensormode.info", "SATActiveSensorArray");
+  if (meta->exists (tag_id)) {
+    gint activearray[4] = { 0 };
+    gint8 index = 0;
+
+    for (index = 0; index < 4; index++)
+      activearray[index] = meta->find (tag_id).data.i32[index];
+
+    g_print ("SAT ActiveSensorArray: [%d,%d,%d,%d]\n", activearray[0],
+        activearray[1], activearray[2], activearray[3]);
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.quic.camera2.sensormode.info", "SATScalerCropRegion");
+  if (meta->exists (tag_id)) {
+    gint cropregion[4] = { 0 };
+    gint8 index = 0;
+
+    for (index = 0; index < 4; index++)
+      cropregion[index] = meta->find (tag_id).data.i32[index];
+
+    g_print ("SAT ScalerCropRegion: [%d,%d,%d,%d]\n", cropregion[0],
+        cropregion[1], cropregion[2], cropregion[3]);
+  }
 }
 
 static void
@@ -669,6 +706,11 @@ main (gint argc, gchar *argv[])
 
   // Connect a callback to the new-sample signal.
   element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), "sink");
+  g_signal_connect (element, "new-sample", G_CALLBACK (new_sample), NULL);
+  gst_object_unref (element);
+
+  // Connect a callback to the new-sample signal.
+  element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), "sink1");
   g_signal_connect (element, "new-sample", G_CALLBACK (new_sample), NULL);
   gst_object_unref (element);
 

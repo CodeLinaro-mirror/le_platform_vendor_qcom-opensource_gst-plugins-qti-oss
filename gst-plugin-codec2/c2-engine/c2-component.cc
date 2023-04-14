@@ -55,15 +55,15 @@ gst_c2_venc_context_debug_category (void)
 std::shared_ptr<C2Buffer>
 createLinearBuffer(const std::shared_ptr<C2LinearBlock>& block)
 {
-  return C2Buffer::CreateLinearBuffer(
+  return C2Buffer::CreateLinearBuffer (
       block->share(block->offset(), block->size(), ::C2Fence()));
 }
 
 std::shared_ptr<C2Buffer>
 createGraphicBuffer(const std::shared_ptr<C2GraphicBlock>& block)
 {
-  return C2Buffer::CreateGraphicBuffer(
-      block->share(C2Rect(block->width(), block->height()), ::C2Fence()));
+  return C2Buffer::CreateGraphicBuffer (
+      block->share (C2Rect(block->width(), block->height()), ::C2Fence()));
 }
 
 C2ComponentWrapper::C2ComponentWrapper (
@@ -79,7 +79,7 @@ C2ComponentWrapper::C2ComponentWrapper (
     return;
   }
 
-  compintf_ = std::shared_ptr<C2ComponentInterface>(component_->intf ());
+  compintf_ = std::shared_ptr<C2ComponentInterface> (component_->intf ());
   if (compintf_.get () == nullptr) {
     GST_ERROR ("Failed to create C2venc component interface");
     return;
@@ -163,7 +163,7 @@ C2ComponentWrapper::Stop ()
   return TRUE;
 }
 
-c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::shared_ptr<C2Buffer>* c2Buf)
+c2_status_t C2ComponentWrapper::prepareC2Buffer (BufferDescriptor* buffer, std::shared_ptr<C2Buffer>* c2Buf)
 {
   uint8_t* rawBuffer = buffer->data;
   uint8_t* destBuffer = nullptr;
@@ -184,22 +184,22 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
 
     if (poolType == C2BlockPool::BASIC_LINEAR) {
       allocSize = ALIGN(frameSize, 4096);
-      err = mLinearPool_->fetchLinearBlock(allocSize, usage, &linear_block);
+      err = mLinearPool_->fetchLinearBlock (allocSize, usage, &linear_block);
       if (err != C2_OK || linear_block == nullptr) {
-        GST_ERROR("Linear pool failed to allocate input buffer of size : (%d)", frameSize);
+        GST_ERROR ("Linear pool failed to allocate input buffer of size : (%d)", frameSize);
         return C2_NO_MEMORY;
       }
 
       C2WriteView view = linear_block->map().get();
       if (view.error() != C2_OK) {
-        GST_ERROR("C2LinearBlock::map() failed : %d", view.error());
+        GST_ERROR ("C2LinearBlock::map() failed : %d", view.error());
         return C2_NO_MEMORY;
       }
       destBuffer = view.base();
-      memcpy(destBuffer, rawBuffer, frameSize);
+      memcpy (destBuffer, rawBuffer, frameSize);
       linear_block->mSize = frameSize;
-      GST_INFO("@@@ input size %d",frameSize);
-      buf = createLinearBuffer(linear_block);
+      GST_INFO ("@@@ input size %d",frameSize);
+      buf = createLinearBuffer (linear_block);
     } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
       if (buffer->format == GST_VIDEO_FORMAT_NV12
           && buffer->ubwc_flag) {
@@ -207,17 +207,17 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
         usage = { C2MemoryUsage::CPU_READ | GBM_BO_USAGE_UBWC_ALIGNED_QTI,
           C2MemoryUsage::CPU_WRITE };
       }
-      err = mGraphicPool_->fetchGraphicBlock(buffer->width, buffer->height,
+      err = mGraphicPool_->fetchGraphicBlock (buffer->width, buffer->height,
               gst_to_c2_gbmformat (buffer->format),
               usage, &graphic_block);
       if (err != C2_OK || graphic_block == nullptr) {
-        GST_ERROR("Graphic pool failed to allocate");
+        GST_ERROR ("Graphic pool failed to allocate");
         return C2_NO_MEMORY;
       }
 
       C2GraphicView view = graphic_block->map().get();
       if (view.error() != C2_OK) {
-        GST_ERROR("C2GraphicBlock::map() failed : %d", view.error());
+        GST_ERROR ("C2GraphicBlock::map() failed : %d", view.error());
         return C2_NO_MEMORY;
       }
       uint8_t * const *data = view.data();
@@ -228,17 +228,17 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
           uint8_t *src, *dest;
 
           if (buffer->ubwc_flag) {
-            uint32_t buf_size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC,
+            uint32_t buf_size = VENUS_BUFFER_SIZE_USED (COLOR_FMT_NV12_UBWC,
               buffer->width, buffer->height, 0);
 
             src = rawBuffer;
             dest = (uint8_t *)*data;
-            memcpy(dest, src, buf_size);
+            memcpy (dest, src, buf_size);
           } else {
             src = rawBuffer;
             src_stride = buffer->width;
-            for (i=0; i<2; i++) {
-              if (0 == i){
+            for (i = 0; i < 2; i++) {
+              if (0 == i) {
                 dest_stride = VENUS_Y_STRIDE (COLOR_FMT_NV12, buffer->width);
                 height = ((buffer->size / buffer->width) / 3) * 2;
                 dest = (uint8_t *)*data;
@@ -259,12 +259,20 @@ c2_status_t C2ComponentWrapper::prepareC2Buffer(BufferDescriptor* buffer, std::s
           }
           break;
         }
+    case GST_VIDEO_FORMAT_P010_10LE:
+    case GST_VIDEO_FORMAT_NV12_10LE32: {
+          uint8_t *src, *dest;
+          src = rawBuffer;
+          dest = (uint8_t *)*data;
+          memcpy (dest, src, buffer->size);
+          break;
+        }
         default:
           GST_ERROR("Unsupported format");
           return C2_BAD_VALUE;
       }
 
-      buf = createGraphicBuffer(graphic_block);
+      buf = createGraphicBuffer (graphic_block);
     }
 
     *c2Buf = buf;
@@ -297,7 +305,7 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
     work->input.buffers.clear ();
 
     if (!isEOSFrame) {
-      if(poolType == C2BlockPool::BASIC_GRAPHIC) {
+      if (poolType == C2BlockPool::BASIC_GRAPHIC) {
         if (buffer->fd != -1) {  //zero copy
           std::shared_ptr<C2GraphicBlock> graphic_block;
 
@@ -311,10 +319,22 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
           gbm_handle->mInts.width = buffer->width;
           gbm_handle->mInts.height = buffer->height;
           if (buffer->ubwc_flag) {
+            if (GST_VIDEO_FORMAT_NV12_10LE32 == buffer->format) {
+              gbm_handle->mInts.stride = (VENUS_Y_STRIDE (
+                COLOR_FMT_NV12_BPP10_UBWC, buffer->width) * 3) / 4;
+              gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+                COLOR_FMT_NV12_BPP10_UBWC, buffer->height);
+            } else {
+              gbm_handle->mInts.stride = VENUS_Y_STRIDE (
+                COLOR_FMT_NV12_UBWC, buffer->width);
+              gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
+                COLOR_FMT_NV12_UBWC, buffer->height);
+            }
+          } else if (GST_VIDEO_FORMAT_P010_10LE == buffer->format){
             gbm_handle->mInts.stride = VENUS_Y_STRIDE (
-              COLOR_FMT_NV12_UBWC, buffer->width);
+              COLOR_FMT_P010, buffer->width) / 2;
             gbm_handle->mInts.slice_height = VENUS_Y_SCANLINES (
-              COLOR_FMT_NV12_UBWC, buffer->height);
+              COLOR_FMT_P010, buffer->height);
           } else {
             gbm_handle->mInts.stride = VENUS_Y_STRIDE (
               COLOR_FMT_NV12, buffer->width);
@@ -350,14 +370,14 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
         } else {  //copy
           GST_INFO ("graphic mem pool Queue");
           std::shared_ptr<C2Buffer> clientBuf;
-          prepareC2Buffer(buffer, &clientBuf);
-          work->input.buffers.emplace_back(clientBuf);
+          prepareC2Buffer (buffer, &clientBuf);
+          work->input.buffers.emplace_back (clientBuf);
         }
       } else if (poolType == C2BlockPool::BASIC_LINEAR) {
         GST_INFO ("Linear mem pool Queue");
         std::shared_ptr<C2Buffer> clientBuf;
-        prepareC2Buffer(buffer, &clientBuf);
-        work->input.buffers.emplace_back(clientBuf);
+        prepareC2Buffer (buffer, &clientBuf);
+        work->input.buffers.emplace_back (clientBuf);
       }
     } else {
       GST_INFO ("queue EOS frame");
@@ -406,7 +426,7 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
 }
 
 bool
-C2ComponentWrapper::FreeOutputBuffer(uint64_t bufferIdx)
+C2ComponentWrapper::FreeOutputBuffer (uint64_t bufferIdx)
 {
   std::map<uint64_t, std::shared_ptr<C2Buffer> >::iterator it;
 
@@ -455,6 +475,9 @@ C2ComponentWrapper::gst_to_c2_gbmformat (GstVideoFormat format)
   case GST_VIDEO_FORMAT_P010_10LE:
     result = GBM_FORMAT_YCbCr_420_P010_VENUS;
     break;
+  case GST_VIDEO_FORMAT_NV12_10LE32:
+    result = GBM_FORMAT_YCbCr_420_TP10_UBWC;
+    break;
   default:
     GST_WARNING ("unsupported video format:%s",
       gst_video_format_to_string (format));
@@ -475,15 +498,16 @@ C2ComponentWrapper::CheckMaxAvailableQueues ()
   return C2_OK;
 }
 
-c2_status_t C2ComponentWrapper::createBlockpool(C2BlockPool::local_id_t poolType){
+c2_status_t C2ComponentWrapper::createBlockpool (C2BlockPool::local_id_t poolType)
+{
   c2_status_t ret;
   if (poolType == C2BlockPool::BASIC_LINEAR) {
-    ret = android::GetCodec2BlockPool(poolType, component_, &mLinearPool_);
+    ret = android::GetCodec2BlockPool (poolType, component_, &mLinearPool_);
     if (ret != C2_OK || mLinearPool_ == nullptr) {
       return ret;
     }
   } else if (poolType == C2BlockPool::BASIC_GRAPHIC) {
-    ret = android::GetCodec2BlockPool(poolType, component_, &mGraphicPool_);
+    ret = android::GetCodec2BlockPool (poolType, component_, &mGraphicPool_);
     if (ret != C2_OK || mGraphicPool_ == nullptr) {
       return ret;
     }
@@ -703,7 +727,7 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
       C2Rect crop;
       const C2GraphicView view = graphic_block.map().get();
 
-      _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size);
+      _UnwrapNativeCodec2GBMMetadata (handle, &width, &height, &format, &usage, &stride, &size);
 
       outBuf.size = size;
       /* The actual value of bo here is a pointer to struct gbm_bo.
@@ -779,7 +803,7 @@ C2VencBuffWrapper::unmap (uint8_t **addr, C2Rect rect, C2Fence * fence)
 const C2Handle *
 C2VencBuffWrapper::handle () const
 {
-  return reinterpret_cast<const C2Handle*>(handle_);
+  return reinterpret_cast<const C2Handle*> (handle_);
 }
 
 id_t
