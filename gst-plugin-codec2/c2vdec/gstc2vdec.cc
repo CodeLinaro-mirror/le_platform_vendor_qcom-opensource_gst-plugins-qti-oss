@@ -172,6 +172,18 @@ make_interlace_param (GstC2InterlaceMode mode, gboolean isInput)
 }
 
 static GstC2ConfigParams
+make_framerate_param (gfloat framerate, gboolean is_input)
+{
+  GstC2ConfigParams param;
+
+  memset (&param, 0, sizeof (GstC2ConfigParams));
+  param.config_name = CONFIG_FUNCTION_KEY_FRAMERATE;
+  param.val.fl = framerate;
+  param.is_input = is_input;
+  return param;
+}
+
+static GstC2ConfigParams
 make_output_picture_order_param (guint output_picture_order_mode)
 {
   GstC2ConfigParams param;
@@ -715,11 +727,15 @@ gst_c2vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   GstC2InterlaceMode c2interlace_mode = GST_C2_INTERLACE_MODE_PROGRESSIVE;
   gchar *comp_name;
   GPtrArray *config = NULL;
+
   GstC2ConfigParams output_block_pool;
   GstC2ConfigParams resolution;
   GstC2ConfigParams interlace;
   GstC2ConfigParams output_picture_order_mode;
   GstC2ConfigParams low_latency_mode;
+  GstC2ConfigParams framerate;
+  gint rate_denominator = 0;
+  gint rate_numerator = 0;
 
   GST_DEBUG_OBJECT (dec, "set_format");
 
@@ -798,6 +814,16 @@ gst_c2vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (dec->low_latency_mode) {
     low_latency_mode = make_low_latency_param (dec->low_latency_mode);
     g_ptr_array_add (config, &low_latency_mode);
+  }
+
+  retval = gst_structure_get_fraction (structure, "framerate",
+      &rate_numerator, &rate_denominator);
+  if (retval && rate_numerator>0 && rate_denominator>0) {
+      framerate = make_framerate_param(rate_numerator/rate_denominator, TRUE);
+      g_ptr_array_add (config, &framerate);
+  } else {
+      GST_DEBUG_OBJECT (dec, "fail to obtain framerate: rate_numerator:%d, rate_denominator:%d"
+      , rate_numerator, rate_denominator);
   }
 
   /* Negotiate with downstream and setup output */

@@ -732,17 +732,16 @@ setVideoFramerate (gpointer param)
   }
 
   GstC2ConfigParams *config = (GstC2ConfigParams*) param;
-
+  GST_DEBUG ("setVideoFramerate config->is_input=%d", config->is_input);
   if (config->is_input) {
-    GST_WARNING ("setVideoFramerate input not implemented");
-
+    C2StreamFrameRateInfo::input framerate;
+    framerate.value = config->val.fl;
+    return C2Param::Copy (framerate);
   } else {
     C2StreamFrameRateInfo::output framerate;
     framerate.value = config->val.fl;
     return C2Param::Copy (framerate);
   }
-
-  return nullptr;
 }
 
 std::unique_ptr<C2Param>
