@@ -354,7 +354,7 @@ OMX_S64 timeStamp_fromIVF = -1;
 unsigned int ts_scaler_fromIVF_d = 0;
 unsigned int ts_scaler_fromIVF_n = 0;
 OMX_S64 timeStampLfile = 0;
-int fps = 30;
+float fps = 30.0;
 unsigned int timestampInterval = 33333;
 codec_format  codec_format_option;
 file_type     file_type_option;
@@ -1588,6 +1588,34 @@ int Play_Decoder(bool secure)
     ts_scaler_fromIVF_d = ivfheader[16] + ((unsigned int)ivfheader[17]<<8) + ((unsigned int)ivfheader[18]<<16) + ((unsigned int)ivfheader[19]<<24);
     ts_scaler_fromIVF_n = ivfheader[20] + ((unsigned int)ivfheader[21]<<8) + ((unsigned int)ivfheader[22]<<16) + ((unsigned int)ivfheader[23]<<24);
     printf("Parsed from IVF file header, time base denominator %d, time base numerator %d\n", ts_scaler_fromIVF_d, ts_scaler_fromIVF_n);
+
+    unsigned int frame_sz = 0;
+    unsigned long long ts1, ts2 = 0;
+    int bytes_read = 0;
+    bytes_read = read(inputBufferFileFd, &frame_sz, 4);
+    if ( bytes_read > 0 && bytes_read < 4) {
+      DEBUG_PRINT_ERROR("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
+      return -1;
+    } else if ( 0 == bytes_read ) {
+      printf("0 bytes read from IVF file, really meet EOF\n");
+      return -1;
+    }
+    bytes_read = read(inputBufferFileFd, &ts1, 8);
+    if ( 8 != bytes_read ) {
+      DEBUG_PRINT_ERROR("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
+      return -1;
+    }
+    lseek64(inputBufferFileFd, frame_sz + 4, SEEK_CUR);
+    bytes_read = read(inputBufferFileFd, &ts2, 8);
+    if ( 8 != bytes_read ) {
+      DEBUG_PRINT_ERROR("This IVF not contain 2 frames, won't continue decoding");
+      return -1;
+    }
+    lseek64(inputBufferFileFd, 32, SEEK_SET);
+    printf("first 2 frames timestamps are %lld, %lld\n", ts1, ts2);
+    if ((ts2 - ts1) != 0 && ts_scaler_fromIVF_n != 0)
+      fps = (float) ts_scaler_fromIVF_d / (ts_scaler_fromIVF_n * (ts2 - ts1));
+    printf("IVF FPS = %.2f\n", fps);
   }
 
   OMX_QCOM_PARAM_PORTDEFINITIONTYPE inputPortFmt;
@@ -1635,8 +1663,8 @@ int Play_Decoder(bool secure)
   bufCnt = 0;
   portFmt.format.video.nFrameHeight = height;
   portFmt.format.video.nFrameWidth  = width;
-  portFmt.format.video.xFramerate = fps << 16;//xFramerate is Q16 format
-  printf("SetParameter for input port fmt: portidx %d, w %u, h %u, xFramerate %u(%d fps)\n", portFmt.nPortIndex, portFmt.format.video.nFrameWidth, portFmt.format.video.nFrameHeight, portFmt.format.video.xFramerate, fps);
+  portFmt.format.video.xFramerate = fps * (1 << 16);//xFramerate is Q16 format
+  printf("SetParameter for input port fmt: portidx %d, w %u, h %u, xFramerate %u(%.2f fps)\n", portFmt.nPortIndex, portFmt.format.video.nFrameWidth, portFmt.format.video.nFrameHeight, portFmt.format.video.xFramerate, fps);
   OMX_SetParameter(dec_handle,OMX_IndexParamPortDefinition, (OMX_PTR)&portFmt);
   OMX_GetParameter(dec_handle,OMX_IndexParamPortDefinition, &portFmt);
   DEBUG_PRINT("Dec: New Min Buffer Count %d", portFmt.nBufferCountMin);
@@ -2513,7 +2541,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
   flags |= flag & GBM_BO_USAGE_PROTECTED_QTI;
   flags |= flag & GBM_BO_USAGE_UBWC_ALIGNED_QTI;
 
-  DEBUG_PRINT("create NV12 gbm_bo with width=%d, height=%d flags 0x%x",
+  DEBUG_PRINT("create NV12 gbm_bo with width=%d, height=%d flags 0x%x !",
               width, height, flags);
 
   bo = gbm_bo_create(gbm_dev, width, height, GBM_FORMAT_NV12, flags);
@@ -2522,7 +2550,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
     return false;
   }
 
-  bo_fd = bo->ion_fd;
+  bo_fd = gbm_bo_get_fd(bo);//gbm_bo_get_fd() returned fd need to be closed manually.
   if (bo_fd < 0) {
     DEBUG_PRINT_ERROR("Get bo fd failed");
     gbm_bo_destroy(bo);
@@ -2532,6 +2560,7 @@ static bool alloc_gbm_memory(int width, int height, struct vdec_gbm *buffer, int
   gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, bo, &meta_fd);
   if (meta_fd < 0) {
     DEBUG_PRINT_ERROR("Get bo meta fd failed");
+    close(bo_fd);
     gbm_bo_destroy(bo);
     return false;
   }
@@ -2573,6 +2602,9 @@ static void free_gbm_memory(struct vdec_gbm *buf_gbm_info)
   }
 
   if (buf_gbm_info->bo) {
+    if (buf_gbm_info->bo_fd >= 0) {
+      close(buf_gbm_info->bo_fd);
+    }
     gbm_bo_destroy(buf_gbm_info->bo);
     buf_gbm_info->bo = NULL;
   }

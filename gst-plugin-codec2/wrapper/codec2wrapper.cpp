@@ -647,6 +647,50 @@ CodecCallback::~CodecCallback()
     LOG_MESSAGE("CodecCallback(%p) destroyed", this);
 }
 
+static uint32_t getValidBufSize(uint32_t format, uint64_t usage, uint32_t width,
+    uint32_t height, uint32_t interlace_mode)
+{
+    uint32_t validBufSize = 0;
+    uint32_t color_fmt = 0;
+    uint32_t y_stride, uv_stride, y_sclines, uv_sclines;
+    const char* color_fmt_str = "NULL";
+
+    if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
+        color_fmt = COLOR_FMT_NV12_UBWC;
+        if (interlace_mode != INTERLACE_MODE_PROGRESSIVE) {
+            validBufSize = VENUS_BUFFER_SIZE_USED(color_fmt, width, height, 1);
+            LOG_DEBUG("output format is NV12_UBWC interlaced");
+        } else {
+            validBufSize = VENUS_BUFFER_SIZE_USED(color_fmt, width, height, 0);
+        }
+    } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
+        color_fmt = COLOR_FMT_NV12_BPP10_UBWC;
+        validBufSize = VENUS_BUFFER_SIZE(color_fmt, width, height);
+    } else {
+        if (format == GBM_FORMAT_NV12) {
+            color_fmt = COLOR_FMT_NV12;
+            color_fmt_str = "NV12";
+        } else if (format == GBM_FORMAT_P010) {
+            color_fmt = COLOR_FMT_P010;
+            color_fmt_str = "P010";
+        } else {
+            LOG_ERROR("format %u is not implemented", format);
+            goto done;
+        }
+
+        y_stride = VENUS_Y_STRIDE(color_fmt, width);
+        uv_stride = VENUS_UV_STRIDE(color_fmt, width);
+        y_sclines = VENUS_Y_SCANLINES(color_fmt, height);
+        uv_sclines = VENUS_UV_SCANLINES(color_fmt, height);
+        validBufSize = y_stride * y_sclines + uv_stride * uv_sclines;
+        LOG_DEBUG("format:%s Y stride:%u Y scanline:%u valid size:%u", color_fmt_str,
+            y_stride, y_sclines, validBufSize);
+    }
+
+done:
+    return validBufSize;
+}
+
 void CodecCallback::onOutputBufferAvailable(
     const std::shared_ptr<C2Buffer>& buffer,
     uint64_t index,
@@ -692,7 +736,6 @@ void CodecCallback::onOutputBufferAvailable(
 
             _UnwrapNativeCodec2GBMMetadata(handle, &width, &height, &format, &usage, &stride, &size, &bo);
 
-            outBuf.size = size;
             /* The actual value of bo here is a pointer to struct gbm_bo.
              * To avoid including GBM header, use void* instead. */
             outBuf.gbm_bo = reinterpret_cast<void*>(bo);
@@ -700,21 +743,7 @@ void CodecCallback::onOutputBufferAvailable(
             LOG_INFO("get crop info (%d,%d) [%dx%d] bo:%p", crop.left, crop.top, crop.width, crop.height, outBuf.gbm_bo);
             outBuf.width = crop.width;
             outBuf.height = crop.height;
-            /* get valid size for NV12_UBWC format */
-            if (format == GBM_FORMAT_NV12 && (usage & GBM_BO_USAGE_UBWC_ALIGNED_QTI)) {
-                if (interlace != INTERLACE_MODE_PROGRESSIVE) {
-                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 1);
-                    LOG_DEBUG("output format is NV12_UBWC interlaced");
-                } else {
-                    outBuf.size = VENUS_BUFFER_SIZE_USED(COLOR_FMT_NV12_UBWC, width, height, 0);
-                }
-            } else if (format == GBM_FORMAT_NV12) {
-                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
-            } else if (format == GBM_FORMAT_YCbCr_420_TP10_UBWC) {
-                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_BPP10_UBWC, width, height);
-            } else if (format == GBM_FORMAT_P010) {
-                outBuf.size = VENUS_BUFFER_SIZE(COLOR_FMT_P010, width, height);
-            }
+            outBuf.size = getValidBufSize(format, usage, width, height, interlace);
 
             /* graphic_block unmapped once out of scope. */
             mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);

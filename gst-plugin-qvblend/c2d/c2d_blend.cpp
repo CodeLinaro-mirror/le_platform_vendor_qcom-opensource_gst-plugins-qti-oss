@@ -232,16 +232,18 @@ bool c2d_blend::AllocateBuffer(int port,struct C2DBuffer *buffer)
 
     buffer->fd = -1;
     buffer->meta_fd = -1;
-    //buffer->fd = gbm_bo_get_fd (buffer->gbm_bo);
-    //2021.08, gbm api changed, after calling gbm_bo_get_fd, need manually close that fd.
-    //After gbm code stable, will use gbm_bo_get_fd() and close().
-    buffer->fd = buffer->gbm_bo->ion_fd;
+    buffer->fd = gbm_bo_get_fd(buffer->gbm_bo);
     gbm_perform (GBM_PERFORM_GET_METADATA_ION_FD, buffer->gbm_bo, &buffer->meta_fd);
     if (buffer->fd <= 0 || buffer->meta_fd <= 0) {
         GST_ERROR ("the fds(bo_fd:%d, meta_fd:%d) are invalid",
                    buffer->fd, buffer->meta_fd);
+        if (buffer->fd >= 0) {
+            close (buffer->fd);
+        }
         gbm_bo_destroy (buffer->gbm_bo);
         buffer->gbm_bo = NULL;
+        buffer->fd = -1;
+        buffer->meta_fd = -1;
         return false;
     }
 
@@ -252,8 +254,13 @@ bool c2d_blend::AllocateBuffer(int port,struct C2DBuffer *buffer)
     if (GBM_ERROR_NONE != result)
     {
         GST_ERROR ("ERROR: get length error");
+        if (buffer->fd >= 0) {
+            close (buffer->fd);
+        }
         gbm_bo_destroy (buffer->gbm_bo);
         buffer->gbm_bo = NULL;
+        buffer->fd = -1;
+        buffer->meta_fd = -1;
         return false;
     }
 
@@ -261,8 +268,13 @@ bool c2d_blend::AllocateBuffer(int port,struct C2DBuffer *buffer)
     if (MAP_FAILED == va) {
         GST_ERROR("failed to map buffer of size = %u, fd = 0x%x",
                   buffer->size, buffer->fd);
+        if (buffer->fd >= 0) {
+            close (buffer->fd);
+        }
         gbm_bo_destroy (buffer->gbm_bo);
         buffer->gbm_bo = NULL;
+        buffer->fd = -1;
+        buffer->meta_fd = -1;
         return false;
     }
 
@@ -283,8 +295,12 @@ bool c2d_blend::FreeBuffer(struct C2DBuffer *buffer)
         buffer->ptr = NULL;
     }
 
-    if (buffer->gbm_bo)
+    if (buffer->gbm_bo) {
+        if (buffer->fd >= 0) {
+            close (buffer->fd);
+        }
         gbm_bo_destroy (buffer->gbm_bo);
+    }
     buffer->gbm_bo = NULL;
     buffer->fd = -1;
     buffer->meta_fd = -1;

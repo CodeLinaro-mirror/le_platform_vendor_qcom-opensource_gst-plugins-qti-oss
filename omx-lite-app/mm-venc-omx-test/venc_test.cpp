@@ -604,7 +604,7 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
   int size = nSize;
   size = (size + 4096 - 1) & ~(4096 - 1);
 
-  D("use gbm\n");
+  D("use gbm!\n");
   ion_data_ptr->ion_device_fd = m_device_fd;
   if(ion_data_ptr->ion_device_fd < 0)
   {
@@ -624,10 +624,7 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
   }
   ion_data_ptr->bo = bo;
 
-  /* TODO: won't use gbm_bo_get_fd() till it's redefined definitely. */
-  //bo_fd = gbm_bo_get_fd(bo);
-  /* Interim solution, just for smooth switch to new interface. */
-  bo_fd = bo->ion_fd;
+  bo_fd = gbm_bo_get_fd(bo);//gbm_bo_get_fd() returned fd need to be closed manually.
   if(bo_fd < 0) {
     E("Get bo fd failed \n");
     goto error_handle;
@@ -688,9 +685,14 @@ void* PmemMalloc(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, int nSize, struct en
 error_handle:
 #ifdef USE_ION
 #ifdef USE_GBM
-    if (ion_data_ptr->bo)
+    if (ion_data_ptr->bo) {
+      if (bo_fd >= 0) {
+        close(bo_fd);
+      }
       gbm_bo_destroy(ion_data_ptr->bo);
+    }
     ion_data_ptr->bo = NULL;
+    ion_data_ptr->data_fd = -1;
     ion_data_ptr->meta_fd = -1;
 #else
     close(ion_data_ptr->data_fd);
@@ -709,9 +711,14 @@ int PmemFree(OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO* pMem, void* pvirt, int nSize, 
   munmap(pvirt, nSize);
 #ifdef USE_ION
 #ifdef USE_GBM
-  if (ion_data_ptr->bo)
+  if (ion_data_ptr->bo) {
+    if (ion_data_ptr->data_fd >= 0) {
+      close(ion_data_ptr->data_fd);
+    }
     gbm_bo_destroy(ion_data_ptr->bo);
+  }
   ion_data_ptr->bo = NULL;
+  ion_data_ptr->data_fd = -1;
   ion_data_ptr->meta_fd = -1;
 #else
   close(ion_data_ptr->data_fd);
@@ -1053,6 +1060,16 @@ OMX_ERRORTYPE ConfigureEncoder()
   /////////////////////////bitrate/////////////////////
   if (m_sProfile.eControlRate == OMX_Video_ControlRateDisable) {
     D("Setting vendor extended rate control mode RC_OFF");
+    OMX_VIDEO_PARAM_QUANTIZATIONTYPE frameQP;
+    OMX_INIT_STRUCT(&frameQP, OMX_VIDEO_PARAM_QUANTIZATIONTYPE);
+    frameQP.nPortIndex = (OMX_U32)PORT_INDEX_OUT;
+    frameQP.nQpI = 22;
+    //frameQP.nQpP = 22;
+    //frameQP.nQpB = 22;
+    D("Setting frameQP iQP: %d", frameQP.nQpI);
+
+    result = OMX_SetParameter(m_hHandle,
+        OMX_IndexParamVideoQuantization, (OMX_PTR)&frameQP);
     result = SetVendorRateControlMode(m_sProfile.eControlRate);
   }
   else if (m_sProfile.nBitrate != DEADVALUE &&
