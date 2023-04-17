@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -32,21 +32,26 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Application:
+* GStreamer Single 4K stream saved to MP4
+*
+* Description:
+* This application creates one 4K stream and encode it in MP4
+*
+* Usage:
+* gst-single-4k-example
+*
+* Help:
+* gst-single-4k-example --help
+*/
+
 #include <stdio.h>
 #include <glib-unix.h>
-#include <pthread.h>
 #include <gst/gst.h>
 
-#define RTSP_OUTPUT 0
-#define DISPLAY_OUTPUT 1
-#define DEFAULT_OUTPUT_WIDTH 1920
-#define DEFAULT_OUTPUT_HEIGHT 1080
-#define DEFAULT_ITERATIONS 6
-#define SLEEP_DURATION 4
-#define HOST "127.0.0.1"
-#define PORT 8554
-
-#define MAX_BITRATE_CTRL_METHOD 0x7F000001
+#define DEFAULT_OUTPUT_WIDTH 3840
+#define DEFAULT_OUTPUT_HEIGHT 2160
 
 typedef struct _GstAppContext GstAppContext;
 struct _GstAppContext
@@ -57,12 +62,9 @@ struct _GstAppContext
   GList *plugins;
   // Pointer to the mainloop
   GMainLoop *mloop;
-  // sHDR state
-  gboolean shdr;
-  // Iterations
-  gint iterations;
 };
 
+// Handle interrupt by CTRL+C
 static gboolean
 handle_interrupt_signal (gpointer userdata)
 {
@@ -88,6 +90,7 @@ handle_interrupt_signal (gpointer userdata)
   return TRUE;
 }
 
+// Handle state change events for the pipeline
 static void
 state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
@@ -112,6 +115,7 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   }
 }
 
+// Handle warning events
 static void
 warning_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
@@ -125,6 +129,7 @@ warning_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   g_error_free (error);
 }
 
+// Handle error events
 static void
 error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
@@ -141,6 +146,7 @@ error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   g_main_loop_quit (mloop);
 }
 
+// Handle end of stream event
 static void
 eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
@@ -152,103 +158,7 @@ eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   g_main_loop_quit (mloop);
 }
 
-static void
-cam_timestamp_signal (GstElement * element, gint64 timestamp, gpointer userdata)
-{
-  static gint64 last_timestamp = timestamp;
-
-  if (((timestamp - last_timestamp) / 1000000.0) > 200.0) {
-    g_print ("Gap in video - %.3f ms\n",
-        (timestamp - last_timestamp) / 1000000.0);
-  }
-  last_timestamp = timestamp;
-}
-
-static gboolean
-wait_for_state_change (GstAppContext * appctx)
-{
-  GstStateChangeReturn ret = GST_STATE_CHANGE_FAILURE;
-
-  ret = gst_element_get_state (appctx->pipeline,
-      NULL, NULL, GST_CLOCK_TIME_NONE);
-
-  if (ret == GST_STATE_CHANGE_FAILURE) {
-    g_printerr ("Pipeline failed to PREROLL!\n");
-    return FALSE;
-  }
-  return TRUE;
-}
-
-void test_shdr_by_pipe_restart (GstAppContext *appctx)
-{
-  GstElement *qtiqmmfsrc, *h264enc;
-
-  // Get qtiqmmfsrc instance
-  qtiqmmfsrc = gst_bin_get_by_name (
-      GST_BIN (appctx->pipeline), "qmmf");
-
-  h264enc = gst_bin_get_by_name (
-      GST_BIN (appctx->pipeline), "h264enc");
-
-  // Send EOS to the encoder in order to flush it's buffers
-  if (h264enc) {
-    gst_element_send_event (h264enc, gst_event_new_eos ());
-    gst_object_unref (h264enc);
-  }
-
-  if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_NULL)) {
-    wait_for_state_change (appctx);
-  }
-
-  appctx->shdr = !appctx->shdr;
-  g_print ("%s sHDR by restart. \n", appctx->shdr ? "Enable" : "Disable");
-  g_object_set (G_OBJECT (qtiqmmfsrc), "shdr", appctx->shdr, NULL);
-
-  if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_PLAYING)) {
-    wait_for_state_change (appctx);
-  }
-
-  gst_object_unref (qtiqmmfsrc);
-}
-
-void test_shdr_by_option (GstAppContext *appctx)
-{
-  GstElement *qtiqmmfsrc;
-
-  // Get qtiqmmfsrc instance
-  qtiqmmfsrc = gst_bin_get_by_name (
-      GST_BIN (appctx->pipeline), "qmmf");
-
-  appctx->shdr = !appctx->shdr;
-  g_print ("%s sHDR by configuration. \n", appctx->shdr ? "Enable" : "Disable");
-  g_object_set (G_OBJECT (qtiqmmfsrc), "shdr", appctx->shdr, NULL);
-
-  gst_object_unref (qtiqmmfsrc);
-}
-
-static void *
-thread_fn (gpointer user_data)
-{
-  GstAppContext *appctx = (GstAppContext *) user_data;
-
-  for (gint i = 0; i < appctx->iterations; i++) {
-    sleep (SLEEP_DURATION);
-    test_shdr_by_pipe_restart (appctx);
-  }
-
-  for (gint i = 0; i < appctx->iterations; i++) {
-    sleep (SLEEP_DURATION);
-    test_shdr_by_option (appctx);
-  }
-
-  sleep (SLEEP_DURATION);
-  gst_element_send_event (appctx->pipeline, gst_event_new_eos ());
-
-  return NULL;
-}
-
+// Unlink and remove all elements
 static void
 destroy_pipe (GstAppContext *appctx)
 {
@@ -269,135 +179,56 @@ destroy_pipe (GstAppContext *appctx)
   gst_object_unref (appctx->pipeline);
 }
 
+// Create all elements and link
 static gboolean
-create_display_pipe (GstAppContext *appctx, gint width, gint height)
+create_pipe (GstAppContext *appctx, gint width, gint height)
 {
-  GstElement *qtiqmmfsrc, *main_capsfilter, *sink;
+  GstElement *qtiqmmfsrc, *main_capsfilter, *encoder, *h264parse,
+      *mp4mux, *filesink;
   GstCaps *filtercaps;
   gboolean ret = FALSE;
 
   // Create all elements
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
   main_capsfilter = gst_element_factory_make ("capsfilter", "capsfilter");
-  sink = gst_element_factory_make ("waylandsink", "waylandsink");
-
-  // Check if all elements are created successfully
-  if (!qtiqmmfsrc || !main_capsfilter || !sink) {
-    g_printerr ("One element could not be created. Exiting.\n");
-    return FALSE;
-  }
-
-  appctx->plugins = NULL;
-  appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
-  appctx->plugins = g_list_append (appctx->plugins, main_capsfilter);
-  appctx->plugins = g_list_append (appctx->plugins, sink);
-
-  g_object_set (G_OBJECT (sink), "fullscreen", TRUE, NULL);
-  g_object_set (G_OBJECT (sink), "async", TRUE, NULL);
-  g_object_set (G_OBJECT (sink), "sync", FALSE, NULL);
-  g_object_set (G_OBJECT (sink), "enable-last-sample", FALSE, NULL);
-
-  // Set qmmfsrc properties
-  g_object_set (G_OBJECT (qtiqmmfsrc), "name", "qmmf", NULL);
-
-  // Configure the stream caps
-  filtercaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, width,
-      "height", G_TYPE_INT, height,
-      "framerate", GST_TYPE_FRACTION, 30, 1,
-      NULL);
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
-  g_object_set (G_OBJECT (main_capsfilter), "caps", filtercaps, NULL);
-  gst_caps_unref (filtercaps);
-
-  // Connect a callback to the timestamp signal.
-  g_object_set (G_OBJECT (qtiqmmfsrc), "camera-timestamp-sig", TRUE, NULL);
-  g_signal_connect (qtiqmmfsrc, "camera-timestamp",
-    G_CALLBACK (cam_timestamp_signal), NULL);
-
-  // Add elements to the pipeline and link them
-  g_print ("Adding all elements to the pipeline...\n");
-  gst_bin_add_many (GST_BIN (appctx->pipeline),
-      qtiqmmfsrc, main_capsfilter, sink, NULL);
-
-  g_print ("Linking elements...\n");
-
-  // Linking the stream
-  ret = gst_element_link_many (
-      qtiqmmfsrc, main_capsfilter, sink, NULL);
-  if (!ret) {
-    g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
-    gst_bin_remove_many (GST_BIN (appctx->pipeline),
-        qtiqmmfsrc, main_capsfilter, sink, NULL);
-    return FALSE;
-  }
-  g_print ("All elements are linked successfully\n");
-
-  return TRUE;
-}
-
-static gboolean
-create_rtsp_pipe (GstAppContext *appctx, gint width, gint height)
-{
-  GstElement *qtiqmmfsrc, *main_capsfilter, *queue1, *encoder;
-  GstElement *queue2, *h264parse, *rtph264pay, *sink;
-  GstCaps *filtercaps;
-  gboolean ret = FALSE;
-
-  // Create all elements
-  qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
-  main_capsfilter = gst_element_factory_make ("capsfilter", "capsfilter");
-  queue1 = gst_element_factory_make ("queue", "queue1");
 #ifdef CODEC2_ENCODE
-  encoder = gst_element_factory_make ("qtic2venc", "h264enc");
+    encoder = gst_element_factory_make ("qtic2venc", "qtic2venc");
 #else
-  encoder = gst_element_factory_make ("omxh264enc", "h264enc");
+    encoder = gst_element_factory_make ("omxh264enc", "omxh264enc");
 #endif
-  queue2 = gst_element_factory_make ("queue", "queue2");
-  h264parse = gst_element_factory_make ("h264parse", "h264parse");
-  rtph264pay = gst_element_factory_make ("rtph264pay", "rtph264pay");
-  sink = gst_element_factory_make ("udpsink", "udpsink");
+    h264parse = gst_element_factory_make ("h264parse", "h264parse");
+    mp4mux = gst_element_factory_make ("mp4mux", "mp4mux");
+    filesink = gst_element_factory_make ("filesink", "filesink");
 
   // Check if all elements are created successfully
-  if (!qtiqmmfsrc || !main_capsfilter || !queue1 || !encoder ||
-      !queue2 || !h264parse || !rtph264pay || !sink) {
+  if (!qtiqmmfsrc || !main_capsfilter || !encoder ||
+      !h264parse || !mp4mux || !filesink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return FALSE;
   }
 
+  // Append all elements in a list
   appctx->plugins = NULL;
   appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
   appctx->plugins = g_list_append (appctx->plugins, main_capsfilter);
-  appctx->plugins = g_list_append (appctx->plugins, queue1);
   appctx->plugins = g_list_append (appctx->plugins, encoder);
-  appctx->plugins = g_list_append (appctx->plugins, queue2);
   appctx->plugins = g_list_append (appctx->plugins, h264parse);
-  appctx->plugins = g_list_append (appctx->plugins, rtph264pay);
-  appctx->plugins = g_list_append (appctx->plugins, sink);
-
-  // Set qmmfsrc properties
-  g_object_set (G_OBJECT (qtiqmmfsrc), "name", "qmmf", NULL);
+  appctx->plugins = g_list_append (appctx->plugins, mp4mux);
+  appctx->plugins = g_list_append (appctx->plugins, filesink);
 
   // Set encoder properties
   g_object_set (G_OBJECT (encoder), "target-bitrate", 6000000, NULL);
+
 #ifndef CODEC2_ENCODE
-  // Set omxh264enc properties
-  g_object_set (G_OBJECT (encoder), "control-rate", MAX_BITRATE_CTRL_METHOD, NULL);
-  g_object_set (G_OBJECT (encoder), "interval-intraframes", 29, NULL);
+  // OMX encoder specific props
   g_object_set (G_OBJECT (encoder), "periodicity-idr", 1, NULL);
+  g_object_set (G_OBJECT (encoder), "interval-intraframes", 29, NULL);
+  g_object_set (G_OBJECT (encoder), "control-rate", 2, NULL);
 #endif
 
-  // Set h264parse properties
-  g_object_set (G_OBJECT (h264parse), "config-interval", -1, NULL);
-
-  // Set rtph264pay properties
-  g_object_set (G_OBJECT (rtph264pay), "pt", 96, NULL);
-
-  // Set udpsink properties
-  g_object_set (G_OBJECT (sink), "host", HOST, NULL);
-  g_object_set (G_OBJECT (sink), "port", PORT, NULL);
+  // Set filesink properties
+  g_object_set (G_OBJECT (filesink), "location", "/data/mux.mp4", NULL);
+  g_object_set (G_OBJECT (filesink), "enable-last-sample", false, NULL);
 
   // Configure the stream caps
   filtercaps = gst_caps_new_simple ("video/x-raw",
@@ -411,28 +242,21 @@ create_rtsp_pipe (GstAppContext *appctx, gint width, gint height)
   g_object_set (G_OBJECT (main_capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
-  // Connect a callback to the timestamp signal.
-  g_object_set (G_OBJECT (qtiqmmfsrc), "camera-timestamp-sig", TRUE, NULL);
-  g_signal_connect (qtiqmmfsrc, "camera-timestamp",
-    G_CALLBACK (cam_timestamp_signal), NULL);
-
   // Add elements to the pipeline and link them
   g_print ("Adding all elements to the pipeline...\n");
   gst_bin_add_many (GST_BIN (appctx->pipeline),
-      qtiqmmfsrc, main_capsfilter, queue1, encoder, queue2,
-      h264parse, rtph264pay, sink, NULL);
+      qtiqmmfsrc, main_capsfilter, encoder, h264parse, mp4mux, filesink, NULL);
 
   g_print ("Linking elements...\n");
 
   // Linking the stream
   ret = gst_element_link_many (
-      qtiqmmfsrc, main_capsfilter, queue1, encoder, queue2,
-      h264parse, rtph264pay, sink, NULL);
+      qtiqmmfsrc, main_capsfilter, encoder, h264parse, mp4mux, filesink, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
     gst_bin_remove_many (GST_BIN (appctx->pipeline),
-        qtiqmmfsrc, main_capsfilter, queue1, encoder, queue2,
-        h264parse, rtph264pay, sink, NULL);
+        qtiqmmfsrc, main_capsfilter, encoder, h264parse,
+        mp4mux, filesink, NULL);
     return FALSE;
   }
   g_print ("All elements are linked successfully\n");
@@ -450,17 +274,11 @@ main (gint argc, gchar * argv[])
   GstElement *pipeline = NULL;
   gboolean ret = FALSE;
   GstAppContext appctx = {};
-  gint output = RTSP_OUTPUT;
   gint width = DEFAULT_OUTPUT_WIDTH;
   gint height = DEFAULT_OUTPUT_HEIGHT;
-  gint iterations = DEFAULT_ITERATIONS;
 
+  // Configure input parameters
   GOptionEntry entries[] = {
-    { "output", 'o', 0, G_OPTION_ARG_INT,
-      &output,
-      "Output",
-      "0 - rtsp, 1 - wayland"
-    },
     { "width", 'w', DEFAULT_OUTPUT_WIDTH, G_OPTION_ARG_INT,
       &width,
       "width",
@@ -470,11 +288,6 @@ main (gint argc, gchar * argv[])
       &height,
       "height",
       "image height"
-    },
-    { "iterations", 'i', DEFAULT_ITERATIONS, G_OPTION_ARG_INT,
-      &iterations,
-      "iterations",
-      "use-case iterations"
     },
     { NULL }
   };
@@ -504,7 +317,6 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
-
   // Initialize GST library.
   gst_init (&argc, &argv);
 
@@ -516,13 +328,9 @@ main (gint argc, gchar * argv[])
   }
 
   appctx.pipeline = pipeline;
-  appctx.iterations = iterations;
 
-  if (output == DISPLAY_OUTPUT) {
-    ret = create_display_pipe (&appctx, width, height);
-  } else {
-    ret = create_rtsp_pipe (&appctx, width, height);
-  }
+  // Build the pipeline
+  ret = create_pipe (&appctx, width, height);
   if (!ret) {
     g_printerr ("failed to create GST pipe.\n");
     return -1;
@@ -572,10 +380,6 @@ main (gint argc, gchar * argv[])
       g_print ("Pipeline state change was successful\n");
       break;
   }
-
-  pthread_t thread;
-  pthread_create (&thread, NULL, &thread_fn, &appctx);
-  // todo: thread join
 
   g_print ("g_main_loop_run\n");
   g_main_loop_run (mloop);

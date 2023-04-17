@@ -7,6 +7,11 @@ add_library(${GST_QTI_C2_ENGINE} SHARED
   c2-config.cc
 )
 
+target_compile_definitions(${GST_QTI_C2_ENGINE} PRIVATE
+  $<$<STREQUAL:${GST_CODEC2_CONFIG_VERSION},2.0>:CODEC2_CONFIG_VERSION_2_0>
+  $<$<BOOL:${HAVE_MMM_COLOR_FMT_H}>:HAVE_MMM_COLOR_FMT_H>
+)
+
 target_include_directories(${GST_QTI_C2_ENGINE} PUBLIC
   ${GST_INCLUDE_DIRS}
 )

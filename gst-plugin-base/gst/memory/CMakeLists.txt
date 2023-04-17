@@ -2,11 +2,11 @@
 set(GST_QTI_MEMORY_BASE gstqtimemorybase)
 
 add_library(${GST_QTI_MEMORY_BASE} SHARED
-  gstionpool.c
+  gstmempool.c
 )
 
 set_target_properties(${GST_QTI_MEMORY_BASE} PROPERTIES PUBLIC_HEADER
-  gstionpool.h
+  gstmempool.h
 )
 
 target_include_directories(${GST_QTI_MEMORY_BASE} PUBLIC
@@ -17,9 +17,18 @@ target_include_directories(${GST_QTI_MEMORY_BASE} PRIVATE
   ${KERNEL_BUILDDIR}/usr/include
 )
 
-# Headers path for msm-5.4 media on qrbx210 targets.
+# Path for some headers in msm-5.4 kernel.
 target_include_directories(${GST_QTI_MEMORY_BASE} PRIVATE
   ${KERNEL_BUILDDIR}/usr/include/vidc
+)
+
+# Path for some headers in msm-5.15 kernel.
+target_include_directories(${GST_QTI_MEMORY_BASE} PRIVATE
+  ${KERNEL_BUILDDIR}/usr/include/uapi
+)
+
+target_compile_definitions(${GST_QTI_MEMORY_BASE} PRIVATE
+  $<$<BOOL:${HAVE_LINUX_DMA_HEAP_H}>:HAVE_LINUX_DMA_HEAP_H>
 )
 
 target_link_libraries(${GST_QTI_MEMORY_BASE} PRIVATE

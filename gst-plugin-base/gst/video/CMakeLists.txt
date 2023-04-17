@@ -17,6 +17,12 @@ set_target_properties(${GST_QTI_VIDEO_BASE} PROPERTIES PUBLIC_HEADER
   "${GST_QTI_VIDEO_BASE_HEADERS}"
 )
 
+target_compile_definitions(${GST_QTI_VIDEO_BASE} PRIVATE
+  $<$<BOOL:${HAVE_MMM_COLOR_FMT_H}>:HAVE_MMM_COLOR_FMT_H>
+  $<$<BOOL:${HAVE_LINUX_DMA_HEAP_H}>:HAVE_LINUX_DMA_HEAP_H>
+  # TODO: set flag based on GBM version
+  $<$<BOOL:${GBM_FREE_FD}>:GBM_FREE_FD>
+)
 
 target_include_directories(${GST_QTI_VIDEO_BASE} PUBLIC
   ${GST_INCLUDE_DIRS}
@@ -26,9 +32,14 @@ target_include_directories(${GST_QTI_VIDEO_BASE} PRIVATE
   ${KERNEL_BUILDDIR}/usr/include
 )
 
-# Headers path for msm-5.4 media on qrbx210 targets.
+# Path for some headers in msm-5.4 kernel.
 target_include_directories(${GST_QTI_VIDEO_BASE} PRIVATE
   ${KERNEL_BUILDDIR}/usr/include/vidc
+)
+
+# Path for some headers in msm-5.15 kernel.
+target_include_directories(${GST_QTI_VIDEO_BASE} PRIVATE
+  ${KERNEL_BUILDDIR}/usr/include/uapi
 )
 
 target_link_libraries(${GST_QTI_VIDEO_BASE} PRIVATE

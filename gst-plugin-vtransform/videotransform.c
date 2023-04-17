@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -69,6 +69,11 @@
 
 #include <gst/video/gstimagepool.h>
 
+#ifdef HAVE_LINUX_DMA_BUF_H
+#include <sys/ioctl.h>
+#include <linux/dma-buf.h>
+#endif // HAVE_LINUX_DMA_BUF_H
+
 #define GST_CAT_DEFAULT video_transform_debug
 GST_DEBUG_CATEGORY_STATIC (video_transform_debug);
 
@@ -103,8 +108,11 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #undef GST_VIDEO_FPS_RANGE
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
-#define GST_VIDEO_FORMATS \
-  "{ NV12, NV21, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
+#define GST_SINK_VIDEO_FORMATS \
+  "{ NV12, NV21, YUY2, P010_10LE, NV12_10LE32, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
+
+#define GST_SRC_VIDEO_FORMATS \
+  "{ NV12, NV21, YUY2, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
 
 enum
 {
@@ -117,9 +125,13 @@ enum
   PROP_BACKGROUND,
 };
 
-static GstStaticCaps gst_video_transform_format_caps =
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS));
+static GstStaticCaps gst_video_transform_static_sink_caps =
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_SINK_VIDEO_FORMATS) ";"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_SINK_VIDEO_FORMATS));
+
+static GstStaticCaps gst_video_transform_static_src_caps =
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_SRC_VIDEO_FORMATS) ";"
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_SRC_VIDEO_FORMATS));
 
 static GType
 gst_video_trasform_rotate_get_type (void)
@@ -148,29 +160,42 @@ gst_video_trasform_rotate_get_type (void)
 }
 
 static GstCaps *
-gst_video_transform_caps (void)
+gst_video_transform_sink_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
   if (g_once_init_enter (&inited)) {
-    caps = gst_static_caps_get (&gst_video_transform_format_caps);
+    caps = gst_static_caps_get (&gst_video_transform_static_sink_caps);
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstCaps *
+gst_video_transform_src_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_static_caps_get (&gst_video_transform_static_src_caps);
     g_once_init_leave (&inited, 1);
   }
   return caps;
 }
 
 static GstPadTemplate *
-gst_video_transform_src_template (void)
-{
-  return gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
-      gst_video_transform_caps ());
-}
-
-static GstPadTemplate *
 gst_video_transform_sink_template (void)
 {
   return gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
-      gst_video_transform_caps ());
+      gst_video_transform_sink_caps ());
+}
+
+static GstPadTemplate *
+gst_video_transform_src_template (void)
+{
+  return gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+      gst_video_transform_src_caps ());
 }
 
 static gboolean
@@ -276,6 +301,9 @@ gst_video_transform_determine_passthrough (GstVideoTransform * vtrans)
 
   passthrough &= !vtrans->flip_h && !vtrans->flip_v;
   passthrough &= vtrans->rotation == GST_VIDEO_TRANSFORM_ROTATE_NONE;
+
+  passthrough &= vtrans->outfeature == vtrans->infeature;
+  passthrough &= vtrans->outubwc == vtrans->inubwc;
 
   GST_DEBUG_OBJECT (vtrans, "Passthrough has been %s",
       passthrough ? "enabled" : "disabled");
@@ -607,6 +635,7 @@ gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
   GstStructure *inopts = NULL, *outopts = NULL;
+  const gchar *feature = NULL;
   GstVideoInfo ininfo, outinfo;
   GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
   gint in_dar_n, in_dar_d, out_dar_n, out_dar_d;
@@ -764,6 +793,17 @@ gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
     gst_video_info_free (vtrans->outinfo);
 
   vtrans->outinfo = gst_video_info_copy (&outinfo);
+
+  feature = gst_caps_has_feature (incaps, GST_CAPS_FEATURE_MEMORY_GBM) ?
+      GST_CAPS_FEATURE_MEMORY_GBM : NULL;
+  vtrans->infeature = g_quark_from_static_string (feature);
+
+  feature = gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM) ?
+      GST_CAPS_FEATURE_MEMORY_GBM : NULL;
+  vtrans->outfeature = g_quark_from_static_string (feature);
+
+  vtrans->inubwc = gst_caps_has_compression (incaps, "ubwc");
+  vtrans->outubwc = gst_caps_has_compression (outcaps, "ubwc");
 
   // Disable passthrough in order to decide output allocation.
   gst_base_transform_set_passthrough (base, FALSE);
@@ -935,66 +975,6 @@ gst_video_transform_fill_pixel_aspect_ratio (GstVideoTransform * vtrans,
       return FALSE;
   }
   return TRUE;
-}
-
-static void
-gst_video_transform_fixate_pixel_aspect_ratio (GstVideoTransform * vtrans,
-    GstStructure * input, GstStructure * output, gint out_width, gint out_height)
-{
-  gint in_par_n, in_par_d, in_width = 0, in_height = 0;
-  guint out_par_n, out_par_d;
-  gboolean success = FALSE;
-
-  GST_DEBUG_OBJECT (vtrans, "Output dimensions fixed to: %dx%d",
-      out_width, out_height);
-
-  {
-    // Retrieve the output PAR (pixel aspect ratio) value.
-    const GValue *par = gst_structure_get_value (output, "pixel-aspect-ratio");
-
-    if (gst_value_is_fixed (par)) {
-      out_par_n = gst_value_get_fraction_numerator (par);
-      out_par_d = gst_value_get_fraction_denominator (par);
-
-      GST_DEBUG_OBJECT (vtrans, "Output PAR is fixed to: %d/%d",
-          out_par_n, out_par_d);
-      return;
-    }
-  }
-
-  {
-    // Retrieve the input PAR (pixel aspect ratio) value.
-    const GValue *par = gst_structure_get_value (input, "pixel-aspect-ratio");
-    in_par_n = gst_value_get_fraction_numerator (par);
-    in_par_d = gst_value_get_fraction_denominator (par);
-  }
-
-  // Retrieve the input width and height.
-  gst_structure_get_int (input, "width", &in_width);
-  gst_structure_get_int (input, "height", &in_height);
-
-  switch (vtrans->rotation) {
-    case GST_VIDEO_TRANSFORM_ROTATE_90_CW:
-    case GST_VIDEO_TRANSFORM_ROTATE_90_CCW:
-      success = gst_video_calculate_display_ratio (&out_par_n, &out_par_d,
-          in_height, in_width, in_par_d, in_par_n, out_width, out_height);
-      break;
-    case GST_VIDEO_TRANSFORM_ROTATE_NONE:
-    case GST_VIDEO_TRANSFORM_ROTATE_180:
-      success = gst_video_calculate_display_ratio (&out_par_n, &out_par_d,
-          in_width, in_height, in_par_n, in_par_d, out_width, out_height);
-      break;
-  }
-
-  if (success) {
-    GST_DEBUG_OBJECT (vtrans, "Fixating output PAR to %d/%d",
-        out_par_n, out_par_d);
-
-    gst_structure_fixate_field_nearest_fraction (output,
-        "pixel-aspect-ratio", out_par_n, out_par_d);
-  }
-
-  return;
 }
 
 static void
@@ -1652,13 +1632,14 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     par = gst_structure_get_value (output, "pixel-aspect-ratio");
 
     // Check which values are fixed and take the necessary actions.
-    if (width && height) {
-      gst_video_transform_fixate_pixel_aspect_ratio (vtrans, input, output,
-          width, height);
-    } else if (width) {
+    if ((width != 0) && (height != 0) && !gst_value_is_fixed (par)) {
+      // The output dimensions are set but the PAR is not fixated.
+      gst_structure_fixate_field_nearest_fraction (output,
+          "pixel-aspect-ratio", 1, 1);
+    } else if ((width != 0) && (height == 0)) {
       // The output width is set, try to calculate output height.
       gst_video_transform_fixate_height (vtrans, input, output, width);
-    } else if (height) {
+    } else if ((height != 0) && (width == 0)) {
       // The output height is set, try to calculate output width.
       gst_video_transform_fixate_width (vtrans, input, output, height);
     } else if (gst_value_is_fixed (par)) {
@@ -1688,8 +1669,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstVideoFrame inframe, outframe;
   gpointer request_id = NULL;
-  GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
-  GstClockTimeDiff tsdelta = GST_CLOCK_STIME_NONE;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
   if (gst_buffer_get_size (outbuffer) == 0 &&
@@ -1702,6 +1682,18 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     return GST_FLOW_OK;
   }
 
+#ifdef HAVE_LINUX_DMA_BUF_H
+  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
+    struct dma_buf_sync bufsync;
+    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
+
+    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
+
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC START failed!");
+  }
+#endif // HAVE_LINUX_DMA_BUF_H
+
   if (!gst_video_frame_map (&outframe, vtrans->outinfo, outbuffer,
           GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
     GST_ERROR_OBJECT (vtrans, "Failed to map output buffer!");
@@ -1709,7 +1701,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     return GST_FLOW_OK;
   }
 
-  ts_begin = gst_util_get_timestamp ();
+  time = gst_util_get_timestamp ();
 
   {
 #ifdef USE_C2D_CONVERTER
@@ -1729,16 +1721,26 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 #endif // USE_GLES_CONVERTER
   }
 
-  ts_end = gst_util_get_timestamp ();
-
-  tsdelta = GST_CLOCK_DIFF (ts_begin, ts_end);
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
   GST_LOG_OBJECT (vtrans, "Conversion took %" G_GINT64_FORMAT ".%03"
-      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (tsdelta),
-      (GST_TIME_AS_USECONDS (tsdelta) % 1000));
+      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000));
 
   gst_video_frame_unmap (&outframe);
   gst_video_frame_unmap (&inframe);
+
+#ifdef HAVE_LINUX_DMA_BUF_H
+  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
+    struct dma_buf_sync bufsync;
+    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
+
+    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
+
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC END failed!");
+  }
+#endif // HAVE_LINUX_DMA_BUF_H
 
   return GST_FLOW_OK;
 }
@@ -2139,6 +2141,12 @@ gst_video_transform_init (GstVideoTransform * vtrans)
 
   vtrans->ininfo = NULL;
   vtrans->outinfo = NULL;
+
+  vtrans->infeature = g_quark_from_static_string (NULL);
+  vtrans->outfeature = g_quark_from_static_string (NULL);
+
+  vtrans->inubwc = FALSE;
+  vtrans->outubwc = FALSE;
 
   vtrans->outpool = NULL;
 

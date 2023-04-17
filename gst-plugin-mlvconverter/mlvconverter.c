@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -142,7 +142,7 @@ static GstCaps *
 gst_ml_video_converter_sink_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_ml_video_converter_static_sink_caps);
@@ -155,7 +155,7 @@ static GstCaps *
 gst_ml_video_converter_src_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_ml_video_converter_static_src_caps);
@@ -329,7 +329,9 @@ gst_map_input_video_frames (GstVideoFrame ** inframes, guint n_inputs,
 
     // Check if a bitwise mask was set for this channel/batch input.
     if ((GST_BUFFER_OFFSET (inbuffer) != GST_BUFFER_OFFSET_NONE) &&
-        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0))
+        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0) &&
+         GST_VIDEO_INFO_MULTIVIEW_MODE (info) ==
+            GST_VIDEO_MULTIVIEW_MODE_SEPARATED)
       continue;
 
     // Check if there is memory block for this index.
@@ -945,7 +947,9 @@ gst_ml_video_converter_prepare_output_buffer (GstBaseTransform * base,
 
     // Check if a bitwise mask was set for this channel/batch input.
     if ((GST_BUFFER_OFFSET (inbuffer) != GST_BUFFER_OFFSET_NONE) &&
-        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0))
+        ((GST_BUFFER_OFFSET (inbuffer) & (1 << idx)) == 0) &&
+        GST_VIDEO_INFO_MULTIVIEW_MODE (mlconverter->ininfo) ==
+            GST_VIDEO_MULTIVIEW_MODE_SEPARATED)
       continue;
 
     name = g_strdup_printf ("channel-%u", idx);
@@ -1143,6 +1147,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
 #ifdef USE_C2D_CONVERTER
   gst_structure_set (opts,
       GST_C2D_VIDEO_CONVERTER_OPT_BACKGROUND, G_TYPE_UINT, 0x00000000,
+      GST_C2D_VIDEO_CONVERTER_OPT_CLEAR, G_TYPE_BOOLEAN, FALSE,
       NULL);
 
   // Configure the C2D converter output parameters.
@@ -1162,6 +1167,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
 #ifdef USE_GLES_CONVERTER
   gst_structure_set (opts,
       GST_GLES_VIDEO_CONVERTER_OPT_BACKGROUND, G_TYPE_UINT, 0x00000000,
+      GST_GLES_VIDEO_CONVERTER_OPT_CLEAR, G_TYPE_BOOLEAN, FALSE,
       GST_GLES_VIDEO_CONVERTER_OPT_FLOAT16_FORMAT, G_TYPE_BOOLEAN,
           (mlconverter->mlinfo->type == GST_ML_TYPE_FLOAT16),
       GST_GLES_VIDEO_CONVERTER_OPT_FLOAT32_FORMAT, G_TYPE_BOOLEAN,

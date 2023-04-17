@@ -28,37 +28,8 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifdef HAVE_CONFIG_H
@@ -213,7 +184,7 @@ static GstCaps *
 gst_overlay_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_overlay_format_caps);
     g_once_init_leave (&inited, 1);
@@ -1284,7 +1255,6 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
   GstCvpOptclFlowMeta *meta = (GstCvpOptclFlowMeta *) metadata;
   g_return_val_if_fail (meta->mvectors->len == meta->stats->len, FALSE);
 
-  gint paxel_width = (gst_overlay->width / 8);
   gint arrows_cnt = 0;
 
   // Read each 4th mv in order to skip each 2nd paxel due arrows density
@@ -1292,8 +1262,8 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
     GstCvpMotionVector *mvector = &g_array_index (meta->mvectors, GstCvpMotionVector, x);
     GstCvpOptclFlowStats *stats = &g_array_index (meta->stats, GstCvpOptclFlowStats, x);
 
-    gint mv_x = mvector->x;
-    gint mv_y = mvector->y;
+    gint mv_x = mvector->dx;
+    gint mv_y = mvector->dy;
 
     // Filter by motion vectors
     if (mv_x < (gint) gst_overlay->arrows_filter_mv &&
@@ -1313,15 +1283,11 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
       continue;
     }
 
-    gint row = (gint) (x / (paxel_width * 2) * 2);
-    gint pos = x - row * paxel_width;
-    gint pos_real = (gint) (pos / 2);
+    if ((stats->sad == 0) && (stats->variance == 0))
+      continue;
 
-    ov_param.arrows[arrows_cnt].end_x = pos_real * 8 + 4;
-    if (pos % 2)
-      ov_param.arrows[arrows_cnt].end_y = (row + 1) * 8;
-    else
-      ov_param.arrows[arrows_cnt].end_y = row * 8 + 4;
+    ov_param.arrows[arrows_cnt].end_x = mvector->x;
+    ov_param.arrows[arrows_cnt].end_y = mvector->y;
 
     ov_param.arrows[arrows_cnt].start_x =
         ov_param.arrows[arrows_cnt].end_x + mv_x;
@@ -2819,7 +2785,7 @@ gst_overlay_set_info (GstVideoFilter * filter, GstCaps * in,
   gst_overlay->format = new_format;
   gst_overlay->overlay = new Overlay();
 
-  int32_t ret = gst_overlay->overlay->Init (gst_overlay->format);
+  int32_t ret = gst_overlay->overlay->Init ();
   if (ret != 0) {
     GST_ERROR_OBJECT (gst_overlay, "Overlay init failed! Format: %u",
         (guint)gst_overlay->format);
