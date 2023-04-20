@@ -1,4 +1,4 @@
-/* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -54,6 +54,9 @@ gst_c2_wrapper_create_component (GstC2Wrapper * wrapper,
 GST_API gboolean
 gst_c2_wrapper_delete_component (GstC2Wrapper * wrapper);
 
+GST_API gint
+gst_c2_wrapper_get_block_pool_id (GstC2Wrapper * wrapper);
+
 GST_API gboolean
 gst_c2_wrapper_config_component (GstC2Wrapper * wrapper,
     GPtrArray * config);
@@ -70,6 +73,6 @@ gst_c2_wrapper_component_queue (GstC2Wrapper * wrapper,
 
 GST_API gboolean
 gst_c2_wrapper_free_output_buffer (GstC2Wrapper * wrapper,
-    uint64_t bufferIdx);
+    uint64_t buf_idx);
 
 #endif // __GST_C2_WRAPPER_H__
