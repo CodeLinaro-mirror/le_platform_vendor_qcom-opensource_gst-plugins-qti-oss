@@ -123,6 +123,7 @@ struct _GstC2_VENCEncoder {
   GstStructure *roi_quant_values;
   GArray *roi_quant_boxes;
   guint32 b_frames;
+  gint32 priority;
 };
 
 struct _GstC2_VENCEncoderClass {

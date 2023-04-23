@@ -67,6 +67,7 @@
 #define CONFIG_FUNCTION_KEY_CSDMODE "csdmode"
 #define CONFIG_FUNCTION_KEY_B_PRECONDITIONS "b_precondition"
 #define CONFIG_FUNCTION_KEY_GOP_TUNING "gop_tuning"
+#define CONFIG_FUNCTION_KEY_VIDEO_PRIORITY "priority"
 
 typedef enum {
   INTERLACE_MODE_PROGRESSIVE = 0,
@@ -350,6 +351,8 @@ typedef struct {
     guint32 p_frames;
     guint32 b_frames;
   } frame_num;
+
+  gint32 priority;
 } config_params_t;
 
 void push_to_settings (gpointer data, gpointer user_data);
