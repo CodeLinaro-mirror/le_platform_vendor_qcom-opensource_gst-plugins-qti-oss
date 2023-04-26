@@ -328,9 +328,7 @@ bool C2ComponentWrapper::Queue(BufferDescriptor * buffer) {
         if (buffer->fd != -1) {  //zero copy
           std::shared_ptr<C2GraphicBlock> graphic_block;
 
-          // TO-DO: MB: Enable back commented code-snippet post gbm discussions
           android::C2HandleGBM *gbm_handle = new android::C2HandleGBM ();
-#if 0
           gbm_handle->version = android::C2HandleGBM::VERSION;
           gbm_handle->numFds = android::C2HandleGBM::NUM_FDS;
           gbm_handle->numInts = android::C2HandleGBM::NUM_INTS;
@@ -364,7 +362,6 @@ bool C2ComponentWrapper::Queue(BufferDescriptor * buffer) {
               buffer->width, buffer->height,
               android::C2PlatformAllocatorStore::DEFAULT_GRAPHIC, gbm_handle);
           graphic_block = _C2BlockFactory::CreateGraphicBlock (alloc);
-#endif
 
           std::shared_ptr<C2Buffer> buf = C2Buffer::CreateGraphicBuffer(
             graphic_block->share (C2Rect(graphic_block->width (),
