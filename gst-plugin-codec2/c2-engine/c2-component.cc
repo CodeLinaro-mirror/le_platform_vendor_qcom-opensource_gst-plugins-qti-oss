@@ -345,6 +345,14 @@ bool C2ComponentWrapper::Queue(BufferDescriptor * buffer) {
 
           gbm_perform (GBM_PERFORM_GET_BUFFER_STRIDE_SCANLINE_SIZE, &bufinfo, usage,
             &gbm_handle->mInts.stride, &gbm_handle->mInts.slice_height, &size);
+
+          if (bufinfo.format == GBM_FORMAT_NV12 && buffer->ubwc_flag) {
+            gbm_handle->mInts.stride = MMM_COLOR_FMT_Y_STRIDE (
+              MMM_COLOR_FMT_NV12_UBWC, buffer->width);
+            gbm_handle->mInts.slice_height = MMM_COLOR_FMT_Y_SCANLINES (
+              MMM_COLOR_FMT_NV12_UBWC, buffer->height);
+          }
+
           GST_INFO ("gbm_perform %d %d %d %d", gbm_handle->mInts.stride,
                gbm_handle->mInts.slice_height, size, buffer->size);
           gbm_handle->mInts.format = ToGBMFormat (buffer->format, buffer->ubwc_flag);
