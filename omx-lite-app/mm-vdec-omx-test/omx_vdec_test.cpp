@@ -79,7 +79,9 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *    actual video info got by codec parsing video frame.
  * 16.alloc_nonsecure_buffer(out) // Allocate system memory to copy frame from
  *    secure output GBM buffer and dump it to a file for correctness checking.
- * 17.Wait for EOS event to free system resource and exit.
+ * 17.Wait for EOS event to free system resource and exit, including calling
+      OMX_SendCommand(OMX_CommandStateSet) to change OMX component state to Idle
+      and Loaded, calling OMX_FreeHandle() and OMX_Deinit().
  */
 
 #include <stdio.h>
