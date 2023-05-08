@@ -39,6 +39,9 @@
 
 #include "c2vdec.h"
 
+#define BIT_DEPTH_8  8
+#define BIT_DEPTH_10 10
+
 GST_DEBUG_CATEGORY_STATIC (gst_c2_vdec_debug_category);
 #define GST_CAT_DEFAULT gst_c2_vdec_debug_category
 
@@ -51,7 +54,7 @@ G_DEFINE_TYPE (GstC2VDecoder, gst_c2_vdec, GST_TYPE_VIDEO_DECODER);
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
-#define GST_VIDEO_FORMATS "{ NV12 }"
+#define GST_VIDEO_FORMATS "{ NV12, NV12_10LE32, P010_10LE }"
 
 enum
 {
@@ -93,6 +96,31 @@ gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
       gst_structure_get_string (structure, "compression") : NULL;
 
   return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+}
+
+static GstVideoFormat
+gst_c2_vdec_set_output_format (GstC2VDecoder * dec, guint8 bit_depth)
+{
+  GstVideoFormat format;
+
+  switch (bit_depth) {
+    case BIT_DEPTH_8:
+      format = GST_VIDEO_FORMAT_NV12;
+      break;
+    case BIT_DEPTH_10:
+      format = dec->isubwc ? GST_VIDEO_FORMAT_NV12_10LE32 : GST_VIDEO_FORMAT_P010_10LE;
+      break;
+    default:
+      format = GST_VIDEO_FORMAT_NV12;
+      GST_WARNING_OBJECT (dec,
+          "Invalid bit depth (%d), fallback to NV12", bit_depth);
+      break;
+  }
+
+  GST_DEBUG_OBJECT (dec, "Set Decode output format to (%s)",
+      gst_video_format_to_string (format));
+
+  return format;
 }
 
 static gboolean
@@ -239,7 +267,8 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   GstCaps *caps = NULL;
   GstStructure *structure = NULL;
   const gchar *name = NULL, *string = NULL;
-  gint width = 0, height = 0, format = GST_VIDEO_FORMAT_UNKNOWN;
+  gint width = 0, height = 0, bitdepth = BIT_DEPTH_8;
+  GstVideoFormat format;
   gboolean success = FALSE;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
@@ -260,7 +289,13 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
     success = gst_structure_get_int (structure, "width", &width);
     success &= gst_structure_get_int (structure, "height", &height);
-    format = GST_VIDEO_FORMAT_NV12;
+
+    if (structure && gst_structure_has_field (structure, "bit-depth-chroma"))
+      gst_structure_get_uint(structure, "bit-depth-chroma", &bitdepth);
+
+    structure = gst_caps_get_structure (caps, 0);
+    c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
+    format = gst_c2_vdec_set_output_format (c2vdec, bitdepth);
   }
 
   if (caps != NULL)
@@ -279,7 +314,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
   // TODO: Enable this code when GBM backend in waylandsink is not in conflict
   // with the decoder due to the lack of output buffer pool.
-#if defined(CODEC2_CONFIG_VERSION_2_0)
+//#if defined(CODEC2_CONFIG_VERSION_2_0)
   // At this point state->caps is NULL.
   if (outstate->caps)
     gst_caps_unref (outstate->caps);
@@ -300,7 +335,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     if (outstate->caps)
       gst_caps_replace (&outstate->caps, NULL);
   }
-#endif // CODEC2_CONFIG_VERSION_2_0
+//#endif // CODEC2_CONFIG_VERSION_2_0
 
   if (!gst_video_decoder_negotiate (decoder)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to negotiate caps!");
