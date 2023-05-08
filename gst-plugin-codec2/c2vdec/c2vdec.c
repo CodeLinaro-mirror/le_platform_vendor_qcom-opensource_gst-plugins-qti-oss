@@ -131,6 +131,7 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
   GstVideoInfo *info = &state->info;
   GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, FALSE };
   GstC2Resolution resolution = { 0, 0 };
+  gdouble framerate = 0.0;
   gboolean success = FALSE;
 
   pixinfo.format = GST_VIDEO_INFO_FORMAT (info);
@@ -150,6 +151,16 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
       GST_C2_PARAM_OUT_RESOLUTION, GPOINTER_CAST (&resolution));
   if (!success) {
     GST_ERROR_OBJECT (c2vdec, "Failed to set output resolution parameter!");
+    return FALSE;
+  }
+
+  gst_util_fraction_to_double (GST_VIDEO_INFO_FPS_N (info),
+      GST_VIDEO_INFO_FPS_D (info), &framerate);
+
+  success = gst_c2_engine_set_parameter (c2vdec->engine,
+      GST_C2_PARAM_IN_FRAMERATE, GPOINTER_CAST (&framerate));
+  if (!success) {
+    GST_ERROR_OBJECT (c2vdec, "Failed to set input framerate parameter!");
     return FALSE;
   }
 
