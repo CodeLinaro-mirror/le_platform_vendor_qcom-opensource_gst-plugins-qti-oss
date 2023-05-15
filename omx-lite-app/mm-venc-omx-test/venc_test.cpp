@@ -481,6 +481,7 @@ struct enc_ion* m_ion_data_array = NULL;
 
 ProfileType m_sProfile;
 
+static OMX_COLOR_FORMATTYPE m_eColorFormat = (OMX_COLOR_FORMATTYPE) QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m;
 static int m_nFramePlay = 0;
 static int m_rotation = 0;
 static int m_nInFd = -1;
@@ -835,7 +836,7 @@ OMX_ERRORTYPE ConfigureEncoder()
   CHK(result);
   portdef.format.video.nFrameWidth = m_sProfile.nFrameWidth;
   portdef.format.video.nFrameHeight = m_sProfile.nFrameHeight;
-  portdef.format.video.eColorFormat = (OMX_COLOR_FORMATTYPE) QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m;
+  portdef.format.video.eColorFormat = m_eColorFormat;
 
   D ("\n Height %lu width %lu bit rate %lu",portdef.format.video.nFrameHeight
      ,portdef.format.video.nFrameWidth,portdef.format.video.nBitrate);
@@ -1900,7 +1901,7 @@ OMX_ERRORTYPE VencTest_ReadAndEmpty(OMX_BUFFERHEADERTYPE* pYUVBuffer)
     pMetaHandle->data[1] = 0; //offset
     pMetaHandle->data[2] = m_sProfile.nFrameBytes;
     pMetaHandle->data[3] = ITUR601;
-    if (pYUVBuffer->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
+    if (m_eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
       pMetaHandle->data[3] |= PRIV_FLAGS_UBWC_ALIGNED;
     }
     pMetaBuffer->buffer_type = CameraSource;
