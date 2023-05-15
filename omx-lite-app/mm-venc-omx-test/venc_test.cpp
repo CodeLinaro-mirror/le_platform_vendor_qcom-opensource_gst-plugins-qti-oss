@@ -421,7 +421,8 @@ struct enc_ion
 #endif
 };
 #endif
-struct StoreMetaDataInBuffersParams {
+#define PRIV_FLAGS_UBWC_ALIGNED 0x08000000  //actually, defined in gr_priv_handle.h
+struct StoreMetaDataInBuffersParams {  //actually, defined in HardwareAPI.h
   OMX_U32 nSize;
   OMX_VERSIONTYPE nVersion;
   OMX_U32 nPortIndex;
@@ -1899,9 +1900,9 @@ OMX_ERRORTYPE VencTest_ReadAndEmpty(OMX_BUFFERHEADERTYPE* pYUVBuffer)
     pMetaHandle->data[1] = 0; //offset
     pMetaHandle->data[2] = m_sProfile.nFrameBytes;
     pMetaHandle->data[3] = ITUR601;
-    // if (pYUVBuffer->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
-     //  pMetaHandle->data[3] |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
-    // }
+    if (pYUVBuffer->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
+      pMetaHandle->data[3] |= PRIV_FLAGS_UBWC_ALIGNED;
+    }
     pMetaBuffer->buffer_type = CameraSource;
     D("metamode data[2] %d", pMetaHandle->data[2]);
   }
