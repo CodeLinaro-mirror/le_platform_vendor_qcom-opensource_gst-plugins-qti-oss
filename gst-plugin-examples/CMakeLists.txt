@@ -11,6 +11,8 @@ pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_APP
+  REQUIRED gstreamer-app-1.0>=${GST_VERSION_REQUIRED})
 
 if (ENABLE_TRACKING_CAM)
   add_subdirectory(gst-tracking-cam-app)

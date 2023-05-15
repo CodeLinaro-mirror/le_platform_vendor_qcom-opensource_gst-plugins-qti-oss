@@ -15,10 +15,7 @@ target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_LIBRARIES}
-  ${GST_VIDEO_LIBRARIES}
-  ${GST_ALLOC_LIBRARIES}
-  gstapp-1.0
-  gstqtivideobase
+  ${GST_APP_LIBRARIES}
 )
 
 install(
