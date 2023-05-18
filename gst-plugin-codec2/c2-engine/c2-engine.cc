@@ -195,7 +195,6 @@ class GstC2Notifier : public IC2Notifier {
 
     } else if (c2buffer->data().type() == C2BufferData::GRAPHIC) {
       const C2ConstGraphicBlock block = c2buffer->data().graphicBlocks().front();
-      const C2GraphicView view = block.map().get();
       auto handle = static_cast<const android::C2HandleGBM*>(block.handle());
       if (nullptr == handle) {
         GST_ERROR ("C2Handle instance is NULL");
@@ -219,11 +218,11 @@ class GstC2Notifier : public IC2Notifier {
         return;
       }
 
-      vmeta->width = view.crop().width;
-      vmeta->height = view.crop().height;
+      vmeta->width = block.crop().width;
+      vmeta->height = block.crop().height;
 
-      GST_LOG ("Crop rectangle (%d,%d) [%dx%d] ", view.crop().left,
-          view.crop().top, view.crop().width, view.crop().height);
+      GST_LOG ("Crop rectangle (%d,%d) [%dx%d] ", block.crop().left,
+          block.crop().top, block.crop().width, block.crop().height);
     } else {
       GST_ERROR ("Unknown Codec2 buffer type!");
       gst_buffer_unref (buffer);
