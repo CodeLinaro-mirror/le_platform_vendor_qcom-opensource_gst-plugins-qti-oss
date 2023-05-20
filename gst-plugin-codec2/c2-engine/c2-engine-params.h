@@ -58,6 +58,9 @@ typedef struct _GstC2QuantInit GstC2QuantInit;
 typedef struct _GstC2QuantRanges GstC2QuantRanges;
 typedef struct _GstC2QuantRectangle GstC2QuantRectangle;
 typedef struct _GstC2QuantRegions GstC2QuantRegions;
+typedef struct _GstC2ColorXyStruct GstC2ColorXyStruct;
+typedef struct _GstC2HdrStaticMetadata GstC2HdrStaticMetadata;
+typedef struct _GstC2ColorAspects GstC2ColorAspects;
 
 // GStreamer Codec2 Engine parameter types.
 enum {
@@ -86,6 +89,8 @@ enum {
   GST_C2_PARAM_QP_RANGES,            // GstC2QuantRanges
   GST_C2_PARAM_ROI_ENCODE,           // GstC2QuantRegions
   GST_C2_PARAM_TRIGGER_SYNC_FRAME,   // gboolean
+  GST_C2_PARAM_HDR_STATIC_METADATA,  // GstC2HdrStaticMetadata
+  GST_C2_PARAM_COLOR_ASPECTS_INFO,   // GstC2ColorAspectsInfo
 };
 
 typedef enum {
@@ -193,6 +198,58 @@ typedef enum {
   GST_C2_PREPEND_HEADER_TO_ALL_SYNC,
 } GstC2HeaderMode;
 
+typedef enum {
+  GST_C2_COLOR_PRIMARIES_UNSPECIFIED,
+  GST_C2_COLOR_PRIMARIES_BT709,
+  GST_C2_COLOR_PRIMARIES_BT470M,
+  GST_C2_COLOR_PRIMARIES_BT470BG,
+  GST_C2_COLOR_PRIMARIES_SMPTE170M,
+  GST_C2_COLOR_PRIMARIES_SMPTE240M,
+  GST_C2_COLOR_PRIMARIES_FILM,
+  GST_C2_COLOR_PRIMARIES_BT2020,
+  GST_C2_COLOR_PRIMARIES_ADOBERGB,
+  GST_C2_COLOR_PRIMARIES_SMPTEST428,
+  GST_C2_COLOR_PRIMARIES_SMPTERP431,
+  GST_C2_COLOR_PRIMARIES_SMPTEEG432,
+  GST_C2_COLOR_PRIMARIES_EBU3213,
+} GstC2ColorPrimaries;
+
+typedef enum {
+  GST_C2_COLOR_TRANSFER_UNSPECIFIED,
+  GST_C2_COLOR_TRANSFER_GAMMA10,
+  GST_C2_COLOR_TRANSFER_GAMMA18,
+  GST_C2_COLOR_TRANSFER_GAMMA20,
+  GST_C2_COLOR_TRANSFER_GAMMA22,
+  GST_C2_COLOR_TRANSFER_BT709,
+  GST_C2_COLOR_TRANSFER_SMPTE240M,
+  GST_C2_COLOR_TRANSFER_SRGB,
+  GST_C2_COLOR_TRANSFER_GAMMA28,
+  GST_C2_COLOR_TRANSFER_LOG100,
+  GST_C2_COLOR_TRANSFER_LOG316,
+  GST_C2_COLOR_TRANSFER_BT2020_12,
+  GST_C2_COLOR_TRANSFER_ADOBERGB,
+  GST_C2_COLOR_TRANSFER_BT2020_10,
+  GST_C2_COLOR_TRANSFER_SMPTE2084,
+  GST_C2_COLOR_TRANSFER_ARIB_STD_B67,
+  GST_C2_COLOR_TRANSFER_BT601
+} GstC2ColorTransfer;
+
+typedef enum {
+  GST_C2_COLOR_MATRIX_UNSPECIFIED,
+  GST_C2_COLOR_MATRIX_RGB,
+  GST_C2_COLOR_MATRIX_FCC,
+  GST_C2_COLOR_MATRIX_BT709,
+  GST_C2_COLOR_MATRIX_BT601,
+  GST_C2_COLOR_MATRIX_SMPTE240M,
+  GST_C2_COLOR_MATRIX_BT2020,
+} GstC2ColorMatrix;
+
+typedef enum {
+  GST_C2_COLOR_RANGE_UNSPECIFIED,
+  GST_C2_COLOR_RANGE_0_255,
+  GST_C2_COLOR_RANGE_16_235,
+} GstC2ColorRange;
+
 struct _GstC2PixelInfo {
   GstVideoFormat format;
   gboolean       isubwc;
@@ -206,6 +263,31 @@ struct _GstC2Resolution {
 struct _GstC2Gop {
   guint32 n_pframes;
   guint32 n_bframes;
+};
+
+struct _GstC2ColorXyStruct {
+  gfloat x;
+  gfloat y;
+};
+
+struct _GstC2HdrStaticMetadata {
+  GstC2ColorXyStruct red;
+  GstC2ColorXyStruct green;
+  GstC2ColorXyStruct blue;
+  GstC2ColorXyStruct white;
+  gfloat max_luminance;
+  gfloat min_luminance;
+
+  // content descriptors
+  gfloat maxCll;  ///< max content light level (pixel luminance) in cd/m^2
+  gfloat maxFall; ///< max frame average light level (frame luminance) in cd/m^2
+};
+
+struct _GstC2ColorAspects {
+  GstC2ColorPrimaries primaries;
+  GstC2ColorTransfer transfer;
+  GstC2ColorMatrix matrix;
+  GstC2ColorRange range;
 };
 
 struct _GstC2IntraRefresh {

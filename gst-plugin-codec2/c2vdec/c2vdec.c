@@ -395,6 +395,84 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     g_return_val_if_fail (c2vdec->engine != NULL, FALSE);
   }
 
+  /* Check if caps has HDR10 static info for vp9 */
+  if (gst_structure_has_name (structure, "video/x-vp9")) {
+    gboolean retval = FALSE;
+    GstC2HdrStaticMetadata hdrmeta;
+    GstC2ColorAspects coloraspects;
+    const gchar *color;
+    const gchar *dispinfo;
+    const gchar *lightlevel;
+    GstVideoColorimetry colorinfo;
+    GstVideoMasteringDisplayInfo mdispinfo;
+    GstVideoContentLightLevel contentlightlevel;
+
+    memset (&colorinfo, 0, sizeof (GstVideoColorimetry));
+    memset (&mdispinfo, 0, sizeof (GstVideoMasteringDisplayInfo));
+    memset (&contentlightlevel, 0, sizeof (GstVideoContentLightLevel));
+    memset (&hdrmeta, 0, sizeof (GstC2HdrStaticMetadata));
+    memset (&coloraspects, 0, sizeof (GstC2ColorAspects));
+
+    if (color = gst_structure_get_string (structure, "colorimetry")) {
+      gboolean res= gst_video_colorimetry_from_string (&colorinfo, color);
+      bitdepth = BIT_DEPTH_10;
+      if (res) {
+        coloraspects.primaries = colorinfo.primaries;
+        coloraspects.transfer = colorinfo.transfer;
+        coloraspects.matrix = colorinfo.matrix;
+        coloraspects.range = colorinfo.range;
+
+        success = gst_c2_engine_set_parameter (c2vdec->engine,
+          GST_C2_PARAM_COLOR_ASPECTS_INFO, GPOINTER_CAST (&coloraspects));
+        if (!success) {
+          GST_ERROR_OBJECT (c2vdec, "Failed to set Color Aspects parameter!");
+          return FALSE;
+        }
+      } else
+        GST_DEBUG_OBJECT (c2vdec, "Unable to parse Colorimetry from caps");
+    }
+
+    retval = FALSE;
+    if (dispinfo = gst_structure_get_string (structure, "mastering-display-info")) {
+      gboolean res = gst_video_mastering_display_info_from_string (&mdispinfo, dispinfo);
+      retval |= res;
+      if (!res)
+        GST_DEBUG_OBJECT (c2vdec,
+            "Unable to parse mastering-display-info from caps");
+    }
+
+    if (lightlevel = gst_structure_get_string (structure, "content-light-level")) {
+      gboolean res= gst_video_content_light_level_from_string (&contentlightlevel, lightlevel);
+      retval |= res;
+      if (!res)
+        GST_DEBUG_OBJECT (c2vdec,
+            "Unable to parse content-light-level from caps");
+    }
+
+    if (retval) {
+      hdrmeta.red.x = mdispinfo.display_primaries[0].x;
+      hdrmeta.red.y = mdispinfo.display_primaries[0].y;
+      hdrmeta.green.x = mdispinfo.display_primaries[1].x;
+      hdrmeta.green.y = mdispinfo.display_primaries[1].y;
+      hdrmeta.blue.x = mdispinfo.display_primaries[2].x;
+      hdrmeta.blue.y = mdispinfo.display_primaries[2].y;
+      hdrmeta.white.x = mdispinfo.white_point.x;
+      hdrmeta.white.y = mdispinfo.white_point.y;
+      hdrmeta.max_luminance =
+            mdispinfo.max_display_mastering_luminance;
+      hdrmeta.min_luminance =
+            mdispinfo.min_display_mastering_luminance;
+      hdrmeta.maxCll = contentlightlevel.max_content_light_level;
+      hdrmeta.maxFall = contentlightlevel.max_frame_average_light_level;
+      success = gst_c2_engine_set_parameter (c2vdec->engine,
+          GST_C2_PARAM_HDR_STATIC_METADATA, GPOINTER_CAST (&hdrmeta));
+      if (!success) {
+        GST_ERROR_OBJECT (c2vdec, "Failed to set Hdr static metadata parameter!");
+        return FALSE;
+      }
+    }
+  }
+
   if (!gst_c2_vdec_setup_parameters (c2vdec, c2vdec->outstate)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to setup parameters!");
     return FALSE;
