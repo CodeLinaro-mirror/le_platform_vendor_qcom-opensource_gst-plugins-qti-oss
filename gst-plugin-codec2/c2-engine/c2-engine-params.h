@@ -59,7 +59,7 @@ typedef struct _GstC2QuantRanges GstC2QuantRanges;
 typedef struct _GstC2QuantRectangle GstC2QuantRectangle;
 typedef struct _GstC2QuantRegions GstC2QuantRegions;
 
-// GStreamer Codec2 Engine parameter types.
+// Gstreamer Codec2 Engine parameter types.
 enum {
   GST_C2_PARAM_IN_FORMAT,            // GstC2PixelInfo
   GST_C2_PARAM_OUT_FORMAT,           // GstC2PixelInfo
@@ -86,6 +86,9 @@ enum {
   GST_C2_PARAM_QP_RANGES,            // GstC2QuantRanges
   GST_C2_PARAM_ROI_ENCODE,           // GstC2QuantRegions
   GST_C2_PARAM_TRIGGER_SYNC_FRAME,   // gboolean
+  GST_C2_PARAM_NATIVE_RECORDING,     // gboolean
+  GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
+  GST_C2_PARAM_PRIORITY,             // gint32
 };
 
 typedef enum {
