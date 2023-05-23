@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -226,7 +226,7 @@ gst_ml_aic_populate_info (GstMLAicEngine * engine, gint idx,
 
 // Helper function for AIC context.
 static void
-gst_ml_aic_log_callback (QLogLevel level, const char * message)
+gst_ml_aic_log_callback (QLogLevel level, const char * message, void* userData)
 {
   if (level == QL_DEBUG || level == QL_INFO)
     GST_TRACE ("AIC: %s", message);
@@ -339,7 +339,7 @@ gst_ml_aic_engine_new (GstStructure * settings)
 
     // Create context from the chosen devices and set the log & error handlers.
     engine->context = ::qaic::rt::Context::Factory(nullptr, device_ids,
-        gst_ml_aic_log_callback, gst_ml_aic_error_handler);
+        gst_ml_aic_log_callback, nullptr, gst_ml_aic_error_handler, nullptr);
 
     // Set the highest debug level, it will be filtered by the GST log system.
     engine->context->setLogLevel(QL_DEBUG);
@@ -598,12 +598,18 @@ gst_ml_aic_engine_submit_request (GstMLAicEngine * engine,
   GST_ML_RETURN_VAL_IF_FAIL (object, GST_ML_AIC_INVALID_ID,
       "Failed to retrieve ExecObj!");
 
-  object->setData(qbuffers);
+  QStatus status = object->setData(qbuffers);
+
+  if (status != QS_SUCCESS) {
+    GST_ERROR ("Failed to setData with ID %u, status %d!",
+        object->getId(), status);
+    return FALSE;
+  }
 
   ::qaic::rt::shQueue queue = engine->queues[program];
 
   try {
-    QStatus status = queue->enqueue(object);
+    status = queue->enqueue(object);
 
     if (status != QS_SUCCESS) {
       GST_ERROR ("Failed to enqueue AIC ExecObj with ID %u, status %d!",
