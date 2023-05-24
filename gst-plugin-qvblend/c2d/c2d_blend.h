@@ -118,12 +118,12 @@ private:
     size_t calcSize(ColorConvertFormat format, size_t width, size_t height);
     size_t calcYSize(ColorConvertFormat format, size_t width, size_t height);
     size_t calcStride(ColorConvertFormat format, size_t width);
-    C2D_STATUS updateRGBSurface(uint8_t *gpuAddr, void * data, bool isSource);
-    C2D_STATUS updateYUVSurface(uint8_t *gpuAddr, void *base, void *data, bool isSource);
+    C2D_STATUS updateRGBSurface(void *gpuAddr, void *data, bool isSource);
+    C2D_STATUS updateYUVSurface(void *gpuAddr, void *base, void *data, bool isSource);
     int32_t createSurface(ColorConvertFormat format, size_t width, size_t height, bool isSource);
     bool isYUVSurface(ColorConvertFormat format);
     void * mapGPUAddr(int bufFD, void *bufPtr, size_t bufLen);
-    bool unmapGPUAddr(unsigned long gAddr);
+    bool unmapGPUAddr(void *gAddr);
     void clearSurfaces();
 
 private:
@@ -167,8 +167,6 @@ typedef void (*compute_fmt_aligned_width_and_height_t)
   (int width, int height, int plane_id, int format, uint32_t num_samples,
    int tile_mode, int raster_mode, int padding_threshold,
    int *aligned_w, int *aligned_h);
-
-#define ADRENO_PIXELFORMAT_R8G8B8A8 28
 
 class AdrenoLibLoader {
   public:

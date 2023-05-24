@@ -42,6 +42,10 @@
 #include <vidc/media/msm_media_info.h>
 #include "c2d_blend.h"
 
+/* For ADRENO_PIXELFORMAT_XXX definitions
+ * used by computeFormatAlignedWidthHeight(). */
+#include <msmgbm_adreno_utils.h>
+
 GST_DEBUG_CATEGORY_EXTERN (gst_videoblend_debug);
 #define GST_CAT_DEFAULT gst_videoblend_debug
 
@@ -60,9 +64,11 @@ c2d_blend::c2d_blend():
 
 c2d_blend::~c2d_blend()
 {
-    if (mGbmDev && gbm_device_destroy) gbm_device_destroy (mGbmDev);
+    if (mGbmDev && gbm_device_destroy)
+        gbm_device_destroy (mGbmDev);
     mGbmDev = NULL;
-    if (mGbmClientFd != -1) close(mGbmClientFd);
+    if (mGbmClientFd != -1)
+        close(mGbmClientFd);
     mGbmClientFd = -1;
     clearSurfaces();
     pthread_mutex_destroy(&mLock);
@@ -72,7 +78,8 @@ bool c2d_blend::init()
 {
     bool bStatus = true;
 
-    if (mInit) bStatus = false;
+    if (mInit)
+        bStatus = false;
 
     if (bStatus)
     {
@@ -111,13 +118,15 @@ bool c2d_blend::init()
     if (bStatus)
     {
         mGbmClientFd = ::open ("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-        if (mGbmClientFd < 0) {
+        if (mGbmClientFd < 0)
+        {
             GST_ERROR("failed to open gbm device");
             bStatus = false;
         }
 
         mGbmDev = gbm_create_device (mGbmClientFd);
-        if (NULL == mGbmDev) {
+        if (NULL == mGbmDev)
+        {
             GST_ERROR ("failed to create gbm_device");
             bStatus = false;
         }
@@ -139,8 +148,8 @@ bool c2d_blend::convert(int srcFd, void *srcBase, void *srcData,
                         int dstFd, void *dstBase, void *dstData)
 {
     C2D_STATUS ret;
-    uint8_t *srcMappedGpuAddr = nullptr;
-    uint8_t *dstMappedGpuAddr = nullptr;
+    void *srcMappedGpuAddr = nullptr;
+    void *dstMappedGpuAddr = nullptr;
     bool status = false;
 
     if (srcFd < 0 || dstFd < 0
@@ -158,7 +167,7 @@ bool c2d_blend::convert(int srcFd, void *srcBase, void *srcData,
         goto out;
     }
 
-    srcMappedGpuAddr = (uint8_t *)mapGPUAddr(srcFd, srcData, mSrcSize);
+    srcMappedGpuAddr = mapGPUAddr(srcFd, srcData, mSrcSize);
     if (!srcMappedGpuAddr)
     {
         goto out;
@@ -175,7 +184,7 @@ bool c2d_blend::convert(int srcFd, void *srcBase, void *srcData,
 
     if (ret == C2D_STATUS_OK)
     {
-        dstMappedGpuAddr = (uint8_t *)mapGPUAddr(dstFd, dstData, mDstSize);
+        dstMappedGpuAddr = mapGPUAddr(dstFd, dstData, mDstSize);
         if (!dstMappedGpuAddr)
         {
             goto unmap_src;
@@ -218,13 +227,13 @@ bool c2d_blend::convert(int srcFd, void *srcBase, void *srcData,
         goto unmap_src;
     }
 unmap_all:
-    if (!unmapGPUAddr((unsigned long)dstMappedGpuAddr))
+    if (!unmapGPUAddr(dstMappedGpuAddr))
     {
         GST_ERROR("unmapping dst GPU address failed");
         status = false;
   }
 unmap_src:
-    if (!unmapGPUAddr((unsigned long)srcMappedGpuAddr))
+    if (!unmapGPUAddr(srcMappedGpuAddr))
     {
         GST_ERROR("unmapping src GPU address failed");
         status = false;
@@ -295,7 +304,8 @@ void c2d_blend::destroy()
     pthread_mutex_lock(&mLock);
     GST_INFO ("configured=%d, srcFormat=%d, dstFormat=%d, srcWidth=%lu, srcHeight=%lu, dstWidth=%lu, dstHeight=%lu",
                mConfigured, mSrcFormat, mDstFormat, mSrcWidth, mSrcHeight, mDstWidth, mDstHeight);
-    if (mConfigured) {
+    if (mConfigured)
+    {
         clearSurfaces();
         mConfigured = false;
     }
@@ -316,7 +326,8 @@ bool c2d_blend::allocateBuffer(int port,struct C2DBuffer *buffer)
         return false;
     }
 
-    if (!buffer->width || !buffer->height) {
+    if (!buffer->width || !buffer->height)
+    {
         GST_ERROR("Buffer param width/height is NULL");
         return false;
     }
@@ -335,7 +346,8 @@ bool c2d_blend::allocateBuffer(int port,struct C2DBuffer *buffer)
     buffer->meta_fd = -1;
     buffer->fd = gbm_bo_get_fd(buffer->gbm_bo);
     gbm_perform (GBM_PERFORM_GET_METADATA_ION_FD, buffer->gbm_bo, &buffer->meta_fd);
-    if (buffer->fd <= 0 || buffer->meta_fd <= 0) {
+    if (buffer->fd <= 0 || buffer->meta_fd <= 0)
+    {
         GST_ERROR ("the fds(bo_fd:%d, meta_fd:%d) are invalid",
                    buffer->fd, buffer->meta_fd);
         if (buffer->fd >= 0) {
@@ -366,7 +378,8 @@ bool c2d_blend::allocateBuffer(int port,struct C2DBuffer *buffer)
     }
 
     void *va = mmap(NULL, buffer->size, PROT_READ|PROT_WRITE, MAP_SHARED, buffer->fd, 0);
-    if (MAP_FAILED == va) {
+    if (MAP_FAILED == va)
+    {
         GST_ERROR("failed to map buffer of size = %u, fd = 0x%x",
                   buffer->size, buffer->fd);
         if (buffer->fd >= 0) {
@@ -391,13 +404,16 @@ bool c2d_blend::freeBuffer(struct C2DBuffer *buffer)
         return false;
     }
 
-    if (buffer->ptr) {
+    if (buffer->ptr)
+    {
         munmap (buffer->ptr, buffer->size);
         buffer->ptr = NULL;
     }
 
-    if (buffer->gbm_bo) {
-        if (buffer->fd >= 0) {
+    if (buffer->gbm_bo)
+    {
+        if (buffer->fd >= 0)
+        {
             close (buffer->fd);
         }
         gbm_bo_destroy (buffer->gbm_bo);
@@ -429,7 +445,8 @@ int32_t c2d_blend::dumpOutput(int fd)
         for (size_t i = 0; i < sliceHeight; i++)
         {
             ret = write(fd, base, mDstWidth); //will work only for the 420 ones
-            if (ret < 0) goto cleanup;
+            if (ret < 0)
+                goto cleanup;
             base += stride;
         }
 
@@ -438,7 +455,8 @@ int32_t c2d_blend::dumpOutput(int fd)
         for (size_t i = 0; i < (sliceHeight+1) / 2; i++)
         {
             ret = write(fd, base, mDstWidth);
-            if (ret < 0) goto cleanup;
+            if (ret < 0)
+                goto cleanup;
             base += stride;
         }
     }
@@ -474,7 +492,7 @@ int32_t c2d_blend::dumpOutput(int fd)
             count += stride;
         }
     }
- cleanup:
+cleanup:
     if (ret < 0)
     {
         GST_ERROR("File write failed w/ errno %s", strerror(errno));
@@ -535,7 +553,8 @@ out:
 uint32_t c2d_blend::getC2DFormat(ColorConvertFormat format, bool isSource)
 {
     uint32_t C2DFormat;
-    switch (format) {
+    switch (format)
+    {
         case ARGB8888:
             C2DFormat = C2D_COLOR_FORMAT_8888_ARGB | C2D_FORMAT_SWAP_ENDIANNESS;
             if (isSource)
@@ -552,7 +571,6 @@ uint32_t c2d_blend::getC2DFormat(ColorConvertFormat format, bool isSource)
         case RGBA8888_NO_PREMULTIPLIED:
             C2DFormat = C2D_COLOR_FORMAT_8888_RGBA | C2D_FORMAT_SWAP_ENDIANNESS;
             return C2DFormat;
-        case NV12_2K:
         case NV12_128m:
             return C2D_COLOR_FORMAT_420_NV12;
         default:
@@ -576,7 +594,7 @@ size_t c2d_blend::calcSize(ColorConvertFormat format, size_t width, size_t heigh
         case RGBA8888_NO_PREMULTIPLIED:
             bpp = 4;
             computeFormatAlignedWidthHeight(width, height,
-                                            ADRENO_PIXELFORMAT_R8G8B8A8 ,
+                                            msm_gbm::ADRENO_PIXELFORMAT_R8G8B8A8,
                                             &alignedw, &alignedh);
             GST_DEBUG("Format: %d, alignedw %d alignedh %d", format, alignedw, alignedh);
             if (mSrcStride)
@@ -584,14 +602,6 @@ size_t c2d_blend::calcSize(ColorConvertFormat format, size_t width, size_t heigh
             else
                 size = alignedw * alignedh * bpp;
             size = ALIGN(size, ALIGN4K);
-            break;
-        case NV12_2K: {
-            alignedw = ALIGN(width, ALIGN16);
-            size_t lumaSize = ALIGN(alignedw * height, ALIGN2K);
-            size_t chromaSize = ALIGN((alignedw * height)/2, ALIGN2K);
-            size = ALIGN(lumaSize + chromaSize, ALIGN4K);
-            GST_DEBUG("NV12_2k, width = %zu, height = %zu, size = %d", width, height, size);
-            }
             break;
         case NV12_128m:
             alignedw = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
@@ -609,11 +619,6 @@ size_t c2d_blend::calcYSize(ColorConvertFormat format, size_t width, size_t heig
 {
     switch (format)
     {
-        case NV12_2K: {
-            size_t alignedw = ALIGN(width, ALIGN16);
-            size_t lumaSize = ALIGN(alignedw * height, ALIGN2K);
-            return lumaSize;
-        }
         case NV12_128m: {
             int32_t stride_alignment = VENUS_Y_STRIDE(COLOR_FMT_NV12, 1);
             int32_t scanline_alignment = VENUS_Y_SCANLINES(COLOR_FMT_NV12, 1);
@@ -627,7 +632,8 @@ size_t c2d_blend::calcYSize(ColorConvertFormat format, size_t width, size_t heig
 
 size_t c2d_blend::calcStride(ColorConvertFormat format, size_t width)
 {
-    switch (format) {
+    switch (format)
+    {
         case ARGB8888:
         case ARGB8888_NO_PREMULTIPLIED:
         case RGBA8888:
@@ -636,8 +642,6 @@ size_t c2d_blend::calcStride(ColorConvertFormat format, size_t width)
                 return mSrcStride * 4;
             else
                 return ALIGN(width, ALIGN32) * 4;
-        case NV12_2K:
-            return ALIGN(width, ALIGN16);
         case NV12_128m: {
             int32_t stride_alignment = VENUS_Y_STRIDE(COLOR_FMT_NV12, 1);
             return ALIGN(width, stride_alignment);
@@ -648,7 +652,7 @@ size_t c2d_blend::calcStride(ColorConvertFormat format, size_t width)
     }
 }
 
-C2D_STATUS c2d_blend::updateRGBSurface(uint8_t *gpuAddr, void * data, bool isSource)
+C2D_STATUS c2d_blend::updateRGBSurface(void *gpuAddr, void * data, bool isSource)
 {
     if (isSource)
     {
@@ -671,14 +675,14 @@ C2D_STATUS c2d_blend::updateRGBSurface(uint8_t *gpuAddr, void * data, bool isSou
     }
 }
 
-C2D_STATUS c2d_blend::updateYUVSurface(uint8_t *gpuAddr, void *base,
+C2D_STATUS c2d_blend::updateYUVSurface(void *gpuAddr, void *base,
                                                   void *data, bool isSource)
 {
     if (isSource)
     {
         C2D_YUV_SURFACE_DEF * srcSurfaceDef = (C2D_YUV_SURFACE_DEF *)mSrcSurfaceDef;
         srcSurfaceDef->plane0 = data;
-        srcSurfaceDef->phys0  = gpuAddr + ((uint8_t *)data - (uint8_t *)base);
+        srcSurfaceDef->phys0  = (uint8_t *)gpuAddr + ((uint8_t *)data - (uint8_t *)base);
         srcSurfaceDef->plane1 = (uint8_t *)data + mSrcYSize;
         srcSurfaceDef->phys1  = (uint8_t *)srcSurfaceDef->phys0 + mSrcYSize;
         return c2dUpdateSurface(mSrcSurface, C2D_SOURCE,
@@ -689,7 +693,7 @@ C2D_STATUS c2d_blend::updateYUVSurface(uint8_t *gpuAddr, void *base,
     {
         C2D_YUV_SURFACE_DEF * dstSurfaceDef = (C2D_YUV_SURFACE_DEF *)mDstSurfaceDef;
         dstSurfaceDef->plane0 = data;
-        dstSurfaceDef->phys0  = gpuAddr + ((uint8_t *)data - (uint8_t *)base);
+        dstSurfaceDef->phys0  = (uint8_t *)gpuAddr + ((uint8_t *)data - (uint8_t *)base);
         dstSurfaceDef->plane1 = (uint8_t *)data + mDstYSize;
         dstSurfaceDef->phys1  = (uint8_t *)dstSurfaceDef->phys0 + mDstYSize;
         return c2dUpdateSurface(mDstSurface, C2D_TARGET,
@@ -783,11 +787,9 @@ bool c2d_blend::isYUVSurface(ColorConvertFormat format)
 {
     switch (format)
     {
-        case NV12_2K:
         case NV12_128m:
             return true;
         default:
-            GST_WARNING("Format not supported , %d", format);
             return false;
     }
 }
@@ -800,8 +802,8 @@ void * c2d_blend::mapGPUAddr(int bufFD, void *bufPtr, size_t bufLen)
                          &gpuaddr);
     if (status != C2D_STATUS_OK)
     {
-        GST_ERROR("c2dMapAddr failed: status %d fd %d ptr %p len %zu flags %d",
-                status, bufFD, bufPtr, bufLen, KGSL_USER_MEM_TYPE_ION);
+        GST_ERROR("c2dMapAddr failed: status %d fd %d ptr %p len %zu flags %s",
+                status, bufFD, bufPtr, bufLen, "KGSL_USER_MEM_TYPE_ION");
         return NULL;
     }
     GST_DEBUG("c2d mapping created: gpuaddr %p fd %d ptr %p len %zu",
@@ -809,43 +811,52 @@ void * c2d_blend::mapGPUAddr(int bufFD, void *bufPtr, size_t bufLen)
     return gpuaddr;
 }
 
-bool c2d_blend::unmapGPUAddr(unsigned long gAddr)
+bool c2d_blend::unmapGPUAddr(void *gAddr)
 {
 
-    C2D_STATUS status = c2dUnMapAddr((void*)gAddr);
+    C2D_STATUS status = c2dUnMapAddr(gAddr);
 
     if (status != C2D_STATUS_OK)
-        GST_ERROR("%s: c2dUnMapAddr failed: status %d gpuaddr %08lx",
-                                     __FUNCTION__, status, gAddr);
+        GST_ERROR("c2dUnMapAddr failed: status %d gpuaddr %p", status, gAddr);
 
     return (status == C2D_STATUS_OK);
 }
 
 void c2d_blend::clearSurfaces()
 {
-        if (mSrcSurface) {
+        if (mSrcSurface)
+        {
             c2dDestroySurface(mSrcSurface);
             mSrcSurface = 0;
         }
 
-         if (mSrcSurfaceDef) {
-            if (isYUVSurface(mSrcFormat)) {
+         if (mSrcSurfaceDef)
+         {
+            if (isYUVSurface(mSrcFormat))
+            {
                 delete ((C2D_YUV_SURFACE_DEF *)mSrcSurfaceDef);
-            } else {
+            }
+            else
+            {
                 delete ((C2D_RGB_SURFACE_DEF *)mSrcSurfaceDef);
             }
             mSrcSurfaceDef = NULL;
         }
 
-        if (mDstSurface) {
+        if (mDstSurface)
+        {
             c2dDestroySurface(mDstSurface);
             mDstSurface = 0;
         }
 
-        if (mDstSurfaceDef) {
-            if (isYUVSurface(mDstFormat)) {
+        if (mDstSurfaceDef)
+        {
+            if (isYUVSurface(mDstFormat))
+            {
                 delete ((C2D_YUV_SURFACE_DEF *)mDstSurfaceDef);
-            } else {
+            }
+            else
+            {
                 delete ((C2D_RGB_SURFACE_DEF *)mDstSurfaceDef);
             }
             mDstSurfaceDef = NULL;
