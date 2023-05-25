@@ -51,7 +51,9 @@
     "dimensions = (int) < < 1, [ 1000, 1001 ] > >"
 
 // Scale values for tensors needed for dequantization.
-static const gfloat qscales = 0.0659240186;
+static const gfloat qscales = 0.159694433;
+static const guint8 qoffset = 0;
+
 // Module caps instance
 static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
 
@@ -141,7 +143,7 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   GArray *predictions = (GArray *) output;
   guint8 *data = NULL;
   guint idx = 0, n_inferences = 0;
-  gdouble value = 0.0;
+  gdouble sum, value = 0.0;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
@@ -150,6 +152,24 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   n_inferences = GST_ML_FRAME_DIM (mlframe, 0, 1);
   data = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
 
+  switch (GST_ML_FRAME_TYPE(mlframe)) {
+  case GST_ML_TYPE_INT8:
+    for (idx = 0; idx < n_inferences; ++idx) {
+      value = (GINT8_PTR_CAST(data)[idx] - qoffset) * qscales;
+      sum += expf(value);
+    }
+    break;
+  case GST_ML_TYPE_FLOAT32:
+    for (idx = 0; idx < n_inferences; ++idx) {
+      value = GFLOAT_PTR_CAST(data)[idx];
+      sum += expf(value);
+    }
+    break;
+  default:
+    GST_ERROR("Unsupported tensor type!");
+    return FALSE;
+  }
+
   // Fill the prediction table.
   for (idx = 0; idx < n_inferences; ++idx) {
     GstLabel *label = NULL;
@@ -157,11 +177,12 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
     switch (GST_ML_FRAME_TYPE (mlframe)) {
       case GST_ML_TYPE_INT8:
-        value = GINT8_PTR_CAST (data)[idx] * qscales;
-        value =  (1 / (1 + expf (- value))) * 100;
+        value = (GINT8_PTR_CAST(data)[idx] - qoffset) * qscales;
+        value = (expf(value) / sum) * 100;
         break;
       case GST_ML_TYPE_FLOAT32:
-        value = (1 / (1 + expf (- GFLOAT_PTR_CAST (data)[idx]))) * 100;
+        value = GFLOAT_PTR_CAST(data)[idx];
+        value = (expf(value) / sum) * 100;
         break;
       default:
         GST_ERROR ("Unsupported tensor type!");
