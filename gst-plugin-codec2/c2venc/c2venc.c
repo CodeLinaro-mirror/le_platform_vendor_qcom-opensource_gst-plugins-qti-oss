@@ -801,7 +801,13 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
       level = gst_c2_utils_h264_level_from_string (string);
     } else if (gst_structure_has_name (structure, "video/x-h265")) {
       const gchar *tier = gst_structure_get_string (structure, "tier");
-      level = gst_c2_utils_h265_level_from_string (string, tier);
+      if (NULL != tier) {
+        level = gst_c2_utils_h265_level_from_string (string, tier);
+      } else {
+        GST_ERROR_OBJECT (c2venc, "gst_structure_get_string returned NULL!");
+        gst_caps_unref (caps);
+        return FALSE;
+      }
     }
 
     if (level == GST_C2_LEVEL_INVALID) {
@@ -1281,6 +1287,27 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   gobject->get_property = GST_DEBUG_FUNCPTR (gst_c2_venc_get_property);
   gobject->finalize     = GST_DEBUG_FUNCPTR (gst_c2_venc_finalize);
 
+
+  GParamSpec *pSpec1 = NULL, *pSpec2 = NULL;
+  pSpec1 = gst_param_spec_array ("rectangle", "Rectangle", "Rectangle",
+          g_param_spec_int ("value", "Rectangle Value",
+              "One of X, Y, WIDTH, HEIGHT or QP", G_MININT, G_MAXINT, 0,
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+  if (NULL != pSpec1) {
+      pSpec2 = gst_param_spec_array ("roi-quant-boxes", "ROI Quantization Boxes",
+        "Manually set ROI boxes (e.g. '<<X, Y, W, H, QP>, <X, Y, W, H, QP>>'). "
+        "The QP values must be in the range of -31 (best quality) to "
+        "30 (worst quality)", pSpec1,
+        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY);
+
+        if (NULL == pSpec2) {
+            return;
+        }
+  } else {
+      return;
+  }
+
   g_object_class_install_property (gobject, PROP_ROTATE,
       g_param_spec_enum ("rotate", "Rotate",
           "Rotate video image", GST_TYPE_C2_VIDEO_ROTATION, DEFAULT_PROP_ROTATE,
@@ -1371,17 +1398,7 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           "person=-20,cup=10,dog=-5;'). The QP values must be in the range of "
           "-31 (best quality) to 30 (worst quality)", GST_TYPE_STRUCTURE,
           G_PARAM_READWRITE| G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
-  g_object_class_install_property (gobject, PROP_ROI_QUANT_BOXES,
-      gst_param_spec_array ("roi-quant-boxes", "ROI Quantization Boxes",
-          "Manually set ROI boxes (e.g. '<<X, Y, W, H, QP>, <X, Y, W, H, QP>>'). "
-          "The QP values must be in the range of -31 (best quality) to "
-          "30 (worst quality)",
-          gst_param_spec_array ("rectangle", "Rectangle", "Rectangle",
-              g_param_spec_int ("value", "Rectangle Value",
-                  "One of X, Y, WIDTH, HEIGHT or QP", G_MININT, G_MAXINT, 0,
-                  G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
-              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject, PROP_ROI_QUANT_BOXES, pSpec2);
   g_object_class_install_property (gobject, PROP_SLICE_MODE,
       g_param_spec_enum ("slice-mode", "slice mode",
           "Slice mode (0xffffffff=component default)",
