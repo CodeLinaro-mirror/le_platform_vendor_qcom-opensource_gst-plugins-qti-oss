@@ -388,7 +388,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   const gchar *string = NULL;
   gint width = 0, height = 0;
   GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
-  gboolean success = FALSE;
+  gboolean success = FALSE, resolution_change = FALSE;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
 
@@ -419,6 +419,13 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (!success) {
     GST_ERROR_OBJECT (c2vdec, "Failed to extract width, height or/and format!");
     return FALSE;
+  }
+
+  if (c2vdec->outstate && (width != c2vdec->outstate->info.width ||
+      height != c2vdec->outstate->info.height)) {
+    resolution_change = TRUE;
+
+    GST_INFO_OBJECT (c2vdec, "Resolution changed: %dx%d", width, height);
   }
 
   GST_DEBUG_OBJECT (c2vdec, "Setting output width: %d, height: %d, format: %s",
@@ -490,7 +497,8 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (c2vdec->secure)
     name = g_strconcat(name, ".secure", NULL);
 
-  if ((c2vdec->engine != NULL) && !gst_c2_engine_stop (c2vdec->engine)) {
+  if (!resolution_change && (c2vdec->engine != NULL)
+      && !gst_c2_engine_stop (c2vdec->engine)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
     return FALSE;
   }
@@ -520,7 +528,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     return FALSE;
   }
 
-  if (!gst_c2_engine_start (c2vdec->engine)) {
+  if (!resolution_change && !gst_c2_engine_start (c2vdec->engine)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to start engine!");
     return FALSE;
   }
