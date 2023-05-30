@@ -62,6 +62,7 @@ G_DEFINE_TYPE (GstC2_VENCEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_CODEC2_VIDEO_ENC_NUM_LTR_FRAMES_DEFAULT (0xffffffff)
 #define GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT (0)
 #define GST_CODEC2_VIDEO_PRIORITY_DEFAULT (0)
+#define GST_CODEC2_VIDEO_ENC_OPERATING_RATE_DEFAULT (0)
 
 // Caps formats.
 #define GST_VIDEO_FORMATS "{ NV12, NV21, NV12_10LE32, P010_10LE }"
@@ -131,6 +132,7 @@ enum
   PROP_ROTATE,
   PROP_B_FRAMES,
   PROP_PRIORITY,
+  PROP_OPERATING_RATE,
 };
 
 typedef struct _GstQuantRectangle GstQuantRectangle;
@@ -692,6 +694,18 @@ make_priority_param (gint32 priority)
     param.config_name = CONFIG_FUNCTION_KEY_VIDEO_PRIORITY;
     param.priority = priority;
     return param;
+}
+
+static config_params_t
+make_operating_rate_param (guint32 operating_rate)
+{
+  config_params_t param;
+
+  memset (&param, 0, sizeof (config_params_t));
+
+  param.config_name = CONFIG_FUNCTION_KEY_OPERATING_RATE;
+  param.operating_rate = operating_rate;
+  return param;
 }
 
 static gboolean
@@ -1333,6 +1347,12 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     g_ptr_array_add(config, &priority_level);
     GST_DEBUG_OBJECT (c2venc, "set video priority %d", c2venc->priority);
 
+  if (c2venc->operating_rate != GST_CODEC2_VIDEO_ENC_OPERATING_RATE_DEFAULT) {
+    config_params_t operating_rate = make_operating_rate_param (c2venc->operating_rate);
+    g_ptr_array_add (config, &operating_rate);
+    GST_DEBUG_OBJECT (c2venc, "set operating rate: %d", c2venc->operating_rate);
+  }
+
   // Config component
   if (!gst_c2_wrapper_config_component (c2venc->wrapper, config)) {
     GST_ERROR_OBJECT (c2venc, "Failed to config interface");
@@ -1702,6 +1722,9 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_PRIORITY:
       c2venc->priority = g_value_get_int(value);
       break;
+    case PROP_OPERATING_RATE:
+      c2venc->operating_rate = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1840,6 +1863,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_PRIORITY:
       g_value_set_int(value, c2venc->priority);
+      break;
+    case PROP_OPERATING_RATE:
+      g_value_set_uint (value, c2venc->operating_rate);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2089,11 +2115,18 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_B_FRAMES_DEFAULT,
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
-    g_object_class_install_property(gobject, PROP_PRIORITY,
+  g_object_class_install_property(gobject, PROP_PRIORITY,
       g_param_spec_int("priority", "Priority of Video Instance",
           "Set the proirity of current video instance among concurrent cases (0=RealTime default)",
           G_MININT32, 0, GST_CODEC2_VIDEO_PRIORITY_DEFAULT,
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+
+  g_object_class_install_property (gobject, PROP_OPERATING_RATE,
+      g_param_spec_uint ("operating-rate", "Operating Rate Tuning",
+          "Expected rate of work through the component (0=component default)",
+          0, G_MAXUINT, GST_CODEC2_VIDEO_ENC_OPERATING_RATE_DEFAULT,
+          static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY)));
 
   gst_element_class_set_static_metadata (element,
       "C2Venc encoder", "C2_VENC/Encoder",

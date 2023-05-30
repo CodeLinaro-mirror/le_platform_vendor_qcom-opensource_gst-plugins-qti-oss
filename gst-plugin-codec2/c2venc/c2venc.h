@@ -124,6 +124,7 @@ struct _GstC2_VENCEncoder {
   GArray *roi_quant_boxes;
   guint32 b_frames;
   gint32 priority;
+  guint32 operating_rate;
 };
 
 struct _GstC2_VENCEncoderClass {
