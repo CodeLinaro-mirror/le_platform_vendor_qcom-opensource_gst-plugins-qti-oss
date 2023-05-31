@@ -183,7 +183,8 @@ typedef enum {
 typedef enum {
     EVENT_OUTPUTS_DONE = 0,
     EVENT_TRIPPED,
-    EVENT_ERROR
+    EVENT_ERROR,
+    EVENT_DROP_FRAME,
 } EVENT_TYPE;
 
 typedef enum {

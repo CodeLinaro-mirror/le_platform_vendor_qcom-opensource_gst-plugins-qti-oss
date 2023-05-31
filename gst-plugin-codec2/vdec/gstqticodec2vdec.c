@@ -1336,6 +1336,21 @@ handle_video_event (const void *handle, EVENT_TYPE type, void *data)
       }
       break;
     }
+    case EVENT_DROP_FRAME:{
+      BufferDescriptor *out_buf = (BufferDescriptor *) data;
+      GstVideoCodecFrame *frame;
+      frame = gst_video_decoder_get_frame (decoder, out_buf->index);
+      if (frame) {
+        GST_DEBUG_OBJECT (dec, "Decode only picture for frame %u",
+            frame->system_frame_number);
+        GST_VIDEO_CODEC_FRAME_SET_DECODE_ONLY (frame);
+        gst_video_decoder_release_frame (decoder, frame);
+      } else {
+        GST_WARNING_OBJECT (dec, "no corresponding output for drop frame %lu",
+            out_buf->index);
+      }
+      break;
+    }
     case EVENT_TRIPPED:{
       GST_ERROR_OBJECT (dec, "Failed to apply configuration setting(%d)",
           *(gint32 *) data);
