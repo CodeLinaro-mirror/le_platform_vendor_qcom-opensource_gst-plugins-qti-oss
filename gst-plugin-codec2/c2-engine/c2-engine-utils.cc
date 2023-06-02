@@ -77,6 +77,15 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2StreamSyncFrameIntervalTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_INTRA_REFRESH,
       C2StreamIntraRefreshTuning::output::PARAM_TYPE },
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
+  { GST_C2_PARAM_ADAPTIVE_B_FRAMES,
+      qc2::C2StreamAdaptiveBPreconditions::output::PARAM_TYPE },
+#else
+  { GST_C2_PARAM_NATIVE_RECORDING,
+      qc2::C2VideoNativeRecording::input::PARAM_TYPE },
+  { GST_C2_PARAM_TEMPORAL_LAYERING,
+      C2StreamTemporalLayeringTuning::output::PARAM_TYPE },
+#endif // CODEC2_CONFIG_VERSION_2_0
   { GST_C2_PARAM_ENTROPY_MODE,
       qc2::C2VideoEntropyMode::output::PARAM_TYPE },
   { GST_C2_PARAM_LOOP_FILTER_MODE,
@@ -128,6 +137,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_GOP_CONFIG, "GOP_CONFIG" },
   { GST_C2_PARAM_KEY_FRAME_INTERVAL, "KEY_FRAME_INTERVAL" },
   { GST_C2_PARAM_INTRA_REFRESH, "INTRA_REFRESH" },
+  { GST_C2_PARAM_ADAPTIVE_B_FRAMES, "ADAPTIVE_B_FRAMES" },
   { GST_C2_PARAM_ENTROPY_MODE, "ENTROPY_MODE" },
   { GST_C2_PARAM_LOOP_FILTER_MODE, "LOOP_FILTER_MODE" },
   { GST_C2_PARAM_SLICE_MB, "SLICE_MB" },
@@ -141,6 +151,8 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_QP_RANGES, "QP_RANGES" },
   { GST_C2_PARAM_ROI_ENCODE, "ROI_ENCODE" },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
+  { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
+  { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
   { GST_C2_PARAM_COLOR_ASPECTS_INFO, "COLOR_ASPECTS" },
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
 };
@@ -466,6 +478,40 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(irefresh);
       break;
     }
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
+      qc2::C2StreamAdaptiveBPreconditions::output bpreconditions;
+      bpreconditions.value = *(reinterpret_cast<gboolean*>(payload));
+      c2param = C2Param::Copy(bpreconditions);
+      break;
+    }
+#else
+    case GST_C2_PARAM_NATIVE_RECORDING: {
+      qc2::C2VideoNativeRecording::input native_recording;
+      native_recording.value = *(reinterpret_cast<gboolean*>(payload));
+      c2param = C2Param::Copy(native_recording);
+      break;
+    }
+    case GST_C2_PARAM_TEMPORAL_LAYERING: {
+      GstC2TemporalLayer *templayer = reinterpret_cast<GstC2TemporalLayer*>(payload);
+      uint32_t ratiosize = templayer->bitrate_ratios->len;
+
+      auto c2templayer =
+          C2StreamTemporalLayeringTuning::output::AllocUnique(ratiosize);
+
+      c2templayer->m.layerCount = templayer->n_layers;
+      c2templayer->m.bLayerCount = templayer->n_blayers;
+
+      // bitrate ratios is ignored for now
+      for (uint32_t i = 0; i < ratiosize; i++) {
+        c2templayer->m.bitrateRatios[i] =
+            g_array_index (templayer->bitrate_ratios, gfloat, i);
+      }
+
+      c2param = C2Param::Copy(*c2templayer);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
     case GST_C2_PARAM_ENTROPY_MODE: {
       qc2::C2VideoEntropyMode::output entropy;
       uint32_t mode = *(reinterpret_cast<GstC2EntropyMode*>(payload));
@@ -581,7 +627,12 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       break;
     }
     case GST_C2_PARAM_ROI_ENCODE: {
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+      qc2::QC2VideoROIRegionInfo::input region;
+#else
       qc2::QC2VideoROIRegionInfo::output region;
+#endif // CODEC2_CONFIG_VERSION_2_0
+
       auto rects = reinterpret_cast<GstC2QuantRegions*>(payload)->rects;
       uint32_t n_rects = reinterpret_cast<GstC2QuantRegions*>(payload)->n_rects;
       std::stringstream ss;
@@ -781,6 +832,43 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       reinterpret_cast<GstC2IntraRefresh*>(payload)->period = irefresh->period;
       break;
     }
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
+      auto bpreconditions =
+          reinterpret_cast<qc2::C2StreamAdaptiveBPreconditions::output*>(c2param.get());
+      *(reinterpret_cast<gboolean*>(payload)) = bpreconditions->value;
+      break;
+    }
+#else
+    case GST_C2_PARAM_NATIVE_RECORDING: {
+      auto native_recording =
+          reinterpret_cast<qc2::C2VideoNativeRecording::input*>(c2param.get());
+
+      *(reinterpret_cast<gboolean*>(payload)) = native_recording->value;
+      break;
+    }
+    case GST_C2_PARAM_TEMPORAL_LAYERING: {
+      auto c2templayer =
+          reinterpret_cast<C2StreamTemporalLayeringTuning::output*>(c2param.get());
+
+      reinterpret_cast<GstC2TemporalLayer*>(payload)->n_layers =
+          c2templayer->m.layerCount;
+      reinterpret_cast<GstC2TemporalLayer*>(payload)->n_blayers =
+          c2templayer->m.bLayerCount;
+
+      float ratio = 0;
+      uint32_t ratiosize = c2templayer->flexCount();
+
+      if (reinterpret_cast<GstC2TemporalLayer*>(payload)->bitrate_ratios != NULL) {
+        GArray* temp = reinterpret_cast<GstC2TemporalLayer*>(payload)->bitrate_ratios;
+        for (uint32_t i = 0; i < ratiosize; i++) {
+          ratio = c2templayer->m.bitrateRatios[i];
+          g_array_append_val (temp, ratio);
+        }
+      }
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
     case GST_C2_PARAM_ENTROPY_MODE: {
       auto entropy =
           reinterpret_cast<qc2::C2VideoEntropyMode::output*>(c2param.get());
@@ -1061,8 +1149,30 @@ std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
     return nullptr;
   }
 
-  auto data = view.data();
-  memcpy (static_cast<void*>(data[0]), static_cast<void*>(map.data), map.size);
+  // Get the GST video metadata for the source strides.
+  GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
+  g_return_val_if_fail (vmeta != NULL, FALSE);
+
+  // Fetch the array of pointers to the planes.
+  uint8_t *const *data = view.data();
+  // Fetch the GBM handle containing the destination stride and scanline.
+  auto handle = static_cast<const android::C2HandleGBM*>(block->handle());
+
+  for (uint32_t idx = 0; idx < vmeta->n_planes; idx++) {
+    uint32_t n_rows = (idx == 0) ? vmeta->height : (vmeta->height / 2);
+
+    // Set the source and destination pointers for the next plane.
+    uint8_t *source = static_cast<uint8_t*>(map.data) + vmeta->offset[idx];
+    uint8_t *destination = static_cast<uint8_t*>(data[0]) +
+        (idx * handle->mInts.stride * handle->mInts.slice_height);
+
+    for (uint32_t num = 0; num < n_rows; num++) {
+      memcpy (destination, source, vmeta->stride[idx]);
+
+      destination += handle->mInts.stride;
+      source += vmeta->stride[idx];
+    }
+  }
 
   gst_buffer_unmap (buffer, &map);
 

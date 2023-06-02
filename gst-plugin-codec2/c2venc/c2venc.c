@@ -357,7 +357,7 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     success = gst_c2_engine_set_parameter (c2venc->engine,
         GST_C2_PARAM_INTRA_REFRESH, GPOINTER_CAST (&(c2venc->intra_refresh)));
     if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set key frame interval parameter!");
+      GST_ERROR_OBJECT (c2venc, "Failed to set intra refresh mode!");
       return FALSE;
     }
   }
@@ -384,6 +384,51 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
   if (!success) {
     GST_ERROR_OBJECT (c2venc, "Failed to set GOP parameter!");
     return FALSE;
+  }
+
+  if (c2venc->bframes != DEFAULT_PROP_B_FRAMES) {
+    gboolean enable = TRUE;
+
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_ADAPTIVE_B_FRAMES, GPOINTER_CAST (&enable));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set adaptive B frames parameter!");
+      return FALSE;
+    }
+#else
+    gfloat ratio = 0.0;
+    GstC2TemporalLayer templayer = {2, 2, NULL};
+
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_NATIVE_RECORDING, GPOINTER_CAST (&enable));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to enable native recording!");
+      return FALSE;
+    }
+
+    // bitrate ratios are bypassed in component now
+    templayer.bitrate_ratios = g_array_new (FALSE, FALSE, sizeof (gfloat));
+    ratio = 0.5;
+    g_array_append_val (templayer.bitrate_ratios, ratio);
+    ratio = 1.0;
+    g_array_append_val (templayer.bitrate_ratios, ratio);
+
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_TEMPORAL_LAYERING, GPOINTER_CAST (&templayer));
+
+    if (templayer.bitrate_ratios != NULL) {
+      g_array_free (templayer.bitrate_ratios, TRUE);
+      templayer.bitrate_ratios = NULL;
+    }
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set temporal layering parameter!");
+      return FALSE;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
   }
 
   if (c2venc->entropy_mode != DEFAULT_PROP_ENTROPY_MODE) {
@@ -586,6 +631,9 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
   } else if (c2venc->headers != NULL) {
     gst_video_encoder_set_headers (GST_VIDEO_ENCODER (c2venc), c2venc->headers);
     c2venc->headers = NULL;
+  } else if (!GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_MARKER)) {
+    gst_buffer_list_add (c2venc->incomplete_buffers, buffer);
+    return;
   }
 
   // Get the frame index from the buffer offset field.
@@ -610,23 +658,43 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
 
   // Unset the custom SYNC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_SYNC);
-
   // Unset the custom UBWC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
-  GST_BUFFER_DURATION (buffer) =
-      gst_util_uint64_scale (GST_SECOND, vinfo->fps_d, vinfo->fps_n);
 
-  frame->output_buffer = buffer;
+  // Check for incomplete buffers and merge them into single buffer.
+  if (gst_buffer_list_length (c2venc->incomplete_buffers) > 0) {
+    GstMemory *memory = NULL;
+
+    // Create a new buffer to hold the memory blocks for all incomplete buffers.
+    frame->output_buffer = gst_buffer_new ();
+
+    while (gst_buffer_list_length (c2venc->incomplete_buffers) > 0) {
+      GstBuffer *buf = gst_buffer_list_get (c2venc->incomplete_buffers, 0);
+
+      // Append the memory block from input buffer into the new buffer.
+      memory = gst_buffer_get_memory (buf, 0);
+      gst_buffer_append_memory (frame->output_buffer, memory);
+
+      // Add parent meta, input buffer won't be released until new buffer is freed.
+      gst_buffer_add_parent_buffer_meta (frame->output_buffer, buf);
+
+      gst_buffer_list_remove (c2venc->incomplete_buffers, 0, 1);
+    }
+
+    memory = gst_buffer_get_memory (buffer, 0);
+    gst_buffer_append_memory (frame->output_buffer, memory);
+
+    gst_buffer_add_parent_buffer_meta (frame->output_buffer, buffer);
+    gst_buffer_unref (buffer);
+  } else {
+    // No previous incomplete buffers, simply past current as the output buffer.
+    frame->output_buffer = buffer;
+  }
+
   gst_video_codec_frame_unref (frame);
 
   GST_TRACE_OBJECT (c2venc, "Encoded %" GST_PTR_FORMAT, buffer);
-
-  if (GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_MARKER)) {
-    ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
-  } else {
-    // TODO Use gst_video_encoder_finish_subframe() wit hGST 1.18 or above.
-    ret = gst_pad_push (GST_VIDEO_ENCODER (c2venc)->srcpad, buffer);
-  }
+  ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
 
   if (ret != GST_FLOW_OK) {
     GST_LOG_OBJECT (c2venc, "Failed to finish frame!");
@@ -1242,6 +1310,8 @@ gst_c2_venc_finalize (GObject * object)
   if (c2venc->engine != NULL)
     gst_c2_engine_free (c2venc->engine);
 
+  gst_buffer_list_unref (c2venc->incomplete_buffers);
+
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (c2venc));
 }
 
@@ -1286,6 +1356,12 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
       g_param_spec_uint ("intra-refresh-period", "Intra Refresh Period",
           "The period of intra refresh. Only support random mode.",
           0, G_MAXUINT, DEFAULT_PROP_INTRA_REFRESH_PERIOD,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject, PROP_B_FRAMES,
+      g_param_spec_uint ("b-frames", "B Frames",
+          "Number of B-frames between two consecutive I-frames "
+          "(0xffffffff=component default)",
+          0, G_MAXUINT, DEFAULT_PROP_B_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_QUANT_I_FRAMES,
       g_param_spec_uint ("quant-i-frames", "I-Frame Quantization",
@@ -1413,6 +1489,8 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->instate = NULL;
   c2venc->isubwc = FALSE;
   c2venc->headers = NULL;
+
+  c2venc->incomplete_buffers = gst_buffer_list_new ();
 
   c2venc->rotate = DEFAULT_PROP_ROTATE;
   c2venc->control_rate = DEFAULT_PROP_RATE_CONTROL;

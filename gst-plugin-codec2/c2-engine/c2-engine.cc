@@ -188,26 +188,6 @@ class GstC2Notifier : public IC2Notifier {
       size = block.size();
       fd = handle->data[0];
 
-      // Check for AVC/HEVC codecs SPS/PPS/VPS NALs.
-      auto c2param = c2buffer->getInfo(C2StreamInitDataInfo::output::PARAM_TYPE);
-      auto csdinfo =
-          std::static_pointer_cast<const C2StreamInitDataInfo::output>(c2param);
-
-      if (csdinfo) {
-        GST_INFO ("Received codec SPS/PPS/VPS NALs in byte-stream format");
-
-        buffer = gst_buffer_new_and_alloc(csdinfo->flexCount());
-        gst_buffer_fill (buffer, 0, csdinfo->m.value, csdinfo->flexCount());
-
-        GST_BUFFER_FLAG_SET (buffer, GST_BUFFER_FLAG_HEADER);
-        GST_BUFFER_TIMESTAMP (buffer) =
-            gst_util_uint64_scale (timestamp, GST_SECOND, 1000000);
-
-        engine_->callbacks->buffer (buffer, engine_->userdata);
-
-        // Create new GST buffer for the rest of the data.
-        buffer = gst_buffer_new ();
-      }
     } else if (c2buffer->data().type() == C2BufferData::GRAPHIC) {
       const C2ConstGraphicBlock block = c2buffer->data().graphicBlocks().front();
       const C2GraphicView view = block.map().get();
@@ -301,8 +281,16 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
   engine = g_new0 (GstC2Engine, 1);
   g_return_val_if_fail (engine != NULL, NULL);
 
-  engine->c2module = C2Factory::GetModule (name);
-  g_return_val_if_fail (engine->c2module != NULL, NULL);
+  g_mutex_init (&engine->lock);
+  g_cond_init (&engine->workdone);
+
+  try {
+    engine->c2module = C2Factory::GetModule (name);
+  } catch (std::exception& e) {
+    GST_ERROR ("Failed to create C2 module, error: '%s'!", e.what());
+    gst_c2_engine_free (engine);
+    return NULL;
+  }
 
   try {
     std::shared_ptr<IC2Notifier> notifier =
@@ -311,6 +299,7 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
     engine->c2module->Initialize (notifier);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to initialize, error: '%s'!", e.what());
+    gst_c2_engine_free (engine);
     return NULL;
   }
 
@@ -320,9 +309,6 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
 
   engine->callbacks = callbacks;
   engine->userdata = userdata;
-
-  g_mutex_init (&engine->lock);
-  g_cond_init (&engine->workdone);
 
   engine->n_pending = 0;
 
@@ -335,13 +321,13 @@ gst_c2_engine_free (GstC2Engine * engine)
 {
   GST_INFO ("Destroyed C2 engine: %p", engine);
 
+  g_cond_clear (&engine->workdone);
+  g_mutex_clear (&engine->lock);
+
   g_free (engine->name);
   delete engine->c2module;
 
-  g_mutex_clear (&engine->lock);
-  g_cond_clear (&engine->workdone);
-
-  g_slice_free (GstC2Engine, engine);
+  g_free (engine);
 }
 
 gboolean
