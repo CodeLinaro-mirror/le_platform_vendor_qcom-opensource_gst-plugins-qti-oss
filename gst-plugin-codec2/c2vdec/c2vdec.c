@@ -39,9 +39,6 @@
 
 #include "c2vdec.h"
 
-#define BIT_DEPTH_8  8
-#define BIT_DEPTH_10 10
-
 GST_DEBUG_CATEGORY_STATIC (gst_c2_vdec_debug_category);
 #define GST_CAT_DEFAULT gst_c2_vdec_debug_category
 
@@ -100,28 +97,136 @@ gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
 }
 
 static GstVideoFormat
-gst_c2_vdec_set_output_format (GstC2VDecoder * dec, guint8 bit_depth)
+gst_c2_vdec_get_output_format (GstC2VDecoder * c2vdec,
+    GstStructure *structure, GstVideoFormat format)
 {
-  GstVideoFormat format;
+  const gchar *chroma_format = NULL;
+  guint bit_depth_luma = 0, bit_depth_chroma = 0;
 
-  switch (bit_depth) {
-    case BIT_DEPTH_8:
-      format = GST_VIDEO_FORMAT_NV12;
-      break;
-    case BIT_DEPTH_10:
-      format = dec->isubwc ? GST_VIDEO_FORMAT_NV12_10LE32 : GST_VIDEO_FORMAT_P010_10LE;
-      break;
-    default:
-      format = GST_VIDEO_FORMAT_NV12;
-      GST_WARNING_OBJECT (dec,
-          "Invalid bit depth (%d), fallback to NV12", bit_depth);
-      break;
+  chroma_format = gst_structure_get_string (structure, "chroma-format");
+  gst_structure_get_uint (structure, "bit-depth-luma", &bit_depth_luma);
+  gst_structure_get_uint (structure, "bit-depth-chroma", &bit_depth_chroma);
+
+  if (chroma_format == NULL && bit_depth_luma == 0 && bit_depth_chroma == 0) {
+    //If static HDR10 info is presentin the caps, then bit-depth is 10
+    if (gst_structure_has_field (structure, "mastering-display-info")) {
+      bit_depth_luma = 10;
+      bit_depth_chroma = 10;
+      chroma_format = "4:2:0";
+    } else if (gst_structure_has_name (structure, "video/x-vp9") ||
+        gst_structure_has_name (structure, "video/x-vp8")) {
+      //vp8 and vp9 caps does not have chroma-format, bit-depth fields
+      bit_depth_luma = 8;
+      bit_depth_chroma = 8;
+      chroma_format = "4:2:0";
+      //TODO: for vp9 and vp9 code is assuming NV12 which may not be true
+      //needs to be fixed
+    }
   }
 
-  GST_DEBUG_OBJECT (dec, "Set Decode output format to (%s)",
-      gst_video_format_to_string (format));
+  if (chroma_format == NULL || bit_depth_luma == 0 || bit_depth_chroma == 0) {
+    GST_ERROR_OBJECT (c2vdec, "Unable to get chroma-format or bit-depth");
+    return GST_VIDEO_FORMAT_UNKNOWN;
+  } else if (g_strcmp0 (chroma_format, "4:2:0") != 0) {
+    GST_ERROR_OBJECT (c2vdec, "Unsupported chroma-format %s", chroma_format);
+    return GST_VIDEO_FORMAT_UNKNOWN;
+  }
+
+  if (bit_depth_luma == 8 && bit_depth_chroma == 8) {
+    format = GST_VIDEO_FORMAT_NV12;
+  } else if (bit_depth_luma == 10 && bit_depth_chroma == 10) {
+    if (format != GST_VIDEO_FORMAT_NV12_10LE32 && !c2vdec->isubwc) {
+      format = GST_VIDEO_FORMAT_P010_10LE;
+    } else if (format == GST_VIDEO_FORMAT_NV12_10LE32 && c2vdec->isubwc) {
+      format = GST_VIDEO_FORMAT_NV12_10LE32;
+    } else {
+      GST_ERROR_OBJECT (c2vdec, "Unsupported format");
+      return GST_VIDEO_FORMAT_UNKNOWN;
+    }
+  }
 
   return format;
+}
+
+static gboolean
+gst_c2_vdec_set_hdr_static_info (GstC2VDecoder * c2vdec, GstStructure *structure)
+{
+  GstC2HdrStaticMetadata hdrmeta;
+  GstC2ColorAspects coloraspects;
+  const gchar *color;
+  const gchar *dispinfo;
+  const gchar *lightlevel;
+  GstVideoColorimetry colorinfo;
+  GstVideoMasteringDisplayInfo mdispinfo;
+  GstVideoContentLightLevel contentlightlevel;
+  gboolean success = FALSE;
+
+
+  memset (&colorinfo, 0, sizeof (GstVideoColorimetry));
+  memset (&mdispinfo, 0, sizeof (GstVideoMasteringDisplayInfo));
+  memset (&contentlightlevel, 0, sizeof (GstVideoContentLightLevel));
+  memset (&hdrmeta, 0, sizeof (GstC2HdrStaticMetadata));
+  memset (&coloraspects, 0, sizeof (GstC2ColorAspects));
+
+  if (color = gst_structure_get_string (structure, "colorimetry")) {
+    gboolean res= gst_video_colorimetry_from_string (&colorinfo, color);
+    if (res) {
+      coloraspects.primaries = colorinfo.primaries;
+      coloraspects.transfer = colorinfo.transfer;
+      coloraspects.matrix = colorinfo.matrix;
+      coloraspects.range = colorinfo.range;
+
+      success = gst_c2_engine_set_parameter (c2vdec->engine,
+          GST_C2_PARAM_COLOR_ASPECTS_TUNING, GPOINTER_CAST (&coloraspects));
+      if (!success) {
+        GST_ERROR_OBJECT (c2vdec, "Failed to set Color Aspects parameter!");
+        return FALSE;
+      }
+    } else
+      GST_DEBUG_OBJECT (c2vdec, "Unable to parse Colorimetry from caps");
+  }
+
+  success = FALSE;
+  if (dispinfo = gst_structure_get_string (structure, "mastering-display-info")) {
+    gboolean res = gst_video_mastering_display_info_from_string (&mdispinfo, dispinfo);
+    success |= res;
+    if (!res)
+      GST_DEBUG_OBJECT (c2vdec,
+          "Unable to parse mastering-display-info from caps");
+  }
+
+  if (lightlevel = gst_structure_get_string (structure, "content-light-level")) {
+    gboolean res= gst_video_content_light_level_from_string (&contentlightlevel, lightlevel);
+    success |= res;
+    if (!res)
+      GST_DEBUG_OBJECT (c2vdec,
+          "Unable to parse content-light-level from caps");
+  }
+
+  if (success) {
+    hdrmeta.red.x = mdispinfo.display_primaries[0].x;
+    hdrmeta.red.y = mdispinfo.display_primaries[0].y;
+    hdrmeta.green.x = mdispinfo.display_primaries[1].x;
+    hdrmeta.green.y = mdispinfo.display_primaries[1].y;
+    hdrmeta.blue.x = mdispinfo.display_primaries[2].x;
+    hdrmeta.blue.y = mdispinfo.display_primaries[2].y;
+    hdrmeta.white.x = mdispinfo.white_point.x;
+    hdrmeta.white.y = mdispinfo.white_point.y;
+    hdrmeta.max_luminance =
+          mdispinfo.max_display_mastering_luminance;
+    hdrmeta.min_luminance =
+          mdispinfo.min_display_mastering_luminance;
+    hdrmeta.maxCll = contentlightlevel.max_content_light_level;
+    hdrmeta.maxFall = contentlightlevel.max_frame_average_light_level;
+    success = gst_c2_engine_set_parameter (c2vdec->engine,
+        GST_C2_PARAM_HDR_STATIC_METADATA, GPOINTER_CAST (&hdrmeta));
+    if (!success) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to set Hdr static metadata parameter!");
+      return FALSE;
+    }
+  }
+
+  return TRUE;
 }
 
 static gboolean
@@ -131,7 +236,6 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
   GstVideoInfo *info = &state->info;
   GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, FALSE };
   GstC2Resolution resolution = { 0, 0 };
-  gdouble framerate = 0.0;
   gboolean success = FALSE;
 
   pixinfo.format = GST_VIDEO_INFO_FORMAT (info);
@@ -154,6 +258,8 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
     return FALSE;
   }
 
+#if defined(CODEC2_CONFIG_VERSION_1_0)
+  gdouble framerate = 0.0;
   gst_util_fraction_to_double (GST_VIDEO_INFO_FPS_N (info),
       GST_VIDEO_INFO_FPS_D (info), &framerate);
 
@@ -163,6 +269,7 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
     GST_ERROR_OBJECT (c2vdec, "Failed to set input framerate parameter!");
     return FALSE;
   }
+#endif // CODEC2_CONFIG_VERSION_1_0
 
   return TRUE;
 }
@@ -279,20 +386,21 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   GstStructure *structure = NULL;
   gchar *name = NULL;
   const gchar *string = NULL;
-  gint width = 0, height = 0, bitdepth = BIT_DEPTH_8;
-  GstVideoFormat format;
+  gint width = 0, height = 0;
+  GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
   gboolean success = FALSE;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
 
   caps = gst_pad_get_allowed_caps (GST_VIDEO_DECODER_SRC_PAD (c2vdec));
 
+  structure = gst_caps_get_structure (caps, 0);
+  c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
+
+  if ((string = gst_structure_get_string (structure, "format")) != NULL)
+    format = gst_video_format_from_string (string);
+
   if ((caps != NULL) && !gst_caps_is_empty (caps) && gst_caps_is_fixed (caps)) {
-    structure = gst_caps_get_structure (caps, 0);
-
-    if ((string = gst_structure_get_string (structure, "format")) != NULL)
-      format = gst_video_format_from_string (string);
-
     success = (format != GST_VIDEO_FORMAT_UNKNOWN) ? TRUE : FALSE;
     success &= gst_structure_get_int (structure, "width", &width);
     success &= gst_structure_get_int (structure, "height", &height);
@@ -301,13 +409,8 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
     success = gst_structure_get_int (structure, "width", &width);
     success &= gst_structure_get_int (structure, "height", &height);
-
-    if (structure && gst_structure_has_field (structure, "bit-depth-chroma"))
-      gst_structure_get_uint(structure, "bit-depth-chroma", &bitdepth);
-
-    structure = gst_caps_get_structure (caps, 0);
-    c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
-    format = gst_c2_vdec_set_output_format (c2vdec, bitdepth);
+    format = gst_c2_vdec_get_output_format (c2vdec, structure, format);
+    success &= (format != GST_VIDEO_FORMAT_UNKNOWN) ? TRUE : FALSE;
   }
 
   if (caps != NULL)
@@ -364,7 +467,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     gst_video_codec_state_unref (c2vdec->outstate);
 
   c2vdec->outstate = outstate;
-  c2vdec->isubwc = gst_caps_has_compression (outstate->caps, "ubwc");
 
   // Extract the component name from the input state caps.
   structure = gst_caps_get_structure (state->caps, 0);
@@ -406,83 +508,12 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     g_return_val_if_fail (c2vdec->engine != NULL, FALSE);
   }
 
-  /* Check if caps has HDR10 static info for vp9 */
-  if (gst_structure_has_name (structure, "video/x-vp9")) {
-    gboolean retval = FALSE;
-    GstC2HdrStaticMetadata hdrmeta;
-    GstC2ColorAspects coloraspects;
-    const gchar *color;
-    const gchar *dispinfo;
-    const gchar *lightlevel;
-    GstVideoColorimetry colorinfo;
-    GstVideoMasteringDisplayInfo mdispinfo;
-    GstVideoContentLightLevel contentlightlevel;
-
-    memset (&colorinfo, 0, sizeof (GstVideoColorimetry));
-    memset (&mdispinfo, 0, sizeof (GstVideoMasteringDisplayInfo));
-    memset (&contentlightlevel, 0, sizeof (GstVideoContentLightLevel));
-    memset (&hdrmeta, 0, sizeof (GstC2HdrStaticMetadata));
-    memset (&coloraspects, 0, sizeof (GstC2ColorAspects));
-
-    if (color = gst_structure_get_string (structure, "colorimetry")) {
-      gboolean res= gst_video_colorimetry_from_string (&colorinfo, color);
-      bitdepth = BIT_DEPTH_10;
-      if (res) {
-        coloraspects.primaries = colorinfo.primaries;
-        coloraspects.transfer = colorinfo.transfer;
-        coloraspects.matrix = colorinfo.matrix;
-        coloraspects.range = colorinfo.range;
-
-        success = gst_c2_engine_set_parameter (c2vdec->engine,
-          GST_C2_PARAM_COLOR_ASPECTS_INFO, GPOINTER_CAST (&coloraspects));
-        if (!success) {
-          GST_ERROR_OBJECT (c2vdec, "Failed to set Color Aspects parameter!");
-          return FALSE;
-        }
-      } else
-        GST_DEBUG_OBJECT (c2vdec, "Unable to parse Colorimetry from caps");
-    }
-
-    retval = FALSE;
-    if (dispinfo = gst_structure_get_string (structure, "mastering-display-info")) {
-      gboolean res = gst_video_mastering_display_info_from_string (&mdispinfo, dispinfo);
-      retval |= res;
-      if (!res)
-        GST_DEBUG_OBJECT (c2vdec,
-            "Unable to parse mastering-display-info from caps");
-    }
-
-    if (lightlevel = gst_structure_get_string (structure, "content-light-level")) {
-      gboolean res= gst_video_content_light_level_from_string (&contentlightlevel, lightlevel);
-      retval |= res;
-      if (!res)
-        GST_DEBUG_OBJECT (c2vdec,
-            "Unable to parse content-light-level from caps");
-    }
-
-    if (retval) {
-      hdrmeta.red.x = mdispinfo.display_primaries[0].x;
-      hdrmeta.red.y = mdispinfo.display_primaries[0].y;
-      hdrmeta.green.x = mdispinfo.display_primaries[1].x;
-      hdrmeta.green.y = mdispinfo.display_primaries[1].y;
-      hdrmeta.blue.x = mdispinfo.display_primaries[2].x;
-      hdrmeta.blue.y = mdispinfo.display_primaries[2].y;
-      hdrmeta.white.x = mdispinfo.white_point.x;
-      hdrmeta.white.y = mdispinfo.white_point.y;
-      hdrmeta.max_luminance =
-            mdispinfo.max_display_mastering_luminance;
-      hdrmeta.min_luminance =
-            mdispinfo.min_display_mastering_luminance;
-      hdrmeta.maxCll = contentlightlevel.max_content_light_level;
-      hdrmeta.maxFall = contentlightlevel.max_frame_average_light_level;
-      success = gst_c2_engine_set_parameter (c2vdec->engine,
-          GST_C2_PARAM_HDR_STATIC_METADATA, GPOINTER_CAST (&hdrmeta));
-      if (!success) {
-        GST_ERROR_OBJECT (c2vdec, "Failed to set Hdr static metadata parameter!");
-        return FALSE;
-      }
-    }
-  }
+  /* Check HDR10 static info if the codec is vp8/vp9,
+   * for HEVC/AVC no need to set because they are part
+   * of the bitstream and will be taken care by codec2 HAL */
+  if (gst_structure_has_name (structure, "video/x-vp9") ||
+      gst_structure_has_name (structure, "video/x-vp8"))
+    gst_c2_vdec_set_hdr_static_info (c2vdec, structure);
 
   if (!gst_c2_vdec_setup_parameters (c2vdec, c2vdec->outstate)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to setup parameters!");

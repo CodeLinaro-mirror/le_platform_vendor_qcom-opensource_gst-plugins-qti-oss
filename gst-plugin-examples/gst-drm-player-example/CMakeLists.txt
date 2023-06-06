@@ -1,5 +1,5 @@
-# GStreamer DRM Player app
-set(GST_EXAMPLE_BIN gst-drm-player-app)
+# GStreamer DRM Player example
+set(GST_EXAMPLE_BIN gst-drm-player-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -11,8 +11,6 @@ find_package(CURL REQUIRED)
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
   ${SYSROOT_INCDIR}
-  ${SYSROOT_INCDIR}/media/drm
-  ${CURL_INCLUDE_DIR}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE

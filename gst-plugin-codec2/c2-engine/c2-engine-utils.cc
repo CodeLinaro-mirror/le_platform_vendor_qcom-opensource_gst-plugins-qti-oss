@@ -117,10 +117,10 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
-  { GST_C2_PARAM_COLOR_ASPECTS_INFO,
-    C2StreamColorAspectsInfo::input::PARAM_TYPE },
+  { GST_C2_PARAM_COLOR_ASPECTS_TUNING,
+    C2StreamColorAspectsTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_HDR_STATIC_METADATA,
-    C2StreamHdrStaticInfo::input::PARAM_TYPE },
+    C2StreamHdrStaticInfo::output::PARAM_TYPE },
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -153,7 +153,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
   { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
-  { GST_C2_PARAM_COLOR_ASPECTS_INFO, "COLOR_ASPECTS" },
+  { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
 };
 
@@ -266,7 +266,7 @@ static const std::unordered_map<uint32_t, uint32_t> kPrependHeaderMap = {
   { GST_C2_PREPEND_HEADER_TO_ALL_SYNC, C2Config::PREPEND_HEADER_TO_ALL_SYNC },
 };
 
-// Map for the GST_C2_PARAM_COLOR_ASPECTS_INFO parameter.
+// Ma for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Primaries parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorPrimariesMap = {
   { GST_C2_COLOR_PRIMARIES_UNSPECIFIED,  C2Color::PRIMARIES_UNSPECIFIED },
   { GST_C2_COLOR_PRIMARIES_BT709,        C2Color::PRIMARIES_BT709 },
@@ -283,7 +283,7 @@ static const std::unordered_map<uint32_t, uint32_t> kColorPrimariesMap = {
   { GST_C2_COLOR_PRIMARIES_EBU3213,      C2Color::PRIMARIES_EBU3213 },
 };
 
-// Map for the GST_C2_PARAM_COLOR_ASPECTS_INFO parameter.
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Transfer parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorTransferMap = {
   { GST_C2_COLOR_TRANSFER_UNSPECIFIED,   C2Color::TRANSFER_UNSPECIFIED },
   { GST_C2_COLOR_TRANSFER_GAMMA10,       C2Color::TRANSFER_OTHER },
@@ -304,7 +304,7 @@ static const std::unordered_map<uint32_t, uint32_t> kColorTransferMap = {
   { GST_C2_COLOR_TRANSFER_BT601,         C2Color::TRANSFER_170M },
 };
 
-// Map for the GST_C2_PARAM_COLOR_ASPECTS_INFO parameter.
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Matrix parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorMatrixMap = {
   { GST_C2_COLOR_MATRIX_UNSPECIFIED,  C2Color::MATRIX_UNSPECIFIED },
   { GST_C2_COLOR_MATRIX_RGB,          C2Color::MATRIX_OTHER },
@@ -315,7 +315,7 @@ static const std::unordered_map<uint32_t, uint32_t> kColorMatrixMap = {
   { GST_C2_COLOR_MATRIX_BT2020,       C2Color::MATRIX_BT2020 },
 };
 
-// Map for the GST_C2_PARAM_COLOR_ASPECTS_INFO parameter.
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Range parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorRangeMap = {
   { GST_C2_COLOR_RANGE_UNSPECIFIED, C2Color::RANGE_UNSPECIFIED },
   { GST_C2_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
@@ -675,7 +675,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       break;
     }
     case GST_C2_PARAM_HDR_STATIC_METADATA: {
-      C2StreamHdrStaticInfo::input hdr_info;
+      C2StreamHdrStaticInfo::output hdr_info;
       GstC2HdrStaticMetadata* hdrmeta =
           reinterpret_cast<GstC2HdrStaticMetadata*>(payload);
 
@@ -694,8 +694,8 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy (hdr_info);
       break;
     }
-    case GST_C2_PARAM_COLOR_ASPECTS_INFO: {
-      C2StreamColorAspectsInfo::input coloraspects;
+    case GST_C2_PARAM_COLOR_ASPECTS_TUNING: {
+      C2StreamColorAspectsTuning::output coloraspects;
       GstC2ColorAspects* color =
           reinterpret_cast<GstC2ColorAspects*>(payload);
       coloraspects.primaries =
