@@ -94,7 +94,7 @@ enum {
   GST_C2_PARAM_NATIVE_RECORDING,     // gboolean
   GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
   GST_C2_PARAM_HDR_STATIC_METADATA,  // GstC2HdrStaticMetadata
-  GST_C2_PARAM_COLOR_ASPECTS_INFO,   // GstC2ColorAspectsInfo
+  GST_C2_PARAM_COLOR_ASPECTS_TUNING, // GstC2ColorAspectsInfo
 };
 
 typedef enum {

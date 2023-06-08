@@ -7,8 +7,6 @@ project(GST_PLUGIN_QTI_OSS_DECRYPTOR
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories(${SYSROOT_INCDIR})
-include_directories(${SYSROOT_INCDIR}/media/hardware)
-include_directories(${SYSROOT_INCDIR}/media/drm)
 link_directories(${SYSROOT_LIBDIR})
 
 find_package(PkgConfig)
@@ -32,29 +30,28 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
 # GStreamer plugin.
-set(GST_QTI_DECRYPTOR gstqtidecryptor)
+set(GST_QTI_DRM_DECRYPTOR gstqtidrmdecryptor)
 
-add_library(${GST_QTI_DECRYPTOR} SHARED
-  decryptor.c
-  decryptor-context.cc
+add_library(${GST_QTI_DRM_DECRYPTOR} SHARED
+  drmdecryptor.c
+  drmdecryptor-engine.cc
 )
 
-target_include_directories(${GST_QTI_DECRYPTOR} PUBLIC
+target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_link_libraries(${GST_QTI_DECRYPTOR} PRIVATE
+target_link_libraries(${GST_QTI_DRM_DECRYPTOR} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   dmabufheap
-  utils
   cutils
 )
 
 install(
-  TARGETS ${GST_QTI_DECRYPTOR}
+  TARGETS ${GST_QTI_DRM_DECRYPTOR}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
-              GROUP_EXECUTE GROUP_READ
+              WORLD_EXECUTE WORLD_READ
 )
