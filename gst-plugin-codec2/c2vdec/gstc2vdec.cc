@@ -61,7 +61,8 @@ static void gst_c2vdec_finalize (GObject * object);
 
 enum
 {
-  PROP_0
+  PROP_0,
+  PROP_PRIORITY
 };
 
 #define NANO_TO_MILLI(x)  ((x) / 1000)
@@ -181,6 +182,19 @@ make_low_latency_param (gboolean low_latency_mode)
   param.low_latency_mode = low_latency_mode;
 
   return param;
+}
+
+static config_params_t
+make_priority_param (gint32 priority)
+{
+    config_params_t param;
+
+    memset (&param, 0, sizeof (config_params_t));
+
+    param.config_name = CONFIG_FUNCTION_KEY_VIDEO_PRIORITY;
+    param.priority = priority;
+
+    return param;
 }
 
 static void
@@ -616,10 +630,57 @@ handle_video_event (EVENT_TYPE type, void *userdata, void *userdata2)
 }
 
 static void
+gst_c2_vdec_set_property (GObject * object, guint prop_id,
+                          const GValue * value, GParamSpec * pspec)
+{
+    GstC2vdec *c2vdec = GST_C2VDEC (object);
+
+    GST_OBJECT_LOCK (c2vdec);
+
+    switch (prop_id) {
+        case PROP_PRIORITY:
+            c2vdec->priority = g_value_get_int(value);
+            break;
+        default:
+            G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+            break;
+    }
+
+    GST_OBJECT_UNLOCK (c2vdec);
+}
+
+static void
+gst_c2_vdec_get_property (GObject * object, guint prop_id,
+                          GValue * value, GParamSpec * pspec)
+{
+    GstC2vdec *c2vdec = GST_C2VDEC (object);
+
+    GST_OBJECT_LOCK (c2vdec);
+    switch (prop_id) {
+        case PROP_PRIORITY:
+            g_value_set_int(value, c2vdec->priority);
+            break;
+        default:
+            G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+            break;
+    }
+
+    GST_OBJECT_UNLOCK (c2vdec);
+}
+
+static void
 gst_c2vdec_class_init (GstC2vdecClass * klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstVideoDecoderClass *video_decoder_class = GST_VIDEO_DECODER_CLASS (klass);
+  gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_c2_vdec_set_property);
+  gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_c2_vdec_get_property);
+
+  g_object_class_install_property(gobject_class, PROP_PRIORITY,
+        g_param_spec_int("priority", "Priority of Video Instance",
+         "Set the proirity of current video instance among concurrent cases (0=RealTime default)",
+         G_MININT32, 0, 0,
+         static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
 
   /* Setting up pads and setting metadata should be moved to
      base_class_init if you intend to subclass this class. */
@@ -704,6 +765,7 @@ gst_c2vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   config_params_t interlace;
   config_params_t output_picture_order_mode;
   config_params_t low_latency_mode;
+  config_params_t priority_param;
 
   GST_DEBUG_OBJECT (dec, "set_format");
 
@@ -773,6 +835,9 @@ gst_c2vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     low_latency_mode = make_low_latency_param (dec->low_latency_mode);
     g_ptr_array_add (config, &low_latency_mode);
   }
+
+  priority_param = make_priority_param(dec->priority);
+  g_ptr_array_add(config, &priority_param);
 
   /* Negotiate with downstream and setup output */
   if (GST_FLOW_OK != gst_c2vdec_setup_output (decoder, config)) {

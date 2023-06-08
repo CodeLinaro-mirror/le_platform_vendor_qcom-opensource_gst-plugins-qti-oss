@@ -99,6 +99,7 @@ std::unique_ptr<C2Param> setRotate (gpointer param);
 std::unique_ptr<C2Param> setCSDMode (gpointer param);
 std::unique_ptr<C2Param> setBPreconditions (gpointer param);
 std::unique_ptr<C2Param> setVideoGopTuning (gpointer param);
+std::unique_ptr<C2Param> setVideoPriority (gpointer param);
 
 // Function map for parameter configuration
 static configFunctionMap sConfigFunctionMap = {
@@ -131,6 +132,7 @@ static configFunctionMap sConfigFunctionMap = {
   { CONFIG_FUNCTION_KEY_CSDMODE, setCSDMode },
   { CONFIG_FUNCTION_KEY_B_PRECONDITIONS, setBPreconditions },
   { CONFIG_FUNCTION_KEY_GOP_TUNING, setVideoGopTuning },
+  { CONFIG_FUNCTION_KEY_VIDEO_PRIORITY, setVideoPriority},
 };
 
 static const VideoProfileMapping video_profile[] = {
@@ -1173,6 +1175,20 @@ setVideoGopTuning (gpointer param)
       config->frame_num.b_frames };
 
   return C2Param::Copy (*gop);
+}
+
+std::unique_ptr<C2Param>
+setVideoPriority (gpointer param)
+{
+    if (param == NULL)
+        return nullptr;
+
+    config_params_t *config = (config_params_t*) param;
+
+    C2RealTimePriorityTuning priority;
+    priority.value = config->priority;
+
+    return C2Param::Copy(priority);
 }
 
 void
