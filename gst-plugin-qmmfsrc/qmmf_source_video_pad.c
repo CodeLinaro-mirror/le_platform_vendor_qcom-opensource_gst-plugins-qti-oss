@@ -25,6 +25,40 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*     * Redistributions of source code must retain the above copyright
+*       notice, this list of conditions and the following disclaimer.
+*
+*     * Redistributions in binary form must reproduce the above
+*       copyright notice, this list of conditions and the following
+*       disclaimer in the documentation and/or other materials provided
+*       with the distribution.
+*
+*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*       contributors may be used to endorse or promote products derived
+*       from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "qmmf_source_video_pad.h"
@@ -40,6 +74,8 @@
 // functions, implement qmmfsrc_video_pad_get_type() function and set
 // qmmfsrc_video_pad_parent_class variable.
 G_DEFINE_TYPE(GstQmmfSrcVideoPad, qmmfsrc_video_pad, GST_TYPE_PAD);
+
+#define GST_TYPE_QMMFSRC_VIDEO_TYPE (video_pad_stream_type_get_type())
 
 GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define GST_CAT_DEFAULT qmmfsrc_video_pad_debug
@@ -60,6 +96,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_PROP_CROP_WIDTH      0
 #define DEFAULT_PROP_CROP_HEIGHT     0
 #define DEFAULT_PROP_EXTRA_BUFFERS   0
+#define DEFAULT_PROP_VIDEO_TYPE      VIDEO_TYPE_VIDEO
 
 enum
 {
@@ -75,9 +112,57 @@ enum
   PROP_VIDEO_FRAMERATE,
   PROP_VIDEO_CROP,
   PROP_VIDEO_EXTRA_BUFFERS,
+  PROP_VIDEO_TYPE,
 };
 
 static guint signals[LAST_SIGNAL];
+
+static GType
+video_pad_stream_type_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { VIDEO_TYPE_VIDEO,
+        "The stream will be configured with tunings and settings most fitted"
+        " for directly encoding the buffers.", "video"
+    },
+    { VIDEO_TYPE_PREVIEW,
+        "The stream will be configured with tunings and settings most fitted"
+        " for directly visualizing the buffers.", "preview"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstQmmfSrcStreamType", variants);
+
+  return gtype;
+}
+
+static void
+video_pad_send_stream_start (GstPad * pad)
+{
+  GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+  gchar *stream_id = NULL;
+  gchar *pad_name  = NULL;
+  GstEvent *event  = NULL;
+
+  if (!vpad->stream_start)
+    return;
+
+  pad_name = gst_pad_get_name (pad);
+  stream_id =  g_strconcat ("qmmfsrc/", pad_name, NULL);
+
+  GST_DEBUG_OBJECT (pad, "Pushing STREAM_START");
+  event = gst_event_new_stream_start (stream_id);
+  gst_event_set_group_id (event, gst_util_group_id_next ());
+
+  gst_pad_push_event (pad, event);
+  vpad->stream_start = FALSE;
+
+  g_free (stream_id);
+  g_free (pad_name);
+}
 
 static void
 video_pad_worker_task (GstPad * pad)
@@ -129,19 +214,20 @@ video_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
     }
     case GST_QUERY_LATENCY:
     {
-      GstClockTime min_latency, max_latency;
+      GstClockTime min_latency = 0, max_latency = GST_CLOCK_TIME_NONE;
+
+      if (GST_QMMFSRC_VIDEO_PAD (pad)->duration == GST_CLOCK_TIME_NONE)
+        break;
 
       // Minimum latency is the time to capture one video frame.
       min_latency = GST_QMMFSRC_VIDEO_PAD (pad)->duration;
-
-      // TODO This will change once GstBufferPool is implemented.
-      max_latency = GST_CLOCK_TIME_NONE;
 
       GST_DEBUG_OBJECT (pad, "Latency %" GST_TIME_FORMAT "/%" GST_TIME_FORMAT,
           GST_TIME_ARGS (min_latency), GST_TIME_ARGS (max_latency));
 
       // We are always live, the minimum latency is 1 frame and
       // the maximum latency is the complete buffer of frames.
+      // This should not be done before camera prerolled.
       gst_query_set_latency (query, TRUE, min_latency, max_latency);
       break;
     }
@@ -206,6 +292,7 @@ video_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
     gboolean active)
 {
   gboolean success = FALSE;
+  GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
 
   switch (mode) {
     case GST_PAD_MODE_PUSH:
@@ -223,6 +310,7 @@ video_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
         gst_segment_init (&GST_QMMFSRC_VIDEO_PAD (pad)->segment,
             GST_FORMAT_UNDEFINED);
       }
+      vpad->stream_start = active;
       break;
     default:
       break;
@@ -386,6 +474,7 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
 
   // Immediately return the fetched caps if they are fixed.
   if (gst_caps_is_fixed (caps)) {
+    video_pad_send_stream_start (pad);
     gst_pad_set_caps (pad, caps);
 
     GST_DEBUG_OBJECT (pad, "Caps already fixated to: %" GST_PTR_FORMAT, caps);
@@ -465,6 +554,7 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
   gst_structure_set (structure, "pixel-aspect-ratio", GST_TYPE_FRACTION,
         1, 1, NULL);
 
+  video_pad_send_stream_start (pad);
   caps = gst_caps_fixate (caps);
   gst_pad_set_caps (pad, caps);
 
@@ -527,6 +617,9 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_EXTRA_BUFFERS:
       pad->xtrabufs = g_value_get_uint (value);
       break;
+    case PROP_VIDEO_TYPE:
+      pad->type = g_value_get_enum(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
       break;
@@ -573,6 +666,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
     }
     case PROP_VIDEO_EXTRA_BUFFERS:
       g_value_set_uint (value, pad->xtrabufs);
+      break;
+    case PROP_VIDEO_TYPE:
+      g_value_set_enum(value, pad->type);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
@@ -642,6 +738,14 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           0, G_MAXUINT, DEFAULT_PROP_EXTRA_BUFFERS,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+#ifdef GST_VIDEO_TYPE_SUPPORT
+  g_object_class_install_property (gobject, PROP_VIDEO_TYPE,
+      g_param_spec_enum ("type", "Type",
+          "The type of the stream.",
+           GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
+           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           GST_PARAM_MUTABLE_PLAYING));
+#endif // GST_VIDEO_TYPE_SUPPORT
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
@@ -660,6 +764,7 @@ static void
 qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
+  pad->stream_start = FALSE;
 
   pad->session_id   = 0;
   pad->index        = -1;
@@ -677,6 +782,7 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->crop.w       = DEFAULT_PROP_CROP_WIDTH;
   pad->crop.h       = DEFAULT_PROP_CROP_HEIGHT;
   pad->xtrabufs     = DEFAULT_PROP_EXTRA_BUFFERS;
+  pad->type         = DEFAULT_PROP_VIDEO_TYPE;
 
   pad->duration  = GST_CLOCK_TIME_NONE;
 

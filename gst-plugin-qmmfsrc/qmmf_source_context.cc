@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -192,9 +192,15 @@ struct _GstQmmfContext {
   /// Camera sensor active pixels property.
   GstVideoRectangle sensorsize;
   /// Camera Sensor Mode.
-  gint               sensormode;
+  gint              sensormode;
   /// Streams frame rate control mode
   guchar            frc_mode;
+  /// Camera IFE direct stream enable
+  gboolean          ife_direct_stream;
+  /// Multi Camera (0) Exposure value
+  gint64            master_exp_time;
+  /// Multi Camera (1) Exposure value
+  gint64            slave_exp_time;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -234,6 +240,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
   camera_metadata_entry entry;
   gint width = 0, height = 0, format = 0;
   gboolean supported = FALSE;
+  guint idx = 0;
 
   if (GST_IS_QMMFSRC_VIDEO_PAD (pad)) {
     width = GST_QMMFSRC_VIDEO_PAD (pad)->width;
@@ -248,7 +255,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
     return FALSE;
   }
 
-    recorder->GetCameraCharacteristics (context->camera_id, meta);
+  recorder->GetCameraCharacteristics (context->camera_id, meta);
 
   if (!meta.exists (ANDROID_SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
     GST_WARNING ("There is no sensor filter information!");
@@ -274,7 +281,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
       QMMFSRC_RETURN_VAL_IF_FAIL (NULL, format == GST_BAYER_FORMAT_RGGB,
           FALSE, "Invalid bayer matrix format, expected format 'rggb' !");
       break;
-#if defined(CAMERA_METADATA_1_1)
+#if defined(CAMERA_METADATA_1_1) || defined(CAMERA_METADATA_1_0_NS)
     case ANDROID_SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_MONO:
       QMMFSRC_RETURN_VAL_IF_FAIL (NULL, format == GST_BAYER_FORMAT_MONO,
           FALSE, "Invalid bayer matrix format, expected format 'mono' !");
@@ -285,18 +292,30 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
-  if (!meta.exists (ANDROID_SENSOR_OPAQUE_RAW_SIZE)) {
-    GST_WARNING ("There is no camera bayer size information!");
-    return FALSE;
+#if defined(CAMERA_METADATA_1_0_NS)
+  if (meta.exists(ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION)) {
+    entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION);
+
+    for (idx = 0; !supported && (idx < entry.count); idx += 3) {
+      if ((width == entry.data.i32[idx]) && (height == entry.data.i32[idx+1]))
+        supported = TRUE;
+    }
+  }
+#endif
+
+  if ((supported != TRUE) && (!meta.exists(ANDROID_SENSOR_OPAQUE_RAW_SIZE))) {
+      GST_WARNING ("There is no camera bayer size information!");
+      return FALSE;
   }
 
   entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE);
-
-  supported = (width == entry.data.i32[0]) && (height == entry.data.i32[1]);
+  for (idx = 0; !supported && (idx < entry.count); idx += 3) {
+    if ((width == entry.data.i32[idx]) && (height == entry.data.i32[idx+1]))
+      supported = TRUE;
+  }
 
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, supported, FALSE,
-      "Invalid bayer resolution, expected %dx%d !", entry.data.i32[0],
-      entry.data.i32[1]);
+      "Invalid %dx%d bayer resolution!", width, height);
 
   return TRUE;
 }
@@ -660,6 +679,20 @@ initialize_camera_param (GstQmmfContext * context)
   if (tag_id != 0)
     meta.update (tag_id, &(context)->saturation, 1);
 
+  tag_id = get_vendor_tag_by_name ("org.codeaurora.qcamera3.multicam_exptime",
+      "masterExpTime");
+
+  if (tag_id != 0)
+    meta.update (tag_id,
+        (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
+
+  tag_id = get_vendor_tag_by_name ("org.codeaurora.qcamera3.multicam_exptime",
+      "slaveExpTime");
+
+  if (tag_id != 0)
+    meta.update (tag_id,
+        (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+
   set_vendor_tags (context->defogtable, &meta);
   set_vendor_tags (context->exptable, &meta);
   set_vendor_tags (context->ltmdata, &meta);
@@ -689,7 +722,7 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
   ::qmmf::recorder::Recorder *recorder = NULL;
   ::qmmf::BufferDescriptor buffer;
 
-  GST_TRACE (" %s", gst_structure_to_string (structure));
+  QMMFSRC_TRACE_STRUCTURE (structure);
 
   gst_structure_get (structure, "recorder", G_TYPE_ULONG, &value, NULL);
   recorder =
@@ -795,8 +828,7 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
       GST_MINI_OBJECT (gstbuffer), qmmf_buffer_qdata_quark (),
       structure, (GDestroyNotify) qmmfsrc_gst_buffer_release
   );
-
-  GST_TRACE (" %s", gst_structure_to_string (structure));
+  QMMFSRC_TRACE_STRUCTURE (structure);
   return gstbuffer;
 }
 
@@ -1136,6 +1168,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
   }
   xtraparam.Update(::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
 
+  // IFE Direct Stream
+  ::qmmf::recorder::IFEDirectStream qmmf_ife_direct_stream;
+  qmmf_ife_direct_stream.enable = context->ife_direct_stream;
+  xtraparam.Update(::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
 
@@ -1306,6 +1343,11 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       ::qmmf::recorder::Rotation::kNone, vpad->xtrabufs
   );
 
+#ifdef GST_VIDEO_TYPE_SUPPORT
+  if (vpad->type == VIDEO_TYPE_PREVIEW)
+    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
+#endif // GST_VIDEO_TYPE_SUPPORT
+
   track_cbs.event_cb =
       [&] (uint32_t track_id, ::qmmf::recorder::EventType type,
           void *data, size_t size)
@@ -1439,6 +1481,9 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
 
     imgparam.mode = ::qmmf::recorder::ImageMode::kSnapshotPlusRaw;
     ::qmmf::recorder::SnapshotRawSetup rawparam;
+
+    rawparam.width = bpad->width;
+    rawparam.height = bpad->height;
 
     switch (bpad->format) {
       case GST_BAYER_FORMAT_BGGR:
@@ -1795,6 +1840,18 @@ gst_qmmf_context_update_local_props (GstQmmfContext * context,
   if (meta->exists(tag_id)) {
     context->contrast = meta->find(tag_id).data.i32[0];
   }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
+  if (meta->exists(tag_id)) {
+    context->master_exp_time = meta->find(tag_id).data.i64[0];
+  }
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
+  if (meta->exists(tag_id)) {
+    context->slave_exp_time = meta->find(tag_id).data.i64[0];
+  }
 }
 
 void
@@ -1834,6 +1891,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_FRC_MODE:
       context->frc_mode = g_value_get_enum (value);
+      return;
+    case PARAM_CAMERA_IFE_DIRECT_STREAM:
+      context->ife_direct_stream = g_value_get_boolean (value);
       return;
   }
 
@@ -2253,6 +2313,26 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(tag_id, &(context)->irmode, 1);
       break;
     }
+    case PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME:
+    {
+      g_return_if_fail (gst_value_array_get_size (value) == 2);
+
+      context->master_exp_time =
+          g_value_get_int (gst_value_array_get_value (value, 0));
+      context->slave_exp_time =
+          g_value_get_int (gst_value_array_get_value (value, 1));
+
+      guint tag_id = get_vendor_tag_by_name (
+          "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
+      meta.update(tag_id,
+          (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
+
+      tag_id = get_vendor_tag_by_name (
+          "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
+      meta.update(tag_id,
+          (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+      break;
+    }
   }
 
   if (!context->slave && (context->state >= GST_STATE_READY)) {
@@ -2351,6 +2431,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_FRC_MODE:
       g_value_set_enum (value, context->frc_mode);
       return;
+    case PARAM_CAMERA_IFE_DIRECT_STREAM:
+      g_value_set_boolean (value, context->ife_direct_stream);
+      break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
       gchar *string = NULL;
@@ -2510,6 +2593,19 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
         recorder->GetCameraCharacteristics (context->camera_id, *meta);
 
       g_value_set_pointer (value, meta);
+      break;
+    }
+    case PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME:
+    {
+      GValue val = G_VALUE_INIT;
+      g_value_init (&val, G_TYPE_INT);
+
+      g_value_set_int (&val, context->master_exp_time);
+      gst_value_array_append_value (value, &val);
+
+      g_value_set_int (&val, context->slave_exp_time);
+      gst_value_array_append_value (value, &val);
+
       break;
     }
   }

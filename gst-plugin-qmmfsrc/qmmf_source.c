@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -115,6 +115,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_IR_MODE                   IR_MODE_OFF
 #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
 #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
+#define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -176,6 +177,8 @@ enum
   PROP_CAMERA_IMAGE_METADATA,
   PROP_CAMERA_STATIC_METADATA,
   PROP_CAMERA_FRC_MODE,
+  PROP_CAMERA_IFE_DIRECT_STREAM,
+  PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
 };
 
 static GstStaticPadTemplate qmmfsrc_video_src_template =
@@ -446,9 +449,12 @@ qmmfsrc_request_pad (GstElement * element, GstPadTemplate * templ,
   g_signal_connect (srcpad, "reconfigure",
       G_CALLBACK (qmmfsrc_pad_reconfigure), GST_ELEMENT (qmmfsrc));
 
-  // Connect a callback to the pad activation signal.
-  g_signal_connect (srcpad, "activation",
-      G_CALLBACK (qmmfsrc_pad_activation), GST_ELEMENT (qmmfsrc));
+  if (isvideo) {
+    // Connect a callback to the pad activation signal.
+    g_signal_connect (srcpad, "activation",
+        G_CALLBACK (qmmfsrc_pad_activation), GST_ELEMENT (qmmfsrc));
+  }
+
   return srcpad;
 }
 
@@ -831,20 +837,23 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
       if (!gst_qmmf_context_open (qmmfsrc->context)) {
-        GST_ERROR_OBJECT (qmmfsrc, "Failed to Open!");
+        GST_ELEMENT_ERROR (qmmfsrc, RESOURCE, NOT_FOUND,
+          ("Failed to Open Camera!"), NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       qmmfsrc->isplugged = TRUE;
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       if (!qmmfsrc_create_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT (qmmfsrc, "Failed to create stream!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED,
+          ("Failed to create stream!"), NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       if (!qmmfsrc_start_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT (qmmfsrc, "Failed to start stream!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED,
+          ("Failed to start stream!"), NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       break;
@@ -872,7 +881,8 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       if (!qmmfsrc_pause_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT(qmmfsrc, "Failed to pause stream!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to pause stream!"),
+          NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       // Return NO_PREROLL to inform bin/pipeline we won't be able to
@@ -885,17 +895,20 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
       // When PoV is plugged stop_stream will be called from here,
       // otherwise it will be called from camera-plug event handling.
       if (qmmfsrc->isplugged && !qmmfsrc_stop_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT(qmmfsrc, "Failed to stop stream!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to stop stream!"),
+          NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       if (!qmmfsrc_delete_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT (qmmfsrc, "Failed to delete stream!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to delete stream!"),
+          NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       if (!gst_qmmf_context_close (qmmfsrc->context)) {
-        GST_ERROR_OBJECT (qmmfsrc, "Failed to Close!");
+        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to Close Camera!"),
+          NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
       break;
@@ -1129,6 +1142,14 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
       break;
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
+      break;
+    case PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1294,6 +1315,14 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_FRC_MODE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
+      break;
+    case PROP_CAMERA_IFE_DIRECT_STREAM:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_IFE_DIRECT_STREAM, value);
+      break;
+    case PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1580,6 +1609,25 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "Stream frame rate control mode.",
           GST_TYPE_QMMFSRC_FRC_MODE, DEFAULT_PROP_CAMERA_FRC_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
+      g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
+          "IFE direct stream support, with this param, ISP will generate"
+          "output stream from IFE directly and skip others ISP modules"
+          "like IPE",
+          DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+#ifdef MULTI_CAMERA_ENABLE // MULTI_CAMERA_ENABLE
+  g_object_class_install_property (gobject, PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+      gst_param_spec_array ("multi-camera-exp-time", "Multi Camera Exposure Time",
+          "The exposure time (in nano-seconds) for each camera in multi camera"
+          " setup ('<exp-time-1, exp-time-2>') and it is used only when"
+          " exposure-mode is OFF",
+          g_param_spec_int ("exp-time", "Exposure Time",
+              "One of exp-time-1, exp-time-2 value.", 0, G_MAXINT, 0,
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
+#endif  // MULTI_CAMERA_ENABLE
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),

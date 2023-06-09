@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2021, 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *  
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -153,9 +153,11 @@ gst_jpeg_enc_callback (GstJPEGEncoderContext * context, guint buf_fd,
     return;
   }
 
+  g_mutex_lock (&context->lock);
   GstVideoCodecFrame *frame = (GstVideoCodecFrame *) g_hash_table_lookup (
       context->requests, GINT_TO_POINTER (buf_fd));
   g_hash_table_remove (context->requests, GINT_TO_POINTER (buf_fd));
+  g_mutex_unlock (&context->lock);
 
   if (frame) {
     // Resize the buffer to the encoded size
@@ -167,7 +169,7 @@ gst_jpeg_enc_callback (GstJPEGEncoderContext * context, guint buf_fd,
 
     GST_DEBUG ("End compressing, encoded_size: %d", encoded_size);
   } else {
-    GST_ERROR ("Failed to a request with fd %d", buf_fd);
+    GST_ERROR ("Failed to find a request with fd %d", buf_fd);
   }
 
   // Call the callback
@@ -207,7 +209,7 @@ gst_jpeg_enc_context_create (GstJPEGEncoderContext * context,
       params, GST_JPEG_ENC_OUTPUT_HEIGHT, &jpeg_params.out_buffer.height);
   gst_structure_get_uint (
       params, GST_JPEG_ENC_OUTPUT_FORMAT, &jpeg_params.out_buffer.format);
-
+  gst_structure_free (params);
   qmmf::recorder::OfflineJpegCb callback =
       [&, context] (guint buf_fd, guint encoded_size)
       { gst_jpeg_enc_callback (context, buf_fd, encoded_size); };
@@ -239,7 +241,6 @@ gst_jpeg_enc_context_destroy (GstJPEGEncoderContext * context)
         &context->lock, wait_time);
     if (!timeout) {
       GST_ERROR ("Timeout on wait for all requests to be received");
-      return FALSE;
     }
     GST_INFO ("All request are received");
   } else {
@@ -259,7 +260,7 @@ gst_jpeg_enc_context_destroy (GstJPEGEncoderContext * context)
 
 gboolean
 gst_jpeg_enc_context_execute (GstJPEGEncoderContext * context,
-    GstVideoCodecFrame * frame)
+    GstVideoCodecFrame * frame, gint quality)
 {
   gboolean ret = TRUE;
   GST_DEBUG ("Jpeg encoder execute");
@@ -279,14 +280,26 @@ gst_jpeg_enc_context_execute (GstJPEGEncoderContext * context,
   qmmf::OfflineJpegProcessParams proc_params;
   proc_params.in_buf_fd = gst_fd_memory_get_fd (inmemory);
   proc_params.out_buf_fd = gst_fd_memory_get_fd (outmemory);
+  proc_params.metadata.quality = quality;
 
-  if (context->recorder->EncodeOfflineJPEG(proc_params) != 0) {
-    GST_ERROR ("Failed to execute the Jpeg encoder");
-    return FALSE;
-  }
+  // calling EncodeOfflineJPEG() may cause thread context switch
+  // to avoid this, we need to use mutex for EncodeOfflineJPEG()
+  // and hash table access
+
+  g_mutex_lock (&context->lock);
 
   g_hash_table_insert (context->requests,
       GINT_TO_POINTER (proc_params.out_buf_fd), frame);
+
+  if (context->recorder->EncodeOfflineJPEG(proc_params) != 0) {
+    GST_ERROR ("Failed to execute the Jpeg encoder");
+    g_hash_table_remove (context->requests,
+        GINT_TO_POINTER (proc_params.out_buf_fd));
+    g_mutex_unlock (&context->lock);
+    return FALSE;
+  }
+
+  g_mutex_unlock (&context->lock);
 
   return TRUE;
 }
