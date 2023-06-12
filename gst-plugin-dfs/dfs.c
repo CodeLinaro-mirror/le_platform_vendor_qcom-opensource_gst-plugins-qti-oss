@@ -58,6 +58,7 @@ G_DEFINE_TYPE (GstDfs, gst_dfs, GST_TYPE_BASE_TRANSFORM);
 #define DEFAULT_PROP_FILTER_HEIGHT 11
 #define DEFAULT_PROP_RECTIFICATION FALSE
 #define DEFAULT_PROP_GPU_RECT FALSE
+#define DEFAULT_PROP_USE_DISP TRUE
 
 #define PLY_HEADER_SIZE 128      //Point Cloud PLY Header size in bytes
 #define PLY_POINT_NUM 3         //Point Cloud PLY point number per row
@@ -574,7 +575,11 @@ gst_dfs_transform (GstBaseTransform * trans, GstBuffer * inbuffer,
     settings.filter_width = dfs->filter_width;
     settings.filter_height = dfs->filter_height;
     settings.rectification = dfs->rectification;
+  #if defined(TARGET_BOARD_QRB5165)
+    settings.use_disparity = dfs->use_disparity;
+  #else
     settings.gpu_rect = dfs->gpu_rect;
+  #endif
     settings.stereo_parameter = dfs->stereo_parameter;
 
     ts_begin = gst_util_get_timestamp ();
@@ -736,8 +741,10 @@ gst_dfs_set_caps (GstBaseTransform * trans, GstCaps * incaps, GstCaps * outcaps)
     dfs->output_mode = OUTPUT_MODE_POINT_CLOUD;
   }
 
+#if !defined(TARGET_BOARD_QRB5165)
   if (dfs->rectification == TRUE && dfs->dfs_mode == MODE_SPEED)
     dfs->gpu_rect = TRUE;
+#endif
 
   //Populate stereo parameter values
   dfs->stereo_parameter.camera[0].pixelWidth =
@@ -866,7 +873,11 @@ gst_dfs_init (GstDfs * dfs)
   dfs->filter_width = DEFAULT_PROP_FILTER_WIDTH;
   dfs->filter_height = DEFAULT_PROP_FILTER_HEIGHT;
   dfs->rectification = DEFAULT_PROP_RECTIFICATION;
+#if defined(TARGET_BOARD_QRB5165)
+  dfs->use_disparity = DEFAULT_PROP_USE_DISP;
+#else
   dfs->gpu_rect = DEFAULT_PROP_GPU_RECT;
+#endif
 
   GST_DEBUG_CATEGORY_INIT (gst_dfs_debug, "qtidfs", 0, "DFS");
 }

@@ -98,7 +98,11 @@ struct _DfsInitSettings {
   gint                  filter_width;
   gint                  filter_height;
   gboolean              rectification;
+#if defined(TARGET_BOARD_QRB5165)
+  gboolean              use_disparity;
+#else
   gboolean              gpu_rect;
+#endif
   stereoConfiguration   stereo_parameter;
 };
 

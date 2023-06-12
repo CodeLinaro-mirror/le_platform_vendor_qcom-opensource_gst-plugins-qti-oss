@@ -223,7 +223,11 @@ gst_dfs_engine_new (DfsInitSettings * settings)
   dfs_param.disparity.minDisparity = settings->min_disparity;
   dfs_param.disparity.numDisparityLevels = settings->num_disparity_levels;
   dfs_param.doRectification = settings->rectification;
+#if defined(TARGET_BOARD_QRB5165)
+  dfs_param.useDisp = settings->use_disparity;
+#else
   dfs_param.doGpuRect = settings->gpu_rect;
+#endif
 
   fill_stereo_params (&stereo_param, &settings->stereo_parameter);
 
@@ -231,12 +235,17 @@ gst_dfs_engine_new (DfsInitSettings * settings)
       ("Filter: %dx%d min_disp: %d num_levels: %d doRectification: %s doGPURect: %s",
       dfs_param.filterWidth, dfs_param.filterHeight,
       dfs_param.disparity.minDisparity, dfs_param.disparity.numDisparityLevels,
-      dfs_param.doRectification ? "enable" : "disable",
-      dfs_param.doGpuRect ? "enable" : "disable");
+      dfs_param.doRectification ? "enable" : "disable");
 
+#if defined(TARGET_BOARD_QRB5165)
+  engine->handle =
+      rvDFS_Initialize (engine->width,
+      engine->height, engine->stride, dfs_param, stereo_param);
+#else
   engine->handle =
       rvDFS_Initialize ((rvDFSMode) settings->dfs_mode, engine->width,
       engine->height, engine->stride, dfs_param, stereo_param);
+#endif
   if (!engine->handle) {
     GST_ERROR ("Failed to initialize DFS");
     goto cleanup;
