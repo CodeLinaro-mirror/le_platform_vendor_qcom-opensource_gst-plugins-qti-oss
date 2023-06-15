@@ -82,7 +82,7 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_ENTROPY_MODE         (0xffffffff)
 #define DEFAULT_PROP_LOOP_FILTER_MODE     (0xffffffff)
 #define DEFAULT_PROP_NUM_LTR_FRAMES       (0xffffffff)
-#define DEFAULT_PROP_PRIORITY             (0xffffffff)
+#define DEFAULT_PROP_PRIORITY             (0)
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
@@ -327,7 +327,7 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
-  if (c2venc->priority != DEFAULT_PROP_PRIORITY) {
+  if (c2venc->priority < DEFAULT_PROP_PRIORITY) {
     success = gst_c2_engine_set_parameter (c2venc->engine,
         GST_C2_PARAM_PRIORITY, GPOINTER_CAST (&(c2venc->priority)));
 
