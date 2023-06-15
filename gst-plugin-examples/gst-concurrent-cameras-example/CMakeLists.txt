@@ -1,24 +1,18 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+cmake_minimum_required(VERSION 3.8.2)
+
+# GStreamer gst-concurrent-cameras-example
+set(GST_EXAMPLE_BIN gst-concurrent-cameras-example)
 
 add_executable(${GST_EXAMPLE_BIN}
-  main.cc
+  main.c
 )
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
 )
 
-# Add target specific precompiler defintions.
-target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
-  $<$<STREQUAL:${CAMERA_METADATA_VERSION},1.0ns>:CAMERA_METADATA_1_0_NS>
-)
-
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_LIBRARIES}
-  camera_metadata
-  $<$<NOT:$<BOOL:${CAMERA_CLIENT_DISABLED}>>:camera_client>
-  utils
 )
 
 install(
