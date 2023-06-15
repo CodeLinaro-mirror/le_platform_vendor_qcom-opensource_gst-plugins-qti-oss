@@ -424,16 +424,17 @@ C2Module* C2Factory::GetModule(std::string name) {
   // Initialize Codec2 Store Factory.
   if (!factory_) {
     void* handle = dlopen("libqcodec2_core.so", RTLD_NOW);
-    if (!handle || dlerror()) {
-      throw std::runtime_error(dlerror() ? dlerror() : "dlopen failed!");
+    char *dlerrorMsg = dlerror();
+    if (!handle || dlerrorMsg) {
+      throw std::runtime_error(dlerrorMsg ? dlerrorMsg : "dlopen failed!");
     }
 
     const char* method = "QC2ComponentStoreFactoryGetter";
     auto FactoryGetter = (QC2ComponentStoreFactoryGetter_t)dlsym(handle, method);
-
-    if ((FactoryGetter == nullptr) || dlerror()) {
+    dlerrorMsg = dlerror();
+    if ((FactoryGetter == nullptr) || dlerrorMsg) {
       dlclose(handle);
-      throw std::runtime_error(dlerror() ? dlerror() : "dlsym failed!");
+      throw std::runtime_error(dlerrorMsg ? dlerrorMsg : "dlsym failed!");
     }
 
     // Get version 1.0 of the Codec2 Store Factory.
