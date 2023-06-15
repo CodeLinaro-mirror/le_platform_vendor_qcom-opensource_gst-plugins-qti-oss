@@ -827,6 +827,10 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
                                   ::android::C2HandleGBM* handle) {
 
   GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
+  if (nullptr == vmeta) {
+    GST_ERROR ("GstVideoMeta instance is NULL");
+    return false;
+  }
   uint32_t size = gst_buffer_get_size (buffer);
   int32_t fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
 
@@ -977,6 +981,10 @@ std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
   uint8_t *const *data = view.data();
   // Fetch the GBM handle containing the destination stride and scanline.
   auto handle = static_cast<const android::C2HandleGBM*>(block->handle());
+  if (nullptr == handle) {
+    GST_ERROR ("C2HandleGBM instance is NULL");
+    return nullptr;
+  }
 
   for (uint32_t idx = 0; idx < vmeta->n_planes; idx++) {
     uint32_t n_rows = (idx == 0) ? vmeta->height : (vmeta->height / 2);
