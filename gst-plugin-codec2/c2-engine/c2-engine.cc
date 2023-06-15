@@ -184,6 +184,11 @@ class GstC2Notifier : public IC2Notifier {
     if (c2buffer->data().type() == C2BufferData::LINEAR) {
       const C2ConstLinearBlock block = c2buffer->data().linearBlocks().front();
       const C2Handle *handle = block.handle();
+      if (nullptr == handle) {
+        GST_ERROR ("C2Handle instance is NULL");
+        gst_buffer_unref (buffer);
+        return;
+      }
 
       size = block.size();
       fd = handle->data[0];
@@ -192,6 +197,11 @@ class GstC2Notifier : public IC2Notifier {
       const C2ConstGraphicBlock block = c2buffer->data().graphicBlocks().front();
       const C2GraphicView view = block.map().get();
       auto handle = static_cast<const android::C2HandleGBM*>(block.handle());
+      if (nullptr == handle) {
+        GST_ERROR ("C2Handle instance is NULL");
+        gst_buffer_unref (buffer);
+        return;
+      }
 
       size = handle->mInts.size;
       fd = handle->mFds.buffer_fd;
@@ -203,6 +213,11 @@ class GstC2Notifier : public IC2Notifier {
       }
 
       GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
+      if (nullptr == vmeta) {
+        GST_ERROR ("GstVideoMeta instance is NULL");
+        gst_buffer_unref (buffer);
+        return;
+      }
 
       vmeta->width = view.crop().width;
       vmeta->height = view.crop().height;
