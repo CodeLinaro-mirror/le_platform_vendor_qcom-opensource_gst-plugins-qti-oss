@@ -212,14 +212,27 @@ switch_camera (GstCameraSwitchCtx *cameraswitchctx) {
 
   // Unlink the current camera stream
   g_print ("Unlinking current camera stream...\n");
-  gst_element_unlink (qmmf_second, cameraswitchctx->capsfilter);
+  if (cameraswitchctx->use_display) {
+    gst_element_set_state (cameraswitchctx->waylandsink, GST_STATE_NULL);
+    gst_element_unlink_many (qmmf_second, cameraswitchctx->capsfilter, cameraswitchctx->waylandsink, NULL);
+  } else {
+    gst_element_unlink (qmmf_second, cameraswitchctx->capsfilter);
+  }
   g_print ("Unlinked current camera stream successfully \n");
 
   // Link the next camera stream
   g_print ("Linking next camera stream...\n");
-  if (!gst_element_link (qmmf, cameraswitchctx->capsfilter)) {
-    g_printerr ("Error: Link cannot be done!\n");
-    return;
+  if (cameraswitchctx->use_display) {
+    gst_element_set_state (cameraswitchctx->waylandsink, GST_STATE_PLAYING);
+    if (!gst_element_link_many (qmmf, cameraswitchctx->capsfilter, cameraswitchctx->waylandsink, NULL)) {
+      g_printerr ("Error: Link cannot be done!\n");
+      return;
+    }
+  } else {
+    if (!gst_element_link (qmmf, cameraswitchctx->capsfilter)) {
+      g_printerr ("Error: Link cannot be done!\n");
+      return;
+    }
   }
   g_print ("Linked next camera stream successfully \n");
 
