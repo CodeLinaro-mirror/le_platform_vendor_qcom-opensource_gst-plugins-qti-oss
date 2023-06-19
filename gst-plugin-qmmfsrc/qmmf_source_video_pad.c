@@ -75,9 +75,7 @@
 // qmmfsrc_video_pad_parent_class variable.
 G_DEFINE_TYPE(GstQmmfSrcVideoPad, qmmfsrc_video_pad, GST_TYPE_PAD);
 
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
 #define GST_TYPE_QMMFSRC_VIDEO_TYPE (video_pad_stream_type_get_type())
-#endif
 
 GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define GST_CAT_DEFAULT qmmfsrc_video_pad_debug
@@ -98,9 +96,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_PROP_CROP_WIDTH      0
 #define DEFAULT_PROP_CROP_HEIGHT     0
 #define DEFAULT_PROP_EXTRA_BUFFERS   0
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
 #define DEFAULT_PROP_VIDEO_TYPE      VIDEO_TYPE_VIDEO
-#endif
 
 enum
 {
@@ -116,14 +112,11 @@ enum
   PROP_VIDEO_FRAMERATE,
   PROP_VIDEO_CROP,
   PROP_VIDEO_EXTRA_BUFFERS,
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
   PROP_VIDEO_TYPE,
-#endif
 };
 
 static guint signals[LAST_SIGNAL];
 
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
 static GType
 video_pad_stream_type_get_type (void)
 {
@@ -145,7 +138,31 @@ video_pad_stream_type_get_type (void)
 
   return gtype;
 }
-#endif
+
+static void
+video_pad_send_stream_start (GstPad * pad)
+{
+  GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+  gchar *stream_id = NULL;
+  gchar *pad_name  = NULL;
+  GstEvent *event  = NULL;
+
+  if (!vpad->stream_start)
+    return;
+
+  pad_name = gst_pad_get_name (pad);
+  stream_id =  g_strconcat ("qmmfsrc/", pad_name, NULL);
+
+  GST_DEBUG_OBJECT (pad, "Pushing STREAM_START");
+  event = gst_event_new_stream_start (stream_id);
+  gst_event_set_group_id (event, gst_util_group_id_next ());
+
+  gst_pad_push_event (pad, event);
+  vpad->stream_start = FALSE;
+
+  g_free (stream_id);
+  g_free (pad_name);
+}
 
 static void
 video_pad_worker_task (GstPad * pad)
@@ -197,19 +214,20 @@ video_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
     }
     case GST_QUERY_LATENCY:
     {
-      GstClockTime min_latency, max_latency;
+      GstClockTime min_latency = 0, max_latency = GST_CLOCK_TIME_NONE;
+
+      if (GST_QMMFSRC_VIDEO_PAD (pad)->duration == GST_CLOCK_TIME_NONE)
+        break;
 
       // Minimum latency is the time to capture one video frame.
       min_latency = GST_QMMFSRC_VIDEO_PAD (pad)->duration;
-
-      // TODO This will change once GstBufferPool is implemented.
-      max_latency = GST_CLOCK_TIME_NONE;
 
       GST_DEBUG_OBJECT (pad, "Latency %" GST_TIME_FORMAT "/%" GST_TIME_FORMAT,
           GST_TIME_ARGS (min_latency), GST_TIME_ARGS (max_latency));
 
       // We are always live, the minimum latency is 1 frame and
       // the maximum latency is the complete buffer of frames.
+      // This should not be done before camera prerolled.
       gst_query_set_latency (query, TRUE, min_latency, max_latency);
       break;
     }
@@ -274,6 +292,7 @@ video_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
     gboolean active)
 {
   gboolean success = FALSE;
+  GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
 
   switch (mode) {
     case GST_PAD_MODE_PUSH:
@@ -291,6 +310,7 @@ video_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
         gst_segment_init (&GST_QMMFSRC_VIDEO_PAD (pad)->segment,
             GST_FORMAT_UNDEFINED);
       }
+      vpad->stream_start = active;
       break;
     default:
       break;
@@ -454,6 +474,7 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
 
   // Immediately return the fetched caps if they are fixed.
   if (gst_caps_is_fixed (caps)) {
+    video_pad_send_stream_start (pad);
     gst_pad_set_caps (pad, caps);
 
     GST_DEBUG_OBJECT (pad, "Caps already fixated to: %" GST_PTR_FORMAT, caps);
@@ -533,6 +554,7 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
   gst_structure_set (structure, "pixel-aspect-ratio", GST_TYPE_FRACTION,
         1, 1, NULL);
 
+  video_pad_send_stream_start (pad);
   caps = gst_caps_fixate (caps);
   gst_pad_set_caps (pad, caps);
 
@@ -595,11 +617,9 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_EXTRA_BUFFERS:
       pad->xtrabufs = g_value_get_uint (value);
       break;
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
     case PROP_VIDEO_TYPE:
       pad->type = g_value_get_enum(value);
       break;
-#endif
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
       break;
@@ -647,11 +667,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_VIDEO_EXTRA_BUFFERS:
       g_value_set_uint (value, pad->xtrabufs);
       break;
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
     case PROP_VIDEO_TYPE:
       g_value_set_enum(value, pad->type);
       break;
-#endif
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
       break;
@@ -720,14 +738,14 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           0, G_MAXUINT, DEFAULT_PROP_EXTRA_BUFFERS,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
+#ifdef GST_VIDEO_TYPE_SUPPORT
   g_object_class_install_property (gobject, PROP_VIDEO_TYPE,
       g_param_spec_enum ("type", "Type",
           "The type of the stream.",
            GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
            G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
-#endif
+#endif // GST_VIDEO_TYPE_SUPPORT
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
@@ -746,6 +764,7 @@ static void
 qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
+  pad->stream_start = FALSE;
 
   pad->session_id   = 0;
   pad->index        = -1;
@@ -763,9 +782,7 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->crop.w       = DEFAULT_PROP_CROP_WIDTH;
   pad->crop.h       = DEFAULT_PROP_CROP_HEIGHT;
   pad->xtrabufs     = DEFAULT_PROP_EXTRA_BUFFERS;
-#ifdef FEATURE_VIDEO_PREVIEW_TYPE_SUPPORT
   pad->type         = DEFAULT_PROP_VIDEO_TYPE;
-#endif
 
   pad->duration  = GST_CLOCK_TIME_NONE;
 
