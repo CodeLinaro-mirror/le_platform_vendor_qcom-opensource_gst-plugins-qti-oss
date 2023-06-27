@@ -110,6 +110,7 @@ struct _GstC2vdec
   gboolean is_ubwc;
   GMutex free_buff_lock;
   GCond free_buff_cond;
+  gint32 priority;
 };
 
 struct _GstC2vdecClass

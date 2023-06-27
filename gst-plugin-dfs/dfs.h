@@ -90,7 +90,11 @@ struct _GstDfs {
 
   gboolean                rectification;
 
+#if defined(TARGET_BOARD_QRB5165)
+  gboolean                use_disparity;
+#else
   gboolean                gpu_rect;
+#endif
 };
 
 struct _GstDfsClass {

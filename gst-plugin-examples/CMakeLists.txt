@@ -11,6 +11,8 @@ pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_APP
+  REQUIRED gstreamer-app-1.0>=${GST_VERSION_REQUIRED})
 
 if (ENABLE_TRACKING_CAM)
   add_subdirectory(gst-tracking-cam-app)
@@ -35,3 +37,4 @@ add_subdirectory(gst-two-1080p-example)
 add_subdirectory(gst-three-1080p-example)
 add_subdirectory(gst-snpe-yolo-ssd-encode-example)
 add_subdirectory(gst-snpe-yolo-ssd-display-example)
+add_subdirectory(gst-camera-switch-appsrc-example)
