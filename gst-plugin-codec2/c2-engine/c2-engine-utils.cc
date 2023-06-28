@@ -37,6 +37,10 @@
 #include <C2PlatformSupport.h>
 #include <C2BlockInternal.h>
 
+#if defined(ENABLE_LINEAR_DMABUF)
+#include <C2DmaBufAllocator.h>
+#endif //ENABLE_LINEAR_DMABUF
+
 #ifdef HAVE_MMM_COLOR_FMT_H
 #include <display/media/mmm_color_fmt.h>
 #else
@@ -117,6 +121,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
+  { GST_C2_PARAM_PRIORITY,
+      C2RealTimePriorityTuning::PARAM_TYPE },
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -149,6 +155,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
   { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
+  { GST_C2_PARAM_PRIORITY, "PRIORITY"},
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -587,10 +594,11 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
         size_t len = strlen (region.rectPayload);
         size_t extlen = strlen (region.rectPayloadExt);
+        size_t writelen = static_cast<size_t>(ss.tellp()) - len - extlen;
 
-        if ((len + ss.tellp()) < size)
+        if ((len + writelen) < size)
           ss.get((region.rectPayload + len), ss.tellp());
-        else if ((extlen + ss.tellp()) < extsize)
+        else if ((extlen + writelen) < extsize)
           ss.get((region.rectPayloadExt + extlen), ss.tellp());
 
         ss.clear();
@@ -612,6 +620,12 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
       syncframe.value = enable ? 1 : 0;
       c2param = C2Param::Copy(syncframe);
+      break;
+    }
+    case GST_C2_PARAM_PRIORITY: {
+      C2RealTimePriorityTuning priority;
+      priority.value = *(reinterpret_cast<int32_t*>(payload));
+      c2param = C2Param::Copy(priority);
       break;
     }
     default:
@@ -900,6 +914,12 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<gboolean*>(payload)) = syncframe->value ? TRUE : FALSE;
       break;
     }
+    case GST_C2_PARAM_PRIORITY: {
+      auto priority =
+          reinterpret_cast<C2RealTimePriorityTuning*>(c2param.get());
+      *(reinterpret_cast<int32_t*>(payload)) = priority->value;
+      break;
+    }
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -936,12 +956,16 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
       break;
     case C2PixelFormat::kP010:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride / 2;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
     case C2PixelFormat::kTP10UBWC:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride * 3 / 4;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
@@ -1159,7 +1183,7 @@ private:
   C2Allocator::id_t    allocator_id_;
 };
 
-std::shared_ptr<C2Buffer> GstC2Utils::ImportBuffer(GstBuffer* buffer) {
+std::shared_ptr<C2Buffer> GstC2Utils::ImportGraphicBuffer(GstBuffer* buffer) {
 
   GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
   g_return_val_if_fail (vmeta != NULL, nullptr);
@@ -1193,3 +1217,59 @@ std::shared_ptr<C2Buffer> GstC2Utils::ImportBuffer(GstBuffer* buffer) {
 
   return c2buffer;
 }
+
+//TODO: This is a temporary change and this may change once we have a proper
+// solution in codec2 backend for importing fd backed buffers using C2HandleBuf.
+#if defined(ENABLE_LINEAR_DMABUF)
+std::shared_ptr<C2Buffer> GstC2Utils::ImportLinearBuffer(GstBuffer* buffer) {
+
+  int32_t fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
+  uint32_t size = gst_buffer_get_size (buffer);
+  static uint32_t index = 0;
+
+  ::android::C2HandleBuf *handle = new android::C2HandleBuf (
+      fd, GST_ROUND_UP_N (size, 4096), index++);
+
+  std::shared_ptr<C2Allocator> allocator;
+  std::shared_ptr<C2AllocatorStore> store =
+      android::GetCodec2PlatformAllocatorStore();
+  auto ret = store->fetchAllocator (
+      android::C2PlatformAllocatorStore::DEFAULT_LINEAR, &allocator);
+  if (ret != C2_OK || allocator == nullptr) {
+    GST_ERROR ("Failed to create C2 allocator");
+    delete handle;
+
+    return nullptr;
+  }
+
+  std::shared_ptr<C2LinearAllocation> allocation;
+  ret = allocator->priorLinearAllocation (handle, &allocation);
+  if (ret != C2_OK) {
+    GST_ERROR ("Prior linear allocation failed");
+    delete handle;
+
+    return nullptr;
+  }
+
+  std::shared_ptr<C2LinearBlock> block =
+      _C2BlockFactory::CreateLinearBlock (allocation);
+  if (!block) {
+    GST_ERROR ("Failed to create linear block!");
+    delete handle;
+
+    return nullptr;
+  }
+  block->mSize = size;
+
+  auto c2buffer = C2Buffer::CreateLinearBuffer (
+      block->share(block->offset(), block->size(), ::C2Fence()));
+  if (!c2buffer) {
+    GST_ERROR ("Failed to create linear C2 buffer");
+    delete handle;
+
+    return nullptr;
+  }
+
+  return c2buffer;
+}
+#endif // ENABLE_LINEAR_DMABUF
