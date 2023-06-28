@@ -52,11 +52,14 @@ G_DEFINE_TYPE (GstC2VDecoder, gst_c2_vdec, GST_TYPE_VIDEO_DECODER);
 #endif
 
 #define GST_VIDEO_FORMATS "{ NV12, NV12_10LE32, P010_10LE }"
+#define DEFAULT_PROP_PRIORITY                           (0)
+
 
 enum
 {
   PROP_0,
-  PROP_SECURE
+  PROP_SECURE,
+  PROP_PRIORITY
 };
 
 static GstStaticPadTemplate gst_c2_vdec_sink_pad_template =
@@ -187,6 +190,15 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
     return FALSE;
   }
 #endif // CODEC2_CONFIG_VERSION_1_0
+
+  if (c2vdec->priority < DEFAULT_PROP_PRIORITY) {
+    success = gst_c2_engine_set_parameter (c2vdec->engine,
+    GST_C2_PARAM_PRIORITY, GPOINTER_CAST (&(c2vdec->priority)));
+    if (!success) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to set video (decoder) priority param!");
+      return FALSE;
+    }
+  }
 
   return TRUE;
 }
@@ -497,6 +509,11 @@ gst_c2_vdec_set_property (GObject * object, guint prop_id, const GValue * value,
     case PROP_SECURE:
       c2vdec->secure = g_value_get_boolean (value);
       break;
+
+    case PROP_PRIORITY:
+      c2vdec->priority = g_value_get_int(value);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -513,6 +530,11 @@ gst_c2_vdec_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_SECURE:
       g_value_set_boolean (value, c2vdec->secure);
       break;
+
+    case PROP_PRIORITY:
+      g_value_set_int(value, c2vdec->priority);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -560,6 +582,12 @@ gst_c2_vdec_class_init (GstC2VDecoderClass * klass)
         "If property is enabled it will select the codec2 secure component",
         FALSE, G_PARAM_READWRITE));
 
+  g_object_class_install_property(gobject, PROP_PRIORITY,
+    g_param_spec_int("priority", "Priority of Video (decoder) Instance",
+     "Set the proirity of current video (decoder) instance among concurrent cases (0=RealTime default)",
+                 G_MININT32, 0, DEFAULT_PROP_PRIORITY,
+                 G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+
   vdec_class->start = GST_DEBUG_FUNCPTR (gst_c2_vdec_start);
   vdec_class->stop = GST_DEBUG_FUNCPTR (gst_c2_vdec_stop);
   vdec_class->flush = GST_DEBUG_FUNCPTR (gst_c2_vdec_flush);
@@ -576,6 +604,7 @@ gst_c2_vdec_init (GstC2VDecoder *c2vdec)
 
   c2vdec->outstate = NULL;
   c2vdec->isubwc = FALSE;
+  c2vdec->priority = DEFAULT_PROP_PRIORITY;
 
   GST_DEBUG_CATEGORY_INIT (gst_c2_vdec_debug_category, "qtic2vdec", 0,
       "QTI c2vdec decoder");

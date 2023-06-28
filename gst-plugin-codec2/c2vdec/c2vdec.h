@@ -71,6 +71,7 @@ struct _GstC2VDecoder {
 
   /// Properties
   gboolean           secure;
+  gint32             priority;
 };
 
 struct _GstC2VDecoderClass {

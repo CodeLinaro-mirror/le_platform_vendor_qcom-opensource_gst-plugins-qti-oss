@@ -332,7 +332,7 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
         GST_C2_PARAM_PRIORITY, GPOINTER_CAST (&(c2venc->priority)));
 
     if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set video priority parameter!");
+      GST_ERROR_OBJECT (c2venc, "Failed to set video (encoder) priority parameter!");
       return FALSE;
     }
   }
@@ -1494,10 +1494,10 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           0, G_MAXUINT, DEFAULT_PROP_NUM_LTR_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_PRIORITY,
-      g_param_spec_int ("priority", "Priority",
-          "The proirity of current video instance among concurrent cases,"
-          "(0xffffffff=component default default)",
-          G_MININT32, G_MAXINT, DEFAULT_PROP_PRIORITY,
+      g_param_spec_int ("priority", "Priority of Video (encoder) Instance",
+          "The proirity of current video (encoder) instance among concurrent cases,"
+          "(0=component default)",
+          G_MININT32, 0, DEFAULT_PROP_PRIORITY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
