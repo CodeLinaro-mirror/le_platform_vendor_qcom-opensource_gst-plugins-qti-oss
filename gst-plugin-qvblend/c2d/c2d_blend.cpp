@@ -625,7 +625,7 @@ size_t c2d_blend::calcYSize(ColorConvertFormat format, size_t width, size_t heig
             return ALIGN(width, stride_alignment) * ALIGN(height, scanline_alignment);
         }
         default:
-            GST_WARNING("Format not supported , %d", format);
+            GST_DEBUG("Format %d is not needed to handle", format);
             return 0;
     }
 }
@@ -675,8 +675,7 @@ C2D_STATUS c2d_blend::updateRGBSurface(void *gpuAddr, void * data, bool isSource
     }
 }
 
-C2D_STATUS c2d_blend::updateYUVSurface(void *gpuAddr, void *base,
-                                                  void *data, bool isSource)
+C2D_STATUS c2d_blend::updateYUVSurface(void *gpuAddr, void *base, void *data, bool isSource)
 {
     if (isSource)
     {
@@ -824,43 +823,40 @@ bool c2d_blend::unmapGPUAddr(void *gAddr)
 
 void c2d_blend::clearSurfaces()
 {
-        if (mSrcSurface)
+    if (mSrcSurface)
+    {
+        c2dDestroySurface(mSrcSurface);
+        mSrcSurface = 0;
+    }
+    if (mSrcSurfaceDef)
+    {
+        if (isYUVSurface(mSrcFormat))
         {
-            c2dDestroySurface(mSrcSurface);
-            mSrcSurface = 0;
+            delete ((C2D_YUV_SURFACE_DEF *)mSrcSurfaceDef);
         }
-
-         if (mSrcSurfaceDef)
-         {
-            if (isYUVSurface(mSrcFormat))
-            {
-                delete ((C2D_YUV_SURFACE_DEF *)mSrcSurfaceDef);
-            }
-            else
-            {
-                delete ((C2D_RGB_SURFACE_DEF *)mSrcSurfaceDef);
-            }
-            mSrcSurfaceDef = NULL;
-        }
-
-        if (mDstSurface)
+        else
         {
-            c2dDestroySurface(mDstSurface);
-            mDstSurface = 0;
+            delete ((C2D_RGB_SURFACE_DEF *)mSrcSurfaceDef);
         }
-
-        if (mDstSurfaceDef)
+        mSrcSurfaceDef = NULL;
+    }
+    if (mDstSurface)
+    {
+        c2dDestroySurface(mDstSurface);
+        mDstSurface = 0;
+    }
+    if (mDstSurfaceDef)
+    {
+        if (isYUVSurface(mDstFormat))
         {
-            if (isYUVSurface(mDstFormat))
-            {
-                delete ((C2D_YUV_SURFACE_DEF *)mDstSurfaceDef);
-            }
-            else
-            {
-                delete ((C2D_RGB_SURFACE_DEF *)mDstSurfaceDef);
-            }
-            mDstSurfaceDef = NULL;
+            delete ((C2D_YUV_SURFACE_DEF *)mDstSurfaceDef);
         }
+        else
+        {
+            delete ((C2D_RGB_SURFACE_DEF *)mDstSurfaceDef);
+        }
+        mDstSurfaceDef = NULL;
+    }
 }
 
 const char *AdrenoLibLoader::mAdrenoUtilsLibName = "libadreno_utils.so";
