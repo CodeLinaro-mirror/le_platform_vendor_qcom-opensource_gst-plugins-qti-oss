@@ -405,14 +405,14 @@ create_main_pipeline (GstAppContext * appctx, const gboolean display,
   // Set properties for encoder element if present.
   if (element = gst_bin_get_by_name (GST_BIN (pipeline), "c2venc")) {
     g_object_set (G_OBJECT (element), "target-bitrate", 6000000, NULL);
-    g_object_set (G_OBJECT (element), "control-rate", "VBR-CFR", NULL);
+    g_object_set (G_OBJECT (element), "control-rate", 3, NULL); // VBR-CFR
 
     gst_object_unref (element);
   } else if (element = gst_bin_get_by_name (GST_BIN (pipeline), "omxvenc")) {
     g_object_set (G_OBJECT (element), "target-bitrate", 6000000, NULL);
     g_object_set (G_OBJECT (element), "periodicity-idr", 1, NULL);
     g_object_set (G_OBJECT (element), "interval-intraframes", 29, NULL);
-    g_object_set (G_OBJECT (element), "control-rate", "constant", NULL);
+    g_object_set (G_OBJECT (element), "control-rate", 2, NULL);
 
     gst_object_unref (element);
   }
