@@ -63,7 +63,7 @@ typedef struct _GstC2ColorXyStruct GstC2ColorXyStruct;
 typedef struct _GstC2HdrStaticMetadata GstC2HdrStaticMetadata;
 typedef struct _GstC2ColorAspects GstC2ColorAspects;
 
-// GStreamer Codec2 Engine parameter types.
+// Gstreamer Codec2 Engine parameter types.
 enum {
   GST_C2_PARAM_IN_FORMAT,            // GstC2PixelInfo
   GST_C2_PARAM_OUT_FORMAT,           // GstC2PixelInfo
@@ -95,6 +95,7 @@ enum {
   GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
   GST_C2_PARAM_HDR_STATIC_METADATA,  // GstC2HdrStaticMetadata
   GST_C2_PARAM_COLOR_ASPECTS_TUNING, // GstC2ColorAspectsInfo
+  GST_C2_PARAM_PRIORITY,             // gint32
 };
 
 typedef enum {

@@ -653,11 +653,14 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
         size_t len = strlen (region.rectPayload);
         size_t extlen = strlen (region.rectPayloadExt);
+        size_t writelen = static_cast<size_t>(ss.tellp()) - len - extlen;
 
-        if ((len + ss.tellp()) < size)
+        if ((len + writelen) < size)
           ss.get((region.rectPayload + len), ss.tellp());
-        else if ((extlen + ss.tellp()) < extsize)
+        else if ((extlen + writelen) < extsize)
           ss.get((region.rectPayloadExt + extlen), ss.tellp());
+
+        ss.clear();
       }
 
       region.type_[0] = 'r';
@@ -999,6 +1002,12 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<gboolean*>(payload)) = syncframe->value ? TRUE : FALSE;
       break;
     }
+    case GST_C2_PARAM_PRIORITY: {
+      auto priority =
+          reinterpret_cast<C2RealTimePriorityTuning*>(c2param.get());
+      *(reinterpret_cast<int32_t*>(payload)) = priority->value;
+      break;
+    }
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -1035,12 +1044,16 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
       break;
     case C2PixelFormat::kP010:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride / 2;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
     case C2PixelFormat::kTP10UBWC:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride * 3 / 4;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
