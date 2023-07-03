@@ -121,10 +121,14 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
+  { GST_C2_PARAM_PRIORITY,
+      C2RealTimePriorityTuning::PARAM_TYPE },
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING,
-    C2StreamColorAspectsTuning::output::PARAM_TYPE },
+      C2StreamColorAspectsTuning::output::PARAM_TYPE },
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA,
-    C2StreamHdrStaticInfo::output::PARAM_TYPE },
+      C2StreamHdrStaticInfo::output::PARAM_TYPE },
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -157,8 +161,11 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
   { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
+  { GST_C2_PARAM_PRIORITY, "PRIORITY"},
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -270,60 +277,60 @@ static const std::unordered_map<uint32_t, uint32_t> kPrependHeaderMap = {
   { GST_C2_PREPEND_HEADER_TO_ALL_SYNC, C2Config::PREPEND_HEADER_TO_ALL_SYNC },
 };
 
-// Ma for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Primaries parameter.
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Primaries parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorPrimariesMap = {
-  { GST_C2_COLOR_PRIMARIES_UNSPECIFIED,  C2Color::PRIMARIES_UNSPECIFIED },
-  { GST_C2_COLOR_PRIMARIES_BT709,        C2Color::PRIMARIES_BT709 },
-  { GST_C2_COLOR_PRIMARIES_BT470M,       C2Color::PRIMARIES_BT470_M },
-  { GST_C2_COLOR_PRIMARIES_BT470BG,      C2Color::PRIMARIES_BT601_625 },
-  { GST_C2_COLOR_PRIMARIES_SMPTE170M,    C2Color::PRIMARIES_BT601_525 },
-  { GST_C2_COLOR_PRIMARIES_SMPTE240M,    C2Color::PRIMARIES_BT601_525 },
-  { GST_C2_COLOR_PRIMARIES_FILM,         C2Color::PRIMARIES_GENERIC_FILM },
-  { GST_C2_COLOR_PRIMARIES_BT2020,       C2Color::PRIMARIES_BT2020 },
-  { GST_C2_COLOR_PRIMARIES_ADOBERGB,     C2Color::PRIMARIES_OTHER },
-  { GST_C2_COLOR_PRIMARIES_SMPTEST428,   C2Color::PRIMARIES_OTHER },
-  { GST_C2_COLOR_PRIMARIES_SMPTERP431,   C2Color::PRIMARIES_RP431 },
-  { GST_C2_COLOR_PRIMARIES_SMPTEEG432,   C2Color::PRIMARIES_EG432 },
-  { GST_C2_COLOR_PRIMARIES_EBU3213,      C2Color::PRIMARIES_EBU3213 },
+  { GST_VIDEO_COLOR_PRIMARIES_UNKNOWN,      C2Color::PRIMARIES_UNSPECIFIED },
+  { GST_VIDEO_COLOR_PRIMARIES_BT709,        C2Color::PRIMARIES_BT709 },
+  { GST_VIDEO_COLOR_PRIMARIES_BT470M,       C2Color::PRIMARIES_BT470_M },
+  { GST_VIDEO_COLOR_PRIMARIES_BT470BG,      C2Color::PRIMARIES_BT601_625 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTE170M,    C2Color::PRIMARIES_BT601_525 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTE240M,    C2Color::PRIMARIES_BT601_525 },
+  { GST_VIDEO_COLOR_PRIMARIES_FILM,         C2Color::PRIMARIES_GENERIC_FILM },
+  { GST_VIDEO_COLOR_PRIMARIES_BT2020,       C2Color::PRIMARIES_BT2020 },
+  { GST_VIDEO_COLOR_PRIMARIES_ADOBERGB,     C2Color::PRIMARIES_OTHER },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTEST428,   C2Color::PRIMARIES_OTHER },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTERP431,   C2Color::PRIMARIES_RP431 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTEEG432,   C2Color::PRIMARIES_EG432 },
+  { GST_VIDEO_COLOR_PRIMARIES_EBU3213,      C2Color::PRIMARIES_EBU3213 },
 };
 
 // Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Transfer parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorTransferMap = {
-  { GST_C2_COLOR_TRANSFER_UNSPECIFIED,   C2Color::TRANSFER_UNSPECIFIED },
-  { GST_C2_COLOR_TRANSFER_GAMMA10,       C2Color::TRANSFER_OTHER },
-  { GST_C2_COLOR_TRANSFER_GAMMA18,       C2Color::TRANSFER_OTHER },
-  { GST_C2_COLOR_TRANSFER_GAMMA20,       C2Color::TRANSFER_GAMMA22 },
-  { GST_C2_COLOR_TRANSFER_GAMMA22,       C2Color::TRANSFER_GAMMA22 },
-  { GST_C2_COLOR_TRANSFER_BT709,         C2Color::TRANSFER_170M },
-  { GST_C2_COLOR_TRANSFER_SMPTE240M,     C2Color::TRANSFER_240M },
-  { GST_C2_COLOR_TRANSFER_SRGB,          C2Color::TRANSFER_SRGB },
-  { GST_C2_COLOR_TRANSFER_GAMMA28,       C2Color::TRANSFER_GAMMA28 },
-  { GST_C2_COLOR_TRANSFER_LOG100,        C2Color::TRANSFER_OTHER },
-  { GST_C2_COLOR_TRANSFER_LOG316,        C2Color::TRANSFER_OTHER },
-  { GST_C2_COLOR_TRANSFER_BT2020_12,     C2Color::TRANSFER_170M },
-  { GST_C2_COLOR_TRANSFER_ADOBERGB,      C2Color::TRANSFER_OTHER },
-  { GST_C2_COLOR_TRANSFER_BT2020_10,     C2Color::TRANSFER_170M },
-  { GST_C2_COLOR_TRANSFER_SMPTE2084,     C2Color::TRANSFER_ST2084 },
-  { GST_C2_COLOR_TRANSFER_ARIB_STD_B67,  C2Color::TRANSFER_HLG },
-  { GST_C2_COLOR_TRANSFER_BT601,         C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_UNKNOWN,       C2Color::TRANSFER_UNSPECIFIED },
+  { GST_VIDEO_TRANSFER_GAMMA10,       C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_GAMMA18,       C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_GAMMA20,       C2Color::TRANSFER_GAMMA22 },
+  { GST_VIDEO_TRANSFER_GAMMA22,       C2Color::TRANSFER_GAMMA22 },
+  { GST_VIDEO_TRANSFER_BT709,         C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_SMPTE240M,     C2Color::TRANSFER_240M },
+  { GST_VIDEO_TRANSFER_SRGB,          C2Color::TRANSFER_SRGB },
+  { GST_VIDEO_TRANSFER_GAMMA28,       C2Color::TRANSFER_GAMMA28 },
+  { GST_VIDEO_TRANSFER_LOG100,        C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_LOG316,        C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_BT2020_12,     C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_ADOBERGB,      C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_BT2020_10,     C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_SMPTE2084,     C2Color::TRANSFER_ST2084 },
+  { GST_VIDEO_TRANSFER_ARIB_STD_B67,  C2Color::TRANSFER_HLG },
+  { GST_VIDEO_TRANSFER_BT601,         C2Color::TRANSFER_170M },
 };
 
 // Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Matrix parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorMatrixMap = {
-  { GST_C2_COLOR_MATRIX_UNSPECIFIED,  C2Color::MATRIX_UNSPECIFIED },
-  { GST_C2_COLOR_MATRIX_RGB,          C2Color::MATRIX_OTHER },
-  { GST_C2_COLOR_MATRIX_FCC,          C2Color::MATRIX_FCC47_73_682 },
-  { GST_C2_COLOR_MATRIX_BT709,        C2Color::MATRIX_BT709 },
-  { GST_C2_COLOR_MATRIX_BT601,        C2Color::MATRIX_BT601 },
-  { GST_C2_COLOR_MATRIX_SMPTE240M,    C2Color::MATRIX_240M },
-  { GST_C2_COLOR_MATRIX_BT2020,       C2Color::MATRIX_BT2020 },
+  { GST_VIDEO_COLOR_MATRIX_UNKNOWN,  C2Color::MATRIX_UNSPECIFIED },
+  { GST_VIDEO_COLOR_MATRIX_RGB,          C2Color::MATRIX_OTHER },
+  { GST_VIDEO_COLOR_MATRIX_FCC,          C2Color::MATRIX_FCC47_73_682 },
+  { GST_VIDEO_COLOR_MATRIX_BT709,        C2Color::MATRIX_BT709 },
+  { GST_VIDEO_COLOR_MATRIX_BT601,        C2Color::MATRIX_BT601 },
+  { GST_VIDEO_COLOR_MATRIX_SMPTE240M,    C2Color::MATRIX_240M },
+  { GST_VIDEO_COLOR_MATRIX_BT2020,       C2Color::MATRIX_BT2020 },
 };
 
 // Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Range parameter.
 static const std::unordered_map<uint32_t, uint32_t> kColorRangeMap = {
-  { GST_C2_COLOR_RANGE_UNSPECIFIED, C2Color::RANGE_UNSPECIFIED },
-  { GST_C2_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
-  { GST_C2_COLOR_RANGE_16_235,     C2Color::RANGE_LIMITED },
+  { GST_VIDEO_COLOR_RANGE_UNKNOWN,  C2Color::RANGE_UNSPECIFIED },
+  { GST_VIDEO_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
+  { GST_VIDEO_COLOR_RANGE_16_235,       C2Color::RANGE_LIMITED },
 };
 
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
@@ -681,30 +688,40 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(syncframe);
       break;
     }
+    case GST_C2_PARAM_PRIORITY: {
+      C2RealTimePriorityTuning priority;
+      priority.value = *(reinterpret_cast<int32_t*>(payload));
+      c2param = C2Param::Copy(priority);
+      break;
+    }
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     case GST_C2_PARAM_HDR_STATIC_METADATA: {
       C2StreamHdrStaticInfo::output hdr_info;
       GstC2HdrStaticMetadata* hdrmeta =
           reinterpret_cast<GstC2HdrStaticMetadata*>(payload);
 
-      hdr_info.mastering.red.x = hdrmeta->red.x;
-      hdr_info.mastering.red.y = hdrmeta->red.y;
-      hdr_info.mastering.green.x = hdrmeta->green.x;
-      hdr_info.mastering.green.y = hdrmeta->green.y;
-      hdr_info.mastering.blue.x = hdrmeta->blue.x;
-      hdr_info.mastering.blue.y =hdrmeta->blue.y;
-      hdr_info.mastering.white.x = hdrmeta->white.x;
-      hdr_info.mastering.white.y = hdrmeta->white.y;
-      hdr_info.mastering.maxLuminance = hdrmeta->max_luminance;
-      hdr_info.mastering.minLuminance = hdrmeta->min_luminance;
-      hdr_info.maxCll = hdrmeta->maxCll;
-      hdr_info.maxFall = hdrmeta->maxFall;
+      hdr_info.mastering.red.x = hdrmeta->mdispinfo.display_primaries[0].x;
+      hdr_info.mastering.red.y = hdrmeta->mdispinfo.display_primaries[0].y;
+      hdr_info.mastering.green.x = hdrmeta->mdispinfo.display_primaries[1].x;
+      hdr_info.mastering.green.y = hdrmeta->mdispinfo.display_primaries[1].y;
+      hdr_info.mastering.blue.x = hdrmeta->mdispinfo.display_primaries[2].x;
+      hdr_info.mastering.blue.y = hdrmeta->mdispinfo.display_primaries[2].y;
+      hdr_info.mastering.white.x = hdrmeta->mdispinfo.white_point.x;
+      hdr_info.mastering.white.y = hdrmeta->mdispinfo.white_point.y;
+      hdr_info.mastering.maxLuminance =
+          hdrmeta->mdispinfo.max_display_mastering_luminance;
+      hdr_info.mastering.minLuminance =
+          hdrmeta->mdispinfo.min_display_mastering_luminance;
+      hdr_info.maxCll = hdrmeta->clightlevel.max_content_light_level;
+      hdr_info.maxFall = hdrmeta->clightlevel.max_frame_average_light_level;
       c2param = C2Param::Copy (hdr_info);
       break;
     }
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     case GST_C2_PARAM_COLOR_ASPECTS_TUNING: {
       C2StreamColorAspectsTuning::output coloraspects;
-      GstC2ColorAspects* color =
-          reinterpret_cast<GstC2ColorAspects*>(payload);
+      GstVideoColorimetry* color =
+          reinterpret_cast<GstVideoColorimetry*>(payload);
       coloraspects.primaries =
            static_cast<C2Color::primaries_t>(kColorPrimariesMap.at(color->primaries));
       coloraspects.transfer =

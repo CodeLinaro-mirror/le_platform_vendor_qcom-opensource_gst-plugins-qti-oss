@@ -119,7 +119,7 @@ gst_c2_vdec_get_output_format (GstC2VDecoder * c2vdec,
       bit_depth_luma = 8;
       bit_depth_chroma = 8;
       chroma_format = "4:2:0";
-      //TODO: for vp9 and vp9 code is assuming NV12 which may not be true
+      //TODO: for vp8 and vp9 code is assuming NV12 which may not be true
       //needs to be fixed
     }
   }
@@ -149,91 +149,10 @@ gst_c2_vdec_get_output_format (GstC2VDecoder * c2vdec,
 }
 
 static gboolean
-gst_c2_vdec_set_hdr_static_info (GstC2VDecoder * c2vdec, GstStructure *structure)
-{
-  GstC2HdrStaticMetadata hdrmeta;
-  GstC2ColorAspects coloraspects;
-  const gchar *color;
-  const gchar *dispinfo;
-  const gchar *lightlevel;
-  GstVideoColorimetry colorinfo;
-  GstVideoMasteringDisplayInfo mdispinfo;
-  GstVideoContentLightLevel contentlightlevel;
-  gboolean success = FALSE;
-
-
-  memset (&colorinfo, 0, sizeof (GstVideoColorimetry));
-  memset (&mdispinfo, 0, sizeof (GstVideoMasteringDisplayInfo));
-  memset (&contentlightlevel, 0, sizeof (GstVideoContentLightLevel));
-  memset (&hdrmeta, 0, sizeof (GstC2HdrStaticMetadata));
-  memset (&coloraspects, 0, sizeof (GstC2ColorAspects));
-
-  if (color = gst_structure_get_string (structure, "colorimetry")) {
-    gboolean res= gst_video_colorimetry_from_string (&colorinfo, color);
-    if (res) {
-      coloraspects.primaries = colorinfo.primaries;
-      coloraspects.transfer = colorinfo.transfer;
-      coloraspects.matrix = colorinfo.matrix;
-      coloraspects.range = colorinfo.range;
-
-      success = gst_c2_engine_set_parameter (c2vdec->engine,
-          GST_C2_PARAM_COLOR_ASPECTS_TUNING, GPOINTER_CAST (&coloraspects));
-      if (!success) {
-        GST_ERROR_OBJECT (c2vdec, "Failed to set Color Aspects parameter!");
-        return FALSE;
-      }
-    } else
-      GST_DEBUG_OBJECT (c2vdec, "Unable to parse Colorimetry from caps");
-  }
-
-  success = FALSE;
-  if (dispinfo = gst_structure_get_string (structure, "mastering-display-info")) {
-    gboolean res = gst_video_mastering_display_info_from_string (&mdispinfo, dispinfo);
-    success |= res;
-    if (!res)
-      GST_DEBUG_OBJECT (c2vdec,
-          "Unable to parse mastering-display-info from caps");
-  }
-
-  if (lightlevel = gst_structure_get_string (structure, "content-light-level")) {
-    gboolean res= gst_video_content_light_level_from_string (&contentlightlevel, lightlevel);
-    success |= res;
-    if (!res)
-      GST_DEBUG_OBJECT (c2vdec,
-          "Unable to parse content-light-level from caps");
-  }
-
-  if (success) {
-    hdrmeta.red.x = mdispinfo.display_primaries[0].x;
-    hdrmeta.red.y = mdispinfo.display_primaries[0].y;
-    hdrmeta.green.x = mdispinfo.display_primaries[1].x;
-    hdrmeta.green.y = mdispinfo.display_primaries[1].y;
-    hdrmeta.blue.x = mdispinfo.display_primaries[2].x;
-    hdrmeta.blue.y = mdispinfo.display_primaries[2].y;
-    hdrmeta.white.x = mdispinfo.white_point.x;
-    hdrmeta.white.y = mdispinfo.white_point.y;
-    hdrmeta.max_luminance =
-          mdispinfo.max_display_mastering_luminance;
-    hdrmeta.min_luminance =
-          mdispinfo.min_display_mastering_luminance;
-    hdrmeta.maxCll = contentlightlevel.max_content_light_level;
-    hdrmeta.maxFall = contentlightlevel.max_frame_average_light_level;
-    success = gst_c2_engine_set_parameter (c2vdec->engine,
-        GST_C2_PARAM_HDR_STATIC_METADATA, GPOINTER_CAST (&hdrmeta));
-    if (!success) {
-      GST_ERROR_OBJECT (c2vdec, "Failed to set Hdr static metadata parameter!");
-      return FALSE;
-    }
-  }
-
-  return TRUE;
-}
-
-static gboolean
 gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
-    GstVideoCodecState * state)
+    GstVideoCodecState * instate, GstVideoCodecState * outstate)
 {
-  GstVideoInfo *info = &state->info;
+  GstVideoInfo *info = &outstate->info;
   GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, FALSE };
   GstC2Resolution resolution = { 0, 0 };
   gboolean success = FALSE;
@@ -257,6 +176,39 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
     GST_ERROR_OBJECT (c2vdec, "Failed to set output resolution parameter!");
     return FALSE;
   }
+
+  success = gst_c2_engine_set_parameter (c2vdec->engine,
+      GST_C2_PARAM_COLOR_ASPECTS_TUNING, GPOINTER_CAST (&info->colorimetry));
+  if (!success) {
+    GST_ERROR_OBJECT (c2vdec, "Failed to set Color Aspects parameter!");
+    return FALSE;
+  }
+
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  GstStructure * structure = gst_caps_get_structure (instate->caps, 0);
+
+  if (gst_structure_has_field (structure, "mastering-display-info") ||
+        gst_structure_has_field (structure, "content-light-level")) {
+    GstC2HdrStaticMetadata hdrstaticinfo = { 0, };
+    gboolean success = FALSE;
+
+    success |=
+        gst_video_mastering_display_info_from_caps (&hdrstaticinfo.mdispinfo,
+            instate->caps);
+    success |=
+        gst_video_content_light_level_from_caps(&hdrstaticinfo.clightlevel,
+            instate->caps);
+
+    if (success) {
+      success = gst_c2_engine_set_parameter (c2vdec->engine,
+          GST_C2_PARAM_HDR_STATIC_METADATA, GPOINTER_CAST (&hdrstaticinfo));
+      if (!success) {
+        GST_ERROR_OBJECT (c2vdec, "Failed to set Hdr static metadata parameter!");
+        return FALSE;
+      }
+    }
+  }
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
 #if defined(CODEC2_CONFIG_VERSION_1_0)
   gdouble framerate = 0.0;
@@ -348,7 +300,7 @@ gst_c2_vdec_stop (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Stop engine");
 
-  if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine)) {
+  if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, TRUE)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to flush engine");
     return FALSE;
   }
@@ -388,7 +340,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   const gchar *string = NULL;
   gint width = 0, height = 0;
   GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
-  gboolean success = FALSE, resolution_change = FALSE;
+  gboolean success = FALSE;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
 
@@ -421,11 +373,41 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     return FALSE;
   }
 
-  if (c2vdec->outstate && (width != c2vdec->outstate->info.width ||
-      height != c2vdec->outstate->info.height)) {
-    resolution_change = TRUE;
+  if (c2vdec->outstate &&
+      (width != c2vdec->outstate->info.width ||
+          height != c2vdec->outstate->info.height)) {
+    GstQuery *query = gst_query_new_drain ();
 
-    GST_INFO_OBJECT (c2vdec, "Resolution changed: %dx%d", width, height);
+    GST_INFO_OBJECT (c2vdec, "Resolution changed from %dx%d to %dx%d",
+        c2vdec->outstate->info.width, c2vdec->outstate->info.height, width, height);
+
+    if (!gst_pad_peer_query (decoder->srcpad, query))
+      GST_DEBUG_OBJECT (c2vdec, "Drain query failed !");
+    gst_query_unref (query);
+
+    // This mutex was locked in the base class before call to this function.
+    // Needs to be unlocked when waiting for any pending buffers during drain.
+    GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+
+    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE))
+      GST_WARNING_OBJECT (c2vdec, "Failed to Drain engine");
+
+    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+  }
+
+  if (c2vdec->outstate && g_str_equal (gst_video_format_to_string (format),
+      gst_video_format_to_string (c2vdec->outstate->info.finfo->format))) {
+
+    GST_INFO_OBJECT (c2vdec, "Format changed from %s to %s",
+    gst_video_format_to_string (format),
+    gst_video_format_to_string (c2vdec->outstate->info.finfo->format));
+
+    GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+    if ((c2vdec->engine != NULL) && !gst_c2_engine_stop (c2vdec->engine)) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
+      return FALSE;
+    }
+    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 
   GST_DEBUG_OBJECT (c2vdec, "Setting output width: %d, height: %d, format: %s",
@@ -497,12 +479,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (c2vdec->secure)
     name = g_strconcat(name, ".secure", NULL);
 
-  if (!resolution_change && (c2vdec->engine != NULL)
-      && !gst_c2_engine_stop (c2vdec->engine)) {
-    GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
-    return FALSE;
-  }
-
   if ((c2vdec->name != NULL) && !g_str_equal (c2vdec->name, name)) {
     g_clear_pointer (&(c2vdec->name), g_free);
     g_clear_pointer (&(c2vdec->engine), gst_c2_engine_free);
@@ -516,19 +492,12 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     g_return_val_if_fail (c2vdec->engine != NULL, FALSE);
   }
 
-  /* Check HDR10 static info if the codec is vp8/vp9,
-   * for HEVC/AVC no need to set because they are part
-   * of the bitstream and will be taken care by codec2 HAL */
-  if (gst_structure_has_name (structure, "video/x-vp9") ||
-      gst_structure_has_name (structure, "video/x-vp8"))
-    gst_c2_vdec_set_hdr_static_info (c2vdec, structure);
-
-  if (!gst_c2_vdec_setup_parameters (c2vdec, c2vdec->outstate)) {
+  if (!gst_c2_vdec_setup_parameters (c2vdec, state, c2vdec->outstate)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to setup parameters!");
     return FALSE;
   }
 
-  if (!resolution_change && !gst_c2_engine_start (c2vdec->engine)) {
+  if (!gst_c2_engine_start (c2vdec->engine)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to start engine!");
     return FALSE;
   }
@@ -574,7 +543,7 @@ gst_c2_vdec_finish (GstVideoDecoder * decoder)
   // Needs to be unlocked when waiting for any pending buffers during drain.
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
-  if (!gst_c2_engine_drain (c2vdec->engine)) {
+  if (!gst_c2_engine_drain (c2vdec->engine, TRUE)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to drain engine");
     return GST_FLOW_ERROR;
   }
