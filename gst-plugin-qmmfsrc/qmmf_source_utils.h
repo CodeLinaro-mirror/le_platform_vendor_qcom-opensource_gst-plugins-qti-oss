@@ -30,7 +30,7 @@
 /*
  *  Changes from Qualcomm Innovation Center are provided under the following license:
  *
- *  Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *  Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted (subject to the limitations in the
@@ -71,6 +71,13 @@
 #include <glib/gtypes.h>
 
 G_BEGIN_DECLS
+
+#define QMMFSRC_TRACE_STRUCTURE(structure) \
+{ \
+  gchar *string = gst_structure_to_string (structure); \
+  GST_TRACE ("%s", string); \
+  g_free (string); \
+}
 
 #define QMMFSRC_RETURN_VAL_IF_FAIL(element, expression, value, ...) \
 { \
@@ -128,8 +135,7 @@ G_BEGIN_DECLS
     (gst_qmmfsrc_noise_reduction_get_type())
 #define GST_TYPE_QMMFSRC_CAPTURE_MODE (gst_qmmfsrc_capture_mode_get_type())
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
-#define GST_TYPE_QMMFSRC_SELECT_TSCP \
-    (gst_qmmfsrc_select_tscp_get_type())
+#define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -276,10 +282,10 @@ enum
 
 enum
 {
-  SELECT_TSCP_DEFAULT,
-  SELECT_TSCP_SOE,
-  SELECT_TSCP_EOE,
-  SELECT_TSCP_SOF,
+  ROTATE_NONE,
+  ROTATE_90CCW,
+  ROTATE_180CCW,
+  ROTATE_270CCW,
 };
 
 GType gst_qmmfsrc_control_mode_get_type (void);
@@ -308,7 +314,7 @@ GType gst_qmmfsrc_capture_mode_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
 
-GType gst_qmmfsrc_select_tscp_get_type (void);
+GType gst_qmmfsrc_rotate_get_type(void);
 
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
 

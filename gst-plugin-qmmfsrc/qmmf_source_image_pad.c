@@ -25,6 +25,40 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*     * Redistributions of source code must retain the above copyright
+*       notice, this list of conditions and the following disclaimer.
+*
+*     * Redistributions in binary form must reproduce the above
+*       copyright notice, this list of conditions and the following
+*       disclaimer in the documentation and/or other materials provided
+*       with the distribution.
+*
+*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*       contributors may be used to endorse or promote products derived
+*       from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "qmmf_source_image_pad.h"
@@ -59,6 +93,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_image_pad_debug);
 #define DEFAULT_PROP_SCREENNAIL_WIDTH   0
 #define DEFAULT_PROP_SCREENNAIL_HEIGHT  0
 #define DEFAULT_PROP_SCREENNAIL_QUALITY 85
+#define DEFAULT_PROP_ROTATE             ROTATE_NONE
 
 enum
 {
@@ -69,9 +104,35 @@ enum
 enum
 {
   PROP_0,
+  PROP_IMAGE_ROTATE,
 };
 
 static guint signals[LAST_SIGNAL];
+
+static void
+image_pad_send_stream_start (GstPad * pad)
+{
+  GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
+  gchar *stream_id = NULL;
+  gchar *pad_name  = NULL;
+  GstEvent *event  = NULL;
+
+  if (!ipad->stream_start)
+    return;
+
+  pad_name = gst_pad_get_name (pad);
+  stream_id =  g_strconcat ("qmmfsrc/", pad_name, NULL);
+
+  GST_DEBUG_OBJECT (pad, "Pushing STREAM_START");
+  event = gst_event_new_stream_start (stream_id);
+  gst_event_set_group_id (event, gst_util_group_id_next ());
+
+  gst_pad_push_event (pad, event);
+  ipad->stream_start = FALSE;
+
+  g_free (stream_id);
+  g_free (pad_name);
+}
 
 void
 image_pad_worker_task (GstPad * pad)
@@ -203,6 +264,7 @@ image_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
     gboolean active)
 {
   gboolean success = TRUE;
+  GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
 
   switch (mode) {
     case GST_PAD_MODE_PUSH:
@@ -217,6 +279,7 @@ image_pad_activate_mode (GstPad * pad, GstObject * parent, GstPadMode mode,
         gst_segment_init (&GST_QMMFSRC_IMAGE_PAD (pad)->segment,
             GST_FORMAT_UNDEFINED);
       }
+      ipad->stream_start = active;
       break;
     default:
       break;
@@ -379,6 +442,7 @@ qmmfsrc_image_pad_fixate_caps (GstPad * pad)
 
   // Immediately return the fetched caps if they are fixed.
   if (gst_caps_is_fixed (caps)) {
+    image_pad_send_stream_start (pad);
     gst_pad_set_caps (pad, caps);
 
     GST_DEBUG_OBJECT (pad, "Caps already fixated to: %" GST_PTR_FORMAT, caps);
@@ -446,6 +510,7 @@ qmmfsrc_image_pad_fixate_caps (GstPad * pad)
   gst_structure_set (structure, "pixel-aspect-ratio", GST_TYPE_FRACTION,
         1, 1, NULL);
 
+  image_pad_send_stream_start (pad);
   caps = gst_caps_fixate (caps);
   gst_pad_set_caps (pad, caps);
 
@@ -480,6 +545,9 @@ image_pad_set_property (GObject * object, guint property_id,
   GST_QMMFSRC_IMAGE_PAD_LOCK (pad);
 
   switch (property_id) {
+    case PROP_IMAGE_ROTATE:
+      pad->rotate = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -497,6 +565,9 @@ image_pad_get_property (GObject * object, guint property_id, GValue * value,
   GST_QMMFSRC_IMAGE_PAD_LOCK (pad);
 
   switch (property_id) {
+    case PROP_IMAGE_ROTATE:
+      g_value_set_enum (value, pad->rotate);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -543,6 +614,12 @@ qmmfsrc_image_pad_class_init (GstQmmfSrcImagePadClass * klass)
   gobject->set_property = GST_DEBUG_FUNCPTR (image_pad_set_property);
   gobject->finalize     = GST_DEBUG_FUNCPTR (image_pad_finalize);
 
+  g_object_class_install_property (gobject, PROP_IMAGE_ROTATE,
+    g_param_spec_enum ("rotate", "Rotate",
+        "Set Orientation Angle for Image Stream",
+        GST_TYPE_QMMFSRC_ROTATE, DEFAULT_PROP_ROTATE,
+        G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0, G_TYPE_NONE);
@@ -556,6 +633,7 @@ static void
 qmmfsrc_image_pad_init (GstQmmfSrcImagePad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
+  pad->stream_start = FALSE;
 
   pad->index     = 0;
 
@@ -564,6 +642,7 @@ qmmfsrc_image_pad_init (GstQmmfSrcImagePad * pad)
   pad->framerate = 0;
   pad->format    = GST_VIDEO_FORMAT_UNKNOWN;
   pad->codec     = GST_IMAGE_CODEC_UNKNOWN;
+  pad->rotate    = DEFAULT_PROP_ROTATE;
   pad->params    = gst_structure_new_empty ("codec-params");
 
   pad->duration  = GST_CLOCK_TIME_NONE;

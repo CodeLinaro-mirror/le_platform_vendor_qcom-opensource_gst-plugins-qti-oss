@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -746,25 +746,10 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstVideoInfo info;
-  guint idx = 0, n_metas = 0, size = 0;
+  guint size = 0;
   gboolean needpool = FALSE;
 
   GST_DEBUG_OBJECT (vcomposer, "Pad %s:%s", GST_DEBUG_PAD_NAME (pad));
-
-  // No input query, nothing to do.
-  if (NULL == inquery)
-    return TRUE;
-
-  n_metas = gst_query_get_n_allocation_metas (inquery);
-
-  for (idx = 0; idx < n_metas; idx++) {
-    GType gtype;
-    const GstStructure *params;
-
-    gtype = gst_query_parse_nth_allocation_meta (inquery, idx, &params);
-    GST_DEBUG_OBJECT (vcomposer, "Proposing metadata %s", g_type_name (gtype));
-    gst_query_add_allocation_meta (outquery, gtype, params);
-  }
 
   // Extract caps from the query.
   gst_query_parse_allocation (outquery, &caps, &needpool);
@@ -918,6 +903,7 @@ gst_video_composer_prepare_input_frame (GstElement * element, GstPad * pad,
   if (!gst_video_frame_map (&frames[idx], sinkpad->info, buffer,
           GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
     GST_ERROR_OBJECT (pad, "Failed to map input buffer!");
+    gst_buffer_unref (buffer);
     return FALSE;
   }
 
@@ -952,6 +938,7 @@ gst_video_composer_prepare_output_frame (GstElement * element, GstPad * pad,
   if (!gst_video_frame_map (&frames[idx], vcomposer->outinfo, buffer,
           GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
     GST_ERROR_OBJECT (vcomposer, "Failed to map output buffer!");
+    gst_buffer_unref (buffer);
     return FALSE;
   }
 
@@ -1201,6 +1188,8 @@ gst_video_composer_update_src_caps (GstAggregator * aggregator,
     } else if (width < outwidth) {
       GST_ERROR_OBJECT (vcomposer, "Set width (%u) is not compatible with the"
           "extrapolated width (%d) from the sinkpads!", width, outwidth);
+      gst_structure_free (structure);
+      gst_caps_unref (*othercaps);
       return GST_FLOW_NOT_SUPPORTED;
     }
 
@@ -1216,6 +1205,8 @@ gst_video_composer_update_src_caps (GstAggregator * aggregator,
     } else if (height < outheight) {
       GST_ERROR_OBJECT (vcomposer, "Set height (%u) is not compatible with the"
           "extrapolated height (%d) from the sinkpads!", height, outheight);
+      gst_structure_free (structure);
+      gst_caps_unref (*othercaps);
       return GST_FLOW_NOT_SUPPORTED;
     }
 
@@ -1241,6 +1232,8 @@ gst_video_composer_update_src_caps (GstAggregator * aggregator,
         GST_ERROR_OBJECT (vcomposer, "Set framerate (%d/%d) is not compatible"
             " with the extrapolated rate (%d/%d) from the sinkpads!", fps_n,
             fps_d, out_fps_n, out_fps_d);
+        gst_structure_free (structure);
+        gst_caps_unref (*othercaps);
         return GST_FLOW_NOT_SUPPORTED;
       }
     }
@@ -1805,8 +1798,10 @@ gst_video_composer_finalize (GObject * object)
     gst_object_unref (GST_OBJECT_CAST(vcomposer->requests));
   }
 
-  if (vcomposer->outpool != NULL)
+  if (vcomposer->outpool != NULL) {
+    gst_buffer_pool_set_active (vcomposer->outpool, FALSE);
     gst_object_unref (vcomposer->outpool);
+  }
 
   if (vcomposer->outinfo != NULL)
     gst_video_info_free (vcomposer->outinfo);

@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -128,9 +128,8 @@ enum
   PARAM_CAMERA_IMAGE_METADATA,
   PARAM_CAMERA_STATIC_METADATA,
   PARAM_CAMERA_FRC_MODE,
-  PARAM_CAMERA_SELECT_TSCP,
-  PARAM_CAMERA_HFR_SYNC_MODE,
-  PARAM_CAMERA_SELECT_ROTATION,
+  PARAM_CAMERA_IFE_DIRECT_STREAM,
+  PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME,
 };
 
 GST_API GstQmmfContext *

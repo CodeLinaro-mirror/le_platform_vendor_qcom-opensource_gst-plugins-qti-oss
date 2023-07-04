@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -73,6 +73,7 @@
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/gstmlmeta.h>
 #include <gst/video/gstimagepool.h>
+#include <gst/memory/gstmempool.h>
 #include <cairo/cairo.h>
 
 #ifdef HAVE_LINUX_DMA_BUF_H
@@ -153,7 +154,7 @@ static GstCaps *
 gst_ml_video_detection_sink_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_ml_video_detection_static_sink_caps);
@@ -166,7 +167,7 @@ static GstCaps *
 gst_ml_video_detection_src_caps (void)
 {
   static GstCaps *caps = NULL;
-  static volatile gsize inited = 0;
+  static gsize inited = 0;
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_ml_video_detection_static_src_caps);
@@ -278,8 +279,9 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
     size = GST_VIDEO_INFO_SIZE (&info);
   } else if (gst_structure_has_name (structure, "text/x-raw")) {
     GST_INFO_OBJECT (detection, "Uses SYSTEM memory");
+    pool = gst_mem_buffer_pool_new (GST_MEMORY_BUFFER_POOL_TYPE_SYSTEM);
 
-    if (NULL == (pool = gst_buffer_pool_new ())) {
+    if (NULL == pool) {
       GST_ERROR_OBJECT (detection, "Failed to create buffer pool!");
       return NULL;
     }

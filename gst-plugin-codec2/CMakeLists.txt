@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8.2)
 project(GST_PLUGIN_QTI_OSS_CODEC2
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
-  LANGUAGES CXX
+  LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -20,6 +20,10 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+
+# Check whether MMM color format header is present.
+include(CheckIncludeFileCXX)
+check_include_file_cxx("display/media/mmm_color_fmt.h" HAVE_MMM_COLOR_FMT_H)
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
