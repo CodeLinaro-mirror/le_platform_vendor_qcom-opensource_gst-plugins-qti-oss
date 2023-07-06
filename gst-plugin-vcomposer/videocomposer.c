@@ -148,6 +148,8 @@ struct _GstConverterRequest {
   // Number of output frames.
   guint         n_outputs;
 
+  GstVideoComposer *vcomposer;
+
   // Time it took for this request to be processed.
   GstClockTime  time;
 };
@@ -159,11 +161,18 @@ gst_converter_request_free (GstConverterRequest * request)
 {
   GstBuffer *buffer = NULL;
   guint idx = 0;
+  guint64 surface_id = 0;
 
   for (idx = 0; idx < request->n_inputs; idx++) {
     buffer = request->inframes[idx].buffer;
 
     if (buffer != NULL) {
+      //TODO: need to find a better way to manage input surfaces
+      surface_id = gst_retrieve_surface_id (request->vcomposer->glesconvert,
+          GST_GLES_INPUT, &(request->inframes[idx]), NULL);
+      gst_destroy_input_surface (surface_id, request->vcomposer->glesconvert,
+          &(request->inframes[idx]));
+
       gst_video_frame_unmap (&(request)->inframes[idx]);
       gst_buffer_unref (buffer);
     }
@@ -196,6 +205,7 @@ gst_converter_request_init (GstConverterRequest * request)
   request->outframes = NULL;
   request->n_outputs = 0;
   request->time = GST_CLOCK_TIME_NONE;
+  request->vcomposer = NULL;
 }
 
 static GstConverterRequest *
@@ -1528,6 +1538,7 @@ gst_video_composer_aggregate (GstAggregator * aggregator, gboolean timeout)
   request->n_inputs = vcomposer->n_inputs;
   request->outframes = g_new0 (GstVideoFrame, vcomposer->n_outputs);
   request->n_outputs = vcomposer->n_outputs;
+  request->vcomposer = vcomposer;
 
   // Get start time for performance measurements.
   request->time = gst_util_get_timestamp ();

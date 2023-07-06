@@ -151,12 +151,6 @@ struct _GstGlesVideoConverter
 
 enum
 {
-  GST_GLES_INPUT,
-  GST_GLES_OUTPUT,
-};
-
-enum
-{
   GST_GLES_UBWC_FORMAT_FLAG    = (1 << 0),
   GST_GLES_FLOAT16_FORMAT_FLAG = (1 << 1),
   GST_GLES_FLOAT32_FORMAT_FLAG = (1 << 2),
@@ -398,6 +392,36 @@ gst_destroy_surface (gpointer key, gpointer value, gpointer userdata)
   return;
 }
 
+void
+gst_destroy_input_surface (guint64 surface_id, GstGlesVideoConverter *convert,
+    const GstVideoFrame * vframe)
+{
+  GstMemory *memory = NULL;
+  guint fd = 0;
+
+  GST_GLES_LOCK (convert);
+
+  memory = gst_buffer_peek_memory (vframe->buffer, 0);
+
+  // Get the input buffer FD from the GstBuffer memory block.
+  fd = gst_fd_memory_get_fd (memory);
+
+  try {
+    convert->engine->DestroySurface(surface_id);
+    GST_DEBUG ("Destroying Input surface with id %lx", surface_id);
+  } catch (std::exception& e) {
+    GST_ERROR ("Failed to destroy Input IB2C surface, error: '%s'!", e.what());
+    return;
+  }
+
+  g_hash_table_remove (convert->insurfaces, GUINT_TO_POINTER (fd));
+
+  GST_GLES_UNLOCK (convert);
+
+  return;
+}
+
+
 static void
 gst_extract_rectangles (const GstStructure * opts,
     std::vector<::ib2c::Region>& srcrects, std::vector<::ib2c::Region>& dstrects,
@@ -620,13 +644,14 @@ gst_update_object (::ib2c::Object * object, guint64 surface_id, GstStructure * o
       object->destination.w, object->destination.h);
 }
 
-static guint64
-gst_retrieve_surface_id (GstGlesVideoConverter * convert, GHashTable * surfaces,
+guint64
+gst_retrieve_surface_id (GstGlesVideoConverter * convert,
     guint direction, const GstVideoFrame * vframe, const GstStructure * opts)
 {
   GstMemory *memory = NULL;
   guint fd = 0, bits = 0;
   guint64 surface_id = 0;
+  GHashTable *surfaces = NULL;
 
   // Get the 1st (and only) memory block from the input GstBuffer.
   memory = gst_buffer_peek_memory (vframe->buffer, 0);
@@ -635,6 +660,11 @@ gst_retrieve_surface_id (GstGlesVideoConverter * convert, GHashTable * surfaces,
 
   // Get the input buffer FD from the GstBuffer memory block.
   fd = gst_fd_memory_get_fd (memory);
+
+  if (direction == GST_GLES_INPUT )
+    surfaces = convert->insurfaces;
+  else
+    surfaces = convert->outsurfaces;
 
   if (!g_hash_table_contains (surfaces, GUINT_TO_POINTER (fd))) {
     bits = GET_OPT_UBWC_FORMAT (opts) ? GST_GLES_UBWC_FORMAT_FLAG : 0;
@@ -874,7 +904,7 @@ gst_gles_video_converter_submit_request (GstGlesVideoConverter * convert,
       // Get the options for current input buffer.
       opts = GST_STRUCTURE (g_list_nth_data (convert->inopts, (num + offset)));
 
-      surface_id = gst_retrieve_surface_id (convert, convert->insurfaces,
+      surface_id = gst_retrieve_surface_id (convert,
           GST_GLES_INPUT, inframe, opts);
       GST_GLES_RETURN_VAL_IF_FAIL_WITH_CLEAN (surface_id != 0, NULL,
           GST_GLES_UNLOCK (convert), "Failed to get surface ID for input buffer!");
@@ -900,7 +930,7 @@ gst_gles_video_converter_submit_request (GstGlesVideoConverter * convert,
     // Get the options for current output frame.
     opts = GST_STRUCTURE (g_list_nth_data (convert->outopts, idx));
 
-    surface_id = gst_retrieve_surface_id (convert, convert->outsurfaces,
+    surface_id = gst_retrieve_surface_id (convert,
         GST_GLES_OUTPUT, outframe, opts);
     GST_GLES_RETURN_VAL_IF_FAIL_WITH_CLEAN (surface_id != 0, NULL,
         GST_GLES_UNLOCK (convert), "Failed to get surface ID for output buffer!");
@@ -923,8 +953,6 @@ gst_gles_video_converter_submit_request (GstGlesVideoConverter * convert,
         std::make_tuple(surface_id, color, clear, normalization, objects)));
   }
 
-  GST_GLES_UNLOCK (convert);
-
   std::uintptr_t request_id;
 
   try {
@@ -936,6 +964,8 @@ gst_gles_video_converter_submit_request (GstGlesVideoConverter * convert,
 
   convert->request_ids = g_list_append (convert->request_ids,
       reinterpret_cast<gpointer>(request_id));
+
+  GST_GLES_UNLOCK (convert);
 
   return reinterpret_cast<gpointer>(request_id);
 }
