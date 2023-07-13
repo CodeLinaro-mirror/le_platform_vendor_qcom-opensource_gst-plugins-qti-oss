@@ -8,6 +8,10 @@ add_executable(${GST_EXAMPLE_BIN}
 pkg_check_modules (XML2 REQUIRED libxml-2.0)
 pkg_check_modules (CURL REQUIRED libcurl)
 
+if (HAVE_CDM_H)
+  add_definitions(-DENABLE_WIDEVINE)
+endif()
+
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
   ${SYSROOT_INCDIR}
@@ -18,6 +22,8 @@ target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   dl
   utils
   cutils
+  $<$<BOOL:${HAVE_CDM_H}>:widevine_ce_cdm_shared>
+  $<$<BOOL:${HAVE_CDM_H}>:oemcrypto>
   ${GST_LIBRARIES}
   ${CURL_LIBRARIES}
   ${XML2_LIBRARIES}
