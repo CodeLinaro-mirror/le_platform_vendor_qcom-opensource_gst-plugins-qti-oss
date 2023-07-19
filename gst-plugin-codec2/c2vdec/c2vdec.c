@@ -208,6 +208,7 @@ static void
 gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
 {
   GstC2VDecoder *c2vdec = GST_C2_VDEC (userdata);
+  GstVideoInfo *vinfo = &(c2vdec->outstate->info);
   GstVideoCodecFrame *frame = NULL;
   GstFlowReturn ret = GST_FLOW_OK;
   guint64 index = 0;
@@ -344,6 +345,9 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   outstate =
       gst_video_decoder_set_output_state (decoder, format, width, height, state);
 
+  // TODO: Enable this code when GBM backend in waylandsink is not in conflict
+  // with the decoder due to the lack of output buffer pool.
+#if defined(CODEC2_CONFIG_VERSION_2_0)
   // At this point state->caps is NULL.
   if (outstate->caps)
     gst_caps_unref (outstate->caps);
@@ -364,6 +368,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     if (outstate->caps)
       gst_caps_replace (&outstate->caps, NULL);
   }
+#endif // CODEC2_CONFIG_VERSION_2_0
 
   if (!gst_video_decoder_negotiate (decoder)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to negotiate caps!");
