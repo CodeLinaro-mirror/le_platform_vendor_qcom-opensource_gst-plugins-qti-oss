@@ -116,6 +116,8 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
 #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
 #define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
+#define DEFAULT_PROP_CAMERA_SELECT_TSCP               SELECT_TSCP_DEFAULT
+#define DEFAULT_PROP_CAMERA_HFR_SYNC_MODE             FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -179,6 +181,8 @@ enum
   PROP_CAMERA_FRC_MODE,
   PROP_CAMERA_IFE_DIRECT_STREAM,
   PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+  PROP_CAMERA_SELECT_TSCP,
+  PROP_CAMERA_HFR_SYNC_MODE,
 };
 
 static GstStaticPadTemplate qmmfsrc_video_src_template =
@@ -1150,6 +1154,10 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
       break;
+    case PROP_CAMERA_HFR_SYNC_MODE:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_HFR_SYNC_MODE, value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1323,6 +1331,10 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
+      break;
+    case PROP_CAMERA_HFR_SYNC_MODE:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_HFR_SYNC_MODE, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1628,6 +1640,13 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif  // MULTI_CAMERA_ENABLE
+
+  g_object_class_install_property (gobject, PROP_CAMERA_HFR_SYNC_MODE,
+    g_param_spec_boolean ("hfr-sync-mode", "HFR Sync Mode",
+          "HFR Sync mode for multiple streams",
+          DEFAULT_PROP_CAMERA_HFR_SYNC_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),

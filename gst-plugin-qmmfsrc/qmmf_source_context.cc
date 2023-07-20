@@ -203,6 +203,10 @@ struct _GstQmmfContext {
   /// Multi Camera (1) Exposure value
   gint64            slave_exp_time;
 
+  /// Camera timestamp select.
+  gint               selecttscp;
+  /// HFR Sync Mode
+  gboolean           hfr_sync_mode;
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
 };
@@ -1192,6 +1196,10 @@ gst_qmmf_context_open (GstQmmfContext * context)
   ::qmmf::recorder::IFEDirectStream qmmf_ife_direct_stream;
   qmmf_ife_direct_stream.enable = context->ife_direct_stream;
   xtraparam.Update(::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+  // HFRSyncMode_
+  ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
+  hfr_sync_mode.enable = context->hfr_sync_mode;
+  xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
@@ -1922,6 +1930,8 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_IFE_DIRECT_STREAM:
       context->ife_direct_stream = g_value_get_boolean (value);
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      context->hfr_sync_mode = g_value_get_boolean (value);
       return;
   }
 
@@ -2461,6 +2471,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_IFE_DIRECT_STREAM:
       g_value_set_boolean (value, context->ife_direct_stream);
+      break;
+    case PARAM_CAMERA_HFR_SYNC_MODE:
+      g_value_set_boolean (value, context->hfr_sync_mode);
       break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
