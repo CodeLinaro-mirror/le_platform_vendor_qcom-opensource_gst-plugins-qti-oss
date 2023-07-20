@@ -281,16 +281,8 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
   engine = g_new0 (GstC2Engine, 1);
   g_return_val_if_fail (engine != NULL, NULL);
 
-  g_mutex_init (&engine->lock);
-  g_cond_init (&engine->workdone);
-
-  try {
-    engine->c2module = C2Factory::GetModule (name);
-  } catch (std::exception& e) {
-    GST_ERROR ("Failed to create C2 module, error: '%s'!", e.what());
-    gst_c2_engine_free (engine);
-    return NULL;
-  }
+  engine->c2module = C2Factory::GetModule (name);
+  g_return_val_if_fail (engine->c2module != NULL, NULL);
 
   try {
     std::shared_ptr<IC2Notifier> notifier =
@@ -299,7 +291,6 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
     engine->c2module->Initialize (notifier);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to initialize, error: '%s'!", e.what());
-    gst_c2_engine_free (engine);
     return NULL;
   }
 
@@ -309,6 +300,9 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
 
   engine->callbacks = callbacks;
   engine->userdata = userdata;
+
+  g_mutex_init (&engine->lock);
+  g_cond_init (&engine->workdone);
 
   engine->n_pending = 0;
 
@@ -321,13 +315,13 @@ gst_c2_engine_free (GstC2Engine * engine)
 {
   GST_INFO ("Destroyed C2 engine: %p", engine);
 
-  g_cond_clear (&engine->workdone);
-  g_mutex_clear (&engine->lock);
-
   g_free (engine->name);
   delete engine->c2module;
 
-  g_free (engine);
+  g_mutex_clear (&engine->lock);
+  g_cond_clear (&engine->workdone);
+
+  g_slice_free (GstC2Engine, engine);
 }
 
 gboolean
