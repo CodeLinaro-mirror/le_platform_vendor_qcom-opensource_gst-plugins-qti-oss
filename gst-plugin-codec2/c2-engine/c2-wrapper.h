@@ -65,6 +65,9 @@ GST_API gboolean
 gst_c2_wrapper_component_stop (GstC2Wrapper * wrapper);
 
 GST_API gboolean
+gst_c2_wrapper_component_flush (GstC2Wrapper * wrapper);
+
+GST_API gboolean
 gst_c2_wrapper_component_queue (GstC2Wrapper * wrapper,
     BufferDescriptor * buffer);
 

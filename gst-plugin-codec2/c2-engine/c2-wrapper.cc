@@ -202,6 +202,17 @@ gst_c2_wrapper_component_stop (GstC2Wrapper * wrapper) {
 }
 
 gboolean
+gst_c2_wrapper_component_flush (GstC2Wrapper * wrapper) {
+
+  if (wrapper->component) {
+    wrapper->component->Flush();
+  }
+
+  GST_INFO ("Flush C2 component");
+  return TRUE;
+}
+
+gboolean
 gst_c2_wrapper_component_queue (GstC2Wrapper * wrapper,
     BufferDescriptor * buffer) {
 
