@@ -64,6 +64,7 @@ public:
   bool Config(GPtrArray* config);
   bool Start();
   bool Stop();
+  bool Flush();
   bool Queue(BufferDescriptor * buffer);
   bool FreeOutputBuffer(uint64_t bufferIdx);
   c2_status_t createBlockpool(C2BlockPool::local_id_t poolType);
@@ -76,7 +77,7 @@ public:
 private:
   C2FrameData::flags_t toC2Flag (FLAG_TYPE flag);
   guint32 gst_to_c2_gbmformat (GstVideoFormat format);
-  c2_status_t CheckMaxAvailableQueues ();
+  c2_status_t CheckAndWaitAvailableQueues (uint32_t max);
   c2_status_t prepareC2Buffer( BufferDescriptor* buffer, std::shared_ptr<C2Buffer>* c2Buf);
   c2_status_t waitForProgressOrStateChange(uint32_t maxPendingWorks,uint32_t timeoutMs);
 

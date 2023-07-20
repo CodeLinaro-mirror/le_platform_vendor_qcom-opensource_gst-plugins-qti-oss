@@ -163,6 +163,22 @@ C2ComponentWrapper::Stop ()
   return TRUE;
 }
 
+bool
+C2ComponentWrapper::Flush ()
+{
+  if (component_.get () != nullptr) {
+    std::list<std::unique_ptr<C2Work>> witems;
+    component_->flush_sm (C2Component::FLUSH_COMPONENT, &witems);
+
+    // Wait until all work is completed.
+    CheckAndWaitAvailableQueues (0);
+  } else {
+    GST_ERROR ("The component is not valid");
+    return FALSE;
+  }
+  return TRUE;
+}
+
 c2_status_t C2ComponentWrapper::prepareC2Buffer (BufferDescriptor* buffer, std::shared_ptr<C2Buffer>* c2Buf)
 {
   uint8_t* rawBuffer = buffer->data;
@@ -400,9 +416,9 @@ C2ComponentWrapper::Queue (BufferDescriptor * buffer)
     workList.push_back (std::move (work));
 
     if (!isEOSFrame) {
-      // If pending works reach maximum, CheckMaxAvailableQueues will wait
+      // If pending works reach maximum, CheckAndWaitAvailableQueues will wait
       // and no more buffer will be queued to the component.
-      CheckMaxAvailableQueues ();
+      CheckAndWaitAvailableQueues (MAX_PENDING_WORK);
     } else {
       GST_INFO ("EOS reached");
     }
@@ -488,11 +504,11 @@ C2ComponentWrapper::gst_to_c2_gbmformat (GstVideoFormat format)
 }
 
 c2_status_t
-C2ComponentWrapper::CheckMaxAvailableQueues ()
+C2ComponentWrapper::CheckAndWaitAvailableQueues (uint32_t max)
 {
   std::unique_lock<std::mutex> ul (lock_);
   GST_DEBUG ("pending works: %d", numpendingworks_);
-  while (numpendingworks_ > MAX_PENDING_WORK) {
+  while (numpendingworks_ > max) {
     workcondition_.wait (ul);
   }
   return C2_OK;
@@ -532,6 +548,7 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
 
   while (!workItems.empty ()) {
     std::unique_ptr<C2Work> work = std::move (workItems.front ());
+    uint64_t bufferIdx = 0;
 
     workItems.pop_front ();
     if (!work) {
@@ -543,8 +560,19 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
       continue;
     }
 
+    const std::unique_ptr<C2Worklet>& worklet = work->worklets.front ();
+    uint64_t timestamp = worklet->output.ordinal.timestamp.peeku ();
+
     if (work->result == C2_NOT_FOUND) {
       GST_INFO ("No output for component(%p)", this);
+      bufferIdx = worklet->output.ordinal.frameIndex.peeku ();
+      callback_->onOutputBufferAvailable (NULL, bufferIdx, timestamp,
+          C2FrameData::FLAG_DISCARD_FRAME, NULL);
+
+      std::unique_lock<std::mutex> ul (component_wrapper->lock_);
+      component_wrapper->numpendingworks_--;
+      component_wrapper->workcondition_.notify_one ();
+
       continue;
     }
 
@@ -553,11 +581,8 @@ C2ComponentListener::onWorkDone_nb (std::weak_ptr<C2Component> component,
       continue;
     }
 
-    const std::unique_ptr<C2Worklet>& worklet = work->worklets.front ();
     std::shared_ptr<C2Buffer> buffer = nullptr;
-    uint64_t bufferIdx = 0;
     C2FrameData::flags_t outputFrameFlag = worklet->output.flags;
-    uint64_t timestamp = worklet->output.ordinal.timestamp.peeku ();
 
     if (worklet->output.buffers.size () == 1u) {
       buffer = worklet->output.buffers[0];
@@ -660,6 +685,9 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
   if (C2FrameData::FLAG_CODEC_CONFIG & flag) {
     flag_res |= FLAG_TYPE_CODEC_CONFIG;
   }
+  if (C2FrameData::FLAG_DISCARD_FRAME & flag) {
+    flag_res |= FLAG_TYPE_DISCARD_FRAME;
+  }
 
   if (buffer) {
     C2BufferData::type_t buf_type = buffer->data ().type ();
@@ -751,6 +779,15 @@ EventCallback::onOutputBufferAvailable (const std::shared_ptr<C2Buffer> buffer,
     outBuf.size = 0;
     outBuf.timestamp = 0;
     outBuf.index = 0;
+    outBuf.flag = flag_type;
+    callback_ (EVENT_OUTPUTS_DONE, &outBuf, userdata_);
+  } else if (flag & C2FrameData::FLAG_DISCARD_FRAME) {
+    GST_INFO ("Mark Discard buffer");
+    //outBuf.data = NULL;
+    outBuf.fd = -1;
+    outBuf.size = 0;
+    outBuf.timestamp = timestamp;
+    outBuf.index = index;
     outBuf.flag = flag_type;
     callback_ (EVENT_OUTPUTS_DONE, &outBuf, userdata_);
   } else {

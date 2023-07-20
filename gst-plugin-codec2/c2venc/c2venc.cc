@@ -858,6 +858,22 @@ gst_c2_venc_stop (GstVideoEncoder * encoder)
   return TRUE;
 }
 
+static gboolean
+gst_c2_venc_flush (GstVideoEncoder * encoder)
+{
+  GstC2_VENCEncoder *c2venc = GST_C2_VENC_ENC (encoder);
+  GST_DEBUG_OBJECT (c2venc, "Encoder flush");
+
+  if ((c2venc->wrapper != NULL) &&
+      !gst_c2_wrapper_component_flush (c2venc->wrapper)) {
+    GST_ERROR_OBJECT (c2venc, "Failed to flush component");
+    return FALSE;
+  }
+
+  GST_DEBUG_OBJECT (c2venc, "Component flushed");
+  return TRUE;
+}
+
 static void
 gst_c2_venc_buffer_release (GstStructure * structure)
 {
@@ -1019,6 +1035,7 @@ handle_video_event (EVENT_TYPE type, void * userdata, void * userdata2)
   GstC2_VENCEncoder *c2venc = GST_C2_VENC_ENC (encoder);
   GST_DEBUG_OBJECT (c2venc, "handle_video_event");
   GstFlowReturn ret = GST_FLOW_OK;
+  GstVideoCodecFrame *frame = NULL;
 
   switch (type) {
     case EVENT_OUTPUTS_DONE: {
@@ -1042,6 +1059,25 @@ handle_video_event (EVENT_TYPE type, void * userdata, void * userdata2)
         c2venc->eos_reached = TRUE;
         g_cond_signal (&c2venc->pending_cond);
         g_mutex_unlock (&c2venc->pending_lock);
+      } else if (outBuffer->flag & FLAG_TYPE_DISCARD_FRAME) {
+        GST_INFO_OBJECT (c2venc, "Encoder discard frame");
+        frame = gst_video_encoder_get_frame (encoder, outBuffer->index);
+        if (frame == NULL) {
+          GST_ERROR_OBJECT (c2venc,
+              "Error in gst_video_encoder_get_frame, frame number: %lu",
+              outBuffer->index);
+          return;
+        }
+
+        frame->output_buffer = NULL;
+        gst_video_codec_frame_unref (frame);
+        // Calling finish_frame with frame->output_buffer == NULL will drop it.
+        ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
+        if (ret != GST_FLOW_OK) {
+          GST_LOG_OBJECT (c2venc, "Failed to finish frame!");
+          return;
+        }
+        GST_LOG_OBJECT (c2venc, "Frame dropped");
       } else {
         GST_ERROR_OBJECT (c2venc, "Invalid output buffer");
       }
@@ -2129,6 +2165,13 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
           static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY)));
 
+  // TODO: Temporary solution to flush all enqued buffers in the encoder
+  // until proper solution is implemented using flush start/stop
+  g_signal_new_class_handler ("flush-buffers", G_TYPE_FROM_CLASS (klass),
+      static_cast<GSignalFlags>(G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION),
+      G_CALLBACK (gst_c2_venc_flush),
+       NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
+
   gst_element_class_set_static_metadata (element,
       "C2Venc encoder", "C2_VENC/Encoder",
       "C2Venc encoding", "QTI");
@@ -2140,6 +2183,7 @@ gst_c2_venc_class_init (GstC2_VENCEncoderClass * klass)
 
   venc_class->start = gst_c2_venc_start;
   venc_class->stop = gst_c2_venc_stop;
+  venc_class->flush = gst_c2_venc_flush;
   venc_class->set_format = gst_c2_venc_set_format;
   venc_class->handle_frame = gst_c2_venc_handle_frame;
   venc_class->finish = gst_c2_venc_finish;
