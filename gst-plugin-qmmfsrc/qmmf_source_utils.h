@@ -136,6 +136,8 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_CAPTURE_MODE (gst_qmmfsrc_capture_mode_get_type())
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
+#define GST_TYPE_QMMFSRC_SELECT_TSCP \
+    (gst_qmmfsrc_select_tscp_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -282,6 +284,13 @@ enum
 
 enum
 {
+  SELECT_TSCP_DEFAULT,
+  SELECT_TSCP_SOE,
+  SELECT_TSCP_EOE,
+  SELECT_TSCP_SOF,
+};
+enum
+{
   ROTATE_NONE,
   ROTATE_90CCW,
   ROTATE_180CCW,
@@ -313,6 +322,8 @@ GType gst_qmmfsrc_noise_reduction_get_type (void);
 GType gst_qmmfsrc_capture_mode_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
+
+GType gst_qmmfsrc_select_tscp_get_type (void);
 
 GType gst_qmmfsrc_rotate_get_type(void);
 

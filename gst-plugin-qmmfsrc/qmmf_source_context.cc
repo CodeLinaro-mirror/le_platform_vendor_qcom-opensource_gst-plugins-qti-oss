@@ -691,6 +691,11 @@ initialize_camera_param (GstQmmfContext * context)
   if (tag_id != 0)
     meta.update (tag_id, &(context)->saturation, 1);
 
+  tag_id = get_vendor_tag_by_name ("org.quic.camera.tsselection",
+          "RefTsSelection");
+  if (tag_id != 0)
+      meta.update (tag_id, &(context)->selecttscp, 1);
+
   tag_id = get_vendor_tag_by_name ("org.codeaurora.qcamera3.multicam_exptime",
       "masterExpTime");
 
@@ -751,6 +756,15 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
   gst_structure_get_uint (structure, "capacity", &buffer.capacity);
   gst_structure_get_uint (structure, "offset", &buffer.offset);
   gst_structure_get_uint64 (structure, "timestamp", &buffer.timestamp);
+  gst_structure_get_uint64 (structure, "ts_soe", &buffer.ts_soe);
+  gst_structure_get_uint64 (structure, "ts_eoe", &buffer.ts_eoe);
+  gst_structure_get_uint64 (structure, "ts_sof", &buffer.ts_sof);
+  gst_structure_get_uint64 (structure, "ts_eof", &buffer.ts_eof);
+  gst_structure_get_uint64 (structure, "ts_hal", &buffer.ts_hal);
+  gst_structure_get_uint64 (structure, "ts_qmf", &buffer.ts_qmf);
+  gst_structure_get_uint64 (structure, "td_exp", &buffer.td_exp);
+  gst_structure_get_uint64 (structure, "ts_aux", &buffer.ts_aux);
+  gst_structure_get_uint64 (structure, "td_aux", &buffer.td_aux);
   gst_structure_get_uint64 (structure, "seqnum", &buffer.seqnum);
   gst_structure_get_uint64 (structure, "flags", &buffer.flags);
 
@@ -830,6 +844,15 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
       "capacity", G_TYPE_UINT, buffer->capacity,
       "offset", G_TYPE_UINT, buffer->offset,
       "timestamp", G_TYPE_UINT64, buffer->timestamp,
+      "ts_soe", G_TYPE_UINT64, buffer->ts_soe,
+      "ts_eoe", G_TYPE_UINT64, buffer->ts_eoe,
+      "ts_sof", G_TYPE_UINT64, buffer->ts_sof,
+      "ts_eof", G_TYPE_UINT64, buffer->ts_eof,
+      "ts_hal", G_TYPE_UINT64, buffer->ts_hal,
+      "ts_qmf", G_TYPE_UINT64, buffer->ts_qmf,
+      "td_exp", G_TYPE_UINT64, buffer->td_exp,
+      "ts_aux", G_TYPE_UINT64, buffer->ts_aux,
+      "td_aux", G_TYPE_UINT64, buffer->td_aux,
       "seqnum", G_TYPE_UINT64, buffer->seqnum,
       "flags", G_TYPE_UINT64, buffer->flags,
       NULL
@@ -875,6 +898,8 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     std::vector<::qmmf::BufferDescriptor> buffers,
     std::vector<::qmmf::BufferMeta> metas)
 {
+  struct timespec t0;
+  uint64_t ts_gst;
   GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
   ::qmmf::recorder::Recorder *recorder = context->recorder;
 
@@ -884,6 +909,7 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
 
   GstBuffer *gstbuffer = NULL;
   GstDataQueueItem *item = NULL;
+  GstStructure *structure = NULL;
 
   for (idx = 0; idx < buffers.size(); ++idx) {
     ::qmmf::BufferDescriptor& buffer = buffers[idx];
@@ -909,6 +935,24 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
 
     // Propagate original camera timestamp in media dependent OFFSET_END field.
     GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
+
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    ts_gst = (((uint64_t)t0.tv_sec) * 1000000000ULL) + ((uint64_t)t0.tv_nsec);
+
+    // Append protection meta with the original camera timestamp.
+    structure = gst_structure_new ("CameraFrameMeta",
+        "timestamp", G_TYPE_UINT64, buffer.timestamp,
+        "ts_soe", G_TYPE_UINT64, buffer.ts_soe,
+        "ts_eoe", G_TYPE_UINT64, buffer.ts_eoe,
+        "ts_sof", G_TYPE_UINT64, buffer.ts_sof,
+        "ts_eof", G_TYPE_UINT64, buffer.ts_eof,
+        "ts_hal", G_TYPE_UINT64, buffer.ts_hal,
+        "ts_qmf", G_TYPE_UINT64, buffer.ts_qmf,
+        "ts_gst", G_TYPE_UINT64, ts_gst,
+        "td_exp", G_TYPE_UINT64, buffer.td_exp,
+        "ts_aux", G_TYPE_UINT64, buffer.ts_aux,
+        "td_aux", G_TYPE_UINT64, buffer.td_aux, NULL);
+    gst_buffer_add_protection_meta (gstbuffer, structure);
 
     GST_QMMF_CONTEXT_LOCK (context);
     // Initialize the timestamp base value for buffer synchronization.
@@ -947,10 +991,13 @@ static void
 image_data_callback (GstQmmfContext * context, GstPad * pad,
     ::qmmf::BufferDescriptor buffer, ::qmmf::BufferMeta meta)
 {
+  struct timespec t0;
+  uint64_t ts_gst;
   GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
   ::qmmf::recorder::Recorder *recorder = context->recorder;
 
   GstBuffer *gstbuffer = NULL;
+  GstStructure *structure = NULL;
   GstDataQueueItem *item = NULL;
 
   gstbuffer = qmmfsrc_gst_buffer_new_wrapped (context, pad, &buffer);
@@ -962,6 +1009,22 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
 
   // Propagate original camera timestamp in media dependent OFFSET_END field.
   GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
+
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ts_gst = (((uint64_t)t0.tv_sec) * 1000000000ULL) + ((uint64_t)t0.tv_nsec);
+  // Append protection meta with the original camera timestamp.
+  structure = gst_structure_new ("CameraFrameMeta",
+        "timestamp", G_TYPE_UINT64, buffer.timestamp,
+        "ts_soe", G_TYPE_UINT64, buffer.ts_soe,
+        "ts_sof", G_TYPE_UINT64, buffer.ts_sof,
+        "ts_eof", G_TYPE_UINT64, buffer.ts_eof,
+        "ts_hal", G_TYPE_UINT64, buffer.ts_hal,
+        "ts_qmf", G_TYPE_UINT64, buffer.ts_qmf,
+        "ts_gst", G_TYPE_UINT64, ts_gst,
+        "td_exp", G_TYPE_UINT64, buffer.td_exp,
+        "ts_aux", G_TYPE_UINT64, buffer.ts_aux,
+        "td_aux", G_TYPE_UINT64, buffer.td_aux, NULL);
+  gst_buffer_add_protection_meta (gstbuffer, structure);
 
   GST_QMMF_CONTEXT_LOCK (context);
   // Initialize the timestamp base value for buffer synchronization.
@@ -2359,6 +2422,15 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(tag_id, &(context)->irmode, 1);
       break;
     }
+    case PARAM_CAMERA_SELECT_TSCP:
+    {
+      guint tag_id = get_vendor_tag_by_name (
+          "org.quic.camera.tsselection", "RefTsSelection");
+
+      context->selecttscp = g_value_get_enum (value);
+      meta.update(tag_id, &(context)->selecttscp, 1);
+      break;
+    }
     case PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME:
     {
       g_return_if_fail (gst_value_array_get_size (value) == 2);
@@ -2485,6 +2557,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_FRC_MODE:
       g_value_set_enum (value, context->frc_mode);
       return;
+    case PARAM_CAMERA_SELECT_TSCP:
+      g_value_set_int (value, context->selecttscp);
+      break;
     case PARAM_CAMERA_IFE_DIRECT_STREAM:
       g_value_set_boolean (value, context->ife_direct_stream);
       break;

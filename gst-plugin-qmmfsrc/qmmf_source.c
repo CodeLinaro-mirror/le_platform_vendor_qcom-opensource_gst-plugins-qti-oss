@@ -1148,6 +1148,10 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
       break;
+    case PROP_CAMERA_SELECT_TSCP:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+              PARAM_CAMERA_SELECT_TSCP, value);
+      break;
     case PROP_CAMERA_IFE_DIRECT_STREAM:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_IFE_DIRECT_STREAM, value);
@@ -1329,6 +1333,10 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_FRC_MODE:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_FRC_MODE, value);
+      break;
+    case PROP_CAMERA_SELECT_TSCP:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+              PARAM_CAMERA_SELECT_TSCP, value);
       break;
     case PROP_CAMERA_IFE_DIRECT_STREAM:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
@@ -1631,6 +1639,12 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "Stream frame rate control mode.",
           GST_TYPE_QMMFSRC_FRC_MODE, DEFAULT_PROP_CAMERA_FRC_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_SELECT_TSCP,
+          g_param_spec_enum ("select-tscp", "TS Mode", "select timestamp capture point",
+              GST_TYPE_QMMFSRC_SELECT_TSCP,
+              DEFAULT_PROP_CAMERA_SELECT_TSCP,
+              G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+              GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
       g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
           "IFE direct stream support, with this param, ISP will generate"
