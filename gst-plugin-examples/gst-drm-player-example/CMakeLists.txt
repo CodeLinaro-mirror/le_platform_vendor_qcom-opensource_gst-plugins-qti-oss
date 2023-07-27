@@ -5,12 +5,13 @@ add_executable(${GST_EXAMPLE_BIN}
   main.cc
 )
 
-find_package(LibXml2 REQUIRED)
-find_package(CURL REQUIRED)
+pkg_check_modules (XML2 REQUIRED libxml-2.0)
+pkg_check_modules (CURL REQUIRED libcurl)
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
   ${SYSROOT_INCDIR}
+  ${XML2_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
@@ -19,7 +20,7 @@ target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   cutils
   ${GST_LIBRARIES}
   ${CURL_LIBRARIES}
-  LibXml2::LibXml2
+  ${XML2_LIBRARIES}
 )
 
 install(

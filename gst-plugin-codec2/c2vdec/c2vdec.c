@@ -377,36 +377,43 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
       (width != c2vdec->outstate->info.width ||
           height != c2vdec->outstate->info.height)) {
     GstQuery *query = gst_query_new_drain ();
+    gboolean success;
 
     GST_INFO_OBJECT (c2vdec, "Resolution changed from %dx%d to %dx%d",
         c2vdec->outstate->info.width, c2vdec->outstate->info.height, width, height);
 
-    if (!gst_pad_peer_query (decoder->srcpad, query))
-      GST_DEBUG_OBJECT (c2vdec, "Drain query failed !");
+    success = gst_pad_peer_query (decoder->srcpad, query);
     gst_query_unref (query);
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2vdec, "Drain query failed !");
+      return FALSE;
+    }
 
     // This mutex was locked in the base class before call to this function.
     // Needs to be unlocked when waiting for any pending buffers during drain.
     GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
-    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE))
-      GST_WARNING_OBJECT (c2vdec, "Failed to Drain engine");
+    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE)) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to Drain engine");
+      return FALSE;
+    }
 
     GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 
-  if (c2vdec->outstate && g_str_equal (gst_video_format_to_string (format),
-      gst_video_format_to_string (c2vdec->outstate->info.finfo->format))) {
-
+  if (c2vdec->outstate && (format != c2vdec->outstate->info.finfo->format)) {
     GST_INFO_OBJECT (c2vdec, "Format changed from %s to %s",
-    gst_video_format_to_string (format),
-    gst_video_format_to_string (c2vdec->outstate->info.finfo->format));
+        gst_video_format_to_string (c2vdec->outstate->info.finfo->format),
+        gst_video_format_to_string (format));
 
     GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+
     if ((c2vdec->engine != NULL) && !gst_c2_engine_stop (c2vdec->engine)) {
       GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
       return FALSE;
     }
+
     GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 

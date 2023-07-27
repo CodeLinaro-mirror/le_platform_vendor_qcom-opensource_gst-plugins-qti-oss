@@ -9,7 +9,6 @@
 
 #include <gst/gst.h>
 #include <glib-unix.h>
-#include <libxml/xmlmemory.h>
 #include <libxml/parser.h>
 #include <curl/curl.h>
 
@@ -108,9 +107,6 @@ struct soapbuf {
   gchar   *pdata;
   size_t  sdata;
 };
-
-static gboolean is_dash = TRUE;
-static gboolean mp4_content = FALSE;
 
 // PlayReady UUID in hex
 static const uint8_t pr_uuid[16] = {
@@ -228,13 +224,13 @@ wait_stdin_message (GAsyncQueue * queue, gchar ** input)
 
     if (gst_structure_has_name (message, STDIN_MESSAGE)) {
       *input = g_strdup (gst_structure_get_string (message, "input"));
-      break;
+      gst_structure_free (message);
+      return TRUE;
     }
 
     gst_structure_free (message);
   }
 
-  gst_structure_free (message);
   return TRUE;
 }
 
@@ -1167,7 +1163,7 @@ parse_manifest (gchar ** pro_header)
   gchar *manifest_content = NULL;
   DrmLicense license = LICENSE_INVALID;
 
-  if (is_dash = decide_dash_or_hls (&manifest_content))
+  if (decide_dash_or_hls (&manifest_content))
     license = parse_dash_manifest (pro_header);
   else
     license = parse_hls_manifest (pro_header, manifest_content);
@@ -1222,7 +1218,7 @@ io_error:
 }
 
 static void
-toggle_play (GstAppContext *appctx)
+toggle_play (GstAppContext * appctx)
 {
   appctx->desired_state = (appctx->current_state == GST_STATE_PLAYING) ?
       GST_STATE_PAUSED : GST_STATE_PLAYING;
@@ -1242,7 +1238,7 @@ toggle_play (GstAppContext *appctx)
 }
 
 static gboolean
-decide_mp4 (gchar * pipeline, gchar ** manifest_url)
+decide_mp4 (gchar * pipeline, gchar ** manifest_url, gboolean * mp4_content)
 {
   gchar *str = g_strdup (pipeline);
 
@@ -1250,7 +1246,7 @@ decide_mp4 (gchar * pipeline, gchar ** manifest_url)
     return FALSE;
 
   if (g_str_has_suffix (str, "mp4")) {
-    mp4_content = TRUE;
+    *mp4_content = TRUE;
     g_free (str);
     return TRUE;
   }
@@ -1339,7 +1335,8 @@ main (gint argc, gchar *argv[])
   gchar *mp4_pro_header = NULL, *pro_header = NULL, *manifest_url = NULL;
   DrmLicense license = LICENSE_INVALID;
   guint bus_watch_id = 0, intrpt_watch_id = 0, stdin_watch_id = 0;
-  gboolean status = -1;
+  gint status = -1;
+  gboolean mp4_content = FALSE;
 
   gst_init (&argc, &argv);
 
@@ -1378,7 +1375,7 @@ main (gint argc, gchar *argv[])
   }
 
   // Parse args to decide whether it's an MP4 content.
-  if (!decide_mp4 (*args, &manifest_url)) {
+  if (!decide_mp4 (*args, &manifest_url, &mp4_content)) {
     g_print ("Erroneous pipeline!\n");
     goto exit;
   }
