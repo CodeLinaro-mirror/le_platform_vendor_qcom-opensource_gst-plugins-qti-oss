@@ -59,8 +59,11 @@ typedef struct _GstC2QuantRanges GstC2QuantRanges;
 typedef struct _GstC2QuantRectangle GstC2QuantRectangle;
 typedef struct _GstC2QuantRegions GstC2QuantRegions;
 typedef struct _GstC2TemporalLayer GstC2TemporalLayer;
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+typedef struct _GstC2HdrStaticMetadata GstC2HdrStaticMetadata;
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
-// GStreamer Codec2 Engine parameter types.
+// Gstreamer Codec2 Engine parameter types.
 enum {
   GST_C2_PARAM_IN_FORMAT,            // GstC2PixelInfo
   GST_C2_PARAM_OUT_FORMAT,           // GstC2PixelInfo
@@ -90,6 +93,11 @@ enum {
   GST_C2_PARAM_TRIGGER_SYNC_FRAME,   // gboolean
   GST_C2_PARAM_NATIVE_RECORDING,     // gboolean
   GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
+  GST_C2_PARAM_PRIORITY,             // gint32
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  GST_C2_PARAM_HDR_STATIC_METADATA,  // GstC2HdrStaticMetadata
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  GST_C2_PARAM_COLOR_ASPECTS_TUNING, // GstVideoColorimetry
 };
 
 typedef enum {
@@ -211,6 +219,13 @@ struct _GstC2Gop {
   guint32 n_pframes;
   guint32 n_bframes;
 };
+
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+struct _GstC2HdrStaticMetadata {
+  GstVideoMasteringDisplayInfo mdispinfo;
+  GstVideoContentLightLevel    clightlevel;
+};
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
 struct _GstC2IntraRefresh {
   GstC2IRefreshMode mode;
