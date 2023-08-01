@@ -832,6 +832,25 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
   return gstbuffer;
 }
 
+::qmmf::recorder::Rotation
+qmmfsrc_gst_get_stream_rotaion (gint rotate)
+{
+  switch (rotate) {
+    case ROTATE_NONE:
+      return ::qmmf::recorder::Rotation::kNone;
+    case ROTATE_90CCW:
+      return ::qmmf::recorder::Rotation::k90;
+    case ROTATE_180CCW:
+      return ::qmmf::recorder::Rotation::k180;
+    case ROTATE_270CCW:
+      return ::qmmf::recorder::Rotation::k270;
+    default:
+      GST_WARNING ("Rotation value %d is invalid default to no rotation",
+          rotate);
+      return ::qmmf::recorder::Rotation::kNone;
+  }
+}
+
 static void
 video_event_callback (uint32_t track_id, ::qmmf::recorder::EventType type,
     void * data, size_t size)
@@ -919,6 +938,10 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
   GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
   ::qmmf::recorder::Recorder *recorder = context->recorder;
 
+  guint numplanes = 0;
+  gsize offset[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
+  gint stride[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
+
   GstBuffer *gstbuffer = NULL;
   GstDataQueueItem *item = NULL;
 
@@ -928,6 +951,17 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
       "Failed to create GST buffer!");
 
   GST_BUFFER_FLAG_SET (gstbuffer, GST_BUFFER_FLAG_LIVE);
+
+  for (size_t i = 0; i < meta.n_planes; ++i) {
+    stride[i] = meta.planes[i].stride;
+    offset[i] = meta.planes[i].offset;
+    numplanes++;
+  }
+
+  // Set GStreamer buffer video metadata.
+  gst_buffer_add_video_meta_full (gstbuffer, GST_VIDEO_FRAME_FLAG_NONE,
+      (GstVideoFormat)ipad->format, ipad->width, ipad->height,
+      numplanes, offset, stride);
 
   // Propagate original camera timestamp in media dependent OFFSET_END field.
   GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
@@ -980,7 +1014,7 @@ camera_event_callback (GstQmmfContext * context,
       uint32_t camera_id = *(static_cast<uint32_t*>(payload));
 
       // Ignore event if it is not for this camera id.
-      if (camera_id == context->camera_id)
+      if (camera_id != context->camera_id)
         return;
 
       event = EVENT_CAMERA_ERROR;
@@ -1236,6 +1270,7 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   ::qmmf::recorder::TrackCb track_cbs;
   ::qmmf::recorder::VideoExtraParam extraparam;
   ::qmmf::recorder::SessionCb session_cbs;
+  ::qmmf::recorder::Rotation rotate;
   gint status = 0;
 
   GST_TRACE ("Create QMMF context session");
@@ -1338,9 +1373,10 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
+  rotate = qmmfsrc_gst_get_stream_rotaion (vpad->rotate);
   ::qmmf::recorder::VideoTrackParam params (
       context->camera_id, vpad->width, vpad->height, vpad->framerate, format,
-      ::qmmf::recorder::Rotation::kNone, vpad->xtrabufs
+      rotate, vpad->xtrabufs
   );
 
 #ifdef GST_VIDEO_TYPE_SUPPORT
@@ -1484,6 +1520,7 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
 
     rawparam.width = bpad->width;
     rawparam.height = bpad->height;
+    rawparam.rotation = qmmfsrc_gst_get_stream_rotaion (bpad->rotate);
 
     switch (bpad->format) {
       case GST_BAYER_FORMAT_BGGR:
@@ -1524,6 +1561,7 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad,
 
   imgparam.width = ipad->width;
   imgparam.height = ipad->height;
+  imgparam.rotation = qmmfsrc_gst_get_stream_rotaion (ipad->rotate);
 
   if (ipad->codec == GST_IMAGE_CODEC_JPEG) {
     imgparam.format = ::qmmf::recorder::ImageFormat::kJPEG;
@@ -1683,10 +1721,16 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
         if (bayerpad == NULL)
           image_data_callback (context, pad, buffer, meta);
         else {
-          if (meta.format == ::qmmf::BufferFormat::kBLOB)
+          if (meta.format == ::qmmf::BufferFormat::kBLOB ||
+              meta.format == ::qmmf::BufferFormat::kNV12)
             image_data_callback (context, pad, buffer, meta);
-          else
+          else if (meta.format == ::qmmf::BufferFormat::kRAW8 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10)
             image_data_callback (context, bayerpad, buffer, meta);
+          else
+            GST_ERROR ("Unsupported snapshot format %d", (gint)meta.format);
         }
       };
 

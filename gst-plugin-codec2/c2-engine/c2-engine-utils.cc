@@ -79,8 +79,12 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2StreamGopTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_KEY_FRAME_INTERVAL,
       C2StreamSyncFrameIntervalTuning::output::PARAM_TYPE },
-  { GST_C2_PARAM_INTRA_REFRESH,
+  { GST_C2_PARAM_INTRA_REFRESH_TUNING,
       C2StreamIntraRefreshTuning::output::PARAM_TYPE },
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+  { GST_C2_PARAM_INTRA_REFRESH_MODE,
+      qc2::C2VideoIntraRefreshType::output::PARAM_TYPE },
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
   { GST_C2_PARAM_ADAPTIVE_B_FRAMES,
       qc2::C2StreamAdaptiveBPreconditions::output::PARAM_TYPE },
@@ -121,6 +125,14 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
+  { GST_C2_PARAM_PRIORITY,
+      C2RealTimePriorityTuning::PARAM_TYPE },
+  { GST_C2_PARAM_COLOR_ASPECTS_TUNING,
+      C2StreamColorAspectsTuning::output::PARAM_TYPE },
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  { GST_C2_PARAM_HDR_STATIC_METADATA,
+      C2StreamHdrStaticInfo::output::PARAM_TYPE },
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -136,7 +148,8 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_BITRATE, "BITRATE" },
   { GST_C2_PARAM_GOP_CONFIG, "GOP_CONFIG" },
   { GST_C2_PARAM_KEY_FRAME_INTERVAL, "KEY_FRAME_INTERVAL" },
-  { GST_C2_PARAM_INTRA_REFRESH, "INTRA_REFRESH" },
+  { GST_C2_PARAM_INTRA_REFRESH_TUNING, "INTRA_REFRESH_TUNING" },
+  { GST_C2_PARAM_INTRA_REFRESH_MODE, "INTRA_REFRESH_MODE" },
   { GST_C2_PARAM_ADAPTIVE_B_FRAMES, "ADAPTIVE_B_FRAMES" },
   { GST_C2_PARAM_ENTROPY_MODE, "ENTROPY_MODE" },
   { GST_C2_PARAM_LOOP_FILTER_MODE, "LOOP_FILTER_MODE" },
@@ -153,6 +166,11 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
   { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
+  { GST_C2_PARAM_PRIORITY, "PRIORITY"},
+  { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -230,10 +248,17 @@ static const std::unordered_map<uint32_t, uint32_t> kRateCtrlMap = {
   { GST_C2_RATE_CTRL_CQ,       C2Config::BITRATE_IGNORE },
 };
 
-// Map for the GST_C2_PARAM_INTRA_REFRESH parameter.
+// Map for the GST_C2_PARAM_INTRA_REFRESH_TUNING/
+// GST_C2_PARAM_INTRA_REFRESH_MODE parameter.
 static const std::unordered_map<uint32_t, uint32_t> kIntraRefreshMap = {
   { GST_C2_INTRA_REFRESH_DISABLED,  C2Config::INTRA_REFRESH_DISABLED },
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
   { GST_C2_INTRA_REFRESH_ARBITRARY, C2Config::INTRA_REFRESH_ARBITRARY },
+  { GST_C2_INTRA_REFRESH_CYCLIC,    C2Config::INTRA_REFRESH_ARBITRARY + 1 },
+#else
+  { GST_C2_INTRA_REFRESH_ARBITRARY, qc2::IntraRefreshMode::INTRA_REFRESH_RANDOM },
+  { GST_C2_INTRA_REFRESH_CYCLIC,    qc2::IntraRefreshMode::INTRA_REFRESH_CYCLIC},
+#endif // CODEC2_CONFIG_VERSION_2_0
 };
 
 // Map for the GST_C2_ENTROPY_MODE parameter.
@@ -262,6 +287,64 @@ static const std::unordered_map<uint32_t, uint32_t> kPrependHeaderMap = {
   { GST_C2_PREPEND_HEADER_TO_NONE,     C2Config::PREPEND_HEADER_TO_NONE },
   { GST_C2_PREPEND_HEADER_ON_CHANGE,   C2Config::PREPEND_HEADER_ON_CHANGE },
   { GST_C2_PREPEND_HEADER_TO_ALL_SYNC, C2Config::PREPEND_HEADER_TO_ALL_SYNC },
+};
+
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Primaries parameter.
+static const std::unordered_map<uint32_t, uint32_t> kColorPrimariesMap = {
+  { GST_VIDEO_COLOR_PRIMARIES_UNKNOWN,      C2Color::PRIMARIES_UNSPECIFIED },
+  { GST_VIDEO_COLOR_PRIMARIES_BT709,        C2Color::PRIMARIES_BT709 },
+  { GST_VIDEO_COLOR_PRIMARIES_BT470M,       C2Color::PRIMARIES_BT470_M },
+  { GST_VIDEO_COLOR_PRIMARIES_BT470BG,      C2Color::PRIMARIES_BT601_625 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTE170M,    C2Color::PRIMARIES_BT601_525 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTE240M,    C2Color::PRIMARIES_BT601_525 },
+  { GST_VIDEO_COLOR_PRIMARIES_FILM,         C2Color::PRIMARIES_GENERIC_FILM },
+  { GST_VIDEO_COLOR_PRIMARIES_BT2020,       C2Color::PRIMARIES_BT2020 },
+  { GST_VIDEO_COLOR_PRIMARIES_ADOBERGB,     C2Color::PRIMARIES_OTHER },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTEST428,   C2Color::PRIMARIES_OTHER },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTERP431,   C2Color::PRIMARIES_RP431 },
+  { GST_VIDEO_COLOR_PRIMARIES_SMPTEEG432,   C2Color::PRIMARIES_EG432 },
+  { GST_VIDEO_COLOR_PRIMARIES_EBU3213,      C2Color::PRIMARIES_EBU3213 },
+};
+
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Transfer parameter.
+static const std::unordered_map<uint32_t, uint32_t> kColorTransferMap = {
+  { GST_VIDEO_TRANSFER_UNKNOWN,       C2Color::TRANSFER_UNSPECIFIED },
+  { GST_VIDEO_TRANSFER_GAMMA10,       C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_GAMMA18,       C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_GAMMA20,       C2Color::TRANSFER_GAMMA22 },
+  { GST_VIDEO_TRANSFER_GAMMA22,       C2Color::TRANSFER_GAMMA22 },
+  { GST_VIDEO_TRANSFER_BT709,         C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_SMPTE240M,     C2Color::TRANSFER_240M },
+  { GST_VIDEO_TRANSFER_SRGB,          C2Color::TRANSFER_SRGB },
+  { GST_VIDEO_TRANSFER_GAMMA28,       C2Color::TRANSFER_GAMMA28 },
+  { GST_VIDEO_TRANSFER_LOG100,        C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_LOG316,        C2Color::TRANSFER_OTHER },
+  { GST_VIDEO_TRANSFER_BT2020_12,     C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_ADOBERGB,      C2Color::TRANSFER_OTHER },
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  { GST_VIDEO_TRANSFER_BT2020_10,     C2Color::TRANSFER_170M },
+  { GST_VIDEO_TRANSFER_SMPTE2084,     C2Color::TRANSFER_ST2084 },
+  { GST_VIDEO_TRANSFER_ARIB_STD_B67,  C2Color::TRANSFER_HLG },
+  { GST_VIDEO_TRANSFER_BT601,         C2Color::TRANSFER_170M },
+#endif
+};
+
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Matrix parameter.
+static const std::unordered_map<uint32_t, uint32_t> kColorMatrixMap = {
+  { GST_VIDEO_COLOR_MATRIX_UNKNOWN,  C2Color::MATRIX_UNSPECIFIED },
+  { GST_VIDEO_COLOR_MATRIX_RGB,          C2Color::MATRIX_OTHER },
+  { GST_VIDEO_COLOR_MATRIX_FCC,          C2Color::MATRIX_FCC47_73_682 },
+  { GST_VIDEO_COLOR_MATRIX_BT709,        C2Color::MATRIX_BT709 },
+  { GST_VIDEO_COLOR_MATRIX_BT601,        C2Color::MATRIX_BT601 },
+  { GST_VIDEO_COLOR_MATRIX_SMPTE240M,    C2Color::MATRIX_240M },
+  { GST_VIDEO_COLOR_MATRIX_BT2020,       C2Color::MATRIX_BT2020 },
+};
+
+// Map for the GST_C2_PARAM_COLOR_ASPECTS_TUNING Range parameter.
+static const std::unordered_map<uint32_t, uint32_t> kColorRangeMap = {
+  { GST_VIDEO_COLOR_RANGE_UNKNOWN,  C2Color::RANGE_UNSPECIFIED },
+  { GST_VIDEO_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
+  { GST_VIDEO_COLOR_RANGE_16_235,       C2Color::RANGE_LIMITED },
 };
 
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
@@ -410,7 +493,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(keyframe);
       break;
     }
-    case GST_C2_PARAM_INTRA_REFRESH: {
+    case GST_C2_PARAM_INTRA_REFRESH_TUNING: {
       C2StreamIntraRefreshTuning::output irefresh;
       uint32_t mode = reinterpret_cast<GstC2IntraRefresh*>(payload)->mode;
 
@@ -420,6 +503,17 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(irefresh);
       break;
     }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_INTRA_REFRESH_MODE: {
+      qc2::C2VideoIntraRefreshType::output ir_type;
+      uint32_t mode = *(reinterpret_cast<guint32*>(payload));
+
+      ir_type.value =
+          static_cast<qc2::IntraRefreshMode>(kIntraRefreshMap.at(mode));
+      c2param = C2Param::Copy(ir_type);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       qc2::C2StreamAdaptiveBPreconditions::output bpreconditions;
@@ -591,10 +685,11 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
         size_t len = strlen (region.rectPayload);
         size_t extlen = strlen (region.rectPayloadExt);
+        size_t writelen = static_cast<size_t>(ss.tellp()) - len - extlen;
 
-        if ((len + ss.tellp()) < size)
+        if ((len + writelen) < size)
           ss.get((region.rectPayload + len), ss.tellp());
-        else if ((extlen + ss.tellp()) < extsize)
+        else if ((extlen + writelen) < extsize)
           ss.get((region.rectPayloadExt + extlen), ss.tellp());
 
         ss.clear();
@@ -616,6 +711,51 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
       syncframe.value = enable ? 1 : 0;
       c2param = C2Param::Copy(syncframe);
+      break;
+    }
+    case GST_C2_PARAM_PRIORITY: {
+      C2RealTimePriorityTuning priority;
+      priority.value = *(reinterpret_cast<int32_t*>(payload));
+      c2param = C2Param::Copy(priority);
+      break;
+    }
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+    case GST_C2_PARAM_HDR_STATIC_METADATA: {
+      C2StreamHdrStaticInfo::output hdr_info;
+      GstC2HdrStaticMetadata* hdrmeta =
+          reinterpret_cast<GstC2HdrStaticMetadata*>(payload);
+
+      hdr_info.mastering.red.x = hdrmeta->mdispinfo.display_primaries[0].x;
+      hdr_info.mastering.red.y = hdrmeta->mdispinfo.display_primaries[0].y;
+      hdr_info.mastering.green.x = hdrmeta->mdispinfo.display_primaries[1].x;
+      hdr_info.mastering.green.y = hdrmeta->mdispinfo.display_primaries[1].y;
+      hdr_info.mastering.blue.x = hdrmeta->mdispinfo.display_primaries[2].x;
+      hdr_info.mastering.blue.y = hdrmeta->mdispinfo.display_primaries[2].y;
+      hdr_info.mastering.white.x = hdrmeta->mdispinfo.white_point.x;
+      hdr_info.mastering.white.y = hdrmeta->mdispinfo.white_point.y;
+      hdr_info.mastering.maxLuminance =
+          hdrmeta->mdispinfo.max_display_mastering_luminance;
+      hdr_info.mastering.minLuminance =
+          hdrmeta->mdispinfo.min_display_mastering_luminance;
+      hdr_info.maxCll = hdrmeta->clightlevel.max_content_light_level;
+      hdr_info.maxFall = hdrmeta->clightlevel.max_frame_average_light_level;
+      c2param = C2Param::Copy (hdr_info);
+      break;
+    }
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+    case GST_C2_PARAM_COLOR_ASPECTS_TUNING: {
+      C2StreamColorAspectsTuning::output coloraspects;
+      GstVideoColorimetry* color =
+          reinterpret_cast<GstVideoColorimetry*>(payload);
+      coloraspects.primaries =
+           static_cast<C2Color::primaries_t>(kColorPrimariesMap.at(color->primaries));
+      coloraspects.transfer =
+           static_cast<C2Color::transfer_t>(kColorTransferMap.at(color->transfer));
+      coloraspects.matrix =
+           static_cast<C2Color::matrix_t>(kColorMatrixMap.at(color->matrix));
+      coloraspects.range =
+           static_cast<C2Color::range_t>(kColorRangeMap.at(color->range));
+      c2param = C2Param::Copy (coloraspects);
       break;
     }
     default:
@@ -729,7 +869,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<int64_t*>(payload)) = keyframe->value;
       break;
     }
-    case GST_C2_PARAM_INTRA_REFRESH: {
+    case GST_C2_PARAM_INTRA_REFRESH_TUNING: {
       auto irefresh =
           reinterpret_cast<C2StreamIntraRefreshTuning::output*>(c2param.get());
 
@@ -741,6 +881,18 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       reinterpret_cast<GstC2IntraRefresh*>(payload)->period = irefresh->period;
       break;
     }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_INTRA_REFRESH_MODE: {
+      auto ir_type =
+          reinterpret_cast<qc2::C2VideoIntraRefreshType::output*>(c2param.get());
+      auto result = std::find_if(kIntraRefreshMap.begin(), kIntraRefreshMap.end(),
+          [&](const auto& m) { return m.second == ir_type->value; });
+
+      *(reinterpret_cast<GstC2IRefreshMode*>(payload)) =
+          static_cast<GstC2IRefreshMode>(result->first);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       auto bpreconditions =
@@ -904,6 +1056,12 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<gboolean*>(payload)) = syncframe->value ? TRUE : FALSE;
       break;
     }
+    case GST_C2_PARAM_PRIORITY: {
+      auto priority =
+          reinterpret_cast<C2RealTimePriorityTuning*>(c2param.get());
+      *(reinterpret_cast<int32_t*>(payload)) = priority->value;
+      break;
+    }
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -940,12 +1098,16 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
       break;
     case C2PixelFormat::kP010:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride / 2;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
     case C2PixelFormat::kTP10UBWC:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
+      stride = stride * 3 / 4;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
@@ -1204,11 +1366,21 @@ std::shared_ptr<C2Buffer> GstC2Utils::ImportGraphicBuffer(GstBuffer* buffer) {
 std::shared_ptr<C2Buffer> GstC2Utils::ImportLinearBuffer(GstBuffer* buffer) {
 
   int32_t fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
-  uint32_t size = gst_buffer_get_size (buffer);
   static uint32_t index = 0;
+  gsize maxsize = 0, size = 0;
+
+  size = gst_buffer_get_sizes (buffer, NULL, &maxsize);
+
+  if ((maxsize % 4096) != 0)
+    maxsize = GST_ROUND_DOWN_N (maxsize, 4096);
+
+  if (maxsize < size) {
+    GST_ERROR ("Buffer size (%zu) less than actual data (%zu)", maxsize, size);
+    return nullptr;
+  }
 
   ::android::C2HandleBuf *handle = new android::C2HandleBuf (
-      fd, GST_ROUND_UP_N (size, 4096), index++);
+      dup (fd), maxsize, index++);
 
   std::shared_ptr<C2Allocator> allocator;
   std::shared_ptr<C2AllocatorStore> store =
@@ -1235,8 +1407,6 @@ std::shared_ptr<C2Buffer> GstC2Utils::ImportLinearBuffer(GstBuffer* buffer) {
       _C2BlockFactory::CreateLinearBlock (allocation);
   if (!block) {
     GST_ERROR ("Failed to create linear block!");
-    delete handle;
-
     return nullptr;
   }
   block->mSize = size;
@@ -1245,8 +1415,6 @@ std::shared_ptr<C2Buffer> GstC2Utils::ImportLinearBuffer(GstBuffer* buffer) {
       block->share(block->offset(), block->size(), ::C2Fence()));
   if (!c2buffer) {
     GST_ERROR ("Failed to create linear C2 buffer");
-    delete handle;
-
     return nullptr;
   }
 

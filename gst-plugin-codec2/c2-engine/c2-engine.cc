@@ -260,12 +260,12 @@ class GstC2Notifier : public IC2Notifier {
     gst_mini_object_set_qdata (GST_MINI_OBJECT (buffer),
         gst_c2_buffer_qdata_quark (), qdata, gst_c2_buffer_qdata_release);
 
+    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
+    engine_->callbacks->buffer (buffer, engine_->userdata);
+
     // Deincrement the number of pending works if frame is complete.
     if (!(flags & C2FrameData::FLAG_INCOMPLETE))
       GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
-
-    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
-    engine_->callbacks->buffer (buffer, engine_->userdata);
   }
 
  private:
@@ -424,7 +424,7 @@ gst_c2_engine_flush (GstC2Engine * engine)
 }
 
 gboolean
-gst_c2_engine_drain (GstC2Engine * engine)
+gst_c2_engine_drain (GstC2Engine * engine, gboolean eos)
 {
   C2Module *c2module = engine->c2module;
   std::shared_ptr<C2Buffer> c2buffer;
@@ -434,9 +434,10 @@ gst_c2_engine_drain (GstC2Engine * engine)
   uint64_t timestamp = 0;
   uint32_t flags = C2FrameData::FLAG_END_OF_STREAM;
 
-  // TODO Switch to Drain API when drain with EOS is supported.
+  // TODO: Switch to Drain API when drain with EOS is supported.
   // try {
-  //   c2module->Drain (C2Component::DRAIN_COMPONENT_WITH_EOS);
+  //   c2module->Drain (eos ? C2Component::DRAIN_COMPONENT_WITH_EOS :
+  //       C2Component::DRAIN_COMPONENT_NO_EOS);
   //   GST_DEBUG ("Drain c2module '%s'", engine->name);
   // } catch (std::exception& e) {
   //   GST_ERROR ("Failed to drain c2module, error: '%s'!", e.what());
@@ -449,6 +450,8 @@ gst_c2_engine_drain (GstC2Engine * engine)
     GST_ERROR ("Failed to queue EOS, error: '%s'!", e.what());
     return FALSE;
   }
+
+  GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);
 
   // Wait until all work is completed or EOS.
   GST_C2_ENGINE_CHECK_AND_WAIT_PENDING_WORK (engine, 0);
