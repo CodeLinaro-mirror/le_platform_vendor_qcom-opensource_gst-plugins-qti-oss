@@ -1,24 +1,26 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+# GStreamer DRM Player example
+set(GST_EXAMPLE_BIN gst-drm-player-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
 )
 
+pkg_check_modules (XML2 REQUIRED libxml-2.0)
+pkg_check_modules (CURL REQUIRED libcurl)
+
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-)
-
-# Add target specific precompiler defintions.
-target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
-  $<$<STREQUAL:${CAMERA_METADATA_VERSION},1.0ns>:CAMERA_METADATA_1_0_NS>
+  ${SYSROOT_INCDIR}
+  ${XML2_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  ${GST_LIBRARIES}
-  camera_metadata
-  $<$<NOT:$<BOOL:${CAMERA_CLIENT_DISABLED}>>:camera_client>
+  dl
   utils
+  cutils
+  ${GST_LIBRARIES}
+  ${CURL_LIBRARIES}
+  ${XML2_LIBRARIES}
 )
 
 install(

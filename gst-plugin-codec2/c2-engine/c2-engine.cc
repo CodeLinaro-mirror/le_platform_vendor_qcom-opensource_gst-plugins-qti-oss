@@ -260,12 +260,12 @@ class GstC2Notifier : public IC2Notifier {
     gst_mini_object_set_qdata (GST_MINI_OBJECT (buffer),
         gst_c2_buffer_qdata_quark (), qdata, gst_c2_buffer_qdata_release);
 
+    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
+    engine_->callbacks->buffer (buffer, engine_->userdata);
+
     // Deincrement the number of pending works if frame is complete.
     if (!(flags & C2FrameData::FLAG_INCOMPLETE))
       GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
-
-    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
-    engine_->callbacks->buffer (buffer, engine_->userdata);
   }
 
  private:
@@ -424,29 +424,16 @@ gst_c2_engine_flush (GstC2Engine * engine)
 }
 
 gboolean
-gst_c2_engine_drain (GstC2Engine * engine)
+gst_c2_engine_drain (GstC2Engine * engine, gboolean eos)
 {
   C2Module *c2module = engine->c2module;
-  std::shared_ptr<C2Buffer> c2buffer;
-  std::list<std::unique_ptr<C2Param>> settings;
-
-  uint64_t index = 0;
-  uint64_t timestamp = 0;
-  uint32_t flags = C2FrameData::FLAG_END_OF_STREAM;
-
-  // TODO Switch to Drain API when drain with EOS is supported.
-  // try {
-  //   c2module->Drain (C2Component::DRAIN_COMPONENT_WITH_EOS);
-  //   GST_DEBUG ("Drain c2module '%s'", engine->name);
-  // } catch (std::exception& e) {
-  //   GST_ERROR ("Failed to drain c2module, error: '%s'!", e.what());
-  //   return FALSE;
-  // }
 
   try {
-    c2module->Queue (c2buffer, settings, index, timestamp, flags);
+    c2module->Drain (eos ? C2Component::DRAIN_COMPONENT_WITH_EOS :
+        C2Component::DRAIN_COMPONENT_NO_EOS);
+    GST_DEBUG ("Drain c2module '%s'", engine->name);
   } catch (std::exception& e) {
-    GST_ERROR ("Failed to queue EOS, error: '%s'!", e.what());
+    GST_ERROR ("Failed to drain c2module, error: '%s'!", e.what());
     return FALSE;
   }
 
@@ -474,7 +461,7 @@ gst_c2_engine_queue (GstC2Engine * engine, GstVideoCodecFrame * frame)
   if (GST_C2_MODE_ENCODE (engine) && (gst_buffer_n_memory (buffer) > 0) &&
       gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
 
-    c2buffer = GstC2Utils::ImportBuffer (buffer);
+    c2buffer = GstC2Utils::ImportGraphicBuffer (buffer);
   } else if (GST_C2_MODE_ENCODE (engine) && (gst_buffer_n_memory (buffer) > 0)) {
     GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
     g_return_val_if_fail (vmeta != NULL, FALSE);
@@ -496,6 +483,12 @@ gst_c2_engine_queue (GstC2Engine * engine, GstVideoCodecFrame * frame)
     }
 
     c2buffer = GstC2Utils::CreateBuffer (buffer, block);
+#if defined(ENABLE_LINEAR_DMABUF)
+  } else if (GST_C2_MODE_DECODE (engine) && (gst_buffer_n_memory (buffer) > 0) &&
+      gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
+
+    c2buffer = GstC2Utils::ImportLinearBuffer (buffer);
+#endif // ENABLE_LINEAR_DMABUF
   } else if (GST_C2_MODE_DECODE (engine) && (gst_buffer_n_memory (buffer) > 0)) {
     std::shared_ptr<C2LinearBlock> block;
     uint32_t size = gst_buffer_get_size (buffer);

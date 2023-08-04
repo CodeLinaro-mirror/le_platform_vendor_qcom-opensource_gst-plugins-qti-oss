@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -55,14 +55,14 @@
 // Offset values for each of the 3 primary tensors needed for dequantization.
 static const gint32 p_qoffsets[3] = { 128, 128, 128 };
 // Scale values for each of the 3 primary tensors needed for dequantization.
-static const gfloat p_qscales[3] = { 0.163093, 0.170221, 0.213311 };
+static const gfloat p_qscales[3] = { 0.181336, 0.158401, 0.146546 };
 // Bounding box weights for each of the 3 tensors used for normalization.
-static const gint32 weights[3][2] = { {32, 32}, {16, 16}, {8, 8} };
+static const gint32 weights[3][2] = { {8, 8}, {16, 16}, {32, 32} };
 // Bounding box gains for each of the 3 tensors used for normalization.
 static const gint32 gains[3][3][2] = {
-    { {116, 90}, {156, 198}, {373, 326} },
-    { {30,  61}, {62,   45}, {59,  119} },
     { {10,  13}, {16,   30}, {33,   23} },
+    { {30,  61}, {62,   45}, {59,  119} },
+    { {116, 90}, {156, 198}, {373, 326} },
 };
 
 // Offset value for dequantizing the tensors with the 2nd set of caps.
@@ -73,7 +73,7 @@ static const gfloat s_qscale = 0.005047998391091824;
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
     "type = (string) { UINT8 }, " \
-    "dimensions = (int) < <1, 3, 20, 12, 85>, <1, 3, 40, 24, 85 >, <1, 3, 80, 48, 85> >; " \
+    "dimensions = (int) < <1, 3, 80, 48, 85>, <1, 3, 40, 24, 85 >, <1, 3, 20, 12, 85> >; " \
     "neural-network/tensors, " \
     "type = (string) { UINT8 }, " \
     "dimensions = (int) < < 1, 6300, 85 > >"
@@ -275,13 +275,6 @@ gst_ml_module_parse_split_tensors (GstMLSubModule * submodule,
           bbox[2] = pow ((bbox[2] * 2), 2) * gains[idx][anchor][0];
           bbox[3] = pow ((bbox[3] * 2), 2) * gains[idx][anchor][1];
 
-          label = g_hash_table_lookup (submodule->labels,
-              GUINT_TO_POINTER (id - (num + CLASSES_IDX)));
-
-          prediction.confidence = confidence * 100.0F;
-          prediction.label = g_strdup (label ? label->name : "unknown");
-          prediction.color = label ? label->color : 0x000000FF;
-
           prediction.top = bbox[1] - (bbox[3] / 2);
           prediction.left = bbox[0] - (bbox[2] / 2);
           prediction.bottom = bbox[1] + (bbox[3] / 2);
@@ -290,6 +283,18 @@ gst_ml_module_parse_split_tensors (GstMLSubModule * submodule,
           // Adjust bounding box dimensions with extracted source aspect ratio.
           gst_ml_prediction_transform_dimensions (&prediction, sar_n, sar_d,
               (width * weights[idx][0]), (height* weights[idx][1]));
+
+          // Discard results with out of region coordinates.
+          if ((prediction.top > 1.0) || (prediction.left > 1.0) ||
+              (prediction.bottom > 1.0) || (prediction.right > 1.0))
+            continue;
+
+          label = g_hash_table_lookup (submodule->labels,
+              GUINT_TO_POINTER (id - (num + CLASSES_IDX)));
+
+          prediction.confidence = confidence * 100.0F;
+          prediction.label = g_strdup (label ? label->name : "unknown");
+          prediction.color = label ? label->color : 0x000000FF;
 
           // Non-Max Suppression (NMS) algorithm.
           nms = gst_ml_non_max_suppression (&prediction, predictions);

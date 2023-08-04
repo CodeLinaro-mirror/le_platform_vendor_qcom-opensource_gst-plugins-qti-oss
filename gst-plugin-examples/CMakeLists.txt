@@ -12,6 +12,10 @@ pkg_check_modules(GST
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 
+# Check whether DRM PlayReady libs are present.
+include(CheckIncludeFileCXX)
+check_include_file_cxx("media/drm/DrmAPI.h" HAVE_DRM_API_H)
+
 if (ENABLE_TRACKING_CAM)
   add_subdirectory(gst-tracking-cam-app)
 endif()
@@ -27,12 +31,13 @@ add_subdirectory(gst-depth-assist-autofocus-example)
 add_subdirectory(gst-appsink-raw-plus-yuv)
 add_subdirectory(gst-camera-switch-example)
 add_subdirectory(gst-add-streams-as-bundle-example)
-if (TARGET_SUPPORTS_S2D)
-  add_subdirectory(gst-hibernate-example)
-endif()
+add_subdirectory(gst-concurrent-cameras-example)
 add_subdirectory(gst-single-4k-example)
 add_subdirectory(gst-two-1080p-example)
 add_subdirectory(gst-three-1080p-example)
 add_subdirectory(gst-snpe-yolo-ssd-encode-example)
 add_subdirectory(gst-snpe-yolo-ssd-display-example)
 add_subdirectory(gst-camera-switch-appsrc-example)
+if (HAVE_DRM_API_H)
+  add_subdirectory(gst-drm-player-example)
+endif()
