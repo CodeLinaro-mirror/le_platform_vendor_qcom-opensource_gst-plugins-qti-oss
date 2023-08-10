@@ -1652,27 +1652,6 @@ gst_qmmf_context_stop_video_streams (GstQmmfContext * context, GArray * ids)
   return TRUE;
 }
 
-gboolean
-gst_qmmf_context_pause_video_streams (GstQmmfContext * context, GArray * ids)
-{
-  ::qmmf::recorder::Recorder *recorder = context->recorder;
-  ::std::unordered_set<uint32_t> track_ids;
-  guint idx = 0;
-  gint status = 0;
-
-  GST_TRACE ("Pausing QMMF context track");
-
-  for (idx = 0; idx < ids->len; idx++)
-    track_ids.emplace(g_array_index (ids, guint, idx));
-
-  status = recorder->PauseVideoTracks (track_ids);
-  QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
-      "QMMF Recorder PauseVideoTracks Failed!");
-
-  GST_TRACE ("QMMF context track paused");
-
-  return TRUE;
-}
 
 gboolean
 gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,

@@ -669,6 +669,11 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     }
   }
 
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
+
   GST_TRACE_OBJECT (qmmfsrc, "Stream created");
 
   return TRUE;
@@ -683,6 +688,11 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
 
   if (g_list_length (qmmfsrc->imgindexes) > 0) {
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads,
@@ -721,11 +731,6 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
     return TRUE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Starting stream");
-
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
-  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-      "Failed to flush source pads!");
 
   ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
@@ -767,11 +772,6 @@ qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
 
   GST_TRACE_OBJECT (qmmfsrc, "Stopping stream");
 
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
-  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-      "Failed to flush source pads!");
-
   ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
   // Iterate over the video pads, fixate caps and create streams.
@@ -788,39 +788,6 @@ qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
   QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream stop failed!");
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream stopped");
-
-  return TRUE;
-}
-
-static gboolean
-qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
-{
-  GstPad *pad = NULL;
-  GList *list = NULL;
-  GArray *ids = NULL;
-  gboolean success = TRUE;
-  gpointer key;
-
-  // No source pads, nothing to do but return.
-  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
-    return TRUE;
-
-  GST_TRACE_OBJECT (qmmfsrc, "Pausing stream");
-
-  // Iterate over the video pads, fixate caps and create streams.
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
-    key = list->data;
-    pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-
-    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
-  }
-
-  success = gst_qmmf_context_pause_video_streams (qmmfsrc->context, ids);
-  g_array_free (ids, TRUE);
-
-  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream pause failed!");
-
-  GST_TRACE_OBJECT (qmmfsrc, "Stream paused");
 
   return TRUE;
 }
@@ -940,15 +907,6 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
       ret = GST_STATE_CHANGE_SUCCESS;
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      if (!qmmfsrc_pause_stream (qmmfsrc)) {
-        GST_ERROR_OBJECT(qmmfsrc, "Failed to pause stream!");
-        return GST_STATE_CHANGE_FAILURE;
-      }
-      // Return NO_PREROLL to inform bin/pipeline we won't be able to
-      // produce data in the PAUSED state, as this is a live source.
-      ret = GST_STATE_CHANGE_NO_PREROLL;
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
       // We will call stop_stream only if the camera is plugged, which
       // is always true for BWC while for PoV it may or may not be true.
       // When PoV is plugged stop_stream will be called from here,
@@ -957,6 +915,11 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
         GST_ERROR_OBJECT(qmmfsrc, "Failed to stop stream!");
         return GST_STATE_CHANGE_FAILURE;
       }
+      // Return NO_PREROLL to inform bin/pipeline we won't be able to
+      // produce data in the PAUSED state, as this is a live source.
+      ret = GST_STATE_CHANGE_NO_PREROLL;
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
       if (!qmmfsrc_delete_stream (qmmfsrc)) {
         GST_ERROR_OBJECT (qmmfsrc, "Failed to delete stream!");
         return GST_STATE_CHANGE_FAILURE;
