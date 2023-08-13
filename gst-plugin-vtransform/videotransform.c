@@ -1718,6 +1718,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     request_id = gst_gles_video_converter_submit_request (vtrans->glesconvert,
         &composition, 1);
     gst_gles_video_converter_wait_request (vtrans->glesconvert, request_id);
+    gst_destroy_input_surface (vtrans->glesconvert, &inframe);
 #endif // USE_GLES_CONVERTER
   }
 
