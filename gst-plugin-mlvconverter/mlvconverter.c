@@ -1308,6 +1308,10 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
     // Wait for the GLES conversion request to finish.
     success = gst_gles_video_converter_wait_request (mlconverter->glesconvert,
         request_id);
+
+    guint idx;
+    for (idx = 0; idx < n_inputs; idx++)
+      gst_destroy_input_surface (mlconverter->glesconvert, &inframes[idx]);
   }
 #endif // USE_GLES_CONVERTER
 

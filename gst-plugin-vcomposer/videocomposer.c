@@ -161,18 +161,16 @@ gst_converter_request_free (GstConverterRequest * request)
 {
   GstBuffer *buffer = NULL;
   guint idx = 0;
-  guint64 surface_id = 0;
 
   for (idx = 0; idx < request->n_inputs; idx++) {
     buffer = request->inframes[idx].buffer;
 
     if (buffer != NULL) {
       //TODO: need to find a better way to manage input surfaces
-      surface_id = gst_retrieve_surface_id (request->vcomposer->glesconvert,
-          GST_GLES_INPUT, &(request->inframes[idx]), NULL);
-      gst_destroy_input_surface (surface_id, request->vcomposer->glesconvert,
+#ifdef USE_GLES_CONVERTER
+      gst_destroy_input_surface (request->vcomposer->glesconvert,
           &(request->inframes[idx]));
-
+#endif // USE_GLES_CONVERTER
       gst_video_frame_unmap (&(request)->inframes[idx]);
       gst_buffer_unref (buffer);
     }

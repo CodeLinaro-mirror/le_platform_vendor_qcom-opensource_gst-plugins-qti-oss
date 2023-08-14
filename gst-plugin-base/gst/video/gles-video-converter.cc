@@ -151,6 +151,12 @@ struct _GstGlesVideoConverter
 
 enum
 {
+  GST_GLES_INPUT,
+  GST_GLES_OUTPUT,
+};
+
+enum
+{
   GST_GLES_UBWC_FORMAT_FLAG    = (1 << 0),
   GST_GLES_FLOAT16_FORMAT_FLAG = (1 << 1),
   GST_GLES_FLOAT32_FORMAT_FLAG = (1 << 2),
@@ -393,28 +399,32 @@ gst_destroy_surface (gpointer key, gpointer value, gpointer userdata)
 }
 
 void
-gst_destroy_input_surface (guint64 surface_id, GstGlesVideoConverter *convert,
+gst_destroy_input_surface (GstGlesVideoConverter *convert,
     const GstVideoFrame * vframe)
 {
   GstMemory *memory = NULL;
   guint fd = 0;
+  guint64 surface_id = 0;
 
   GST_GLES_LOCK (convert);
 
   memory = gst_buffer_peek_memory (vframe->buffer, 0);
-
-  // Get the input buffer FD from the GstBuffer memory block.
   fd = gst_fd_memory_get_fd (memory);
 
-  try {
-    convert->engine->DestroySurface(surface_id);
-    GST_DEBUG ("Destroying Input surface with id %lx", surface_id);
-  } catch (std::exception& e) {
-    GST_ERROR ("Failed to destroy Input IB2C surface, error: '%s'!", e.what());
-    return;
-  }
+  surface_id = GPOINTER_TO_ULONG (
+      g_hash_table_lookup (convert->insurfaces, GUINT_TO_POINTER (fd)));
 
-  g_hash_table_remove (convert->insurfaces, GUINT_TO_POINTER (fd));
+  if (surface_id != 0) {
+    try {
+      convert->engine->DestroySurface(surface_id);
+      GST_DEBUG ("Destroying Input surface with id %lx", surface_id);
+    } catch (std::exception& e) {
+      GST_ERROR ("Failed to destroy Input IB2C surface, error: '%s'!", e.what());
+      return;
+    }
+
+    g_hash_table_remove (convert->insurfaces, GUINT_TO_POINTER (fd));
+  }
 
   GST_GLES_UNLOCK (convert);
 

@@ -266,12 +266,6 @@ GST_VIDEO_API GType gst_gles_video_rotation_get_type (void);
 #define GST_GLES_VIDEO_CONVERTER_OPT_UBWC_FORMAT \
     "GstGlesVideoConverter.ubwc-format"
 
-enum
-{
-  GST_GLES_INPUT,
-  GST_GLES_OUTPUT,
-};
-
 typedef struct _GstGlesVideoConverter GstGlesVideoConverter;
 typedef struct _GstGlesComposition GstGlesComposition;
 
@@ -292,17 +286,6 @@ struct _GstGlesComposition
 };
 
 /**
- * gst_retrieve_surface_id:
- *
- * it gets the surface id for the composition
- *
- * return: surface_id
- */
-guint64
-gst_retrieve_surface_id (GstGlesVideoConverter * convert,
-    guint direction, const GstVideoFrame * vframe, const GstStructure * opts);
-
-/**
  * gst_destroy_input_surface:
  *
  * it destroys the surface of the input once the request
@@ -311,7 +294,7 @@ gst_retrieve_surface_id (GstGlesVideoConverter * convert,
  * return: NONE
  */
 void
-gst_destroy_input_surface (guint64 surface_id, GstGlesVideoConverter *convert,
+gst_destroy_input_surface (GstGlesVideoConverter *convert,
     const GstVideoFrame * vframe);
 
 
