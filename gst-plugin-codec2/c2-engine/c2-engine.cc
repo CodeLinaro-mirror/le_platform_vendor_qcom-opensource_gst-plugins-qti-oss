@@ -168,6 +168,10 @@ class GstC2Notifier : public IC2Notifier {
     engine_->callbacks->event (type, payload, engine_->userdata);
   }
 
+  void DropHandler () override {
+    GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
+  }
+
   void FrameAvailable(std::shared_ptr<C2Buffer>& c2buffer, uint64_t index,
                       uint64_t timestamp, C2FrameData::flags_t flags) override {
 

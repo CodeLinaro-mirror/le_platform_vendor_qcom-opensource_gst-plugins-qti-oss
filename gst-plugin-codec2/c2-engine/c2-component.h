@@ -88,6 +88,7 @@ class IC2Notifier {
   virtual void EventHandler(C2EventType event, void* payload) = 0;
   virtual void FrameAvailable(std::shared_ptr<C2Buffer>& buffer, uint64_t index,
                               uint64_t timestamp, C2FrameData::flags_t flags) = 0;
+  virtual void DropHandler() = 0;
 };
 
 /** C2LinearMemory
