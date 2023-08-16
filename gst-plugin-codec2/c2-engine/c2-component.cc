@@ -118,7 +118,19 @@ C2Module::C2Module (std::shared_ptr<C2Component>& component)
   interface_ = std::shared_ptr<C2ComponentInterface>(component_->intf());
 }
 
-C2Module::~C2Module () { }
+C2Module::~C2Module () {
+  c2_status_t status = component_->reset();
+  if (status != C2_OK) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "reset failed, error ", status, "!");
+  }
+
+  status = component_->release();
+  if (status != C2_OK) {
+    throw Exception("Component[", interface_->getName().c_str(), "]: "
+        "release failed, error ", status, "!");
+  }
+}
 
 c2_status_t C2Module::Initialize(std::shared_ptr<IC2Notifier>& notifier) {
 
