@@ -59,6 +59,9 @@ typedef struct _GstC2QuantRanges GstC2QuantRanges;
 typedef struct _GstC2QuantRectangle GstC2QuantRectangle;
 typedef struct _GstC2QuantRegions GstC2QuantRegions;
 typedef struct _GstC2TemporalLayer GstC2TemporalLayer;
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+typedef struct _GstC2HdrStaticMetadata GstC2HdrStaticMetadata;
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
 // Gstreamer Codec2 Engine parameter types.
 enum {
@@ -73,7 +76,8 @@ enum {
   GST_C2_PARAM_BITRATE,              // guint32
   GST_C2_PARAM_GOP_CONFIG,           // GstC2Gop
   GST_C2_PARAM_KEY_FRAME_INTERVAL,   // gint64
-  GST_C2_PARAM_INTRA_REFRESH,        // GstC2IntraRefresh
+  GST_C2_PARAM_INTRA_REFRESH_TUNING, // GstC2IntraRefresh
+  GST_C2_PARAM_INTRA_REFRESH_MODE,   // GstC2IRefreshMode
   GST_C2_PARAM_ADAPTIVE_B_FRAMES,    // gboolean
   GST_C2_PARAM_ENTROPY_MODE,         // GstC2EntropyMode
   GST_C2_PARAM_LOOP_FILTER_MODE,     // GstC2LoopFilterMode
@@ -91,6 +95,12 @@ enum {
   GST_C2_PARAM_NATIVE_RECORDING,     // gboolean
   GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
   GST_C2_PARAM_PRIORITY,             // gint32
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  GST_C2_PARAM_HDR_STATIC_METADATA,  // GstC2HdrStaticMetadata
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  GST_C2_PARAM_COLOR_ASPECTS_TUNING, // GstVideoColorimetry
+  GST_C2_PARAM_REPORT_AVG_QP,        // gboolean
+  GST_C2_PARAM_LTR_MARK,             // guint32
 };
 
 typedef enum {
@@ -167,6 +177,7 @@ typedef enum {
 typedef enum {
   GST_C2_INTRA_REFRESH_DISABLED,
   GST_C2_INTRA_REFRESH_ARBITRARY,
+  GST_C2_INTRA_REFRESH_CYCLIC,
 } GstC2IRefreshMode;
 
 typedef enum {
@@ -212,6 +223,13 @@ struct _GstC2Gop {
   guint32 n_pframes;
   guint32 n_bframes;
 };
+
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+struct _GstC2HdrStaticMetadata {
+  GstVideoMasteringDisplayInfo mdispinfo;
+  GstVideoContentLightLevel    clightlevel;
+};
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
 struct _GstC2IntraRefresh {
   GstC2IRefreshMode mode;
