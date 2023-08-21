@@ -743,6 +743,13 @@ void CodecCallback::onOutputBufferAvailable(
             }
             mCallback(mHandle, EVENT_OUTPUTS_DONE, &outBuf);
         }
+    } else if (flag & C2FrameData::FLAG_DROP_FRAME) {
+        outBuf.timestamp = timestamp;
+        outBuf.index = index;
+        outBuf.flag = toWrapperFlag(flag);
+        outBuf.interlaceMode = interlace;
+        LOG_MESSAGE("Mark drop frame index: %lu, pts: %lu", index, timestamp);
+        mCallback(mHandle, EVENT_DROP_FRAME, &outBuf);
     } else if (flag & C2FrameData::FLAG_END_OF_STREAM) {
         LOG_MESSAGE("Mark EOS buffer");
         outBuf.data = NULL;

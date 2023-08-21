@@ -852,6 +852,20 @@ void C2ComponentAdapter::handleWorkDone(
                             "output frames, or codec config update event",
                     this);
                 continue;
+            } else if (outputFrameFlag & C2FrameData::FLAG_DROP_FRAME
+                || outputFrameFlag & C2FrameData::FLAG_DISCARD_FRAME) {
+                /* When an input is dropped, output Buffer is not produced.
+                 * To ensure the work gets evicted with an empty output so as
+                 * to push it downstream against frame neither being finished
+                 * nor upstream buffer being finalized.
+                 * Most likely in superframe case.
+                 */
+                bufferIdx = work->input.ordinal.frameIndex.peeku();
+                timestamp = work->input.ordinal.timestamp.peeku();
+
+                LOG_MESSAGE("Component(%p) work drop frame, may mean a superframe. Input Frame index: %lu, pts %lu",
+                    this, bufferIdx, timestamp);
+                mCallback->onOutputBufferAvailable(NULL, bufferIdx, timestamp, interlace, outputFrameFlag);
             } else {
                 LOG_MESSAGE("Incorrect number of output buffers: %lu", worklet->output.buffers.size());
             }
