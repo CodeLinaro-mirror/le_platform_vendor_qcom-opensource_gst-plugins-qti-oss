@@ -437,68 +437,35 @@ gst_overlay_update_converter_params (GstVOverlay * overlay, guint idx,
     GstVideoRectangle * source, GstVideoRectangle * destination)
 {
   GstStructure *opts = gst_structure_new_empty ("options");
-  GValue rects = G_VALUE_INIT, entry = G_VALUE_INIT, value = G_VALUE_INIT;
+  GArray *s_rects = NULL, *d_rects = NULL;
 
-  g_value_init (&value, G_TYPE_INT);
-  g_value_init (&entry, GST_TYPE_ARRAY);
-  g_value_init (&rects, GST_TYPE_ARRAY);
+  s_rects = g_array_new (FALSE, FALSE, sizeof (GstVideoRectangle));
+  s_rects = g_array_append_vals (s_rects, source, 1);
 
-  g_value_set_int (&value, source->x);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, source->y);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, source->w);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, source->h);
-  gst_value_array_append_value (&entry, &value);
-
-  gst_value_array_append_value (&rects, &entry);
-  g_value_reset (&entry);
+  d_rects = g_array_new (FALSE, FALSE, sizeof (GstVideoRectangle));
+  d_rects = g_array_append_vals (d_rects, destination, 1);
 
 #ifdef USE_C2D_CONVERTER
-  gst_structure_set_value (opts,
-      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
-  g_value_reset (&rects);
-#endif // USE_C2D_CONVERTER
-
-#ifdef USE_GLES_CONVERTER
-  gst_structure_set_value (opts,
-      GST_GLES_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, &rects);
-  g_value_reset (&rects);
-#endif // USE_GLES_CONVERTER
-
-  g_value_set_int (&value, destination->x);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, destination->y);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, destination->w);
-  gst_value_array_append_value (&entry, &value);
-  g_value_set_int (&value, destination->h);
-  gst_value_array_append_value (&entry, &value);
-  g_value_unset (&value);
-
-  gst_value_array_append_value (&rects, &entry);
-  g_value_unset (&entry);
-
-  GST_TRACE_OBJECT (overlay, "Source/Destination Rectangles[%u]: [%d %d %d %d]"
-      " -> [%d %d %d %d]", idx, source->x, source->y, source->w, source->h,
-      destination->x, destination->y, destination->w, destination->h);
-
-#ifdef USE_C2D_CONVERTER
-  gst_structure_set_value (opts,
-      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &rects);
-  g_value_unset (&rects);
+  gst_structure_set (opts,
+      GST_C2D_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, G_TYPE_ARRAY, s_rects,
+      GST_C2D_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, G_TYPE_ARRAY, d_rects,
+      NULL);
 
   gst_c2d_video_converter_set_input_opts (overlay->c2dconvert, idx, opts);
 #endif // USE_C2D_CONVERTER
 
 #ifdef USE_GLES_CONVERTER
-  gst_structure_set_value (opts,
-      GST_GLES_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, &rects);
-  g_value_unset (&rects);
+  gst_structure_set (opts,
+      GST_GLES_VIDEO_CONVERTER_OPT_SRC_RECTANGLES, G_TYPE_ARRAY, s_rects,
+      GST_GLES_VIDEO_CONVERTER_OPT_DEST_RECTANGLES, G_TYPE_ARRAY, d_rects,
+      NULL);
 
   gst_gles_video_converter_set_input_opts (overlay->glesconvert, idx, opts);
 #endif // USE_GLES_CONVERTER
+
+  GST_TRACE_OBJECT (overlay, "Source/Destination Rectangles[%u]: [%d %d %d %d]"
+      " -> [%d %d %d %d]", idx, source->x, source->y, source->w, source->h,
+      destination->x, destination->y, destination->w, destination->h);
 }
 
 static void
