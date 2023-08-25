@@ -68,6 +68,7 @@
 #include "videotransform.h"
 
 #include <gst/video/gstimagepool.h>
+#include <gst/video/gstvideooriginmeta.h>
 
 #define GST_CAT_DEFAULT video_transform_debug
 GST_DEBUG_CATEGORY_STATIC (video_transform_debug);
@@ -473,6 +474,7 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstBufferPool *pool = vtrans->outpool;
   gboolean passthrough = FALSE, writable = TRUE;
+  GstVideoOriginMeta *origin_meta;
 
   // Check whether passthrough should be true/false based on parameters.
   gst_video_transform_determine_passthrough (vtrans);
@@ -512,6 +514,22 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
   // Copy the flags and timestamps from the input buffer.
   gst_buffer_copy_into (*outbuffer, inbuffer,
       GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
+  origin_meta = gst_buffer_add_video_origin_meta (*outbuffer);
+  if (origin_meta == NULL) {
+    GST_ERROR_OBJECT (vtrans, "failed to add video frame origin meta");
+    return GST_FLOW_ERROR;
+  }
+
+  if (vtrans->ininfo != NULL) {
+    origin_meta->width = vtrans->ininfo->width;
+    origin_meta->height = vtrans->ininfo->height;
+  } else {
+    GST_ERROR_OBJECT (vtrans, "ininfo is NULL, failed to set origin meta");
+    return GST_FLOW_ERROR;
+  }
+
+  origin_meta->crop = vtrans->crop;
 
   return GST_FLOW_OK;
 }
