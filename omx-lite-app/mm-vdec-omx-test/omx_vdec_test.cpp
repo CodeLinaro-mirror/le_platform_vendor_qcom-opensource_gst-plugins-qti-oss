@@ -292,6 +292,8 @@ typedef enum {
 /* Decoder output to external GBM buffer allocated by OMX IL client. */
 bool output_dynamic_meta_mode = false;
 
+static bool deinterlace = true;
+
 /* flag indicates it's secure playback mode or not */
 static bool secure_mode = false;
 static uint8_t *input_nonsecure_buffer = NULL;
@@ -1048,7 +1050,7 @@ static void parse_argv4_output_option(const char *argv4)
 
 static void print_usage(char **argv)
 {
-  printf("%s <infile_path> <codec_type> <file_type> <output_op> <test_op> <num_frames> <output_buf>\n", argv[0]);
+  printf("%s <infile_path> <codec_type> <file_type> <output_op> <test_op> <num_frames> <output_buf> [deinterlace]\n", argv[0]);
   printf("<codec_type>\t1:h264, 9:h265, 8:vp9\n");
   printf("<file_type>\t4:byte-stream without container or ivf format\n");
   printf("<output_op>\t"
@@ -1058,12 +1060,19 @@ static void print_usage(char **argv)
   printf("<num_frames>\t0:when test_op=1, N:num of frames to decode when test_op=0\n");
   printf("<output_buf>\t"
          "0:OMX_AllocateBuffer() allocates buffers for OMX output port\n\t\t"
-         "1:OMX_UseBuffer() with dynamic meta mode for OMX output port\n\n");
+         "1:OMX_UseBuffer() with dynamic meta mode for OMX output port\n");
+  printf("[deinterlace]\t"
+         "di0: disable omx internal deinterlace feature. If not set this option, omx do internal deinterlace\n\t\t"
+         "Due to lite app's parser limitation, only support 2 fields in 1 NAL 264!\n\n");
 
   printf("Usage example(only verified h264, h265 and vp9):\n");
   printf("For h264: %s xxx.h264 1 4 2 1 0 0\n", argv[0]);
   printf("For h265: %s xxx.h265 9 4 2 1 0 0\n", argv[0]);
   printf("For vp9: %s xxx.ivf 8 4 2 1 0 0\n", argv[0]);
+  printf("To disable omx internal deinterlace feature for interlace 264:\n"
+         "%s xxx.h264 1 4 10 1 0 0 di0\n"
+         "%s xxx.h264 1 4 8 1 0 0 di0\n", argv[0], argv[0]);
+
 
   printf("Above cmd will output NV12 file as yuvframes.yuv under current directory.\n\n");
   printf("For h264: %s xxx.h264 1 4 0 1 0 0\n", argv[0]);
@@ -1129,15 +1138,16 @@ int main(int argc, char **argv)
   crop_rect.nWidth = width;
   crop_rect.nHeight = height;
 
-  omx_debug_level_init();
-
   if (argc < 8)
   {
     print_usage(argv);
     main_rt = -1;
     goto main_exit;
   }
-  else if(argc >= 8)
+
+  omx_debug_level_init();
+
+  if(argc >= 8)
   {
     codec_format_option = (codec_format)atoi(argv[2]);
     file_type_option = (file_type)atoi(argv[3]);
@@ -1150,10 +1160,15 @@ int main(int argc, char **argv)
       num_frames_to_decode = 0;
     }
     output_dynamic_meta_mode = !!atoi(argv[7]);
+    if (argc >= 9) {
+      if (!strncmp(argv[8], "di0", strlen("di0"))) {
+        deinterlace = false;
+      }
+    }
     printf("*******************************************************\n");
-    printf("*** codec=%d,file_type=%d,output=%d,test=%d,frames=%d,out_buf=%d\n",
+    printf("*** codec=%d,file_type=%d,output=%d,test=%d,frames=%d,out_buf=%d,deinterlace=%d\n",
         codec_format_option, file_type_option,
-        atoi(argv[4]), test_option, num_frames_to_decode, atoi(argv[7]));
+        atoi(argv[4]), test_option, num_frames_to_decode, atoi(argv[7]), (int)deinterlace);
   }
 
   if (parse_argv1_mode_and_infile(argv[1])) {
@@ -1712,6 +1727,21 @@ int Play_Decoder(bool secure)
     DEBUG_PRINT_ERROR(" ERROR: Setting picture order!");
     return -1;
   }
+
+  if (!deinterlace) {
+    OMX_VENDOR_DEINTERLACE param;
+    memset(&param, 0, sizeof(param));
+    CONFIG_VERSION_SIZE(param);
+    param.nDeinterlace = 0;
+    DEBUG_PRINT("SetConfig to disable deinterlace begin.");
+    error = OMX_SetConfig(dec_handle, (OMX_INDEXTYPE)OMX_IndexVendorVideoDeinterlace, (OMX_PTR)&param);
+    DEBUG_PRINT("SetConfig to disable deinterlace end.");
+    if (error != OMX_ErrorNone) {
+      DEBUG_PRINT_ERROR("ERROR: Setting deinterlace disable fail %d!", error);
+      return -1;
+    }
+  }
+
   DEBUG_PRINT("Video format: W x H (%d x %d)",
     portFmt.format.video.nFrameWidth,
     portFmt.format.video.nFrameHeight);
