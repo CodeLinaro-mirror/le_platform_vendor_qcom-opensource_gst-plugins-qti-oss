@@ -36,11 +36,9 @@
 #endif
 #include <fcntl.h>
 #include <stdint.h>
-#include<sys/mman.h>
+#include <sys/mman.h>
 #include "qavblib.h"
 
-#define QEAVB_PCM_DEFAULT_BLOCKSIZE 1500
-#define QEAVB_TS_DEFAULT_BLOCKSIZE 1500
 #define DEFALUT_SLEEP_US 10000
 #define MIN_SLEEP_US 2000
 #define MIN_RETRY_TOTALTIME_US  250000000

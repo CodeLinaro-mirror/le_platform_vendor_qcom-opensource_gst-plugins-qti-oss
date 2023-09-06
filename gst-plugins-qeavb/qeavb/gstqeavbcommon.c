@@ -37,33 +37,40 @@ int qeavb_create_stream_remote(int eavb_fd, char* file_path, eavb_ioctl_hdr_t* h
 {
   GST_INFO ("Calling %s() with par: fd %d, file %s, hdr %p", __func__, eavb_fd, file_path==NULL?"NULL":file_path, hdr);
   GST_DEBUG ("data receiving retry total time %d", MIN_RETRY_TOTALTIME_US);
-  if(file_path)
+  if(file_path) {
+    kpi_place_marker("M - qeavb qavb_create_stream_remote() calling");
     return qavb_create_stream_remote(eavb_fd, file_path, hdr);
-  else
+  }else{
+    kpi_place_marker("M - qeavb file_path NULL fatal err!");
     return -1;
+  }
 }
 
 int qeavb_get_stream_info(int eavb_fd, eavb_ioctl_hdr_t* hdr, eavb_ioctl_stream_info_t* info)
 {
   GST_INFO ("Calling %s() with par: fd %d, hdr %p, info %p", __func__, eavb_fd, hdr, info);
+  kpi_place_marker("M - qeavb qavb_get_stream_info() calling");
   return qavb_get_stream_info(eavb_fd, hdr, info);
 }
 
 int qeavb_destroy_stream(int eavb_fd, eavb_ioctl_hdr_t* hdr)
 {
   GST_INFO ("Calling %s() with par: fd %d, hdr %p", __func__, eavb_fd, hdr);
+  kpi_place_marker("M - qeavb qavb_destroy_stream() calling");
   return qavb_destroy_stream(eavb_fd, hdr);
 }
 
 int qeavb_connect_stream(int eavb_fd, eavb_ioctl_hdr_t* hdr)
 {
   GST_INFO ("Calling %s() with par: fd %d, hdr %p", __func__, eavb_fd, hdr);
+  kpi_place_marker("M - qeavb qavb_connect_stream() calling");
   return qavb_connect_stream(eavb_fd, hdr);
 }
 
 int qeavb_disconnect_stream(int eavb_fd, eavb_ioctl_hdr_t* hdr)
 {
   GST_INFO ("Calling %s() with par: fd %d, hdr %p", __func__, eavb_fd, hdr);
+  kpi_place_marker("M - qeavb qavb_disconnect_stream() calling");
   return qavb_disconnect_stream(eavb_fd, hdr);
 }
 

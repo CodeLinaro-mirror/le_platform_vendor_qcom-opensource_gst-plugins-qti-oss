@@ -41,6 +41,8 @@
 
 #include "gstqeavbcommon.h"
 
+#define QEAVB_PCM_DEFAULT_BLOCKSIZE 1500
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_QEAVB_PCM_SRC (gst_qeavb_pcm_src_get_type())
@@ -67,6 +69,7 @@ struct _GstQeavbPcmSrc
   eavb_ioctl_hdr_t hdr;
   eavb_ioctl_stream_info_t stream_info;
   eavb_ioctl_stream_config_t cfg_data;
+  unsigned int src_fill_idx;  //just for debug
   gboolean started;
   gboolean is_first_pcmpacket;
   GMutex lock;
