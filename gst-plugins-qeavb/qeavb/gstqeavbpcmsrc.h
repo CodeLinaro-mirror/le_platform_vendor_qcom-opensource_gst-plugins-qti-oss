@@ -42,6 +42,10 @@
 #include "gstqeavbcommon.h"
 
 #define QEAVB_PCM_DEFAULT_BLOCKSIZE 1500
+//period should > 0
+#define LOG_HEARTBEAT_PCM_PERIOD_INIT 480 //measured _pcm_src_fill() is called about 240 times per second
+#define LOG_HEARTBEAT_PCM_PERIOD_MIN 100
+#define LOG_HEARTBEAT_PCM_PERIOD_MAX 700
 
 G_BEGIN_DECLS
 
@@ -73,6 +77,7 @@ struct _GstQeavbPcmSrc
   gboolean started;
   gboolean is_first_pcmpacket;
   GMutex lock;
+  LOG_HEARTBEAT_CTX logbeat;
 };
 
 struct _GstQeavbPcmSrcClass

@@ -42,6 +42,10 @@
 #include "gstqeavbcommon.h"
 
 #define QEAVB_TS_DEFAULT_BLOCKSIZE 1500
+//period should > 0
+#define LOG_HEARTBEAT_TS_PERIOD_INIT 300  //measured _ts_src_fill() is called about 150 times per second
+#define LOG_HEARTBEAT_TS_PERIOD_MIN 80
+#define LOG_HEARTBEAT_TS_PERIOD_MAX 500
 
 G_BEGIN_DECLS
 
@@ -73,6 +77,7 @@ struct _GstQeavbTsSrc
   gboolean started;
   gboolean is_first_tspacket;
   GMutex lock;
+  LOG_HEARTBEAT_CTX logbeat;
 };
 
 struct _GstQeavbTsSrcClass

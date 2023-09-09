@@ -123,6 +123,7 @@ gst_qeavb_pcm_src_init (GstQeavbPcmSrc * qeavbpcmsrc)
   memset(&(qeavbpcmsrc->hdr), 0, sizeof(eavb_ioctl_hdr_t));
   memset(&(qeavbpcmsrc->stream_info), 0, sizeof(eavb_ioctl_stream_info_t));
   g_mutex_init (&qeavbpcmsrc->lock);
+  log_heartbeat_init(&qeavbpcmsrc->logbeat, LOG_HEARTBEAT_PCM_PERIOD_INIT, LOG_HEARTBEAT_PCM_PERIOD_MIN, LOG_HEARTBEAT_PCM_PERIOD_MAX);
   GST_LOG_OBJECT (qeavbpcmsrc, "eavb_fd addr %p off %u, hdr addr %p off %u, qeavbpcmsrc addr %p", &(qeavbpcmsrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbPcmSrc, eavb_fd), &(qeavbpcmsrc->hdr), G_STRUCT_OFFSET(GstQeavbPcmSrc, hdr), qeavbpcmsrc);
   kpi_place_marker("M - qeavbpcmsrc init");
 }
@@ -287,6 +288,9 @@ gst_qeavb_pcm_src_start (GstBaseSrc * basesrc)
 
   GST_INFO_OBJECT(qeavbpcmsrc,"qeavb pcm src start");
   kpi_place_marker("M - qeavbpcmsrc start");
+
+  log_heartbeat_counter_reset(&qeavbpcmsrc->logbeat);
+
   qeavbpcmsrc->eavb_fd = open("/dev/virt-eavb", O_RDWR);
   GST_LOG_OBJECT (qeavbpcmsrc, "eavb_fd addr %p off %u val %d, hdr addr %p off %u, qeavbpcmsrc addr %p", &(qeavbpcmsrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbPcmSrc, eavb_fd), qeavbpcmsrc->eavb_fd, &(qeavbpcmsrc->hdr), G_STRUCT_OFFSET(GstQeavbPcmSrc, hdr), qeavbpcmsrc);
   if (qeavbpcmsrc->eavb_fd < 0) {
@@ -426,6 +430,14 @@ gst_qeavb_pcm_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
   int err = 0;
   guint32 payload_size = 0;
   char tips[64];
+  int need_show_log = 0;
+
+  if (!qeavbpcmsrc->is_first_pcmpacket) {
+    need_show_log = log_heartbeat_counter_click(&qeavbpcmsrc->logbeat);
+  }
+  if (need_show_log) {
+    kpi_place_marker("M - qeavbpcmsrc src_fill() calling");
+  }
 
   if (qeavbpcmsrc->stream_info.wakeup_period_us != 0) {
     sleep_us = qeavbpcmsrc->stream_info.wakeup_period_us;
@@ -523,6 +535,10 @@ retry:
   }
 finish_handle:
   g_mutex_unlock(&qeavbpcmsrc->lock);
+  if (need_show_log) {
+    snprintf(tips, sizeof(tips), "M - qeavbpcmsrc src_fill() ret 0x%x, recv %dB", error, recv_len);
+    kpi_place_marker(tips);
+  }
   return error;
 }
 

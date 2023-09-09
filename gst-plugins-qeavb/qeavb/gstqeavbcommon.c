@@ -96,3 +96,74 @@ int kpi_place_marker(const char* str)
   }
   return -1;
 }
+
+int log_heartbeat_init(LOG_HEARTBEAT_CTX* ctx, int period_init, int period_min, int period_max)
+{
+  ctx->period = period_init;
+  ctx->period_upper = period_max;
+  ctx->period_lower = period_min;
+  ctx->counter = -1;
+  ctx->last_t_valid = 0;
+  GST_INFO ("log_heartbeat_init(, period init %d, min %d, max %d) called", period_init, period_min, period_max);
+  return 0;
+}
+
+int log_heartbeat_counter_reset(LOG_HEARTBEAT_CTX* ctx)
+{
+  ctx->counter = -1;
+  ctx->last_t_valid = 0;
+  GST_INFO ("log_heartbeat_counter_reset() called");
+  return 0;
+}
+
+//Return 1 means reach period, caller should show log
+//To reduce clock_gettime() calling number, introduce period concept. Only when reach period, will call clock_gettime.
+int log_heartbeat_counter_click(LOG_HEARTBEAT_CTX* ctx)
+{
+  if (ctx->counter == -1) {
+    if (0 == clock_gettime(CLOCK_MONOTONIC, &ctx->last_t)) {
+      ctx->counter = ctx->period - 1;
+      ctx->last_t_valid = 1;
+      return 1;
+    }else{
+      ctx->last_t_valid = 0;
+      kpi_place_marker("M - qeavb clock_gettime() for 1st click fail!");
+      GST_ERROR ("clock_gettime() return error for 1st click");
+      return 0;
+    }
+  }
+
+  if (ctx->counter == 0) {
+    struct timespec t;
+    long long t_dif = -1;
+    int period_new = -1;
+    if (0 == clock_gettime(CLOCK_MONOTONIC, &t)) {
+      if (ctx->last_t_valid) {
+        t_dif = (t.tv_sec - ctx->last_t.tv_sec) * 1000000000LL + (t.tv_nsec - ctx->last_t.tv_nsec);
+        if (t_dif) {
+          //tune and update period
+          period_new = ctx->period * (long long)(LOG_BEATHEAT_EXPECTED_PERIOD_NS) / t_dif;
+          if (period_new < ctx->period_lower) {
+            ctx->period = ctx->period_lower;
+          }else if (period_new > ctx->period_upper) {
+            ctx->period = ctx->period_upper;
+          }else{
+            ctx->period = period_new;
+          }
+        }
+      }
+      ctx->last_t = t;
+      ctx->last_t_valid = 1;
+      GST_DEBUG ("log heartbeat period update to %d(%d, dif %lldns, cur %lld.%09d sec)", ctx->period, period_new, t_dif, (long long)t.tv_sec, (int)t.tv_nsec);
+    }else{
+      ctx->last_t_valid = 0;
+      kpi_place_marker("M - qeavb clock_gettime() for Nth click fail!");
+      GST_ERROR ("clock_gettime() return error for Nth click");
+    }
+    ctx->counter = ctx->period - 1;
+    return 1;
+  }
+
+  ctx->counter--;
+  return 0;
+}
