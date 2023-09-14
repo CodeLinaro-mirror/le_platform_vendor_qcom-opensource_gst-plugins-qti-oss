@@ -240,7 +240,7 @@ gst_qeavb_ts_src_start (GstBaseSrc * basesrc)
   }
   qeavbtssrc->started = TRUE;
   kpi_place_marker("M - qeavbtssrc started successful");
-  GST_DEBUG_OBJECT (qeavbtssrc, "QEAVB ts source started");
+  GST_INFO_OBJECT (qeavbtssrc, "QEAVB ts source started");
   return TRUE;
 
 error_disconnect:
@@ -267,8 +267,10 @@ gst_qeavb_ts_src_stop (GstBaseSrc * basesrc)
 {
   int err = 0;
   GstQeavbTsSrc *qeavbtssrc = GST_QEAVB_TS_SRC (basesrc);
+  GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop begin");
 
   g_mutex_lock(&qeavbtssrc->lock);
+  GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop locked");
   if (qeavbtssrc->started) {
     if (qeavbtssrc->eavb_addr)
       g_free(qeavbtssrc->eavb_addr);
@@ -291,6 +293,7 @@ gst_qeavb_ts_src_stop (GstBaseSrc * basesrc)
   }
   qeavbtssrc->started = FALSE;
   g_mutex_unlock(&qeavbtssrc->lock);
+  GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop end");
   return TRUE;
 }
 
@@ -326,7 +329,9 @@ gst_qeavb_ts_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
 
 retry:
 #define TSSRC_RETRY_KPILOG_SUPPRESS 300  //Every TSSRC_RETRY_KPILOG_SUPPRESS, will print one KPI log
+  GST_LOG_OBJECT (qeavbtssrc, "src_fill() will call lock");
   g_mutex_lock(&qeavbtssrc->lock);
+  GST_LOG_OBJECT (qeavbtssrc, "src_fill() locked");
   if (qeavbtssrc->started) {
     memset(&qavb_buffer, 0, sizeof(eavb_ioctl_buf_data_t));
     qavb_buffer.hdr.payload_size = payload_size;
@@ -368,8 +373,9 @@ retry:
       if (retry_time < RETRY_COUNT){
         retry_time ++;
         g_mutex_unlock(&qeavbtssrc->lock);
-        GST_LOG_OBJECT (qeavbtssrc,"retry to receive data %d, will sleep time %d us\n", retry_time, sleep_us);
+        GST_LOG_OBJECT (qeavbtssrc,"retry to receive data %d, will sleep time %d us", retry_time, sleep_us);
         g_usleep(sleep_us);
+        GST_LOG_OBJECT (qeavbtssrc,"usleep returned");
         goto retry;
       } else {
         kpi_place_marker("E - qeavbtssrc recv data timeout!");
