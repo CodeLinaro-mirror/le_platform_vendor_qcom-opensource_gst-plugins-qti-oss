@@ -190,7 +190,6 @@ class GstC2Notifier : public IC2Notifier {
 
     } else if (c2buffer->data().type() == C2BufferData::GRAPHIC) {
       const C2ConstGraphicBlock block = c2buffer->data().graphicBlocks().front();
-      const C2GraphicView view = block.map().get();
       auto handle = static_cast<const android::C2HandleGBM*>(block.handle());
 
       size = handle->mInts.size;
@@ -204,11 +203,11 @@ class GstC2Notifier : public IC2Notifier {
 
       GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
 
-      vmeta->width = view.crop().width;
-      vmeta->height = view.crop().height;
+      vmeta->width = block.crop().width;
+      vmeta->height = block.crop().height;
 
-      GST_LOG ("Crop rectangle (%d,%d) [%dx%d] ", view.crop().left,
-          view.crop().top, view.crop().width, view.crop().height);
+      GST_LOG ("Crop rectangle (%d,%d) [%dx%d] ", block.crop().left,
+          block.crop().top, block.crop().width, block.crop().height);
     } else {
       GST_ERROR ("Unknown Codec2 buffer type!");
       gst_buffer_unref (buffer);
@@ -254,18 +253,21 @@ class GstC2Notifier : public IC2Notifier {
     GST_BUFFER_TIMESTAMP (buffer) =
         gst_util_uint64_scale (timestamp, GST_SECOND, 1000000);
 
+    // extract codec2 buffer info to gst buffer
+    GstC2Utils::AppendCodecMeta (buffer, c2buffer);
+
     GstC2BufferQData *qdata = new GstC2BufferQData(c2buffer);
 
     // Set a notification function to signal when the buffer is no longer used.
     gst_mini_object_set_qdata (GST_MINI_OBJECT (buffer),
         gst_c2_buffer_qdata_quark (), qdata, gst_c2_buffer_qdata_release);
 
+    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
+    engine_->callbacks->buffer (buffer, engine_->userdata);
+
     // Deincrement the number of pending works if frame is complete.
     if (!(flags & C2FrameData::FLAG_INCOMPLETE))
       GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
-
-    GST_TRACE ("Available %" GST_PTR_FORMAT, buffer);
-    engine_->callbacks->buffer (buffer, engine_->userdata);
   }
 
  private:
@@ -424,7 +426,7 @@ gst_c2_engine_flush (GstC2Engine * engine)
 }
 
 gboolean
-gst_c2_engine_drain (GstC2Engine * engine)
+gst_c2_engine_drain (GstC2Engine * engine, gboolean eos)
 {
   C2Module *c2module = engine->c2module;
   std::shared_ptr<C2Buffer> c2buffer;
@@ -434,9 +436,10 @@ gst_c2_engine_drain (GstC2Engine * engine)
   uint64_t timestamp = 0;
   uint32_t flags = C2FrameData::FLAG_END_OF_STREAM;
 
-  // TODO Switch to Drain API when drain with EOS is supported.
+  // TODO: Switch to Drain API when drain with EOS is supported.
   // try {
-  //   c2module->Drain (C2Component::DRAIN_COMPONENT_WITH_EOS);
+  //   c2module->Drain (eos ? C2Component::DRAIN_COMPONENT_WITH_EOS :
+  //       C2Component::DRAIN_COMPONENT_NO_EOS);
   //   GST_DEBUG ("Drain c2module '%s'", engine->name);
   // } catch (std::exception& e) {
   //   GST_ERROR ("Failed to drain c2module, error: '%s'!", e.what());
@@ -449,6 +452,8 @@ gst_c2_engine_drain (GstC2Engine * engine)
     GST_ERROR ("Failed to queue EOS, error: '%s'!", e.what());
     return FALSE;
   }
+
+  GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);
 
   // Wait until all work is completed or EOS.
   GST_C2_ENGINE_CHECK_AND_WAIT_PENDING_WORK (engine, 0);
