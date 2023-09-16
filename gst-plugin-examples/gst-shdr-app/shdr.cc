@@ -61,6 +61,7 @@ struct _GstAppContext
   gboolean shdr;
   // Iterations
   gint iterations;
+  gboolean is_rtsp_pipe;
 };
 
 static gboolean
@@ -165,11 +166,11 @@ cam_timestamp_signal (GstElement * element, gint64 timestamp, gpointer userdata)
 }
 
 static gboolean
-wait_for_state_change (GstAppContext * appctx)
+wait_for_state_change (GstElement *element)
 {
   GstStateChangeReturn ret = GST_STATE_CHANGE_FAILURE;
 
-  ret = gst_element_get_state (appctx->pipeline,
+  ret = gst_element_get_state (element,
       NULL, NULL, GST_CLOCK_TIME_NONE);
 
   if (ret == GST_STATE_CHANGE_FAILURE) {
@@ -181,24 +182,17 @@ wait_for_state_change (GstAppContext * appctx)
 
 void test_shdr_by_pipe_restart (GstAppContext *appctx)
 {
-  GstElement *qtiqmmfsrc, *h264enc;
+  GstElement *qtiqmmfsrc, *restart_target;
 
   // Get qtiqmmfsrc instance
   qtiqmmfsrc = gst_bin_get_by_name (
       GST_BIN (appctx->pipeline), "qmmf");
 
-  h264enc = gst_bin_get_by_name (
-      GST_BIN (appctx->pipeline), "h264enc");
-
-  // Send EOS to the encoder in order to flush it's buffers
-  if (h264enc) {
-    gst_element_send_event (h264enc, gst_event_new_eos ());
-    gst_object_unref (h264enc);
-  }
+  restart_target = (appctx->is_rtsp_pipe) ? qtiqmmfsrc : appctx->pipeline;
 
   if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_NULL)) {
-    wait_for_state_change (appctx);
+      gst_element_set_state (restart_target, GST_STATE_NULL)) {
+    wait_for_state_change (restart_target);
   }
 
   appctx->shdr = !appctx->shdr;
@@ -206,8 +200,8 @@ void test_shdr_by_pipe_restart (GstAppContext *appctx)
   g_object_set (G_OBJECT (qtiqmmfsrc), "shdr", appctx->shdr, NULL);
 
   if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_PLAYING)) {
-    wait_for_state_change (appctx);
+      gst_element_set_state (restart_target, GST_STATE_PLAYING)) {
+    wait_for_state_change (restart_target);
   }
 
   gst_object_unref (qtiqmmfsrc);
@@ -291,6 +285,7 @@ create_display_pipe (GstAppContext *appctx, gint width, gint height)
   appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
   appctx->plugins = g_list_append (appctx->plugins, main_capsfilter);
   appctx->plugins = g_list_append (appctx->plugins, sink);
+  appctx->is_rtsp_pipe = FALSE;
 
   g_object_set (G_OBJECT (sink), "fullscreen", TRUE, NULL);
   g_object_set (G_OBJECT (sink), "async", TRUE, NULL);
@@ -376,6 +371,7 @@ create_rtsp_pipe (GstAppContext *appctx, gint width, gint height)
   appctx->plugins = g_list_append (appctx->plugins, h264parse);
   appctx->plugins = g_list_append (appctx->plugins, rtph264pay);
   appctx->plugins = g_list_append (appctx->plugins, sink);
+  appctx->is_rtsp_pipe = TRUE;
 
   // Set qmmfsrc properties
   g_object_set (G_OBJECT (qtiqmmfsrc), "name", "qmmf", NULL);
