@@ -136,7 +136,6 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_CAPTURE_MODE (gst_qmmfsrc_capture_mode_get_type())
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
-#define GST_TYPE_QMMFSRC_CAM_OPMODE (gst_qmmfsrc_cam_opmode_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -289,11 +288,6 @@ enum
   ROTATE_270CCW,
 };
 
-typedef enum {
-  CAM_OPMODE_NONE,
-  CAM_OPMODE_FRAMESELECTION,
-} GstCamOpMode;
-
 GType gst_qmmfsrc_control_mode_get_type (void);
 
 GType gst_qmmfsrc_effect_mode_get_type (void);
@@ -321,8 +315,6 @@ GType gst_qmmfsrc_capture_mode_get_type (void);
 GType gst_qmmfsrc_frc_mode_get_type (void);
 
 GType gst_qmmfsrc_rotate_get_type(void);
-
-GType gst_qmmfsrc_cam_opmode_get_type (void);
 
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
 
