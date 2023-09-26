@@ -110,11 +110,13 @@ gst_qeavb_ts_src_init (GstQeavbTsSrc * qeavbtssrc)
   qeavbtssrc->config_file = g_strdup (DEFAULT_TS_CONFIG_FILE);
   qeavbtssrc->eavb_addr = NULL;
   qeavbtssrc->eavb_fd = -1;
+  qeavbtssrc->src_fill_idx = 0;
   qeavbtssrc->is_first_tspacket = TRUE;
   qeavbtssrc->started = FALSE;
   memset(&(qeavbtssrc->hdr), 0, sizeof(eavb_ioctl_hdr_t));
   memset(&(qeavbtssrc->stream_info), 0, sizeof(eavb_ioctl_stream_info_t));
   g_mutex_init (&qeavbtssrc->lock);
+  log_heartbeat_init(&qeavbtssrc->logbeat, LOG_HEARTBEAT_TS_PERIOD_INIT, LOG_HEARTBEAT_TS_PERIOD_MIN, LOG_HEARTBEAT_TS_PERIOD_MAX);
   GST_LOG_OBJECT (qeavbtssrc, "eavb_fd addr %p off %u, hdr addr %p off %u, qeavbtssrc addr %p", &(qeavbtssrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbTsSrc, eavb_fd), &(qeavbtssrc->hdr), G_STRUCT_OFFSET(GstQeavbTsSrc, hdr), qeavbtssrc);
   kpi_place_marker("M - qeavbtssrc init");
 }
@@ -123,6 +125,7 @@ static void
 gst_qeavb_ts_src_finalize (GObject * object)
 {
   GstQeavbTsSrc *qeavbtssrc = GST_QEAVB_TS_SRC (object);
+  kpi_place_marker("M - qeavbtssrc finalize");
   g_free(qeavbtssrc->config_file);
   g_mutex_clear (&qeavbtssrc->lock);
   G_OBJECT_CLASS (parent_class)->finalize (object);
@@ -180,7 +183,10 @@ gst_qeavb_ts_src_change_state (GstElement * element,
 {
   GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
   GstQeavbTsSrc *src = GST_QEAVB_TS_SRC (element);
+  char tips[64];
   GST_INFO_OBJECT(src, "Doing self transition: 0x%x(%s)", transition, gst_state_change_get_name(transition));
+  snprintf(tips, sizeof(tips), "M - qeavbtssrc state trans 0x%x", transition);
+  kpi_place_marker(tips);
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       gst_qeavb_ts_src_stop(GST_BASE_SRC (src));
@@ -189,7 +195,11 @@ gst_qeavb_ts_src_change_state (GstElement * element,
     break;
   }
   GST_INFO_OBJECT(src, "Doing parent transition: 0x%x", transition);
+  snprintf(tips, sizeof(tips), "M - qeavbtssrc doing parent trans 0x%x", transition);
+  kpi_place_marker(tips);
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+  snprintf(tips, sizeof(tips), "M - qeavbtssrc done trans 0x%x, ret %d", transition, ret);
+  kpi_place_marker(tips);
   GST_INFO_OBJECT(src, "Done transition: 0x%x, ret %d(%s)", transition, ret, gst_element_state_change_return_get_name(ret));
   return ret;
 }
@@ -198,43 +208,61 @@ static gboolean
 gst_qeavb_ts_src_start (GstBaseSrc * basesrc)
 {
   int err = 0;
+  char tips[64];
   GstQeavbTsSrc *qeavbtssrc = GST_QEAVB_TS_SRC (basesrc);
 
   GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src start");
   kpi_place_marker("M - qeavbtssrc start");
+
+  log_heartbeat_counter_reset(&qeavbtssrc->logbeat);
+
   qeavbtssrc->eavb_fd = open("/dev/virt-eavb", O_RDWR);
   GST_LOG_OBJECT (qeavbtssrc, "eavb_fd addr %p off %u val %d, hdr addr %p off %u, qeavbtssrc addr %p", &(qeavbtssrc->eavb_fd), G_STRUCT_OFFSET(GstQeavbTsSrc, eavb_fd), qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), G_STRUCT_OFFSET(GstQeavbTsSrc, hdr), qeavbtssrc);
   if (qeavbtssrc->eavb_fd < 0) {
+    kpi_place_marker("M - qeavbtssrc start: eavb fd open fail!");
     GST_ERROR_OBJECT (qeavbtssrc,"open eavb fd error, exit!");
     return FALSE;
   }
 
+  kpi_place_marker("M - qeavbtssrc start: will create stream remote");
   err = qeavb_create_stream_remote(qeavbtssrc->eavb_fd, qeavbtssrc->config_file, &(qeavbtssrc->hdr));
   if (0 != err) {
+    snprintf(tips, sizeof(tips), "M - qeavbtssrc start: create stream remote err %d", err);
+    kpi_place_marker(tips);
     GST_ERROR_OBJECT (qeavbtssrc,"create stream remote error %d, exit!", err);
     goto error_close;
   }
 
   GST_DEBUG_OBJECT (qeavbtssrc,"will get stream info");
+  kpi_place_marker("M - qeavbtssrc start: will get stream info");
   err = qeavb_get_stream_info(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &(qeavbtssrc->stream_info));
   if (0 != err) {
+    snprintf(tips, sizeof(tips), "M - qeavbtssrc start: get stream info err %d", err);
+    kpi_place_marker(tips);
     GST_ERROR_OBJECT (qeavbtssrc,"get stream info error %d, exit!", err);
     goto error_destroy;
   }
 
   GST_DEBUG_OBJECT (qeavbtssrc, "QEAVB TS source stream info max_buffer_size %d, pkts_per_wake %d", qeavbtssrc->stream_info.max_buffer_size, qeavbtssrc->stream_info.pkts_per_wake);
+  snprintf(tips, sizeof(tips), "M - qeavbtssrc start: m_b_s %d, p_p_w %d", qeavbtssrc->stream_info.max_buffer_size, qeavbtssrc->stream_info.pkts_per_wake);
+  kpi_place_marker(tips);
 
   err = qeavb_connect_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
   if (0 != err) {
+    snprintf(tips, sizeof(tips), "M - qeavbtssrc start: connect stream err %d", err);
+    kpi_place_marker(tips);
     GST_ERROR_OBJECT (qeavbtssrc,"connect stream error %d, exit!", err);
     goto error_destroy;
   }
 
-  if (0 != qeavbtssrc->stream_info.max_buffer_size && 0 != qeavbtssrc->stream_info.pkts_per_wake)
+  if (0 != qeavbtssrc->stream_info.max_buffer_size && 0 != qeavbtssrc->stream_info.pkts_per_wake) {
+    kpi_place_marker("M - qeavbtssrc start: will gstbasesrc set blocksize");
     gst_base_src_set_blocksize (basesrc, qeavbtssrc->stream_info.max_buffer_size * qeavbtssrc->stream_info.pkts_per_wake);
+  }
 
   qeavbtssrc->eavb_addr = g_malloc0(qeavbtssrc->stream_info.max_buffer_size * qeavbtssrc->stream_info.pkts_per_wake);
   if (qeavbtssrc->eavb_addr == NULL) {
+    kpi_place_marker("M - qeavbtssrc start: alloc buf fail!");
     GST_ERROR_OBJECT (qeavbtssrc,"alloc buffer error, exit!");
     goto error_disconnect;
   }
@@ -246,12 +274,16 @@ gst_qeavb_ts_src_start (GstBaseSrc * basesrc)
 error_disconnect:
   err = qeavb_disconnect_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
     if (0 != err) {
+      snprintf(tips, sizeof(tips), "M - qeavbtssrc start: disconnect stream err %d", err);
+      kpi_place_marker(tips);
       GST_ERROR_OBJECT (qeavbtssrc,"disconnect stream error %d!", err);
     }
 error_destroy:
     GST_DEBUG_OBJECT (qeavbtssrc,"destroying stream");
     err = qeavb_destroy_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
     if (0 != err) {
+      snprintf(tips, sizeof(tips), "M - qeavbtssrc start: destroy stream err %d", err);
+      kpi_place_marker(tips);
       GST_ERROR_OBJECT (qeavbtssrc,"destroy stream error %d!", err);
     }
 error_close:
@@ -259,6 +291,7 @@ error_close:
     close(qeavbtssrc->eavb_fd);
     qeavbtssrc->eavb_fd = -1;
   }
+  kpi_place_marker("M - qeavbtssrc started fail!");
   return FALSE;
 }
 
@@ -266,9 +299,11 @@ static gboolean
 gst_qeavb_ts_src_stop (GstBaseSrc * basesrc)
 {
   int err = 0;
+  char tips[64];
   GstQeavbTsSrc *qeavbtssrc = GST_QEAVB_TS_SRC (basesrc);
   GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop begin");
 
+  kpi_place_marker("M - qeavbtssrc stop");
   g_mutex_lock(&qeavbtssrc->lock);
   GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop locked");
   if (qeavbtssrc->started) {
@@ -276,23 +311,31 @@ gst_qeavb_ts_src_stop (GstBaseSrc * basesrc)
       g_free(qeavbtssrc->eavb_addr);
     qeavbtssrc->eavb_addr = NULL;
     GST_DEBUG_OBJECT (qeavbtssrc,"desconnect stream");
+    kpi_place_marker("M - qeavbtssrc stop: disconnect stream");
     err = qeavb_disconnect_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
     if (0 != err) {
+      snprintf(tips, sizeof(tips), "M - qeavbtssrc stop: disconnect stream err %d", err);
+      kpi_place_marker(tips);
       GST_ERROR_OBJECT (qeavbtssrc,"disconnect stream error %d, exit!", err);
     }
 
     GST_DEBUG_OBJECT (qeavbtssrc,"destroying stream");
+    kpi_place_marker("M - qeavbtssrc stop: destroying stream");
     err = qeavb_destroy_stream(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr));
     if (0 != err) {
+      snprintf(tips, sizeof(tips), "M - qeavbtssrc stop: destroy stream err %d", err);
+      kpi_place_marker(tips);
       GST_ERROR_OBJECT (qeavbtssrc,"destroy stream error %d, exit!", err);
     }
 
+    kpi_place_marker("M - qeavbtssrc stop: close fd");
     close(qeavbtssrc->eavb_fd);
     qeavbtssrc->eavb_fd = -1;
     GST_DEBUG_OBJECT (qeavbtssrc, "QEAVB ts source stopped");
   }
   qeavbtssrc->started = FALSE;
   g_mutex_unlock(&qeavbtssrc->lock);
+  kpi_place_marker("M - qeavbtssrc stop end");
   GST_INFO_OBJECT(qeavbtssrc,"qeavb ts src stop end");
   return TRUE;
 }
@@ -301,7 +344,7 @@ static GstFlowReturn
 gst_qeavb_ts_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
 {
   GstMapInfo map;
-  gint32 retry_time = 0;
+  gint32 retry_time = 0, retry_time_residual;
   gint32 sleep_us = DEFALUT_SLEEP_US;
   eavb_ioctl_buf_data_t qavb_buffer;
   gint32 recv_len = 0;
@@ -310,6 +353,14 @@ gst_qeavb_ts_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
   int err = 0;
   guint32 payload_size = 0;
   char tips[64];
+  int need_show_log = 0;
+
+  if (!qeavbtssrc->is_first_tspacket) {
+    need_show_log = log_heartbeat_counter_click(&qeavbtssrc->logbeat);
+  }
+  if (need_show_log) {
+    kpi_place_marker("M - qeavbtssrc src_fill() calling");
+  }
 
   if (qeavbtssrc->stream_info.wakeup_period_us != 0) {
     sleep_us = qeavbtssrc->stream_info.wakeup_period_us;
@@ -320,7 +371,8 @@ gst_qeavb_ts_src_fill (GstPushSrc * pushsrc, GstBuffer * buffer)
 
   payload_size = qeavbtssrc->stream_info.max_buffer_size * qeavbtssrc->stream_info.pkts_per_wake;
 
-  GST_DEBUG_OBJECT (qeavbtssrc, "pkts_per_wake %d, payload_size %u, wakeup_period_us %d", qeavbtssrc->stream_info.pkts_per_wake, payload_size, qeavbtssrc->stream_info.wakeup_period_us);
+  GST_DEBUG_OBJECT (qeavbtssrc, "pkts_per_wake %d, payload_size %u, wakeup_period_us %d, src_fill_idx %u", qeavbtssrc->stream_info.pkts_per_wake, payload_size, qeavbtssrc->stream_info.wakeup_period_us, qeavbtssrc->src_fill_idx);
+  qeavbtssrc->src_fill_idx ++;  //this idx is used to indicate whether log is missed. If log missed, above src_fill_idx log will have discontinuity
 
   if (qeavbtssrc->is_first_tspacket) {
     snprintf(tips, sizeof(tips), "M - qeavbtssrc begin recv 1st pkt. w_p_us %d", qeavbtssrc->stream_info.wakeup_period_us);
@@ -337,14 +389,29 @@ retry:
     qavb_buffer.hdr.payload_size = payload_size;
     qavb_buffer.pbuf = (uint64_t)qeavbtssrc->eavb_addr;
     GST_LOG_OBJECT (qeavbtssrc, "will call qeavb_receive_data(), retry %d", retry_time);
-    if (qeavbtssrc->is_first_tspacket && 0 == retry_time%TSSRC_RETRY_KPILOG_SUPPRESS) {
-      snprintf(tips, sizeof(tips), "M - qeavbtssrc recving 1st pkt, retry %d.", retry_time);
-      kpi_place_marker(tips);
+    retry_time_residual = retry_time % TSSRC_RETRY_KPILOG_SUPPRESS;
+    if (qeavbtssrc->is_first_tspacket) {
+      if (0 == retry_time_residual) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recving 1st pkt, retry %d.", retry_time);
+        kpi_place_marker(tips);
+      }
+    }else{
+      if (0 == retry_time_residual && retry_time != 0) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recving Nth pkt, retry %d.", retry_time);
+        kpi_place_marker(tips);
+      }
     }
     recv_len = qeavb_receive_data(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &qavb_buffer);
-    if (qeavbtssrc->is_first_tspacket && (0==retry_time%TSSRC_RETRY_KPILOG_SUPPRESS || recv_len>0)) {
-      snprintf(tips, sizeof(tips), "M - qeavbtssrc recv 1st pkt rt %d retry %d.", recv_len, retry_time);
-      kpi_place_marker(tips);
+    if (qeavbtssrc->is_first_tspacket) {
+      if (0 == retry_time_residual || recv_len > 0) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recv 1st pkt rt %d retry %d.", recv_len, retry_time);
+        kpi_place_marker(tips);
+      }
+    }else{
+      if (0 == retry_time_residual && retry_time != 0) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recv Nth pkt rt %d retry %d.", recv_len, retry_time);
+        kpi_place_marker(tips);
+      }
     }
     GST_LOG_OBJECT (qeavbtssrc, "receive data len %d", recv_len);
     if (recv_len > 0) {
@@ -357,6 +424,8 @@ retry:
       gst_buffer_set_size (buffer, recv_len);
       err = qeavb_receive_done(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &qavb_buffer);
       if (0 != err) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recv done(len %d) err %d", recv_len, err);
+        kpi_place_marker(tips);
         GST_ERROR_OBJECT (qeavbtssrc,"receive data (len %d) done error %d, exit!", recv_len, err);
         g_warn_if_fail(FALSE && "qeavb_receive_done() ret err after qeavb_receive_data() received data!");
         error = GST_FLOW_ERROR;
@@ -365,6 +434,8 @@ retry:
     } else {
       err = qeavb_receive_done(qeavbtssrc->eavb_fd, &(qeavbtssrc->hdr), &qavb_buffer);
       if (0 != err) {
+        snprintf(tips, sizeof(tips), "M - qeavbtssrc recv done err %d", err);
+        kpi_place_marker(tips);
         GST_ERROR_OBJECT (qeavbtssrc,"receive data done error %d, exit!", err);
         g_warn_if_fail(FALSE && "qeavb_receive_done() ret err after qeavb_receive_data() not received data!");
         error = GST_FLOW_ERROR;
@@ -387,6 +458,10 @@ retry:
   }
 finish_handle:
   g_mutex_unlock(&qeavbtssrc->lock);
+  if (need_show_log) {
+    snprintf(tips, sizeof(tips), "M - qeavbtssrc src_fill() ret 0x%x, recv %dB", error, recv_len);
+    kpi_place_marker(tips);
+  }
   return error;
 }
 
