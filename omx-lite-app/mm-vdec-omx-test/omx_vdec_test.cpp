@@ -1914,7 +1914,7 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
   if (!secure) {
     DEBUG_PRINT("User not need secure buffer, so no secure modifier");
   } else {
-    if ((modifier & GBM_FORMAT_MOD_QTI_SECURE) == GBM_FORMAT_MOD_QTI_SECURE)
+    if (modifier == GBM_FORMAT_MOD_QTI_SECURE || modifier == GBM_FORMAT_MOD_QTI_COMPRESSED_SECURE)
       DEBUG_PRINT("GBM buffer has secure modifier");
     else
       DEBUG_PRINT_ERROR("GBM buffer should have secure modifier!");
@@ -1923,7 +1923,7 @@ static void check_gbm_modifier_status(uint64_t modifier, bool secure, bool ubwc)
   if (!ubwc) {
     DEBUG_PRINT("User not need UBWC buffer, so no UBWC modifier");
   } else {
-    if ((modifier & DRM_FORMAT_MOD_QCOM_COMPRESSED) == DRM_FORMAT_MOD_QCOM_COMPRESSED)
+    if (modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED || modifier == GBM_FORMAT_MOD_QTI_COMPRESSED_SECURE)
       DEBUG_PRINT("GBM buffer has compressed UBWC modifier");
     else
       DEBUG_PRINT_ERROR("GBM buffer should have compressed UBWC modifier!");
