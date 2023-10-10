@@ -41,19 +41,17 @@
 // Set the default debug category.
 #define GST_CAT_DEFAULT gst_ml_module_debug
 
-// Non-maximum Suppression (NMS) threshold (50%).
-#define INTERSECTION_THRESHOLD 0.5F
-
 #define GFLOAT_PTR_CAST(data)       ((gfloat*) data)
+#define GUINT8_PTR_CAST(data)       ((guint8*) data)
 #define GST_ML_SUB_MODULE_CAST(obj) ((GstMLSubModule*)(obj))
 
 // MODULE_CAPS support input dim [32, 32] -> [1920, 1088]. Number class 1 -> 1001
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
-    "type = (string) { FLOAT32 }, " \
+    "type = (string) { UINT8, FLOAT32 }, " \
     "dimensions = (int) < <1, 4, [21, 42840]>, <1, [1, 1001], [21, 42840]> >; " \
     "neural-network/tensors, " \
-    "type = (string) { FLOAT32 }, " \
+    "type = (string) { UINT8, FLOAT32 }, " \
     "dimensions = (int) < <1, [5, 1005], [21, 42840]> > "
 
 // Module caps instance
@@ -62,122 +60,34 @@ static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
 typedef struct _GstMLSubModule GstMLSubModule;
 
 struct _GstMLSubModule {
+  // Configurated ML capabilities in structure format.
+  GstMLInfo  mlinfo;
+
   // List of prediction labels.
   GHashTable *labels;
   // Confidence threshold value.
   gfloat     threshold;
+
+  // Offset values for each of the tensors for dequantization of some tensors.
+  gdouble    qoffsets[GST_ML_MAX_TENSORS];
+  // Scale values for each of the tensors for dequantization of some tensors.
+  gdouble    qscales[GST_ML_MAX_TENSORS];
 };
-
-static inline void
-gst_ml_prediction_transform_dimensions (GstMLPrediction * prediction,
-    gint num, gint denum, guint width, guint height)
-{
-  gdouble coeficient = 0.0;
-
-  if (num > denum) {
-    gst_util_fraction_to_double (num, denum, &coeficient);
-
-    prediction->top /= width / coeficient;
-    prediction->bottom /= width / coeficient;
-    prediction->left /= width;
-    prediction->right /= width;
-    return;
-  } else if (num < denum) {
-    gst_util_fraction_to_double (denum, num, &coeficient);
-
-    prediction->top /= height;
-    prediction->bottom /= height;
-    prediction->left /= height / coeficient;
-    prediction->right /= height / coeficient;
-    return;
-  }
-
-  // There is no need for AR adjustments, just translate to relative coords.
-  prediction->top /= height;
-  prediction->bottom /= height;
-  prediction->left /= width;
-  prediction->right /= width;
-}
-
-static inline gdouble
-gst_ml_predictions_intersection_score (GstMLPrediction * l_prediction,
-    GstMLPrediction * r_prediction)
-{
-  gdouble width = 0, height = 0, intersection = 0, l_area = 0, r_area = 0;
-
-  // Figure out the width of the intersecting rectangle.
-  // 1st: Find out the X axis coordinate of left most Top-Right point.
-  width = MIN (l_prediction->right, r_prediction->right);
-  // 2nd: Find out the X axis coordinate of right most Top-Left point
-  // and substract from the previously found value.
-  width -= MAX (l_prediction->left, r_prediction->left);
-
-  // Negative width means that there is no overlapping.
-  if (width <= 0.0F) return 0.0F;
-
-  // Figure out the height of the intersecting rectangle.
-  // 1st: Find out the Y axis coordinate of bottom most Left-Top point.
-  height = MIN (l_prediction->bottom, r_prediction->bottom);
-  // 2nd: Find out the Y axis coordinate of top most Left-Bottom point
-  // and substract from the previously found value.
-  height -= MAX (l_prediction->top, r_prediction->top);
-
-  // Negative height means that there is no overlapping.
-  if (height <= 0.0F) return 0.0F;
-
-  // Calculate intersection area.
-  intersection = width * height;
-
-  // Calculate the are of the 2 objects.
-  l_area = (l_prediction->right - l_prediction->left) *
-      (l_prediction->bottom - l_prediction->top);
-  r_area = (r_prediction->right - r_prediction->left) *
-      (r_prediction->bottom - r_prediction->top);
-
-  // Intersection over Union score.
-  return intersection / (l_area + r_area - intersection);
-}
-
-static inline gint
-gst_ml_non_max_suppression (GstMLPrediction * l_prediction, GArray * predictions)
-{
-  gdouble score = 0.0;
-  guint idx = 0;
-
-  for (idx = 0; idx < predictions->len;  idx++) {
-    GstMLPrediction *r_prediction =
-        &(g_array_index (predictions, GstMLPrediction, idx));
-
-    score = gst_ml_predictions_intersection_score (l_prediction, r_prediction);
-
-    // If the score is below the threshold, continue with next list entry.
-    if (score <= INTERSECTION_THRESHOLD)
-      continue;
-
-    // If labels do not match, continue with next list entry.
-    if (g_strcmp0 (l_prediction->label, r_prediction->label) != 0)
-      continue;
-
-    // If confidence of current prediction is higher, remove the old entry.
-    if (l_prediction->confidence > r_prediction->confidence)
-      return idx;
-
-    // If confidence of current prediction is lower, don't add it to the list.
-    if (l_prediction->confidence <= r_prediction->confidence)
-      return -2;
-  }
-
-  // If this point is reached then add current prediction to the list;
-  return -1;
-}
 
 gpointer
 gst_ml_module_open (void)
 {
   GstMLSubModule *submodule = NULL;
+  guint idx = 0;
 
   submodule = g_slice_new0 (GstMLSubModule);
   g_return_val_if_fail (submodule != NULL, NULL);
+
+  // Initialize the quantization offsets and scales.
+  for (idx = 0; idx < GST_ML_MAX_TENSORS; idx++) {
+    submodule->qoffsets[idx] = 0.0;
+    submodule->qscales[idx] = 1.0;
+  }
 
   return (gpointer) submodule;
 }
@@ -214,6 +124,7 @@ gboolean
 gst_ml_module_configure (gpointer instance, GstStructure * settings)
 {
   GstMLSubModule *submodule = GST_ML_SUB_MODULE_CAST (instance);
+  GstCaps *caps = NULL, *mlcaps = NULL;
   const gchar *input = NULL;
   GValue list = G_VALUE_INIT;
   gdouble threshold = 0.0;
@@ -221,6 +132,30 @@ gst_ml_module_configure (gpointer instance, GstStructure * settings)
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (settings != NULL, FALSE);
+
+  if (!(success = gst_structure_has_field (settings, GST_ML_MODULE_OPT_CAPS))) {
+    GST_ERROR ("Settings stucture does not contain configuration caps!");
+    goto cleanup;
+  }
+
+  // Fetch the configuration capabilities.
+  gst_structure_get (settings, GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, &caps, NULL);
+  // Get the set of supported capabilities.
+  mlcaps = gst_ml_module_caps ();
+
+  // Make sure that the configuration capabilities are fixated and supported.
+  if (!(success = gst_caps_is_fixed (caps))) {
+    GST_ERROR ("Configuration caps are not fixated!");
+    goto cleanup;
+  } else if (!(success = gst_caps_can_intersect (caps, mlcaps))) {
+    GST_ERROR ("Configuration caps are not supported!");
+    goto cleanup;
+  }
+
+  if (!(success = gst_ml_info_from_caps (&(submodule->mlinfo), caps))) {
+    GST_ERROR ("Failed to get ML info from confguration caps!");
+    goto cleanup;
+  }
 
   input = gst_structure_get_string (settings, GST_ML_MODULE_OPT_LABELS);
 
@@ -243,11 +178,73 @@ gst_ml_module_configure (gpointer instance, GstStructure * settings)
   gst_structure_get_double (settings, GST_ML_MODULE_OPT_THRESHOLD, &threshold);
   submodule->threshold = threshold / 100.0;
 
+  if (GST_ML_INFO_TYPE (&(submodule->mlinfo)) == GST_ML_TYPE_UINT8) {
+    GstStructure *constants = NULL;
+    const GValue *qoffsets = NULL, *qscales = NULL;
+    guint idx = 0, n_tensors = 0;
+
+    success = gst_structure_has_field (settings, GST_ML_MODULE_OPT_CONSTANTS);
+    if (!success) {
+      GST_ERROR ("Settings stucture does not contain constants value!");
+      goto cleanup;
+    }
+
+    constants = GST_STRUCTURE (g_value_get_boxed (
+        gst_structure_get_value (settings, GST_ML_MODULE_OPT_CONSTANTS)));
+
+    if (!(success = gst_structure_has_field (constants, "q-offsets"))) {
+      GST_ERROR ("Missing quantization offsets coefficients!");
+      goto cleanup;
+    } else if (!(success = gst_structure_has_field (constants, "q-scales"))) {
+      GST_ERROR ("Missing quantization scales coefficients!");
+      goto cleanup;
+    }
+
+    qoffsets = gst_structure_get_value (constants, "q-offsets");
+    qscales = gst_structure_get_value (constants, "q-scales");
+    n_tensors = GST_ML_INFO_N_TENSORS (&(submodule->mlinfo));
+
+    if (!(success = (gst_value_array_get_size (qoffsets) == n_tensors))) {
+      GST_ERROR ("Expecting %u dequantization offsets entries but received "
+          "only %u!", n_tensors, gst_value_array_get_size (qoffsets));
+      goto cleanup;
+    } else if (!(success = (gst_value_array_get_size (qscales) == n_tensors))) {
+      GST_ERROR ("Expecting %u dequantization scales entries but received "
+          "only %u!", n_tensors, gst_value_array_get_size (qscales));
+      goto cleanup;
+    }
+
+    for (idx = 0; idx < n_tensors; idx++) {
+      submodule->qoffsets[idx] =
+          g_value_get_double (gst_value_array_get_value (qoffsets, idx));
+      submodule->qscales[idx] =
+          g_value_get_double (gst_value_array_get_value (qscales, idx));
+    }
+  }
+
 cleanup:
+  if (caps != NULL)
+    gst_caps_unref (caps);
+
   g_value_unset (&list);
   gst_structure_free (settings);
 
   return success;
+}
+
+static inline gfloat
+gst_ml_module_get_dequant_value (void * pdata, GstMLType mltype, guint idx,
+    gfloat offset, gfloat scale)
+{
+  switch (mltype) {
+    case GST_ML_TYPE_UINT8:
+      return ((GUINT8_PTR_CAST (pdata))[idx] - offset) * scale;
+    case GST_ML_TYPE_FLOAT32:
+      return (GFLOAT_PTR_CAST (pdata))[idx];
+    default:
+      break;
+  }
+  return 0.0;
 }
 
 gboolean
@@ -257,14 +254,21 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   GArray *predictions = (GArray *) output;
   GstProtectionMeta *pmeta = NULL;
   GstLabel *label = NULL;
+  gpointer bboxes = NULL, scores = NULL;
+  GstMLType mltype = GST_ML_TYPE_UNKNOWN;
   gint sar_n = 1, sar_d = 1, nms = -1;
-  gfloat *bbox_data = NULL, *class_data = NULL;
   guint n_classes = 0, n_detections = 0, in_height = 0, in_width = 0, idx = 0;
   gfloat cx = 0, cy = 0, w = 0, h = 0;
+  gdouble s_scale = 0.0, s_offset = 0.0, b_offset = 0.0, b_scale = 0.0;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
   g_return_val_if_fail (predictions != NULL, FALSE);
+
+  if (!gst_ml_info_is_equal (&(mlframe->info), &(submodule->mlinfo))) {
+    GST_ERROR ("ML frame with unsupported layout!");
+    return FALSE;
+  }
 
   // Extract the SAR (Source Aspect Ratio).
   if ((pmeta = gst_buffer_get_protection_meta (mlframe->buffer)) != NULL) {
@@ -273,47 +277,54 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     gst_structure_get_uint (pmeta->info, "input-tensor-width", &in_width);
   }
 
-  if (!in_height || !in_width) {
-    GST_ERROR ("Unsupported input size[%ux%u]!", in_height, in_width);
-    return FALSE;
-  }
-
+  mltype = GST_ML_FRAME_TYPE (mlframe);
   n_detections = GST_ML_FRAME_DIM (mlframe, 0, 2);
 
   if (GST_ML_FRAME_N_BLOCKS (mlframe) == 2) {
     //Tensor dimensions looks like: <1, 4, 8400>, <1, 80, 8400>
     if (GST_ML_FRAME_DIM (mlframe, 0, 1) == 4) {
-      bbox_data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
-      class_data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 1));
+      bboxes = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
+      scores = GST_ML_FRAME_BLOCK_DATA (mlframe, 1);
       n_classes = GST_ML_FRAME_DIM (mlframe, 1, 1);
     } else {
-      bbox_data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 1));
-      class_data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+      bboxes = GST_ML_FRAME_BLOCK_DATA (mlframe, 1);
+      scores = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
       n_classes = GST_ML_FRAME_DIM (mlframe, 0, 1);
     }
+
+    s_scale = submodule->qscales[0];
+    s_offset = submodule->qoffsets[0];
+
+    b_scale = submodule->qscales[1];
+    b_offset = submodule->qoffsets[1];
   } else if (GST_ML_FRAME_N_BLOCKS (mlframe) == 1) {
     //Tensor dimensions looks like: <1, 84, 8400>
-    bbox_data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
-    class_data = bbox_data + 4 * n_detections;
-    n_classes = GST_ML_FRAME_DIM (mlframe, 0, 1) - 4 ;
+    bboxes = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
+
+    if (mltype == GST_ML_TYPE_FLOAT32)
+      scores = GFLOAT_PTR_CAST (bboxes) + 4 * n_detections;
+    else if (mltype == GST_ML_TYPE_UINT8)
+      scores = GUINT8_PTR_CAST (bboxes) + 4 * n_detections;
+
+    n_classes = GST_ML_FRAME_DIM (mlframe, 0, 1) - 4;
+
+    s_scale = b_scale = submodule->qscales[0];
+    s_offset = b_offset = submodule->qoffsets[0];
   }
 
-  if (!bbox_data || !class_data || !n_classes || !n_detections) {
-    GST_ERROR ("Unsupported tensors capabilities!");
-    return FALSE;
-  }
   GST_LOG ("Input size[%d:%d] SAR[%d/%d]. n_detections: %d. n_classes: %d"
       ". threshold: %f", in_height, in_width, sar_n, sar_d, n_detections,
       n_classes, submodule->threshold);
 
   for (idx = 0; idx < n_detections; idx++) {
     GstMLPrediction prediction = { 0, };
-    guint class_idx = 0;
+    guint class_idx = 0, num = 0;
     gfloat confidence = 0, class_score = 0;
 
     // Find the class ID with the highest score.
-    for (guint num = 0; num < n_classes; num++) {
-      class_score = class_data[idx + num * n_detections];
+    for (num = 0; num < n_classes; num++) {
+      class_score = gst_ml_module_get_dequant_value (scores, mltype,
+          idx + num * n_detections, s_offset, s_scale);
 
       if (class_score <= confidence)
         continue;
@@ -323,24 +334,21 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     }
 
     // Discard results below the minimum score threshold.
-    if ((confidence < submodule->threshold) || (confidence > 1))
+    if (confidence < submodule->threshold)
       continue;
 
     // Get bounding box centre X, centre Y, width, height coordinates parameters.
-    cx = bbox_data[idx + 0 * n_detections];
-    cy = bbox_data[idx + 1 * n_detections];
-    w =  bbox_data[idx + 2 * n_detections];
-    h =  bbox_data[idx + 3 * n_detections];
-
-    if ((w <= 0) || (h <= 0))
-      continue;
-
-    label = g_hash_table_lookup (
-        submodule->labels, GUINT_TO_POINTER (class_idx));
+    cx = gst_ml_module_get_dequant_value (bboxes, mltype, idx + 0 * n_detections,
+        b_offset, b_scale);
+    cy = gst_ml_module_get_dequant_value (bboxes, mltype, idx + 1 * n_detections,
+        b_offset, b_scale);
+    w  = gst_ml_module_get_dequant_value (bboxes, mltype, idx + 2 * n_detections,
+        b_offset, b_scale);
+    h  = gst_ml_module_get_dequant_value (bboxes, mltype, idx + 3 * n_detections,
+        b_offset, b_scale);
 
     prediction.confidence = confidence * 100.0F;
-    prediction.label = g_strdup (label ? label->name : "unknown");
-    prediction.color = label ? label->color : 0x000000F;
+
     prediction.top =  cy - h / 2.0f;
     prediction.left = cx - w / 2.0f;
     prediction.bottom = prediction.top + h;
@@ -349,6 +357,18 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     // Adjust bounding box dimensions with extracted source aspect ratio.
     gst_ml_prediction_transform_dimensions (
         &prediction, sar_n, sar_d, in_width, in_height);
+
+    // Discard results with out of region coordinates.
+    if ((prediction.top > 1.0)   || (prediction.left > 1.0) ||
+        (prediction.bottom > 1.0) || (prediction.right > 1.0) ||
+        (prediction.top < 0.0)    || (prediction.left < 0.0) ||
+        (prediction.bottom < 0.0) || (prediction.right < 0.0))
+      continue;
+
+    label = g_hash_table_lookup (
+        submodule->labels, GUINT_TO_POINTER (class_idx));
+    prediction.label = g_strdup (label ? label->name : "unknown");
+    prediction.color = label ? label->color : 0x000000F;
 
     // Non-Max Suppression (NMS) algorithm.
     nms = gst_ml_non_max_suppression (&prediction, predictions);
@@ -369,6 +389,6 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
     predictions = g_array_append_val (predictions, prediction);
   }
-  GST_DEBUG ("predictions->len: %d", predictions->len);
+
   return TRUE;
 }
