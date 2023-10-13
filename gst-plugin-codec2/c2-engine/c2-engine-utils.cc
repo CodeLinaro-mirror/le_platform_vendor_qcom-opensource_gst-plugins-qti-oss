@@ -79,8 +79,12 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2StreamGopTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_KEY_FRAME_INTERVAL,
       C2StreamSyncFrameIntervalTuning::output::PARAM_TYPE },
-  { GST_C2_PARAM_INTRA_REFRESH,
+  { GST_C2_PARAM_INTRA_REFRESH_TUNING,
       C2StreamIntraRefreshTuning::output::PARAM_TYPE },
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+  { GST_C2_PARAM_INTRA_REFRESH_MODE,
+      qc2::C2VideoIntraRefreshType::output::PARAM_TYPE },
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
   { GST_C2_PARAM_ADAPTIVE_B_FRAMES,
       qc2::C2StreamAdaptiveBPreconditions::output::PARAM_TYPE },
@@ -129,6 +133,12 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
   { GST_C2_PARAM_HDR_STATIC_METADATA,
       C2StreamHdrStaticInfo::output::PARAM_TYPE },
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  { GST_C2_PARAM_LTR_MARK,
+      qc2::C2VideoLTRMarkTuning::input::PARAM_TYPE },
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+  { GST_C2_PARAM_REPORT_AVG_QP,
+      C2AndroidStreamAverageBlockQuantizationInfo::output::PARAM_TYPE },
+#endif // CODEC2_CONFIG_VERSION_2_0
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -144,7 +154,8 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_BITRATE, "BITRATE" },
   { GST_C2_PARAM_GOP_CONFIG, "GOP_CONFIG" },
   { GST_C2_PARAM_KEY_FRAME_INTERVAL, "KEY_FRAME_INTERVAL" },
-  { GST_C2_PARAM_INTRA_REFRESH, "INTRA_REFRESH" },
+  { GST_C2_PARAM_INTRA_REFRESH_TUNING, "INTRA_REFRESH_TUNING" },
+  { GST_C2_PARAM_INTRA_REFRESH_MODE, "INTRA_REFRESH_MODE" },
   { GST_C2_PARAM_ADAPTIVE_B_FRAMES, "ADAPTIVE_B_FRAMES" },
   { GST_C2_PARAM_ENTROPY_MODE, "ENTROPY_MODE" },
   { GST_C2_PARAM_LOOP_FILTER_MODE, "LOOP_FILTER_MODE" },
@@ -166,6 +177,8 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  { GST_C2_PARAM_REPORT_AVG_QP, "AVERGE_BLOCK_QP_INFO"},
+  { GST_C2_PARAM_LTR_MARK, "LTR_MARK" },
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -243,10 +256,17 @@ static const std::unordered_map<uint32_t, uint32_t> kRateCtrlMap = {
   { GST_C2_RATE_CTRL_CQ,       C2Config::BITRATE_IGNORE },
 };
 
-// Map for the GST_C2_PARAM_INTRA_REFRESH parameter.
+// Map for the GST_C2_PARAM_INTRA_REFRESH_TUNING/
+// GST_C2_PARAM_INTRA_REFRESH_MODE parameter.
 static const std::unordered_map<uint32_t, uint32_t> kIntraRefreshMap = {
   { GST_C2_INTRA_REFRESH_DISABLED,  C2Config::INTRA_REFRESH_DISABLED },
+#if !defined(CODEC2_CONFIG_VERSION_2_0)
   { GST_C2_INTRA_REFRESH_ARBITRARY, C2Config::INTRA_REFRESH_ARBITRARY },
+  { GST_C2_INTRA_REFRESH_CYCLIC,    C2Config::INTRA_REFRESH_ARBITRARY + 1 },
+#else
+  { GST_C2_INTRA_REFRESH_ARBITRARY, qc2::IntraRefreshMode::INTRA_REFRESH_RANDOM },
+  { GST_C2_INTRA_REFRESH_CYCLIC,    qc2::IntraRefreshMode::INTRA_REFRESH_CYCLIC},
+#endif // CODEC2_CONFIG_VERSION_2_0
 };
 
 // Map for the GST_C2_ENTROPY_MODE parameter.
@@ -481,7 +501,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(keyframe);
       break;
     }
-    case GST_C2_PARAM_INTRA_REFRESH: {
+    case GST_C2_PARAM_INTRA_REFRESH_TUNING: {
       C2StreamIntraRefreshTuning::output irefresh;
       uint32_t mode = reinterpret_cast<GstC2IntraRefresh*>(payload)->mode;
 
@@ -491,6 +511,17 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(irefresh);
       break;
     }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_INTRA_REFRESH_MODE: {
+      qc2::C2VideoIntraRefreshType::output ir_type;
+      uint32_t mode = *(reinterpret_cast<guint32*>(payload));
+
+      ir_type.value =
+          static_cast<qc2::IntraRefreshMode>(kIntraRefreshMap.at(mode));
+      c2param = C2Param::Copy(ir_type);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       qc2::C2StreamAdaptiveBPreconditions::output bpreconditions;
@@ -735,6 +766,21 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy (coloraspects);
       break;
     }
+    case GST_C2_PARAM_LTR_MARK: {
+      qc2::C2VideoLTRMarkTuning::input ltr_mark;
+      ltr_mark.frameid = *(reinterpret_cast<guint32*>(payload));
+
+      c2param = C2Param::Copy(ltr_mark);
+      break;
+    }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_REPORT_AVG_QP: {
+      C2AndroidStreamAverageBlockQuantizationInfo::output avg_qp;
+      avg_qp.value = *(reinterpret_cast<int32_t*>(payload));
+      c2param = C2Param::Copy(avg_qp);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -846,7 +892,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<int64_t*>(payload)) = keyframe->value;
       break;
     }
-    case GST_C2_PARAM_INTRA_REFRESH: {
+    case GST_C2_PARAM_INTRA_REFRESH_TUNING: {
       auto irefresh =
           reinterpret_cast<C2StreamIntraRefreshTuning::output*>(c2param.get());
 
@@ -858,6 +904,18 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       reinterpret_cast<GstC2IntraRefresh*>(payload)->period = irefresh->period;
       break;
     }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_INTRA_REFRESH_MODE: {
+      auto ir_type =
+          reinterpret_cast<qc2::C2VideoIntraRefreshType::output*>(c2param.get());
+      auto result = std::find_if(kIntraRefreshMap.begin(), kIntraRefreshMap.end(),
+          [&](const auto& m) { return m.second == ir_type->value; });
+
+      *(reinterpret_cast<GstC2IRefreshMode*>(payload)) =
+          static_cast<GstC2IRefreshMode>(result->first);
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
 #if !defined(CODEC2_CONFIG_VERSION_2_0)
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       auto bpreconditions =
@@ -1027,6 +1085,21 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<int32_t*>(payload)) = priority->value;
       break;
     }
+    case GST_C2_PARAM_LTR_MARK: {
+      auto ltr_mark =
+          reinterpret_cast<qc2::C2VideoLTRMarkTuning::input*>(c2param.get());
+
+      *(reinterpret_cast<guint32*>(payload)) = ltr_mark->frameid;
+      break;
+    }
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    case GST_C2_PARAM_REPORT_AVG_QP: {
+      auto avg_qp = reinterpret_cast<
+          C2AndroidStreamAverageBlockQuantizationInfo::output*>(c2param.get());
+      *(reinterpret_cast<guint32*>(payload)) = avg_qp->value;
+      break;
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -1167,6 +1240,51 @@ bool GstC2Utils::ExtractHandleInfo(GstBuffer* buffer,
       format, width, height, n_planes, offsets, strides);
 
   return true;
+}
+
+bool GstC2Utils::AppendCodecMeta(GstBuffer* buffer,
+    std::shared_ptr<C2Buffer>& c2buffer) {
+
+  GstStructure *structure = NULL;
+
+  if (c2buffer->data().type() != C2BufferData::LINEAR)
+    return FALSE;
+
+  structure = gst_structure_new_empty ("CodecInfo");
+
+  std::shared_ptr<const C2Info> c2info =
+      c2buffer->getInfo (C2StreamPictureTypeInfo::output::PARAM_TYPE);
+  auto pictype =
+      std::static_pointer_cast<const C2StreamPictureTypeInfo::output>(c2info);
+
+  if (pictype) {
+    gst_structure_set (structure,
+        "picture-type", G_TYPE_UINT, static_cast<guint>(pictype->value), NULL);
+    GST_TRACE ("Picture type: %u", static_cast<guint>(pictype->value));
+  }
+
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+  std::shared_ptr<const C2Info> c2qpinfo = c2buffer->getInfo (
+      C2AndroidStreamAverageBlockQuantizationInfo::output::PARAM_TYPE);
+
+  auto avgqpinfo = std::static_pointer_cast<
+      const C2AndroidStreamAverageBlockQuantizationInfo::output>(c2qpinfo);
+
+  if (avgqpinfo) {
+    gst_structure_set (structure,
+        "average-block-qp", G_TYPE_INT, static_cast<gint>(avgqpinfo->value),
+        NULL);
+    GST_TRACE ("Average block QP: %d", static_cast<gint>(avgqpinfo->value));
+  }
+#endif // CODEC2_CONFIG_VERSION_2_0
+
+  if (gst_structure_n_fields (structure) == 0 ||
+      gst_buffer_add_protection_meta (buffer, structure) == NULL) {
+    gst_structure_free (structure);
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(

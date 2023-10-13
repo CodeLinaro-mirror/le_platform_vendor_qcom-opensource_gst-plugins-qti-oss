@@ -418,10 +418,6 @@ gst_ml_video_classification_fill_video_output (
 
     prediction = &(g_array_index (predictions, GstMLPrediction, idx));
 
-    // Break immediately if sorted prediction confidence is below the threshold.
-    if (prediction->confidence < classification->threshold)
-      break;
-
     // Concat the prediction data to the output string.
     string = g_strdup_printf ("%s: %.1f%%", prediction->label,
         prediction->confidence);
@@ -842,7 +838,8 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
 
   if (!gst_caps_can_intersect (incaps, modulecaps)) {
     GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
-        ("Module caps do not intersect with the negotiated caps!"));
+        ("Module caps %" GST_PTR_FORMAT " do not intersect with the "
+         "negotiated caps %" GST_PTR_FORMAT "!", modulecaps, incaps));
     return FALSE;
   }
 
@@ -853,7 +850,10 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   structure = gst_structure_new ("options",
-      GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, classification->labels, NULL);
+      GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
+      GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, classification->labels,
+      GST_ML_MODULE_OPT_THRESHOLD, G_TYPE_DOUBLE, classification->threshold,
+      NULL);
 
   if (!gst_ml_module_set_opts (classification->module, structure)) {
     GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),

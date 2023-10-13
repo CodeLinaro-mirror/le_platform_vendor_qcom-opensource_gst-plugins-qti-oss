@@ -170,6 +170,7 @@ gst_c2_intra_refresh_get_type (void)
   static const GEnumValue variants[] = {
     { GST_C2_INTRA_REFRESH_DISABLED, "No intra resfresh", "disable" },
     { GST_C2_INTRA_REFRESH_ARBITRARY, "Arbitrary", "arbitrary" },
+    { GST_C2_INTRA_REFRESH_CYCLIC, "Cyclic", "cyclic" },
     { 0xffffffff, "Component Default", "default" },
     { 0, NULL, NULL },
   };
@@ -286,6 +287,23 @@ gst_c2_venc_trigger_iframe (GstC2VEncoder * c2venc)
 }
 
 static gboolean
+gst_c2_venc_ltr_mark (GstC2VEncoder * c2venc, guint id)
+{
+  gboolean success = FALSE;
+
+  GST_DEBUG_OBJECT (c2venc, "LTR Mark index %d", id);
+
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_LTR_MARK, GPOINTER_CAST (&id));
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to set ltr mark index!");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     GstVideoCodecState * state)
 {
@@ -327,6 +345,18 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+  gboolean enable = TRUE;
+  // enable codec2 avg qp info report
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_REPORT_AVG_QP, GPOINTER_CAST (&(enable)));
+
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to enable QP report parameter!");
+    return FALSE;
+  }
+#endif // CODEC2_CONFIG_VERSION_2_0
+
   if (c2venc->priority != DEFAULT_PROP_PRIORITY) {
     success = gst_c2_engine_set_parameter (c2venc->engine,
         GST_C2_PARAM_PRIORITY, GPOINTER_CAST (&(c2venc->priority)));
@@ -364,14 +394,36 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     }
   }
 
-  if ((c2venc->intra_refresh.mode != DEFAULT_PROP_INTRA_REFRESH_MODE) &&
-      (c2venc->intra_refresh.period != DEFAULT_PROP_INTRA_REFRESH_PERIOD)) {
+  if (c2venc->intra_refresh.mode != DEFAULT_PROP_INTRA_REFRESH_MODE) {
+
+    if (c2venc->intra_refresh.mode == GST_C2_INTRA_REFRESH_DISABLED) {
+      GST_INFO_OBJECT (c2venc, "Intra refresh mode is set to disable, "
+        "resetting period to 0");
+      c2venc->intra_refresh.period = 0;
+    }
+
+    // this configuration just set intra refresh period in codec2 V2
     success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_INTRA_REFRESH, GPOINTER_CAST (&(c2venc->intra_refresh)));
+        GST_C2_PARAM_INTRA_REFRESH_TUNING,
+        GPOINTER_CAST (&(c2venc->intra_refresh)));
+
     if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set intra refresh mode!");
+      GST_ERROR_OBJECT (c2venc, "Failed to set intra refresh tuning!");
       return FALSE;
     }
+
+#if defined(CODEC2_CONFIG_VERSION_2_0)
+    if (c2venc->intra_refresh.mode != GST_C2_INTRA_REFRESH_DISABLED) {
+      success = gst_c2_engine_set_parameter (c2venc->engine,
+          GST_C2_PARAM_INTRA_REFRESH_MODE,
+          GPOINTER_CAST (&(c2venc->intra_refresh.mode)));
+
+      if (!success) {
+        GST_ERROR_OBJECT (c2venc, "Failed to set intra refresh mode!");
+        return FALSE;
+      }
+    }
+#endif // CODEC2_CONFIG_VERSION_2_0
   }
 
   success = gst_c2_engine_get_parameter (c2venc->engine,
@@ -835,7 +887,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     c2venc->name = g_strdup (name);
 
   if (c2venc->engine == NULL) {
-    c2venc->engine = gst_c2_engine_new (name, &callbacks, c2venc);
+    c2venc->engine = gst_c2_engine_new (c2venc->name, &callbacks, c2venc);
     g_return_val_if_fail (c2venc->engine != NULL, FALSE);
   }
 
@@ -960,6 +1012,11 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 {
   GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
   GstClockTimeDiff deadline;
+
+  // GAP input buffer, drop the frame.
+  if ((gst_buffer_get_size (frame->input_buffer) == 0) &&
+      GST_BUFFER_FLAG_IS_SET (frame->input_buffer, GST_BUFFER_FLAG_GAP))
+    return gst_video_encoder_finish_frame (encoder, frame);
 
   if ((deadline = gst_video_encoder_get_max_encode_time (encoder, frame)) < 0) {
     GST_WARNING_OBJECT (c2venc, "Input frame is too late, dropping "
@@ -1328,6 +1385,8 @@ gst_c2_venc_finalize (GObject * object)
   if (c2venc->engine != NULL)
     gst_c2_engine_free (c2venc->engine);
 
+  g_free (c2venc->name);
+
   gst_buffer_list_unref (c2venc->incomplete_buffers);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (c2venc));
@@ -1486,6 +1545,10 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_trigger_iframe),
       NULL, NULL, g_cclosure_marshal_VOID__VOID, G_TYPE_BOOLEAN, 0);
+
+  g_signal_new_class_handler ("ltr-mark", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_mark),
+      NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_UINT);
 
   gst_element_class_set_static_metadata (element,
       "Codec2 H.264/H.265/HEIC Video Encoder", "Codec/Encoder/Video",
