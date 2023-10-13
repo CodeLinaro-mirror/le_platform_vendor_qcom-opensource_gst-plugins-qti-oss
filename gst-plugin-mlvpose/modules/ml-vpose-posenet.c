@@ -71,8 +71,6 @@
 
 // Size (Stride) in pixels of one block of the tensor matrix.
 #define MATRIX_BLOCK_SIZE     16.0F
-// Keypoint confidence threshold (10%).
-#define CONFIDENCE_THRESHOLD  0.1F
 // Minimum distance in pixels between keypoints of poses.
 #define NMS_THRESHOLD_RADIUS  20.0F
 
@@ -85,12 +83,6 @@
     "dimensions = (int) " GST_ML_MODULE_TENSOR_DIMS
 
 #define GST_ML_SUB_MODULE_CAST(obj) ((GstMLSubModule*)(obj))
-
-// Offset values for each of the 3 tensors needed for dequantization.
-static const gint32 qoffsets[3] = { 128, 128, 117 };
-// Scale values for each of the 3 tensors needed for dequantization.
-static const gfloat qscales[3] =
-    { 0.0784313753247261, 0.0784313753247261, 1.3875764608383179 };
 
 // Module caps instance
 static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
@@ -107,12 +99,23 @@ struct _GstHoughScore {
 };
 
 struct _GstMLSubModule {
+  // Configurated ML capabilities in structure format.
+  GstMLInfo  mlinfo;
+
   // List of keypoint labels.
   GHashTable *labels;
   // Chain/Tree comprised of keypoint pairs that describe the skeleton.
   GArray     *links;
   // List of keypoint pairs that are connected together.
   GArray     *connections;
+
+  // Confidence threshold value.
+  gfloat     threshold;
+
+  // Offset values for each of the tensors for dequantization of some tensors.
+  gdouble    qoffsets[GST_ML_MAX_TENSORS];
+  // Scale values for each of the tensors for dequantization of some tensors.
+  gdouble    qscales[GST_ML_MAX_TENSORS];
 };
 
 
@@ -313,7 +316,8 @@ gst_ml_non_max_suppression (GstPoseKeypoint * l_keypoint, GArray * predictions)
 static void
 gst_ml_traverse_skeleton_link (GstPoseKeypoint * kp, guint id, guint edge,
     guint n_edges, gfloat x, gfloat y, guint width, guint height, guint n_keypoints,
-    const guint8 * heatmap, const guint8 * offsets, const guint8 * displacements)
+    const guint8 * heatmap, const guint8 * offsets, const guint8 * displacements,
+    const gdouble * qoffsets, const gdouble * qscales)
 {
   gfloat displacement = 0.0, offset = 0.0, confidence = 0.0;
   guint n = 0, m = 0, idx = 0;
@@ -356,7 +360,8 @@ gst_ml_traverse_skeleton_link (GstPoseKeypoint * kp, guint id, guint edge,
 }
 
 static void
-gst_ml_extract_hough_scores (GArray * scores, GstMLFrame * mlframe)
+gst_ml_extract_hough_scores (GArray * scores, GstMLFrame * mlframe,
+    gfloat threshold, const gdouble * qoffsets, const gdouble * qscales)
 {
   GstHoughScore score = { 0, };
   guint8 *heatmap = NULL, *offsets = NULL;
@@ -371,9 +376,9 @@ gst_ml_extract_hough_scores (GArray * scores, GstMLFrame * mlframe)
   // The 4th dimension of 1st tensor represents the number of keypoints.
   n_keypoints = GST_ML_FRAME_DIM (mlframe, 0, 3);
 
-  // Convinient Ppointer to the keypoints heatmap inside the 1st tensor.
+  // Convenient pointer to the keypoints heatmap inside the 1st tensor.
   heatmap = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
-  // Convinient pointer to the keypoints coordinate offsets inside the 2nd tensor.
+  // Convenient pointer to the keypoints coordinate offsets inside the 2nd tensor.
   offsets = GST_ML_FRAME_BLOCK_DATA (mlframe, 1);
 
   // Iterate the heatmap and find the keypoint with highest score for each block.
@@ -392,7 +397,7 @@ gst_ml_extract_hough_scores (GArray * scores, GstMLFrame * mlframe)
       confidence = 1.0 / (1.0 + expf (- confidence));
 
       // Discard results below the minimum confidence threshold.
-      if (confidence < CONFIDENCE_THRESHOLD)
+      if (confidence < threshold)
         continue;
 
       idx = (id - num);
@@ -417,8 +422,8 @@ gst_ml_extract_hough_scores (GArray * scores, GstMLFrame * mlframe)
 }
 
 static void
-gst_ml_decode_pose_prediction (GstMLPrediction * prediction,
-    GstMLFrame * mlframe, GHashTable * labels, GArray * links)
+gst_ml_decode_pose_prediction (GstMLSubModule * submodule,
+    GstMLPrediction * prediction, GstMLFrame * mlframe)
 {
   GstPoseKeypoint *s_kp = NULL, *d_kp = NULL;
   guint8 *heatmap = NULL, *offsets = NULL, *displacements = NULL;
@@ -439,11 +444,11 @@ gst_ml_decode_pose_prediction (GstMLPrediction * prediction,
   // Pointer to the displacement data inside the 3rd tensor.
   displacements = GST_ML_FRAME_BLOCK_DATA (mlframe, 2);
 
-  n_edges = links->len;
+  n_edges = submodule->links->len;
 
   // Iterate backwards over the skeleton links to find the seed keypoint.
   for (edge = (n_edges - 1); edge >= 0; edge--) {
-    GstPoseLink *link = &(g_array_index (links, GstPoseLink, edge));
+    GstPoseLink *link = &(g_array_index (submodule->links, GstPoseLink, edge));
 
     s_kp = &(g_array_index (prediction->keypoints, GstPoseKeypoint, link->d_kp_id));
     d_kp = &(g_array_index (prediction->keypoints, GstPoseKeypoint, link->s_kp_id));
@@ -456,10 +461,10 @@ gst_ml_decode_pose_prediction (GstMLPrediction * prediction,
     // Increase the edge with 2x links length, because iteration is backwards.
     gst_ml_traverse_skeleton_link (d_kp, link->s_kp_id, (edge + (n_edges * 2)),
         n_edges, s_kp->x, s_kp->y, width, height, n_keypoints, heatmap,
-        offsets, displacements);
+        offsets, displacements, submodule->qoffsets, submodule->qscales);
 
     // Extract info from labels and populate the coresponding keypoint params.
-    gst_ml_keypoint_populate_label_params (d_kp, link->s_kp_id, labels);
+    gst_ml_keypoint_populate_label_params (d_kp, link->s_kp_id, submodule->labels);
 
     GST_TRACE ("Keypoint: '%s' [%.2f x %.2f], confidence %.2f", d_kp->label,
         d_kp->x, d_kp->y, d_kp->confidence);
@@ -467,7 +472,7 @@ gst_ml_decode_pose_prediction (GstMLPrediction * prediction,
 
   // Iterate forward over the skeleton links to find all other keypoints.
   for (edge = 0; edge < n_edges; edge++) {
-    GstPoseLink *link = &(g_array_index (links, GstPoseLink, edge));
+    GstPoseLink *link = &(g_array_index (submodule->links, GstPoseLink, edge));
 
     s_kp = &(g_array_index (prediction->keypoints, GstPoseKeypoint, link->s_kp_id));
     d_kp = &(g_array_index (prediction->keypoints, GstPoseKeypoint, link->d_kp_id));
@@ -478,10 +483,11 @@ gst_ml_decode_pose_prediction (GstMLPrediction * prediction,
 
     // Extrapolate data from the source keypoint and populate the destination.
     gst_ml_traverse_skeleton_link (d_kp, link->d_kp_id, edge, n_edges, s_kp->x,
-        s_kp->y, width, height, n_keypoints, heatmap, offsets, displacements);
+        s_kp->y, width, height, n_keypoints, heatmap, offsets, displacements,
+        submodule->qoffsets, submodule->qscales);
 
     // Extract info from labels and populate the coresponding keypoint params.
-    gst_ml_keypoint_populate_label_params (d_kp, link->d_kp_id, labels);
+    gst_ml_keypoint_populate_label_params (d_kp, link->d_kp_id, submodule->labels);
 
     GST_TRACE ("Keypoint: '%s' [%.2f x %.2f], confidence %.2f", d_kp->label,
         d_kp->x, d_kp->y, d_kp->confidence);
@@ -492,9 +498,16 @@ gpointer
 gst_ml_module_open (void)
 {
   GstMLSubModule *submodule = NULL;
+  guint idx = 0;
 
   submodule = g_slice_new0 (GstMLSubModule);
   g_return_val_if_fail (submodule != NULL, NULL);
+
+  // Initialize the quantization offsets and scales.
+  for (idx = 0; idx < GST_ML_MAX_TENSORS; idx++) {
+    submodule->qoffsets[idx] = 0.0;
+    submodule->qscales[idx] = 1.0;
+  }
 
   return (gpointer) submodule;
 }
@@ -537,43 +550,128 @@ gboolean
 gst_ml_module_configure (gpointer instance, GstStructure * settings)
 {
   GstMLSubModule *submodule = GST_ML_SUB_MODULE_CAST (instance);
+  GstCaps *caps = NULL, *mlcaps = NULL;
   const gchar *input = NULL;
   GValue list = G_VALUE_INIT;
+  gdouble threshold = 0.0;
+  gboolean success = FALSE;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (settings != NULL, FALSE);
 
+  if (!(success = gst_structure_has_field (settings, GST_ML_MODULE_OPT_CAPS))) {
+    GST_ERROR ("Settings stucture does not contain configuration caps!");
+    goto cleanup;
+  }
+
+  // Fetch the configuration capabilities.
+  gst_structure_get (settings, GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, &caps, NULL);
+  // Get the set of supported capabilities.
+  mlcaps = gst_ml_module_caps ();
+
+  // Make sure that the configuration capabilities are fixated and supported.
+  if (!(success = gst_caps_is_fixed (caps))) {
+    GST_ERROR ("Configuration caps are not fixated!");
+    goto cleanup;
+  } else if (!(success = gst_caps_can_intersect (caps, mlcaps))) {
+    GST_ERROR ("Configuration caps are not supported!");
+    goto cleanup;
+  }
+
+  if (!(success = gst_ml_info_from_caps (&(submodule->mlinfo), caps))) {
+    GST_ERROR ("Failed to get ML info from confguration caps!");
+    goto cleanup;
+  }
+
   input = gst_structure_get_string (settings, GST_ML_MODULE_OPT_LABELS);
-  g_return_val_if_fail (gst_ml_parse_labels (input, &list), FALSE);
+
+  // Parse funtion will print error message if it fails, simply goto cleanup.
+  if (!(success = gst_ml_parse_labels (input, &list)))
+    goto cleanup;
 
   submodule->labels = gst_ml_load_labels (&list);
-  g_return_val_if_fail (submodule->labels != NULL, FALSE);
+
+  // Labels funtion will print error message if it fails, simply goto cleanup.
+  if (!(success = (submodule->labels != NULL)))
+    goto cleanup;
 
   // Fill the keypoints chain/tree.
   submodule->links = g_array_new (FALSE, FALSE, sizeof (GstPoseLink));
   submodule->connections = g_array_new (FALSE, FALSE, sizeof (GstPoseLink));
 
   // Recursiveli fill the skeleton chain/tree starting from label 0 as seed.
-  if (!gst_ml_load_links (&list, 0, submodule->links)) {
+  if (!(success = gst_ml_load_links (&list, 0, submodule->links))) {
     GST_ERROR ("Failed to load the skeleton chain/tree!");
-
-    g_value_unset (&list);
-    gst_structure_free (settings);
-    return FALSE;
+    goto cleanup;
   }
 
   // Recursiveli fill the keypoint connections starting from label 0 as seed.
-  if (!gst_ml_load_connections (&list, submodule->connections)) {
+  if (!(success = gst_ml_load_connections (&list, submodule->connections))) {
     GST_ERROR ("Failed to load the keypoint interconnections!");
-
-    g_value_unset (&list);
-    gst_structure_free (settings);
-    return FALSE;
+    goto cleanup;
   }
+
+  success = gst_structure_has_field (settings, GST_ML_MODULE_OPT_THRESHOLD);
+  if (!success) {
+    GST_ERROR ("Settings stucture does not contain threshold value!");
+    goto cleanup;
+  }
+
+  gst_structure_get_double (settings, GST_ML_MODULE_OPT_THRESHOLD, &threshold);
+  submodule->threshold = threshold / 100.0;
+
+  if (GST_ML_INFO_TYPE (&(submodule->mlinfo)) == GST_ML_TYPE_UINT8) {
+    GstStructure *constants = NULL;
+    const GValue *qoffsets = NULL, *qscales = NULL;
+    guint idx = 0, n_tensors = 0;
+
+    success = gst_structure_has_field (settings, GST_ML_MODULE_OPT_CONSTANTS);
+    if (!success) {
+      GST_ERROR ("Settings stucture does not contain constants value!");
+      goto cleanup;
+    }
+
+    constants = GST_STRUCTURE (g_value_get_boxed (
+        gst_structure_get_value (settings, GST_ML_MODULE_OPT_CONSTANTS)));
+
+    if (!(success = gst_structure_has_field (constants, "q-offsets"))) {
+      GST_ERROR ("Missing quantization offsets coefficients!");
+      goto cleanup;
+    } else if (!(success = gst_structure_has_field (constants, "q-scales"))) {
+      GST_ERROR ("Missing quantization scales coefficients!");
+      goto cleanup;
+    }
+
+    qoffsets = gst_structure_get_value (constants, "q-offsets");
+    qscales = gst_structure_get_value (constants, "q-scales");
+    n_tensors = GST_ML_INFO_N_TENSORS (&(submodule->mlinfo));
+
+    if (!(success = (gst_value_array_get_size (qoffsets) == n_tensors))) {
+      GST_ERROR ("Expecting %u dequantization offsets entries but received "
+          "only %u!", n_tensors, gst_value_array_get_size (qoffsets));
+      goto cleanup;
+    } else if (!(success = (gst_value_array_get_size (qscales) == n_tensors))) {
+      GST_ERROR ("Expecting %u dequantization scales entries but received "
+          "only %u!", n_tensors, gst_value_array_get_size (qscales));
+      goto cleanup;
+    }
+
+    for (idx = 0; idx < n_tensors; idx++) {
+      submodule->qoffsets[idx] =
+          g_value_get_double (gst_value_array_get_value (qoffsets, idx));
+      submodule->qscales[idx] =
+          g_value_get_double (gst_value_array_get_value (qscales, idx));
+    }
+  }
+
+cleanup:
+  if (caps != NULL)
+    gst_caps_unref (caps);
 
   g_value_unset (&list);
   gst_structure_free (settings);
-  return TRUE;
+
+  return success;
 }
 
 gboolean
@@ -589,12 +687,9 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   g_return_val_if_fail (mlframe != NULL, FALSE);
   g_return_val_if_fail (predictions != NULL, FALSE);
 
-  // Extract the SAR (Source Aspect Ratio).
-  if ((pmeta = gst_buffer_get_protection_meta (mlframe->buffer)) != NULL) {
-    sar_n = gst_value_get_fraction_numerator (
-        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
-    sar_d = gst_value_get_fraction_denominator (
-        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
+  if (!gst_ml_info_is_equal (&(mlframe->info), &(submodule->mlinfo))) {
+    GST_ERROR ("ML frame with unsupported layout!");
+    return FALSE;
   }
 
   n_keypoints = g_hash_table_size (submodule->labels);
@@ -612,11 +707,16 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     return FALSE;
   }
 
+  // Extract the SAR (Source Aspect Ratio).
+  if ((pmeta = gst_buffer_get_protection_meta (mlframe->buffer)) != NULL)
+    gst_structure_get_fraction (pmeta->info, "source-aspect-ratio", &sar_n, &sar_d);
+
   // Initial allocation for the Hough score map for each block of the matrix.
   scores = g_array_new (FALSE, FALSE, sizeof (GstHoughScore));
 
   // Find the keypoints with highest score for each block inside the heatmap.
-  gst_ml_extract_hough_scores (scores, mlframe);
+  gst_ml_extract_hough_scores (scores, mlframe, submodule->threshold,
+      submodule->qoffsets, submodule->qscales);
 
   // Sort the hough keypoint scores map by the their confidences.
   g_array_sort (scores, gst_ml_compare_scores);
@@ -657,8 +757,7 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
         kp->label, kp->x, kp->y, kp->confidence);
 
     // Traverse the skeleton links and populate pose keypoints.
-    gst_ml_decode_pose_prediction (&prediction, mlframe, submodule->labels,
-        submodule->links);
+    gst_ml_decode_pose_prediction (submodule, &prediction, mlframe);
 
     predictions = g_array_append_val (predictions, prediction);
   }
