@@ -202,6 +202,8 @@ struct _GstQmmfContext {
   gint64            master_exp_time;
   /// Multi Camera (1) Exposure value
   gint64            slave_exp_time;
+  /// Camera operation mode
+  gint              cam_operation_mode;
 
   /// Camera timestamp select.
   gint               selecttscp;
@@ -996,6 +998,10 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
   GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
   ::qmmf::recorder::Recorder *recorder = context->recorder;
 
+  guint numplanes = 0;
+  gsize offset[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
+  gint stride[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
+
   GstBuffer *gstbuffer = NULL;
   GstStructure *structure = NULL;
   GstDataQueueItem *item = NULL;
@@ -1006,6 +1012,17 @@ image_data_callback (GstQmmfContext * context, GstPad * pad,
       "Failed to create GST buffer!");
 
   GST_BUFFER_FLAG_SET (gstbuffer, GST_BUFFER_FLAG_LIVE);
+
+  for (size_t i = 0; i < meta.n_planes; ++i) {
+    stride[i] = meta.planes[i].stride;
+    offset[i] = meta.planes[i].offset;
+    numplanes++;
+  }
+
+  // Set GStreamer buffer video metadata.
+  gst_buffer_add_video_meta_full (gstbuffer, GST_VIDEO_FRAME_FLAG_NONE,
+      (GstVideoFormat)ipad->format, ipad->width, ipad->height,
+      numplanes, offset, stride);
 
   // Propagate original camera timestamp in media dependent OFFSET_END field.
   GST_BUFFER_OFFSET_END (gstbuffer) = buffer.timestamp;
@@ -1164,6 +1181,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       g_slice_free (GstQmmfContext, context);,
       NULL, "QMMF Recorder creation failed!");
 
+  context->state = GST_STATE_NULL;
+  context->eventcb = eventcb;
+  context->metacb = metacb;
+  context->userdata = userdata;
+
   // Register a events function which will call the EOS callback if necessary.
   cbs.event_cb =
       [&, context] (::qmmf::recorder::EventType type, void *data, size_t size)
@@ -1183,12 +1205,6 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       gst_structure_new_empty ("org.quic.camera.anr_tuning");
   context->mwbsettings =
       gst_structure_new_empty ("org.codeaurora.qcamera3.manualWB");
-
-  context->state = GST_STATE_NULL;
-
-  context->eventcb = eventcb;
-  context->metacb = metacb;
-  context->userdata = userdata;
 
   GST_INFO ("Created QMMF context: %p", context);
   return context;
@@ -1270,6 +1286,20 @@ gst_qmmf_context_open (GstQmmfContext * context)
   ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
   hfr_sync_mode.enable = context->hfr_sync_mode;
   xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
+
+  // Camera Operation Mode
+  ::qmmf::recorder::CamOpModeControl cam_opmode;
+  switch(context->cam_operation_mode) {
+    case CAM_OPMODE_NONE:
+      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeNone;
+      break;
+    case CAM_OPMODE_FRAMESELECTION:
+      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeFrameSelection;
+      break;
+    default:
+      break;
+  }
+  xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
@@ -1789,10 +1819,16 @@ gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
         if (bayerpad == NULL)
           image_data_callback (context, pad, buffer, meta);
         else {
-          if (meta.format == ::qmmf::BufferFormat::kBLOB)
+          if (meta.format == ::qmmf::BufferFormat::kBLOB ||
+              meta.format == ::qmmf::BufferFormat::kNV12)
             image_data_callback (context, pad, buffer, meta);
-          else
+          else if (meta.format == ::qmmf::BufferFormat::kRAW8 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10 ||
+              meta.format == ::qmmf::BufferFormat::kRAW10)
             image_data_callback (context, bayerpad, buffer, meta);
+          else
+            GST_ERROR ("Unsupported snapshot format %d", (gint)meta.format);
         }
       };
 
@@ -2003,6 +2039,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_HFR_SYNC_MODE:
       context->hfr_sync_mode = g_value_get_boolean (value);
+      return;
+    case PARAM_CAMERA_OPERATION_MODE:
+      context->cam_operation_mode = g_value_get_enum (value);
       return;
   }
 
@@ -2459,6 +2498,14 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(ANDROID_JPEG_ORIENTATION, &(context)->rotation, 1);
       break;
     }
+    case PARAM_CAMERA_STANDBY:
+    {
+      guint tag_id = get_vendor_tag_by_name (
+          "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
+      guint8 standby = g_value_get_uint (value);
+      meta.update(tag_id, &standby, 1);
+      break;
+    }
   }
 
   if (!context->slave && (context->state >= GST_STATE_READY)) {
@@ -2742,6 +2789,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_SELECT_ROTATION:
       g_value_set_int (value, context->rotation);
+      break;
+    case PARAM_CAMERA_OPERATION_MODE:
+      g_value_set_enum (value, context->cam_operation_mode);
       break;
   }
 }

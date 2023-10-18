@@ -67,14 +67,17 @@
 // Set the default debug category.
 #define GST_CAT_DEFAULT gst_ml_module_debug
 
-#define GINT32_PTR_CAST(data)       ((gint32*) data)
-#define GFLOAT_PTR_CAST(data)       ((gfloat*) data)
+#define GFLOAT_PTR_CAST(data)       ((gfloat*)data)
 #define GST_ML_SUB_MODULE_CAST(obj) ((GstMLSubModule*)(obj))
 
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
-    "type = (string) { UINT8, INT32, FLOAT32 }, " \
-    "dimensions = (int) < < 1, [ 1000, 1001 ] > >"
+    "type = (string) { FLOAT32 }, " \
+    "dimensions = (int) < < 26, 1, 37 > > ;" \
+    "neural-network/tensors, " \
+    "type = (string) { FLOAT32 }, " \
+    "dimensions = (int) < < 1, [26, 48], 37 > >"
+
 
 // Module caps instance
 static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
@@ -90,6 +93,8 @@ struct _GstMLSubModule {
   // Confidence threshold value.
   gdouble    threshold;
 };
+
+static const gchar alphabet[] = "_0123456789abcdefghijklmnopqrstuvwxyz";
 
 gpointer
 gst_ml_module_open (void)
@@ -203,9 +208,9 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 {
   GstMLSubModule *submodule = GST_ML_SUB_MODULE_CAST (instance);
   GArray *predictions = (GArray *) output;
-  guint8 *data = NULL;
-  guint idx = 0, n_inferences = 0;
-  gdouble confidence = 0.0;
+  gfloat *data = NULL;
+  guint n_characters = 0, n_rows = 0, idx = 0;
+  GString *result = NULL;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
@@ -216,41 +221,40 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     return FALSE;
   }
 
-  n_inferences = GST_ML_FRAME_DIM (mlframe, 0, 1);
-  data = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
+  result = g_string_new (NULL);
+  data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+  n_characters = GST_ML_FRAME_DIM (mlframe, 0, 2);
+  n_rows = GST_ML_FRAME_DIM (mlframe, 0, 0);
 
-  // Fill the prediction table.
-  for (idx = 0; idx < n_inferences; ++idx) {
-    GstLabel *label = NULL;
-    GstMLPrediction prediction = { 0 };
+  if (n_rows == 1)
+    n_rows = GST_ML_FRAME_DIM (mlframe, 0, 1);
 
-    switch (GST_ML_FRAME_TYPE (mlframe)) {
-      case GST_ML_TYPE_UINT8:
-        confidence = data[idx] * (100.0 / G_MAXUINT8);
-        break;
-      case GST_ML_TYPE_INT32:
-        confidence = GINT32_PTR_CAST (data)[idx];
-        break;
-      case GST_ML_TYPE_FLOAT32:
-        confidence = GFLOAT_PTR_CAST (data)[idx] * 100;
-        break;
-      default:
-        GST_ERROR ("Unsupported tensor type!");
-        return FALSE;
-    }
+  GST_LOG("n_rows: %d, n_characters: %d", n_rows, n_characters);
 
-    // Discard results with confidence below the set threshold.
-    if (confidence < submodule->threshold)
+  for (idx = 0; idx < n_rows; idx++) {
+    guint m = 0, c_id = 0;
+    gfloat *pclass = data + (n_characters  * idx);
+
+     // Find the character ID with the highest confidence.
+    for (m = 1; m < n_characters; m++)
+      c_id = (pclass[m] > pclass[c_id]) ? m : c_id;
+
+    if (!c_id)
       continue;
 
-    label = g_hash_table_lookup (submodule->labels, GUINT_TO_POINTER (idx));
+    g_string_append_c (result, alphabet[c_id]);
+  }
 
-    prediction.confidence = confidence;
-    prediction.label = g_strdup (label ? label->name : "unknown");
-    prediction.color = label ? label->color : 0x000000FF;
+  if (result->len > 0) {
+    GstMLPrediction prediction = { 0, 0.0, 0x00FF00FF };
+
+    prediction.confidence = 100;
+    prediction.label = g_strdup (result->str);
+    prediction.color = 0x00FF00FF;
 
     predictions = g_array_append_val (predictions, prediction);
   }
 
+  g_string_free (result, TRUE);
   return TRUE;
 }

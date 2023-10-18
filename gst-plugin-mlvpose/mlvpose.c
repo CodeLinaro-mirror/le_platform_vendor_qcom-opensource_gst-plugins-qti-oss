@@ -115,6 +115,7 @@ G_DEFINE_TYPE (GstMLVideoPose, gst_ml_video_pose,
 #define DEFAULT_PROP_LABELS      NULL
 #define DEFAULT_PROP_NUM_RESULTS 5
 #define DEFAULT_PROP_THRESHOLD   50.0F
+#define DEFAULT_PROP_CONSTANTS   NULL
 
 #define DEFAULT_MIN_BUFFERS      2
 #define DEFAULT_MAX_BUFFERS      10
@@ -134,6 +135,7 @@ enum
   PROP_LABELS,
   PROP_NUM_RESULTS,
   PROP_THRESHOLD,
+  PROP_CONSTANTS,
 };
 
 enum {
@@ -400,9 +402,6 @@ gst_ml_video_pose_fill_video_output (GstMLVideoPose * vpose,
     for (num = 0; num < keypoints->len; ++num) {
       GstPoseKeypoint *kp = &(g_array_index (keypoints, GstPoseKeypoint, num));
 
-      if (kp->confidence < vpose->threshold)
-        continue;
-
       // Adjust coordinates based on the output buffer dimensions.
       kp->x = kp->x * vmeta->width;
       kp->y = kp->y * vmeta->height;
@@ -431,10 +430,6 @@ gst_ml_video_pose_fill_video_output (GstMLVideoPose * vpose,
 
       s_kp = &(g_array_index (keypoints, GstPoseKeypoint, link->s_kp_id));
       d_kp = &(g_array_index (keypoints, GstPoseKeypoint, link->d_kp_id));
-
-      if ((s_kp->confidence < vpose->threshold) ||
-          (d_kp->confidence < vpose->threshold))
-        continue;
 
       GST_TRACE_OBJECT (vpose, "Link: '%s' [%.0f x %.0f] <--> '%s' [%.0f x %.0f]",
           s_kp->label, s_kp->x, s_kp->y, d_kp->label, d_kp->x, d_kp->y);
@@ -861,7 +856,8 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
 
   if (!gst_caps_can_intersect (incaps, modulecaps)) {
     GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
-        ("Module caps do not intersect with the negotiated caps!"));
+        ("Module caps %" GST_PTR_FORMAT " do not intersect with the "
+         "negotiated caps %" GST_PTR_FORMAT "!", modulecaps, incaps));
     return FALSE;
   }
 
@@ -872,7 +868,16 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   structure = gst_structure_new ("options",
-      GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, vpose->labels, NULL);
+      GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
+      GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, vpose->labels,
+      GST_ML_MODULE_OPT_THRESHOLD, G_TYPE_DOUBLE, vpose->threshold,
+      NULL);
+
+  if (vpose->mlconstants != NULL) {
+    gst_structure_set (structure,
+        GST_ML_MODULE_OPT_CONSTANTS, GST_TYPE_STRUCTURE, vpose->mlconstants,
+        NULL);
+  }
 
   if (!gst_ml_module_set_opts (vpose->module, structure)) {
     GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
@@ -998,6 +1003,59 @@ gst_ml_video_pose_set_property (GObject * object, guint prop_id,
     case PROP_THRESHOLD:
       vpose->threshold = g_value_get_double (value);
       break;
+    case PROP_CONSTANTS:
+    {
+      const gchar *input = g_value_get_string (value);
+      GValue value = G_VALUE_INIT;
+
+      g_value_init (&value, GST_TYPE_STRUCTURE);
+
+      if (g_file_test (input, G_FILE_TEST_IS_REGULAR)) {
+        GString *string = NULL;
+        GError *error = NULL;
+        gchar *contents = NULL;
+        gboolean success = FALSE;
+
+        if (!g_file_get_contents (input, &contents, NULL, &error)) {
+          GST_ERROR ("Failed to get file contents, error: %s!",
+              GST_STR_NULL (error->message));
+          g_clear_error (&error);
+          break;
+        }
+
+        // Remove trailing space and replace new lines with a comma delimiter.
+        contents = g_strstrip (contents);
+        contents = g_strdelimit (contents, "\n", ',');
+
+        string = g_string_new (contents);
+        g_free (contents);
+
+        // Add opening and closing brackets.
+        string = g_string_prepend (string, "{ ");
+        string = g_string_append (string, " }");
+
+        // Get the raw character data.
+        contents = g_string_free (string, FALSE);
+
+        success = gst_value_deserialize (&value, contents);
+        g_free (contents);
+
+        if (!success) {
+          GST_ERROR ("Failed to deserialize file contents!");
+          break;
+        }
+      } else if (!gst_value_deserialize (&value, input)) {
+        GST_ERROR ("Failed to deserialize string!");
+        break;
+      }
+
+      if (vpose->mlconstants != NULL)
+        gst_structure_free (vpose->mlconstants);
+
+      vpose->mlconstants = GST_STRUCTURE (g_value_dup_boxed (&value));
+      g_value_unset (&value);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1023,6 +1081,17 @@ gst_ml_video_pose_get_property (GObject * object, guint prop_id,
     case PROP_THRESHOLD:
       g_value_set_double (value, vpose->threshold);
       break;
+    case PROP_CONSTANTS:
+    {
+      gchar *string = NULL;
+
+      if (vpose->mlconstants != NULL)
+        string = gst_structure_to_string (vpose->mlconstants);
+
+      g_value_set_string (value, string);
+      g_free (string);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1073,6 +1142,12 @@ gst_ml_video_pose_class_init (GstMLVideoPoseClass * klass)
       g_param_spec_double ("threshold", "Threshold",
           "Confidence threshold in %", 10.0, 100.0, DEFAULT_PROP_THRESHOLD,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CONSTANTS,
+      g_param_spec_string ("constants", "Constants",
+          "Constants, offsets and coefficients used by the chosen module for "
+          "post-processing of incoming tensors in GstStructure string format. "
+          "Applicable only for some modules.",
+          DEFAULT_PROP_CONSTANTS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,
       "Machine Learning Pose", "Filter/Effect/Converter",
@@ -1108,6 +1183,7 @@ gst_ml_video_pose_init (GstMLVideoPose * vpose)
   vpose->labels = DEFAULT_PROP_LABELS;
   vpose->n_results = DEFAULT_PROP_NUM_RESULTS;
   vpose->threshold = DEFAULT_PROP_THRESHOLD;
+  vpose->mlconstants = DEFAULT_PROP_CONSTANTS;
 
   GST_DEBUG_CATEGORY_INIT (gst_ml_video_pose_debug, "qtimlvpose", 0,
       "QTI ML pose estimation plugin");

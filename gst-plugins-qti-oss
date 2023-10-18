@@ -1,0 +1,278 @@
+diff --cc gst-plugin-examples/gst-concurrent-cameras-example/main.c
+index 2564034,57773cd..0000000
+--- a/gst-plugin-examples/gst-concurrent-cameras-example/main.c
++++ b/gst-plugin-examples/gst-concurrent-cameras-example/main.c
+@@@ -217,7 -217,7 +217,11 @@@ error_cb (GstBus * bus, GstMessage * me
+    // Since there is error, set pipeline to NULL state.
+    gst_element_set_state (ctx->pipeline, GST_STATE_NULL);
+  
+++<<<<<<< HEAD
+ +  // decrease the refcount of the pipeline which got error.
+++=======
++   // Decrease the refcount of the pipeline which got error.
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+    --*ctx->refcount;
+  
+    g_free (debug);
+diff --cc gst-plugin-qmmfsrc/qmmf_source.c
+index dc965c2,2c72d88..0000000
+--- a/gst-plugin-qmmfsrc/qmmf_source.c
++++ b/gst-plugin-qmmfsrc/qmmf_source.c
+@@@ -116,9 -116,7 +116,13 @@@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debu
+  #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
+  #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
+  #define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
+++<<<<<<< HEAD
+ +#define DEFAULT_PROP_CAMERA_SELECT_TSCP               SELECT_TSCP_DEFAULT
+ +#define DEFAULT_PROP_CAMERA_HFR_SYNC_MODE             FALSE
+ +#define DEFAULT_PROP_CAMERA_ROTATION                  0
+++=======
++ #define DEFAULT_PROP_CAMERA_OPERATION_MODE            CAM_OPMODE_NONE
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+  
+  static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
+  
+@@@ -182,9 -180,7 +186,13 @@@ enu
+    PROP_CAMERA_FRC_MODE,
+    PROP_CAMERA_IFE_DIRECT_STREAM,
+    PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+++<<<<<<< HEAD
+ +  PROP_CAMERA_SELECT_TSCP,
+ +  PROP_CAMERA_HFR_SYNC_MODE,
+ +  PROP_CAMERA_ROTATION,
+++=======
++   PROP_CAMERA_OPERATION_MODE,
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+  };
+  
+  static GstStaticPadTemplate qmmfsrc_video_src_template =
+@@@ -1160,13 -1193,9 +1209,19 @@@ qmmfsrc_set_property (GObject * object
+        gst_qmmf_context_set_camera_param (qmmfsrc->context,
+            PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
+        break;
+++<<<<<<< HEAD
+ +    case PROP_CAMERA_HFR_SYNC_MODE:
+ +      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+ +          PARAM_CAMERA_HFR_SYNC_MODE, value);
+ +      break;
+ +    case PROP_CAMERA_ROTATION:
+ +      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+ +          PARAM_CAMERA_SELECT_ROTATION, value);
+++=======
++     case PROP_CAMERA_OPERATION_MODE:
++       gst_qmmf_context_set_camera_param (qmmfsrc->context,
++           PARAM_CAMERA_OPERATION_MODE, value);
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+        break;
+      default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+@@@ -1346,13 -1371,9 +1401,19 @@@ qmmfsrc_get_property (GObject * object
+        gst_qmmf_context_get_camera_param (qmmfsrc->context,
+            PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
+        break;
+++<<<<<<< HEAD
+ +    case PROP_CAMERA_HFR_SYNC_MODE:
+ +      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+ +          PARAM_CAMERA_HFR_SYNC_MODE, value);
+ +      break;
+ +    case PROP_CAMERA_ROTATION:
+ +      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+ +          PARAM_CAMERA_SELECT_ROTATION, value);
+++=======
++     case PROP_CAMERA_OPERATION_MODE:
++       gst_qmmf_context_get_camera_param (qmmfsrc->context,
++           PARAM_CAMERA_OPERATION_MODE, value);
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+        break;
+      default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+@@@ -1664,20 -1679,13 +1725,30 @@@ qmmfsrc_class_init (GstQmmfSrcClass * k
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PLAYING));
+  #endif  // MULTI_CAMERA_ENABLE
+++<<<<<<< HEAD
+ +  g_object_class_install_property (gobject, PROP_CAMERA_ROTATION,
+ +      g_param_spec_int ("rotation", "ROTATION",
+ +          "Rotation angle is ",
+ +          0, 360, DEFAULT_PROP_CAMERA_ROTATION,
+ +          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+ +          GST_PARAM_MUTABLE_PLAYING));
+ +
+ +
+ +  g_object_class_install_property (gobject, PROP_CAMERA_HFR_SYNC_MODE,
+ +    g_param_spec_boolean ("hfr-sync-mode", "HFR Sync Mode",
+ +          "HFR Sync mode for multiple streams",
+ +          DEFAULT_PROP_CAMERA_HFR_SYNC_MODE,
+ +          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+ +
+++=======
++   g_object_class_install_property (gobject, PROP_CAMERA_OPERATION_MODE,
++       g_param_spec_enum ("op-mode", "Camera operation mode",
++            "provide camera operation mode to support specified camera function "
++            "support mode : none | frameselection "
++            "by default camera operation mode is none.",
++            GST_TYPE_QMMFSRC_CAM_OPMODE, DEFAULT_PROP_CAMERA_OPERATION_MODE,
++            G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+  
+    signals[SIGNAL_CAPTURE_IMAGE] =
+        g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),
+diff --cc gst-plugin-qmmfsrc/qmmf_source_context.cc
+index 84e9f2f,91bacd1..0000000
+--- a/gst-plugin-qmmfsrc/qmmf_source_context.cc
++++ b/gst-plugin-qmmfsrc/qmmf_source_context.cc
+@@@ -202,14 -201,9 +202,16 @@@ struct _GstQmmfContext 
+    gint64            master_exp_time;
+    /// Multi Camera (1) Exposure value
+    gint64            slave_exp_time;
++   /// Camera operation mode
++   gint              cam_operation_mode;
+  
+ +  /// Camera timestamp select.
+ +  gint               selecttscp;
+ +  /// HFR Sync Mode
+ +  gboolean           hfr_sync_mode;
+ +  /// rotation angle
+ +  gint               rotation;
+ +
+    /// QMMF Recorder instance.
+    ::qmmf::recorder::Recorder *recorder;
+  };
+@@@ -996,8 -940,11 +998,12 @@@ image_data_callback (GstQmmfContext * c
+    GstQmmfSrcImagePad *ipad = GST_QMMFSRC_IMAGE_PAD (pad);
+    ::qmmf::recorder::Recorder *recorder = context->recorder;
+  
++   guint numplanes = 0;
++   gsize offset[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
++   gint stride[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
++ 
+    GstBuffer *gstbuffer = NULL;
+ +  GstStructure *structure = NULL;
+    GstDataQueueItem *item = NULL;
+  
+    gstbuffer = qmmfsrc_gst_buffer_new_wrapped (context, pad, &buffer);
+@@@ -1266,11 -1207,21 +1282,25 @@@ gst_qmmf_context_open (GstQmmfContext 
+    ::qmmf::recorder::IFEDirectStream qmmf_ife_direct_stream;
+    qmmf_ife_direct_stream.enable = context->ife_direct_stream;
+    xtraparam.Update(::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+ +  // HFRSyncMode_
+ +  ::qmmf::recorder::HFRSyncMode hfr_sync_mode;
+ +  hfr_sync_mode.enable = context->hfr_sync_mode;
+ +  xtraparam.Update(::qmmf::recorder::QMMF_HFR_SYNC_MODE, hfr_sync_mode);
+  
++   // Camera Operation Mode
++   ::qmmf::recorder::CamOpModeControl cam_opmode;
++   switch(context->cam_operation_mode) {
++     case CAM_OPMODE_NONE:
++       cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeNone;
++       break;
++     case CAM_OPMODE_FRAMESELECTION:
++       cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeFrameSelection;
++       break;
++     default:
++       break;
++   }
++   xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
++ 
+    qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
+        const ::camera::CameraMetadata& result) {
+  
+@@@ -2001,8 -1954,8 +2037,13 @@@ gst_qmmf_context_set_camera_param (GstQ
+      case PARAM_CAMERA_IFE_DIRECT_STREAM:
+        context->ife_direct_stream = g_value_get_boolean (value);
+        return;
+++<<<<<<< HEAD
+ +    case PARAM_CAMERA_HFR_SYNC_MODE:
+ +      context->hfr_sync_mode = g_value_get_boolean (value);
+++=======
++     case PARAM_CAMERA_OPERATION_MODE:
++       context->cam_operation_mode = g_value_get_enum (value);
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+        return;
+    }
+  
+@@@ -2451,12 -2395,12 +2492,21 @@@
+            (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+        break;
+      }
+++<<<<<<< HEAD
+ +    case PARAM_CAMERA_SELECT_ROTATION:
+ +    {
+ +      gint rotation;
+ +      context->rotation = g_value_get_int (value);
+ +
+ +      meta.update(ANDROID_JPEG_ORIENTATION, &(context)->rotation, 1);
+++=======
++     case PARAM_CAMERA_STANDBY:
++     {
++       guint tag_id = get_vendor_tag_by_name (
++           "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
++       guint8 standby = g_value_get_uint (value);
++       meta.update(tag_id, &standby, 1);
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+        break;
+      }
+    }
+@@@ -2740,8 -2678,8 +2790,13 @@@ gst_qmmf_context_get_camera_param (GstQ
+  
+        break;
+      }
+++<<<<<<< HEAD
+ +    case PARAM_CAMERA_SELECT_ROTATION:
+ +      g_value_set_int (value, context->rotation);
+++=======
++     case PARAM_CAMERA_OPERATION_MODE:
++       g_value_set_enum (value, context->cam_operation_mode);
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+        break;
+    }
+  }
+diff --cc gst-plugin-qmmfsrc/qmmf_source_context.h
+index aa483af,3fbf0a9..0000000
+--- a/gst-plugin-qmmfsrc/qmmf_source_context.h
++++ b/gst-plugin-qmmfsrc/qmmf_source_context.h
+@@@ -130,9 -130,8 +130,14 @@@ enu
+    PARAM_CAMERA_FRC_MODE,
+    PARAM_CAMERA_IFE_DIRECT_STREAM,
+    PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+++<<<<<<< HEAD
+ +  PARAM_CAMERA_SELECT_TSCP,
+ +  PARAM_CAMERA_HFR_SYNC_MODE,
+ +  PARAM_CAMERA_SELECT_ROTATION,
+++=======
++   PARAM_CAMERA_STANDBY,
++   PARAM_CAMERA_OPERATION_MODE,
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+  };
+  
+  GST_API GstQmmfContext *
+diff --cc gst-plugin-qmmfsrc/qmmf_source_utils.h
+index 2df22e2,a02cb21..0000000
+--- a/gst-plugin-qmmfsrc/qmmf_source_utils.h
++++ b/gst-plugin-qmmfsrc/qmmf_source_utils.h
+@@@ -136,8 -136,7 +136,12 @@@ G_BEGIN_DECL
+  #define GST_TYPE_QMMFSRC_CAPTURE_MODE (gst_qmmfsrc_capture_mode_get_type())
+  #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
+  #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
+++<<<<<<< HEAD
+ +#define GST_TYPE_QMMFSRC_SELECT_TSCP \
+ +    (gst_qmmfsrc_select_tscp_get_type())
+++=======
++ #define GST_TYPE_QMMFSRC_CAM_OPMODE (gst_qmmfsrc_cam_opmode_get_type())
+++>>>>>>> 6579b5d82e79278cb5a08a7cd9871a4f4a35ce89
+  
+  #define GST_BAYER_FORMAT_OFFSET 0x1000
+  
+@@@ -323,10 -320,10 +332,12 @@@ GType gst_qmmfsrc_capture_mode_get_typ
+  
+  GType gst_qmmfsrc_frc_mode_get_type (void);
+  
+ +GType gst_qmmfsrc_select_tscp_get_type (void);
+ +
+  GType gst_qmmfsrc_rotate_get_type(void);
+  
++ GType gst_qmmfsrc_cam_opmode_get_type (void);
++ 
+  guchar gst_qmmfsrc_control_mode_android_value (const guint value);
+  
+  guint gst_qmmfsrc_android_value_control_mode (const guchar value);
