@@ -3,12 +3,14 @@ set(GST_QTI_VIDEO_BASE gstqtivideobase)
 
 add_library(${GST_QTI_VIDEO_BASE} SHARED
   gstimagepool.c
+  gstvideooriginmeta.c
   $<$<BOOL:${GST_C2D_CONVERTER}>:c2d-video-converter.c>
   $<$<BOOL:${GST_GLES_CONVERTER}>:gles-video-converter.cc>
 )
 
 set(GST_QTI_VIDEO_BASE_HEADERS
   gstimagepool.h
+  gstvideooriginmeta.h
   $<$<BOOL:${GST_C2D_CONVERTER}>:${CMAKE_CURRENT_SOURCE_DIR}/c2d-video-converter.h>
   $<$<BOOL:${GST_GLES_CONVERTER}>:${CMAKE_CURRENT_SOURCE_DIR}/gles-video-converter.h>
 )
