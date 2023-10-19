@@ -670,8 +670,14 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   gpointer key;
   GstPad *pad;
   GList *list = NULL;
+  GValue value = G_VALUE_INIT;
+  gboolean video_stream_reverse_visit = FALSE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  g_object_get_property(G_OBJECT(qmmfsrc), "op-mode", &value);
+  if (g_value_get_enum(&value) == CAM_OPMODE_FRAMESELECTION)
+    video_stream_reverse_visit = TRUE;
 
   if (g_list_length (qmmfsrc->imgindexes) > 0) {
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads,
@@ -682,8 +688,11 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
         "Image stream deletion failed!");
   }
 
-  //use reverse order to delete video streams
-  list = g_list_last(qmmfsrc->vidindexes);
+  //only use rever visit under certain case
+  if (video_stream_reverse_visit == TRUE)
+    list = g_list_last(qmmfsrc->vidindexes);
+  else
+    list = qmmfsrc->vidindexes;
 
   while (list != NULL) {
     key = list->data;
@@ -693,7 +702,10 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Video stream deletion failed!");
 
-    list = list->prev;
+    if (video_stream_reverse_visit == TRUE)
+      list = list->prev;
+    else
+      list = list->next;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream deleted");
@@ -743,16 +755,25 @@ qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
   gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GValue value = G_VALUE_INIT;
+  gboolean video_stream_reverse_visit = FALSE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Stopping stream");
+
+  g_object_get_property(G_OBJECT(qmmfsrc), "op-mode", &value);
+  if (g_value_get_enum(&value) == CAM_OPMODE_FRAMESELECTION)
+    video_stream_reverse_visit = TRUE;
 
   success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
       qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
   if (!success)
     GST_WARNING ("There are no src pads!");
 
-  //use reverse order to stop video streams
-  list = g_list_last(qmmfsrc->vidindexes);
+  //only use rever visit under certain case
+  if (video_stream_reverse_visit == TRUE)
+    list = g_list_last(qmmfsrc->vidindexes);
+  else
+    list = qmmfsrc->vidindexes;
 
   while (list != NULL) {
     key = list->data;
@@ -762,7 +783,10 @@ qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Stream stop failed!");
 
-    list = list->prev;
+    if (video_stream_reverse_visit == TRUE)
+      list = list->prev;
+    else
+      list = list->next;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream stopped");
@@ -777,11 +801,20 @@ qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
   gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GValue value = G_VALUE_INIT;
+  gboolean video_stream_reverse_visit = FALSE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Pausing stream");
 
-  //use reverse order to pause video streams
-  list = g_list_last(qmmfsrc->vidindexes);
+  g_object_get_property(G_OBJECT(qmmfsrc), "op-mode", &value);
+  if (g_value_get_enum(&value) == CAM_OPMODE_FRAMESELECTION)
+    video_stream_reverse_visit = TRUE;
+
+  //only use rever visit under certain case
+  if (video_stream_reverse_visit == TRUE)
+    list = g_list_last(qmmfsrc->vidindexes);
+  else
+    list = qmmfsrc->vidindexes;
 
   while (list != NULL) {
     key = list->data;
@@ -791,7 +824,10 @@ qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Stream pause failed!");
 
-    list = list->prev;
+    if (video_stream_reverse_visit == TRUE)
+      list = list->prev;
+    else
+      list = list->next;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream paused");
