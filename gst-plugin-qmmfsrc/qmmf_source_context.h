@@ -166,9 +166,6 @@ GST_API gboolean
 gst_qmmf_context_stop_video_streams (GstQmmfContext * context, GArray * ids);
 
 GST_API gboolean
-gst_qmmf_context_pause_video_streams (GstQmmfContext * context, GArray * ids);
-
-GST_API gboolean
 gst_qmmf_context_capture_image (GstQmmfContext * context, GstPad * pad,
                                 GstPad * bayerpad, guint imgtype, guint n_images,
                                 GPtrArray * metas);
