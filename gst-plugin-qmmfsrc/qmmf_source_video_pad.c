@@ -666,7 +666,6 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   g_mutex_init (&pad->deletemutex);
   g_cond_init (&pad->deletecond);
 
-  pad->session_id   = 0;
   pad->index        = -1;
   pad->srcidx       = -1;
 
