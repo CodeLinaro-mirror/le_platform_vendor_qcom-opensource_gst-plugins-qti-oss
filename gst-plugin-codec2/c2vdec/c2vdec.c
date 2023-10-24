@@ -236,6 +236,20 @@ gst_c2_vdec_event_handler (guint type, gpointer payload, gpointer userdata)
   } else if (type == GST_C2_EVENT_ERROR) {
     guint32 error = *((guint32*) payload);
     GST_ERROR_OBJECT (c2vdec, "Received engine ERROR: '%u'", error);
+  } else if (type == GST_C2_EVENT_DROP) {
+    guint64 index = *((guint64*) payload);
+    GstVideoCodecFrame *frame = NULL;
+
+    GST_DEBUG_OBJECT (c2vdec, "Received engine drop frame: %lu", index);
+
+    frame = gst_video_decoder_get_frame (GST_VIDEO_DECODER (c2vdec), index);
+    if (frame == NULL) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to get decoder frame with index %"
+          G_GUINT64_FORMAT, index);
+      return;
+    }
+    gst_video_decoder_drop_frame (GST_VIDEO_DECODER (c2vdec), frame);
+    gst_video_codec_frame_unref (frame);
   }
 }
 
@@ -244,6 +258,7 @@ gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
 {
   GstC2VDecoder *c2vdec = GST_C2_VDEC (userdata);
   GstVideoCodecFrame *frame = NULL;
+  GstVideoMeta *vmeta = NULL;
   GstFlowReturn ret = GST_FLOW_OK;
   guint64 index = 0;
 
@@ -266,6 +281,45 @@ gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
 
   frame->output_buffer = buffer;
   gst_video_codec_frame_unref (frame);
+
+  // TODO: Renegotiate output state caps for resolution change using video meta
+  // as upstream parser plugins are not able to provide this information through
+  // sink caps
+
+  vmeta = gst_buffer_get_video_meta (buffer);
+
+  if (vmeta->width != c2vdec->outstate->info.width ||
+      vmeta->height != c2vdec->outstate->info.height) {
+    GstVideoCodecState *outstate = NULL;
+    const GstCapsFeatures *features = NULL;
+
+    GST_DEBUG_OBJECT (c2vdec, "Resolution changed from %dx%d to %ux%u",
+        c2vdec->outstate->info.width, c2vdec->outstate->info.height,
+        vmeta->width, vmeta->height);
+
+    outstate = gst_video_decoder_set_output_state (GST_VIDEO_DECODER (c2vdec),
+        c2vdec->outstate->info.finfo->format, vmeta->width, vmeta->height, NULL);
+
+    gst_caps_unref (outstate->caps);
+    outstate->caps = gst_video_info_to_caps (&outstate->info);
+
+    if (features = gst_caps_get_features (c2vdec->outstate->caps, 0))
+      gst_caps_set_features (outstate->caps, 0,
+          gst_caps_features_copy (features));
+
+    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (c2vdec))) {
+      GST_ERROR_OBJECT (c2vdec, "Failed to negotiate caps!");
+      gst_video_codec_state_unref (outstate);
+      gst_buffer_unref (buffer);
+      return;
+    }
+
+    GST_DEBUG_OBJECT (c2vdec, "Renegotiated output state caps: %" GST_PTR_FORMAT,
+        outstate->caps);
+
+    gst_video_codec_state_unref (c2vdec->outstate);
+    c2vdec->outstate = outstate;
+  }
 
   GST_TRACE_OBJECT (c2vdec, "Decoded %" GST_PTR_FORMAT, buffer);
   ret = gst_video_decoder_finish_frame (GST_VIDEO_DECODER (c2vdec), frame);
@@ -301,7 +355,7 @@ gst_c2_vdec_stop (GstVideoDecoder * decoder)
   GST_DEBUG_OBJECT (c2vdec, "Stop engine");
 
   if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, TRUE)) {
-    GST_ERROR_OBJECT (c2vdec, "Failed to flush engine");
+    GST_ERROR_OBJECT (c2vdec, "Failed to drain engine");
     return FALSE;
   }
 
@@ -320,10 +374,14 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Flush engine");
 
+  GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+
   if ((c2vdec->engine != NULL) && !gst_c2_engine_flush (c2vdec->engine)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to flush engine");
     return FALSE;
   }
+
+  GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
   GST_DEBUG_OBJECT (c2vdec, "Engine flushed");
   return TRUE;
@@ -371,35 +429,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (!success) {
     GST_ERROR_OBJECT (c2vdec, "Failed to extract width, height or/and format!");
     return FALSE;
-  }
-
-  if (c2vdec->outstate &&
-      (width != c2vdec->outstate->info.width ||
-          height != c2vdec->outstate->info.height)) {
-    GstQuery *query = gst_query_new_drain ();
-    gboolean success;
-
-    GST_INFO_OBJECT (c2vdec, "Resolution changed from %dx%d to %dx%d",
-        c2vdec->outstate->info.width, c2vdec->outstate->info.height, width, height);
-
-    success = gst_pad_peer_query (decoder->srcpad, query);
-    gst_query_unref (query);
-
-    if (!success) {
-      GST_ERROR_OBJECT (c2vdec, "Drain query failed !");
-      return FALSE;
-    }
-
-    // This mutex was locked in the base class before call to this function.
-    // Needs to be unlocked when waiting for any pending buffers during drain.
-    GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
-
-    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE)) {
-      GST_ERROR_OBJECT (c2vdec, "Failed to Drain engine");
-      return FALSE;
-    }
-
-    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 
   if (c2vdec->outstate && (format != c2vdec->outstate->info.finfo->format)) {
