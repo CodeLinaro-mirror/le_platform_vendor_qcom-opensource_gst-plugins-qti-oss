@@ -1231,20 +1231,6 @@ gst_qmmf_context_open (GstQmmfContext * context)
   }
   xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
 
-  // Camera Operation Mode
-  ::qmmf::recorder::CamOpModeControl cam_opmode;
-  switch(context->cam_operation_mode) {
-    case CAM_OPMODE_NONE:
-      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeNone;
-      break;
-    case CAM_OPMODE_FRAMESELECTION:
-      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeFrameSelection;
-      break;
-    default:
-      break;
-  }
-  xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
-
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
 
