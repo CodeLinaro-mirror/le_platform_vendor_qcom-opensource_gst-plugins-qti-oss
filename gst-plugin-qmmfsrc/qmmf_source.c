@@ -116,6 +116,8 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_SENSOR_MODE               -1
 #define DEFAULT_PROP_CAMERA_FRC_MODE                  FRAME_SKIP
 #define DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM         FALSE
+#define DEFAULT_PROP_CAMERA_OPERATION_MODE            CAM_OPMODE_NONE
+#define DEFAULT_PROP_CAMERA_MULTI_ROI                 FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -179,6 +181,9 @@ enum
   PROP_CAMERA_FRC_MODE,
   PROP_CAMERA_IFE_DIRECT_STREAM,
   PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+  PROP_CAMERA_OPERATION_MODE,
+  PROP_CAMERA_INPUT_ROI,
+  PROP_CAMERA_INPUT_ROI_INFO,
 };
 
 static GstStaticPadTemplate qmmfsrc_video_src_template =
@@ -677,13 +682,18 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
         "Image stream deletion failed!");
   }
 
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
+  //use reverse order to delete video streams
+  list = g_list_last(qmmfsrc->vidindexes);
+
+  while (list != NULL) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
 
     success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Video stream deletion failed!");
+
+    list = list->prev;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream deleted");
@@ -741,14 +751,18 @@ qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
   if (!success)
     GST_WARNING ("There are no src pads!");
 
-  // Iterate over the video pads, fixate caps and create streams.
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
+  //use reverse order to stop video streams
+  list = g_list_last(qmmfsrc->vidindexes);
+
+  while (list != NULL) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
 
     success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Stream stop failed!");
+
+    list = list->prev;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream stopped");
@@ -766,14 +780,18 @@ qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
 
   GST_TRACE_OBJECT (qmmfsrc, "Pausing stream");
 
-  // Iterate over the video pads, fixate caps and create streams.
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
+  //use reverse order to pause video streams
+  list = g_list_last(qmmfsrc->vidindexes);
+
+  while (list != NULL) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
 
     success = gst_qmmf_context_pause_video_stream (qmmfsrc->context, pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Stream pause failed!");
+
+    list = list->prev;
   }
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream paused");
@@ -1178,6 +1196,18 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
       break;
+    case PROP_CAMERA_OPERATION_MODE:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_OPERATION_MODE, value);
+      break;
+    case PROP_CAMERA_INPUT_ROI:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_INPUT_ROI, value);
+      break;
+    case PROP_CAMERA_INPUT_ROI_INFO:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_INPUT_ROI_INFO, value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1352,6 +1382,19 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME, value);
       break;
+    case PROP_CAMERA_OPERATION_MODE:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_OPERATION_MODE, value);
+      break;
+    case PROP_CAMERA_INPUT_ROI:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_INPUT_ROI, value);
+      break;
+    case PROP_CAMERA_INPUT_ROI_INFO:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_INPUT_ROI_INFO, value);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1656,6 +1699,30 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif  // MULTI_CAMERA_ENABLE
+  g_object_class_install_property (gobject, PROP_CAMERA_OPERATION_MODE,
+      g_param_spec_enum ("op-mode", "Camera operation mode",
+           "provide camera operation mode to support specified camera function "
+           "support mode : none | frameselection "
+           "by default camera operation mode is none.",
+           GST_TYPE_QMMFSRC_CAM_OPMODE, DEFAULT_PROP_CAMERA_OPERATION_MODE,
+           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_INPUT_ROI,
+      g_param_spec_boolean ("input-roi-enable", "Input ROI reprocess enable",
+          "Input ROI if enabled, Input ROI reprocess usecase will be selected",
+          DEFAULT_PROP_CAMERA_MULTI_ROI,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_INPUT_ROI_INFO,
+      gst_param_spec_array ("input-roi-info", "Input ROI info",
+          "Applicable only if input-roi-enable property is set."
+          "input-roi-info is array for each roi ('<X1, Y1, WIDTH1, HEIGHT1"
+          " X2, Y2, WIDTH2, HEIGHT2, ...>')"
+          " it needs to be filled for the no. of Input ROI's"
+          " in playing state",
+          g_param_spec_int ("value", "Input ROI coordinates",
+              "One of X, Y, WIDTH, HEIGHT values.", 0, G_MAXINT, 0,
+              G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),

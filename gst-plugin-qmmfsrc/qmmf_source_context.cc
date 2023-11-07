@@ -201,6 +201,12 @@ struct _GstQmmfContext {
   gint64            master_exp_time;
   /// Multi Camera (1) Exposure value
   gint64            slave_exp_time;
+  /// Camera operation mode
+  gint              cam_operation_mode;
+  /// Input ROI reprocess usecase enable
+  gboolean          input_roi_enable;
+  /// Number of Input ROI's
+  gint32            input_roi_count;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -1104,6 +1110,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       g_slice_free (GstQmmfContext, context);,
       NULL, "QMMF Recorder creation failed!");
 
+  context->state = GST_STATE_NULL;
+  context->eventcb = eventcb;
+  context->metacb = metacb;
+  context->userdata = userdata;
+
   // Register a events function which will call the EOS callback if necessary.
   cbs.event_cb =
       [&, context] (::qmmf::recorder::EventType type, void *data, size_t size)
@@ -1123,12 +1134,6 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
       gst_structure_new_empty ("org.quic.camera.anr_tuning");
   context->mwbsettings =
       gst_structure_new_empty ("org.codeaurora.qcamera3.manualWB");
-
-  context->state = GST_STATE_NULL;
-
-  context->eventcb = eventcb;
-  context->metacb = metacb;
-  context->userdata = userdata;
 
   GST_INFO ("Created QMMF context: %p", context);
   return context;
@@ -1165,33 +1170,33 @@ gst_qmmf_context_open (GstQmmfContext * context)
   camera_slave_mode.mode = context->slave ?
       ::qmmf::recorder::SlaveMode::kSlave :
       ::qmmf::recorder::SlaveMode::kMaster;
-  xtraparam.Update(::qmmf::recorder::QMMF_CAMERA_SLAVE_MODE,
+  xtraparam.Update (::qmmf::recorder::QMMF_CAMERA_SLAVE_MODE,
       camera_slave_mode);
 
   // LDC
   ::qmmf::recorder::LDCMode ldc;
   ldc.enable = context->ldc;
-  xtraparam.Update(::qmmf::recorder::QMMF_LDC, ldc);
+  xtraparam.Update (::qmmf::recorder::QMMF_LDC, ldc);
 
   // LCAC
   ::qmmf::recorder::LCACMode lcac;
   lcac.enable = context->lcac;
-  xtraparam.Update(::qmmf::recorder::QMMF_LCAC, lcac);
+  xtraparam.Update (::qmmf::recorder::QMMF_LCAC, lcac);
 
   // EIS
   ::qmmf::recorder::EISSetup eis;
   eis.enable = context->eis;
-  xtraparam.Update(::qmmf::recorder::QMMF_EIS, eis);
+  xtraparam.Update (::qmmf::recorder::QMMF_EIS, eis);
 
   // SHDR
   ::qmmf::recorder::VideoHDRMode hdr;
   hdr.enable = context->shdr;
-  xtraparam.Update(::qmmf::recorder::QMMF_VIDEO_HDR_MODE, hdr);
+  xtraparam.Update (::qmmf::recorder::QMMF_VIDEO_HDR_MODE, hdr);
 
   // ForceSensorMode
   ::qmmf::recorder::ForceSensorMode forcesensormode;
   forcesensormode.mode = context->sensormode;
-  xtraparam.Update(::qmmf::recorder::QMMF_FORCE_SENSOR_MODE, forcesensormode);
+  xtraparam.Update (::qmmf::recorder::QMMF_FORCE_SENSOR_MODE, forcesensormode);
 
   // FrameRateControl
   ::qmmf::recorder::FrameRateControl frc;
@@ -1200,12 +1205,31 @@ gst_qmmf_context_open (GstQmmfContext * context)
   } else {
     frc.mode = ::qmmf::recorder::FrameRateControlMode::kCaptureRequest;
   }
-  xtraparam.Update(::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
+  xtraparam.Update (::qmmf::recorder::QMMF_FRAME_RATE_CONTROL, frc);
 
   // IFE Direct Stream
   ::qmmf::recorder::IFEDirectStream qmmf_ife_direct_stream;
   qmmf_ife_direct_stream.enable = context->ife_direct_stream;
-  xtraparam.Update(::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+  xtraparam.Update (::qmmf::recorder::QMMF_IFE_DIRECT_STREAM, qmmf_ife_direct_stream);
+
+  // Input ROI
+  ::qmmf::recorder::InputROISetup qmmf_input_roi;
+  qmmf_input_roi.enable = context->input_roi_enable;
+  xtraparam.Update (::qmmf::recorder::QMMF_INPUT_ROI, qmmf_input_roi);
+
+  // Camera Operation Mode
+  ::qmmf::recorder::CamOpModeControl cam_opmode;
+  switch(context->cam_operation_mode) {
+    case CAM_OPMODE_NONE:
+      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeNone;
+      break;
+    case CAM_OPMODE_FRAMESELECTION:
+      cam_opmode.mode = ::qmmf::recorder::ExtraParameCamOpModeEnum::kCamOperationModeFrameSelection;
+      break;
+    default:
+      break;
+  }
+  xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
@@ -1383,6 +1407,12 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   if (vpad->type == VIDEO_TYPE_PREVIEW)
     params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
 #endif // GST_VIDEO_TYPE_SUPPORT
+
+  if (vpad->reprocess_enable)
+    params.flags |= ::qmmf::recorder::VideoFlags::kReproc;
+
+  if (context->input_roi_enable && !vpad->reprocess_enable)
+    context->input_roi_count++;
 
   track_cbs.event_cb =
       [&] (uint32_t track_id, ::qmmf::recorder::EventType type,
@@ -1939,6 +1969,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_IFE_DIRECT_STREAM:
       context->ife_direct_stream = g_value_get_boolean (value);
       return;
+    case PARAM_CAMERA_OPERATION_MODE:
+      context->cam_operation_mode = g_value_get_enum (value);
+      return;
+    case PARAM_CAMERA_INPUT_ROI:
+      context->input_roi_enable = g_value_get_boolean (value);
+      return;
   }
 
   if (context->state >= GST_STATE_READY &&
@@ -2385,6 +2421,28 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       meta.update(tag_id, &standby, 1);
       break;
     }
+    case PARAM_CAMERA_INPUT_ROI_INFO:
+    {
+      g_return_if_fail (context->input_roi_count != 0);
+
+      guint32 tag_id = get_vendor_tag_by_name (
+          "com.qti.camera.multiROIinfo","streamROICount");
+      meta.update (tag_id, &(context)->input_roi_count, 1);
+
+      tag_id = get_vendor_tag_by_name (
+          "com.qti.camera.multiROIinfo","streamROIInfo");
+      gint32 roi_count = context->input_roi_count *4;
+      gint32 crop[roi_count];
+      g_return_if_fail (gst_value_array_get_size (value) ==
+                        static_cast<guint32>(roi_count));
+
+      for (gint i = 0; i < roi_count; i++) {
+        crop[i] = g_value_get_int (gst_value_array_get_value (value, i));
+      }
+
+      meta.update (tag_id, crop, roi_count);
+      break;
+    }
   }
 
   if (!context->slave && (context->state >= GST_STATE_READY)) {
@@ -2485,6 +2543,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       return;
     case PARAM_CAMERA_IFE_DIRECT_STREAM:
       g_value_set_boolean (value, context->ife_direct_stream);
+      break;
+    case PARAM_CAMERA_INPUT_ROI:
+      g_value_set_boolean (value, context->input_roi_enable);
       break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
@@ -2657,6 +2718,21 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
 
       g_value_set_int (&val, context->slave_exp_time);
       gst_value_array_append_value (value, &val);
+
+      break;
+    }
+    case PARAM_CAMERA_OPERATION_MODE:
+      g_value_set_enum (value, context->cam_operation_mode);
+      break;
+    case PARAM_CAMERA_INPUT_ROI_INFO:
+    {
+      GValue val = G_VALUE_INIT;
+      g_value_init (&val, G_TYPE_INT);
+
+      for (int i = 0; i < context->input_roi_count * 4; i++) {
+        g_value_set_int (&val, 0);
+        gst_value_array_append_value (value, &val);
+      }
 
       break;
     }
