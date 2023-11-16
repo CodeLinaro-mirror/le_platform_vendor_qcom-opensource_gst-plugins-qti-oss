@@ -219,9 +219,9 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 {
   GstJPEGEncoder *jpegenc = GST_JPEG_ENC (encoder);
   GstVideoInfo *info = &state->info;
-  GstStructure *params = NULL;
+  GstStructure *params = NULL, *structure = NULL;
   GstVideoCodecState *output_state = NULL;
-  GstCaps *outcaps = NULL;
+  GstCaps *outcaps = NULL, *negotiate_caps = NULL;
 
   // Set output caps
   outcaps = gst_caps_new_simple ("image/jpeg",
@@ -271,9 +271,32 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   GST_DEBUG_OBJECT (jpegenc, "Encoder configured: width - %d, height - %d",
       GST_VIDEO_INFO_WIDTH (info), GST_VIDEO_INFO_HEIGHT (info));
 
+  negotiate_caps = gst_pad_get_allowed_caps (GST_VIDEO_ENCODER_SRC_PAD (jpegenc));
+  negotiate_caps = gst_caps_truncate (negotiate_caps);
+  GST_DEBUG_OBJECT (jpegenc, "Setting output state caps: %" GST_PTR_FORMAT, negotiate_caps);
+
   output_state =
       gst_video_encoder_set_output_state (GST_VIDEO_ENCODER (jpegenc),
-      outcaps, state);
+      negotiate_caps, state);
+
+  structure = gst_caps_get_structure (output_state->caps, 0);
+  if (gst_structure_has_field (structure, "framerate")) {
+    gint32 fps_n = 0, fps_d = 0;
+
+    gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
+
+    if ((fps_n == 0) && (fps_d == 1))
+      output_state->info.flags |= GST_VIDEO_FLAG_VARIABLE_FPS;
+    else if ((fps_n != 0) && (fps_d != 0))
+      output_state->info.flags &= ~(GST_VIDEO_FLAG_VARIABLE_FPS);
+  }
+
+  if (!gst_video_encoder_negotiate (encoder)) {
+    GST_ERROR_OBJECT (jpegenc, "Failed to negotiate caps!");
+    return FALSE;
+  }
+  GST_DEBUG_OBJECT (jpegenc, "Output state caps: %" GST_PTR_FORMAT, output_state->caps);
+
   gst_video_codec_state_unref (output_state);
 
   return TRUE;
@@ -459,6 +482,63 @@ gst_jpeg_enc_finalize (GObject * object)
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (jpegenc));
 }
 
+static GstCaps *
+gst_jpeg_enc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
+{
+  GstJPEGEncoder *jpegenc = GST_JPEG_ENC (encoder);
+  GstCaps *caps = NULL, *intermediary = NULL;
+  GstStructure *structure = NULL;
+  guint length = 0;
+  const GValue *framerate = NULL, *maxframerate = NULL;
+
+  // Get framerate and max-framerate from filter
+  if (filter != NULL) {
+    intermediary = gst_caps_copy (filter);
+    length = gst_caps_get_size (intermediary);
+
+    structure = gst_caps_get_structure (filter, 0);
+
+    if (gst_structure_has_field (structure, "framerate"))
+      framerate = gst_structure_get_value (structure, "framerate");
+
+    if (gst_structure_has_field (structure, "max-framerate"))
+      maxframerate = gst_structure_get_value (structure, "max-framerate");
+  }
+
+  structure = NULL;
+  // Replace max-framerate to framerate in intermediary
+  for (guint i = 0; i < length; i++) {
+    structure = gst_caps_get_structure (intermediary, i);
+    if (gst_structure_has_field (structure, "max-framerate"))
+      gst_structure_remove_fields (structure, "framerate", "max-framerate", NULL);
+  }
+
+  GST_LOG_OBJECT (jpegenc, "intermediary caps %" GST_PTR_FORMAT, intermediary);
+
+  caps = gst_video_encoder_proxy_getcaps (encoder, NULL, intermediary);
+
+  if (intermediary != NULL) {
+    gst_caps_unref (intermediary);
+    intermediary = NULL;
+  }
+
+  structure = NULL;
+  // Restore the framerate and max-framerate fields into the returned caps.
+  for (guint i = 0; i < gst_caps_get_size (caps); i++) {
+    structure = gst_caps_get_structure (caps, i);
+
+    if (framerate != NULL)
+      gst_structure_set_value (structure, "framerate", framerate);
+
+    if (maxframerate != NULL)
+      gst_structure_set_value (structure, "max-framerate", maxframerate);
+  }
+
+  GST_LOG_OBJECT (jpegenc, "Returning caps %" GST_PTR_FORMAT, caps);
+
+  return caps;
+}
+
 static void
 gst_jpeg_enc_class_init (GstJPEGEncoderClass * klass)
 {
@@ -493,6 +573,7 @@ gst_jpeg_enc_class_init (GstJPEGEncoderClass * klass)
   venc_class->stop = gst_jpeg_enc_stop;
   venc_class->set_format = gst_jpeg_enc_set_format;
   venc_class->handle_frame = gst_jpeg_enc_handle_frame;
+  venc_class->getcaps = gst_jpeg_enc_getcaps;
 }
 
 static gboolean
