@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(GST_PLUGIN_QTI_OSS_DECRYPTOR
+project(GST_PLUGIN_QTI_OSS_ML_QNN
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
 )
@@ -14,6 +14,8 @@ find_package(PkgConfig)
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_BASE
+  REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 
@@ -21,44 +23,34 @@ pkg_check_modules(GST_ALLOC
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-# Check whether CDM libs are present.
-include(CheckIncludeFileCXX)
-check_include_file_cxx("ce_cdm/cdm.h" HAVE_CDM_H)
-
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
-if (HAVE_CDM_H)
-  add_definitions(-DENABLE_WIDEVINE)
-endif()
 
 # Common compiler flags.
-set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
-# GStreamer plugin.
-set(GST_QTI_DRM_DECRYPTOR gstqtidrmdecryptor)
+# GStreamer ML QNN plugin.
+set(GST_QTI_ML_QNN gstqtimlqnn)
 
-add_library(${GST_QTI_DRM_DECRYPTOR} SHARED
-  drmdecryptor.cc
-  drmdecryptor-engine.cc
+add_library(${GST_QTI_ML_QNN} SHARED
+  mlqnn.c
+  ml-qnn-engine.cc
 )
 
-target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
+target_include_directories(${GST_QTI_ML_QNN} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_link_libraries(${GST_QTI_DRM_DECRYPTOR} PRIVATE
+target_link_libraries(${GST_QTI_ML_QNN} PRIVATE
   ${GST_LIBRARIES}
+  ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
-  cutils
-  gstqtimemorybase
-  $<$<BOOL:${HAVE_CDM_H}>:widevine_ce_cdm_shared>
-  $<$<BOOL:${HAVE_CDM_H}>:oemcrypto>
+  gstqtimlbase
 )
 
 install(
-  TARGETS ${GST_QTI_DRM_DECRYPTOR}
+  TARGETS ${GST_QTI_ML_QNN}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
