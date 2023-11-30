@@ -40,7 +40,7 @@
 * Capture images with low framerate for timelapse
 *
 * Usage:
-* gst-timelapse-example -i <interval>
+* gst-timelapse-example -c <interval> -i <hostip>
 *
 * Help:
 * gst-camera-switch-appsrc-example --help
@@ -63,25 +63,25 @@ namespace camera = android::hardware::camera::common::V1_0::helper;
     "video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
     "fakesink " \
     "camsrc.image_1 ! video/x-raw(memory:GBM),format=NV12," \
-    "width=1280,height=720,framerate=0/1,max-framerate=30/1 ! " \
+    "width=3840,height=2160,framerate=0/1,max-framerate=30/1 ! " \
     "tee name=tee_4k ! qtic2venc ! video/x-h264,framerate=30/1 ! queue ! " \
     "h264parse ! mp4mux ! " \
-    "filesink location=/data/output/Timelapse_mux_4k_tmp_720p.mp4 async=false " \
-    "tee_4k. ! qtijpegenc ! image/jpeg,framerate=30/1 ! avimux ! " \
-    "filesink location=/data/output/Timelapse_mux_4k_tmp_720p.avi async=false " \
+    "filesink location=/data/output/Timelapse_mux_4k.mp4 async=false " \
+    "tee_4k. ! qtijpegenc ! multifilesink " \
+    "location=/data/output/Timelapse_mux_4k_%d.jpg max-files=1 async=false " \
     "camsrc.image_2 ! video/x-raw(memory:GBM),format=NV12," \
     "width=1280,height=720,framerate=0/1,max-framerate=30/1 ! " \
-    "tee name=tee_720p ! qtijpegenc ! image/jpeg,framerate=30/1 ! avimux ! " \
-    "filesink location=/data/output/Timelapse_mux_720p.avi async=false " \
-    "tee_720p. ! qtic2venc ! video/x-h264,framerate=30/1 ! queue ! " \
+    "tee name=tee_720p ! qtic2venc ! queue ! " \
     "h264parse ! mp4mux ! " \
     "filesink location=/data/output/Timelapse_mux_720p.mp4 async=false " \
-    "tee_720p. ! qtic2venc ! video/x-h264,framerate=30/1 ! queue ! " \
+    "tee_720p. ! qtic2venc ! queue ! " \
     "h264parse config-interval=-1 ! rtph264pay pt=96 ! " \
-    "udpsink host=127.0.0.1 port=8554 async=false " \
+    "udpsink name=udpsink host=127.0.0.1 port=8554 async=false " \
     "tee_720p. ! appsink name=appsink emit-signals=true async=false " \
-    "tee_720p. ! waylandsink x=0 y=0 width=840 height=480 async=false " \
-    "tee_720p. ! waylandsink x=0 y=480 width=480 height=480 async=false " \
+    "tee_720p. ! waylandsink sync=false async=false " \
+    "x=0 y=0 width=840 height=480 " \
+    "tee_720p. ! waylandsink sync=false async=false " \
+    "x=0 y=480 width=480 height=480 " \
     "camsrc.image_3 ! " \
     "video/x-bayer,format=rggb,bpp=(string)10,width=4096,height=3072 ! " \
     "multifilesink location=/data/output/Timelapse_%d.raw max-files=1 async=false"
@@ -91,11 +91,11 @@ namespace camera = android::hardware::camera::common::V1_0::helper;
     "tee name=apsrctee ! queue ! qtijpegenc ! image/jpeg,framerate=1/1 ! queue ! " \
     "multifilesink async=false " \
     "location=/data/output/Timelapse_First_Snapshot_1280_720_%d.jpg " \
-    "apsrctee. ! qtivtransform ! " \
-    "video/x-raw(memory:GBM),format=NV12,width=640,height=480,framerate=1/1 ! " \
+    "apsrctee. ! qtivtransform engine=fcv ! " \
+    "video/x-raw(memory:GBM),format=NV12,width=400,height=224,framerate=1/1 ! " \
     "queue ! qtijpegenc ! queue ! " \
     "multifilesink async=false " \
-    "location=/data/output/Timelapse_First_Snapshot_640_480_%d.jpg"
+    "location=/data/output/Timelapse_First_Snapshot_400_224_%d.jpg"
 
 typedef struct _GstAppContext GstAppContext;
 
@@ -103,6 +103,7 @@ typedef struct _GstAppContext GstAppContext;
 #define DEFAULT_CAPTURE_INTERVAL 1
 #define DEFAULT_CAPTURE_DELAY 333
 #define DEFAULT_NUMBER_JPEG 1
+#define DEFAULT_HOST_IP "127.0.0.1"
 
 // Function declaration
 static GstAppContext* appcontext_create ();
@@ -402,7 +403,11 @@ new_sample_callback (GstElement* appsink, gpointer userdata)
 
   appsrc = gst_bin_get_by_name (GST_BIN (appctx->pipeline_snapshot), "appsrc");
 
-  // Select target buffer to push
+  /* 
+    Select target buffer to push as preview. But first frame is black due to
+    the wakeup of camera, so the first frame will be replaced with the one
+    (pts >= DEFAULT_CAPTURE_DELAY) to skip wakeup.
+  */
   if (GST_TIME_AS_MSECONDS (buffer->pts) <= 0) {
     g_print ("FirstJpeg Capture timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS (buffer->pts));
     copybuffer = gst_buffer_copy (buffer);
@@ -412,7 +417,6 @@ new_sample_callback (GstElement* appsink, gpointer userdata)
     g_print ("push-buffer.\n");
     if (ret != GST_FLOW_OK) {
       g_printerr ("ERROR: Failed to emit push-buffer signal.\n");
-      sample_release (sample);
       return GST_FLOW_ERROR;
     }
   } else if (GST_TIME_AS_MSECONDS (buffer->pts) >= DEFAULT_CAPTURE_DELAY) {
@@ -427,12 +431,10 @@ new_sample_callback (GstElement* appsink, gpointer userdata)
     g_signal_emit_by_name (appsrc, "push-buffer", copybuffer, &ret);
     if (ret != GST_FLOW_OK) {
       g_printerr ("ERROR: Failed to emit push-buffer signal.\n");
-      sample_release (sample);
       return GST_FLOW_ERROR;
     }
     g_print ("push-buffer.\n");
-  }
-  else {
+  } else {
     g_print ("Drop Capture timestamp: %" GST_TIME_FORMAT "\n", GST_TIME_ARGS (buffer->pts));
     sample_release (sample);
   }
@@ -483,10 +485,20 @@ static gboolean
 interrupt_handler (gpointer userdata)
 {
   GstAppContext* appctx = (GstAppContext*) userdata;
-  GstState state;
+  GstElement* camera = NULL;
+  gboolean success = FALSE;
+  GstState state = GST_STATE_NULL;
 
   // set exit to true
   appctx->exit = TRUE;
+
+  // send cancel-capture signal
+  camera = gst_bin_get_by_name (GST_BIN (appctx->pipeline_main), "camsrc");
+  g_signal_emit_by_name (G_OBJECT (camera), "cancel-capture", &success);
+  g_print ("cancel-capture.\n");
+
+  if (!success)
+    g_printerr ("ERROR: Failed to emit cancel-capture signal.\n");
 
   g_print ("\n\nReceived an interrupt signal, sending EOS...\n\n");
 
@@ -596,13 +608,19 @@ main (gint argc, gchar *argv[])
   GOptionContext* ctx = NULL;
   guint interrupt = 0;
   gint capture_interval = DEFAULT_CAPTURE_INTERVAL;
+  gchar* hostip = DEFAULT_HOST_IP;
 
   // Configure input parameters
   GOptionEntry entries[] = {
-    { "capture_interval", 'i', 0, G_OPTION_ARG_INT,
+    { "capture_interval", 'c', 0, G_OPTION_ARG_INT,
       &capture_interval,
       "captureinterval",
       "Capture Interval (Unit: second; Default: 1 second)"
+    },
+    { "hostip", 'i', 0, G_OPTION_ARG_STRING,
+      &hostip,
+      "hostIP",
+      "Host IP"
     },
     { NULL }
   };
@@ -642,11 +660,24 @@ main (gint argc, gchar *argv[])
     goto cleanup;
   }
 
+  // Configure Host IP to send data to rtsp-server
+  if (g_strcmp0 (hostip, DEFAULT_HOST_IP)) {
+    GstElement* udpsink = NULL;
+
+    udpsink = gst_bin_get_by_name (GST_BIN (appctx->pipeline_main), "udpsink");
+    g_object_set (G_OBJECT (udpsink), "host", hostip, NULL);
+    gst_object_unref (udpsink);
+
+    g_print ("Udpsink host configured: %s\n", hostip);
+  }
+
   // Add signals only for pipeline_main
   if (!signals_add (appctx)) {
     g_printerr ("ERROR: failed to add signals for pipeline_main.\n");
     goto cleanup;
   }
+
+  // Add a function to handle CtrlC
   interrupt = g_unix_signal_add (SIGINT, interrupt_handler, appctx);
 
   // Start playing
@@ -660,7 +691,7 @@ main (gint argc, gchar *argv[])
   if (!capture_func (appctx))
     g_print ("ERROR:failed to send capture-image");
 
-  // Add a function to handle CtrlC
+  // Capture periodically
   g_timeout_add (capture_interval * 1000, capture_func, appctx);
 
   // Run main loop
