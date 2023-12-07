@@ -128,6 +128,8 @@ class C2VencBuffWrapper : public C2GraphicAllocation {
 public:
   C2VencBuffWrapper (uint32_t width, uint32_t height,
       C2Allocator::id_t allocator_id, android::C2HandleGBM * handle);
+  ~C2VencBuffWrapper ();
+
   c2_status_t map (C2Rect rect, C2MemoryUsage usage, C2Fence * fence,
       C2PlanarLayout * layout, uint8_t ** addr) override;
   c2_status_t unmap (uint8_t ** addr, C2Rect rect, C2Fence * fence) override;
