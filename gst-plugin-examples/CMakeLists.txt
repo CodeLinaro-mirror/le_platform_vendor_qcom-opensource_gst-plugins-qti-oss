@@ -58,3 +58,5 @@ if (${ENABLE_ALL_APPS})
 endif()
 
 add_subdirectory(gst-video-playback-example)
+add_subdirectory(gst-audio-decode-example)
+
