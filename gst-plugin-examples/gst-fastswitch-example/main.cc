@@ -223,6 +223,8 @@ appcontext_create (GstAppContext* appctx, const gint vnum)
 static void
 appcontext_delete (GstAppContext* appctx)
 {
+  GList* list = g_list_first (appctx->vstreams_list);
+
   // Remove the source element
   source_remove (appctx);
 
@@ -232,8 +234,9 @@ appcontext_delete (GstAppContext* appctx)
   if (appctx->pipeline)
     gst_object_unref (appctx->pipeline);
 
-  if (appctx->vstreams_list)
-    g_list_free (appctx->vstreams_list);
+  for (list = appctx->vstreams_list; list != NULL; list = list->next) {
+    g_free (list->data);
+  }
 
   if (appctx->previewstream)
     g_free (appctx->previewstream);
@@ -453,14 +456,14 @@ video_stream_create (GstAppContext* appctx)
   GstPadTemplate* qtiqmmfsrc_template = NULL;
   gboolean ret = FALSE;
   gchar location[] = DEFAULT_VIDEOSTREAM_FILE_LOCATION;
+  guint index = 0;
 
   // Get qtiqmmfsrc element pad template
   qtiqmmfsrc_klass = GST_ELEMENT_GET_CLASS (appctx->source);
   qtiqmmfsrc_template =
       gst_element_class_get_pad_template (qtiqmmfsrc_klass, "video_%u");
 
-  for (guint i = 1; i <= g_list_length (appctx->vstreams_list); ++i) {
-    list = g_list_nth (appctx->vstreams_list, i-1);
+  for (list = appctx->vstreams_list; list != NULL; list = list->next) {
     videostream = (GstVideoStreamInfo*) (list->data);
 
     // Create and link for video stream
@@ -505,7 +508,8 @@ video_stream_create (GstAppContext* appctx)
     g_object_set (G_OBJECT (videostream->capsfilter),
         "caps", videostream->qmmf_caps, NULL);
 
-    snprintf (location, sizeof (location), DEFAULT_VIDEOSTREAM_FILE_LOCATION, i);
+    snprintf (location, sizeof (location), DEFAULT_VIDEOSTREAM_FILE_LOCATION, index);
+    ++index;
     g_object_set (G_OBJECT (videostream->filesinker),
         "location", location, NULL);
 
@@ -558,10 +562,10 @@ streams_create (GstAppContext* appctx)
 // Delete streams
 static void
 streams_delete(GstAppContext* appctx) {
-  GList* list = g_list_first (appctx->vstreams_list);
+  GList* list = NULL;
   GstPreviewStreamInfo* previewstream = appctx->previewstream;
 
-  while (list->data) {
+  for (list = appctx->vstreams_list; list != NULL; list = list->next) {
     GstVideoStreamInfo* videostream = (GstVideoStreamInfo*) (list->data);
 
     if (videostream->qmmf_pad)
@@ -571,7 +575,6 @@ streams_delete(GstAppContext* appctx) {
         videostream->capsfilter, videostream->encoder,
         videostream->parser, videostream->muxer,
         videostream->filesinker, NULL);
-    list = list->next;
   }
 
   if (previewstream->qmmf_pad)
@@ -585,8 +588,9 @@ streams_delete(GstAppContext* appctx) {
 static gboolean
 switch_func (gpointer userdata) {
   GstAppContext* appctx = (GstAppContext*) userdata;
-  GList* list = g_list_first (appctx->vstreams_list);
-  GstState state = GST_STATE_NULL, state_encoder = GST_STATE_NULL;
+  GList* list = NULL;
+  GstState state_encoder = GST_STATE_NULL;
+  static GstState state = GST_STATE_NULL;
   gboolean ret = FALSE;
 
   // Check exit
@@ -601,11 +605,12 @@ switch_func (gpointer userdata) {
     return FALSE;
   }
 
+  list = appctx->vstreams_list;
   // Check pad activation to link or unlink video stream
   if (gst_pad_is_active (((GstVideoStreamInfo*) (list->data))->qmmf_pad)) {
     g_print ("Preview + Video stream end.\n");
 
-    while (list != NULL) {
+    for (list = appctx->vstreams_list; list != NULL; list = list->next) {
       GstVideoStreamInfo* videostream = (GstVideoStreamInfo*) (list->data);
 
       // Unlink video stream
@@ -644,25 +649,24 @@ switch_func (gpointer userdata) {
 
         // Deactivate the pad
       gst_pad_set_active (videostream->qmmf_pad, FALSE);
-
-      list = list->next;
     }
 
-    // Get state and set to PLAYING if not
-    if (state != GST_STATE_PLAYING)
+    // Set to PLAYING if not
+    if (state != GST_STATE_PLAYING) {
       gst_element_set_state (appctx->pipeline, GST_STATE_PLAYING);
 
-    gst_element_get_state (appctx->pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
-    if (state != GST_STATE_PLAYING) {
-      g_print ("ERROR: failed to set pipeline to PLAYING state.\n");
-      return FALSE;
+      gst_element_get_state (appctx->pipeline, &state, NULL, GST_CLOCK_TIME_NONE);
+      if (state != GST_STATE_PLAYING) {
+        g_print ("ERROR: failed to set pipeline to PLAYING state.\n");
+        return FALSE;
+      }
     }
 
     g_print ("Preview stream start.\n");
   } else {
     g_print ("Preview stream end.\n");
 
-    while (list != NULL) {
+    for (list = appctx->vstreams_list; list != NULL; list = list->next) {
       GstVideoStreamInfo* videostream = (GstVideoStreamInfo*) (list->data);
 
       // Link video stream
@@ -687,6 +691,11 @@ switch_func (gpointer userdata) {
           appctx->source, gst_pad_get_name (videostream->qmmf_pad),
           videostream->capsfilter, NULL, GST_PAD_LINK_CHECK_DEFAULT);
 
+      if (!ret) {
+        g_printerr ("ERROR: failed to link video pad.\n");
+        return FALSE;
+      }
+
       ret = gst_element_link_many (videostream->capsfilter,
           videostream->encoder, videostream->parser, videostream->muxer,
           videostream->filesinker, NULL);
@@ -695,8 +704,6 @@ switch_func (gpointer userdata) {
         g_printerr ("ERROR: failed to link video stream.\n");
         return FALSE;
       }
-
-      list = list->next;
     }
 
     g_print ("Preview + Video stream start.\n");

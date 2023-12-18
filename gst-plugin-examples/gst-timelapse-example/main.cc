@@ -43,7 +43,7 @@
 * gst-timelapse-example -c <interval> -i <hostip>
 *
 * Help:
-* gst-camera-switch-appsrc-example --help
+* gst-timelapse-example --help
 */
 
 #include <stdio.h>
@@ -403,7 +403,7 @@ new_sample_callback (GstElement* appsink, gpointer userdata)
 
   appsrc = gst_bin_get_by_name (GST_BIN (appctx->pipeline_snapshot), "appsrc");
 
-  /* 
+  /*
     Select target buffer to push as preview. But first frame is black due to
     the wakeup of camera, so the first frame will be replaced with the one
     (pts >= DEFAULT_CAPTURE_DELAY) to skip wakeup.
