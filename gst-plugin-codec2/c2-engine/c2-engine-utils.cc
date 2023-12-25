@@ -185,9 +185,9 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
 static const std::unordered_map<uint32_t, C2Config::profile_t> kProfileMap = {
   { GST_C2_PROFILE_AVC_BASELINE,
       C2Config::profile_t::PROFILE_AVC_BASELINE },
-  { GST_C2_PROFILE_AVC_CONSTRAINT_BASELINE,
+  { GST_C2_PROFILE_AVC_CONSTRAINED_BASELINE,
       C2Config::profile_t::PROFILE_AVC_CONSTRAINED_BASELINE },
-  { GST_C2_PROFILE_AVC_CONSTRAINT_HIGH,
+  { GST_C2_PROFILE_AVC_CONSTRAINED_HIGH,
       C2Config::profile_t::PROFILE_AVC_CONSTRAINED_HIGH },
   { GST_C2_PROFILE_AVC_HIGH,
       C2Config::profile_t::PROFILE_AVC_HIGH },
@@ -353,6 +353,14 @@ static const std::unordered_map<uint32_t, uint32_t> kColorRangeMap = {
   { GST_VIDEO_COLOR_RANGE_UNKNOWN,  C2Color::RANGE_UNSPECIFIED },
   { GST_VIDEO_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
   { GST_VIDEO_COLOR_RANGE_16_235,       C2Color::RANGE_LIMITED },
+};
+
+// Map for the GstC2PictureType.
+static const std::unordered_map<uint32_t, uint32_t> kPictureTypeMap = {
+  { GST_C2_SYNC_FRAME, C2Config::SYNC_FRAME },
+  { GST_C2_I_FRAME,    C2Config::I_FRAME },
+  { GST_C2_P_FRAME,    C2Config::P_FRAME },
+  { GST_C2_B_FRAME,    C2Config::B_FRAME },
 };
 
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
@@ -1258,9 +1266,14 @@ bool GstC2Utils::AppendCodecMeta(GstBuffer* buffer,
       std::static_pointer_cast<const C2StreamPictureTypeInfo::output>(c2info);
 
   if (pictype) {
+    auto result = std::find_if(kPictureTypeMap.begin(), kPictureTypeMap.end(),
+        [&](const auto& m) { return m.second == pictype->value; });
+
     gst_structure_set (structure,
-        "picture-type", G_TYPE_UINT, static_cast<guint>(pictype->value), NULL);
-    GST_TRACE ("Picture type: %u", static_cast<guint>(pictype->value));
+        "picture-type", G_TYPE_UINT,
+        static_cast<GstC2PictureType>(result->first), NULL);
+
+    GST_TRACE ("Picture type: %u", static_cast<GstC2PictureType>(result->first));
   }
 
 #if defined(CODEC2_CONFIG_VERSION_2_0)
