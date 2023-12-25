@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,102 +61,56 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_CVP_OPTCLFLOW_ENGINE_H__
-#define __GST_CVP_OPTCLFLOW_ENGINE_H__
+#ifndef __GST_CV_OPTCLFLOW_H__
+#define __GST_CV_OPTCLFLOW_H__
 
 #include <gst/gst.h>
-#include <gst/video/video.h>
-#include <gst/allocators/allocators.h>
+#include <gst/base/gstbasetransform.h>
+
+#include "opticalflow-engine.h"
 
 G_BEGIN_DECLS
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH:
- *
- * #G_TYPE_UINT, video source width
- * Default: 0
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_WIDTH \
-    "GstCvpOptclFlowEngine.video-width"
+#define GST_TYPE_CV_OPTCLFLOW \
+  (gst_cv_optclflow_get_type())
+#define GST_CV_OPTCLFLOW(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_CV_OPTCLFLOW,GstCvOptclFlow))
+#define GST_CV_OPTCLFLOW_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_CV_OPTCLFLOW,GstCvOptclFlowClass))
+#define GST_IS_CV_OPTCLFLOW(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_CV_OPTCLFLOW))
+#define GST_IS_CV_OPTCLFLOW_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_CV_OPTCLFLOW))
+#define GST_CV_OPTCLFLOW_CAST(obj)       ((GstCvOptclFlow *)(obj))
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT:
- *
- * #G_TYPE_UINT, video source height
- * Default: 0
- *
- * Not applicable for output
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_HEIGHT \
-    "GstCvpOptclFlowEngine.video-height"
+typedef struct _GstCvOptclFlow      GstCvOptclFlow;
+typedef struct _GstCvOptclFlowClass GstCvOptclFlowClass;
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE:
- *
- * #G_TYPE_UINT, video source aligned width
- * Default: 0
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_STRIDE \
-    "GstCvpOptclFlowEngine.video-stride"
+struct _GstCvOptclFlow {
+  GstBaseTransform        parent;
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE:
- *
- * #G_TYPE_UINT, video source aligned height
- * Default: 0
- *
- * Not applicable for output
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_SCANLINE \
-    "GstCvpOptclFlowEngine.video-scanline"
+  GstVideoInfo            *ininfo;
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT:
- *
- * #GST_TYPE_VIDEO_SOURCE_FORMAT, set the video source format
- * Default: #GST_VIDEO_FORMAT_UNKNOWN.
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FORMAT \
-    "GstCvpOptclFlowEngine.video-format"
+  // Output buffer pool
+  GstBufferPool           *outpool;
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS:
- *
- * #G_TYPE_UINT, video source frame rate in frames per second
- * Default: 0
- *
- * Not applicable for output
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_VIDEO_FPS \
-    "GstCvpOptclFlowEngine.video-fps"
+  /// Supported converters.
+  GstCvOptclFlowEngine      *engine;
+  /// List of buffers for processing.
+  GList                   *buffers;
 
-/**
- * GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS:
- *
- * #G_TYPE_BOOLEAN, Enable/disable additional motion vector statistics
- * Default: TRUE
- */
-#define GST_CVP_OPTCLFLOW_ENGINE_OPT_ENABLE_STATS \
-    "GstCvpOptclFlowEngine.enable-stats"
+  /// Properties.
+  gboolean                stats;
+  guint16                 variance;
+  guint16                 sad;
+};
 
+struct _GstCvOptclFlowClass {
+  GstBaseTransformClass parent;
+};
 
-typedef struct _GstCvpOptclFlowEngine GstCvpOptclFlowEngine;
-
-GST_API GstCvpOptclFlowEngine *
-gst_cvp_optclflow_engine_new     (GstStructure * settings);
-
-GST_API void
-gst_cvp_optclflow_engine_free    (GstCvpOptclFlowEngine * engine);
-
-GST_API gboolean
-gst_cvp_optclflow_engine_sizes   (GstCvpOptclFlowEngine * engine,
-                                  guint * mvsize, guint * statsize);
-
-GST_API gboolean
-gst_cvp_optclflow_engine_execute (GstCvpOptclFlowEngine * engine,
-                                  const GstVideoFrame * inframes, guint n_inputs,
-                                  GstBuffer * outbuffer);
+G_GNUC_INTERNAL GType gst_cv_optclflow_get_type(void);
 
 G_END_DECLS
 
-#endif /* __GST_CVP_OPTCLFLOW_ENGINE_H__ */
+#endif // __GST_CV_OPTCLFLOW_H__

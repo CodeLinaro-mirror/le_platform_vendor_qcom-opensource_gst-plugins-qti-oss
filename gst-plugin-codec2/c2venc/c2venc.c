@@ -270,6 +270,19 @@ gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
 }
 
 static gboolean
+gst_caps_has_subformat (const GstCaps * caps, const gchar * subformat)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "subformat") ?
+      gst_structure_get_string (structure, "subformat") : NULL;
+
+  return (g_strcmp0 (string, subformat) == 0) ? TRUE : FALSE;
+}
+
+static gboolean
 gst_c2_venc_trigger_iframe (GstC2VEncoder * c2venc)
 {
   gboolean success = FALSE, enable = TRUE;
@@ -347,13 +360,16 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
 
 #if defined(CODEC2_CONFIG_VERSION_2_0)
   gboolean enable = TRUE;
-  // enable codec2 avg qp info report
-  success = gst_c2_engine_set_parameter (c2venc->engine,
-      GST_C2_PARAM_REPORT_AVG_QP, GPOINTER_CAST (&(enable)));
 
-  if (!success) {
-    GST_ERROR_OBJECT (c2venc, "Failed to enable QP report parameter!");
-    return FALSE;
+  // Enable codec2 avg qp info report, only avaiable in h264/h265.
+  if (g_str_has_suffix (c2venc->name, "heic.encoder") == FALSE ) {
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_REPORT_AVG_QP, GPOINTER_CAST (&(enable)));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to enable QP report parameter!");
+      return FALSE;
+    }
   }
 #endif // CODEC2_CONFIG_VERSION_2_0
 
@@ -677,6 +693,23 @@ gst_c2_venc_event_handler (guint type, gpointer payload, gpointer userdata)
   } else if (type == GST_C2_EVENT_ERROR) {
     gint32 error = *((gint32*) userdata);
     GST_ERROR_OBJECT (c2venc, "Received engine ERROR: '%x'", error);
+  } else if (type == GST_C2_EVENT_DROP) {
+    guint64 index = *((guint64*) payload);
+    GstVideoCodecFrame *frame = NULL;
+
+    GST_DEBUG_OBJECT (c2venc, "Received engine drop frame: %" G_GUINT64_FORMAT,
+        index);
+
+    frame = gst_video_encoder_get_frame (GST_VIDEO_ENCODER (c2venc), index);
+    if (frame == NULL) {
+      GST_ERROR_OBJECT (c2venc, "Failed to get encoder frame with index %"
+          G_GUINT64_FORMAT, index);
+      return;
+    }
+    frame->output_buffer = NULL;
+    // Calling finish_frame with frame->output_buffer == NULL will drop it.
+    gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
+    gst_video_codec_frame_unref (frame);
   }
 }
 
@@ -724,7 +757,9 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_SYNC);
   // Unset the custom UBWC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
-
+  // Unset the custom HEIC flag if present.
+  GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
+  
   // Check for incomplete buffers and merge them into single buffer.
   if (gst_buffer_list_length (c2venc->incomplete_buffers) > 0) {
     GstMemory *memory = NULL;
@@ -790,11 +825,6 @@ gst_c2_venc_stop (GstVideoEncoder * encoder)
   GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
   GST_DEBUG_OBJECT (c2venc, "Stop engine");
 
-  if ((c2venc->engine != NULL) && !gst_c2_engine_drain (c2venc->engine, TRUE)) {
-    GST_ERROR_OBJECT (c2venc, "Failed to flush engine");
-    return FALSE;
-  }
-
   if ((c2venc->engine != NULL) && !gst_c2_engine_stop (c2venc->engine)) {
     GST_ERROR_OBJECT (c2venc, "Failed to stop engine");
     return FALSE;
@@ -825,6 +855,59 @@ gst_c2_venc_flush (GstVideoEncoder * encoder)
   return TRUE;
 }
 
+static GstCaps *
+gst_c2_venc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
+{
+  GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
+  GstCaps *caps = NULL, *intermeadiary = NULL;
+  GstStructure *structure = NULL;
+  const GValue *framerate = NULL, *maxframerate = NULL;
+  guint idx = 0, length = 0;
+
+  GST_LOG_OBJECT (c2venc, "Filter caps %" GST_PTR_FORMAT, filter);
+
+  // Create a local copy of the filter caps with removed fps fields.
+  if (filter != NULL) {
+    intermeadiary = gst_caps_copy (filter);
+    length = gst_caps_get_size (intermeadiary);
+
+    // Fetch the ignored framerate and max-framerate fields from the filter caps.
+    structure = gst_caps_get_structure (filter, 0);
+
+    if (gst_structure_has_field (structure, "framerate"))
+      framerate = gst_structure_get_value (structure, "framerate");
+
+    if (gst_structure_has_field (structure, "max-framerate"))
+      maxframerate = gst_structure_get_value (structure, "max-framerate");
+  }
+
+  // Remove framerate and max-framerate fields as different fps are supported.
+  for (idx = 0; idx < length; idx++) {
+    structure = gst_caps_get_structure (intermeadiary, idx);
+    gst_structure_remove_fields (structure, "framerate", "max-framerate", NULL);
+  }
+
+  GST_LOG_OBJECT (c2venc, "Intermeadiary caps %" GST_PTR_FORMAT, intermeadiary);
+  caps = gst_video_encoder_proxy_getcaps (encoder, NULL, intermeadiary);
+
+  if (intermeadiary != NULL)
+    gst_caps_unref (intermeadiary);
+
+  // Restore the framerate and max-framerate fields into the returned caps.
+  for (idx = 0; idx < gst_caps_get_size (caps); idx++) {
+    structure = gst_caps_get_structure (caps, idx);
+
+    if (framerate != NULL)
+      gst_structure_set_value (structure, "framerate", framerate);
+
+    if (maxframerate != NULL)
+      gst_structure_set_value (structure, "max-framerate", maxframerate);
+  }
+
+  GST_LOG_OBJECT (c2venc, "Returning caps %" GST_PTR_FORMAT, caps);
+  return caps;
+}
+
 static gboolean
 gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 {
@@ -840,6 +923,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   gboolean success = FALSE;
 
   c2venc->isubwc = gst_caps_has_compression (state->caps, "ubwc");
+
+  c2venc->isheif = gst_caps_has_subformat(state->caps, "heif");
 
   GST_DEBUG_OBJECT (c2venc, "Setting new format %s%s",
       gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)),
@@ -977,6 +1062,19 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   GST_DEBUG_OBJECT (c2venc, "Setting output state caps: %" GST_PTR_FORMAT, caps);
 
   outstate = gst_video_encoder_set_output_state (encoder, caps, state);
+  structure = gst_caps_get_structure (outstate->caps, 0);
+
+  if (gst_structure_has_field (structure, "framerate")) {
+    gint32 fps_n = 0, fps_d = 0;
+
+    gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
+
+    if ((fps_n == 0) && (fps_d == 1))
+      outstate->info.flags |= GST_VIDEO_FLAG_VARIABLE_FPS;
+    else if ((fps_n != 0) && (fps_d != 0))
+      outstate->info.flags &= ~(GST_VIDEO_FLAG_VARIABLE_FPS);
+  }
+
   gst_video_codec_state_unref (outstate);
 
   if (!gst_video_encoder_negotiate (encoder)) {
@@ -987,6 +1085,14 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   outstate = gst_video_encoder_get_output_state (encoder);
 
   GST_DEBUG_OBJECT (c2venc, "Output state caps: %" GST_PTR_FORMAT, outstate->caps);
+
+  // Variable input fps and fixed output fps, get the duration for timestamp adjustment.
+  if ((state->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS) &&
+      !(outstate->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS)) {
+    c2venc->duration = gst_util_uint64_scale_int (GST_SECOND,
+        GST_VIDEO_INFO_FPS_D (info), GST_VIDEO_INFO_FPS_N (info));
+  }
+
   gst_video_codec_state_unref (outstate);
 
   if (!gst_c2_venc_setup_parameters (c2venc, state)) {
@@ -1026,6 +1132,21 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     return gst_video_encoder_finish_frame (encoder, frame);
   }
 
+  if (c2venc->duration != GST_CLOCK_TIME_NONE) {
+
+    GST_LOG_OBJECT (c2venc, "Adjust timestamp! Expected %" GST_TIME_FORMAT
+        " but received frame %u with %" GST_TIME_FORMAT " !",
+        GST_TIME_ARGS (c2venc->prevts + c2venc->duration),
+        frame->system_frame_number, GST_TIME_ARGS (frame->pts));
+
+    if (c2venc->prevts != GST_CLOCK_TIME_NONE) {
+      frame->pts = c2venc->prevts + c2venc->duration;
+      frame->abidata.ABI.ts = frame->pts;
+    }
+
+    c2venc->prevts = frame->pts;
+  }
+
   GST_LOG_OBJECT (c2venc, "Frame number : %d, pts: %" GST_TIME_FORMAT
       ", dts: %" GST_TIME_FORMAT, frame->system_frame_number,
       GST_TIME_ARGS (frame->pts), GST_TIME_ARGS (frame->dts));
@@ -1034,6 +1155,9 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   if (c2venc->isubwc)
     GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
+
+  if (c2venc->isheif)
+    GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
 
   // This mutex was locked in the base class before call this function.
   // Needs to be unlocked when waiting for any pending buffers during drain.
@@ -1538,7 +1662,7 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   g_object_class_install_property (gobject, PROP_PRIORITY,
       g_param_spec_int ("priority", "Priority",
           "The proirity of current video instance among concurrent cases,"
-          "(0xffffffff=component default default)",
+          "(0xffffffff=component default)",
           G_MININT32, G_MAXINT, DEFAULT_PROP_PRIORITY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
@@ -1549,6 +1673,12 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   g_signal_new_class_handler ("ltr-mark", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_mark),
       NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_UINT);
+
+  // TODO: Temporary solution to flush all enqued buffers in the encoder
+  // until proper solution is implemented using flush start/stop
+  g_signal_new_class_handler ("flush-buffers", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_flush),
+      NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
 
   gst_element_class_set_static_metadata (element,
       "Codec2 H.264/H.265/HEIC Video Encoder", "Codec/Encoder/Video",
@@ -1562,6 +1692,7 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   venc_class->start = GST_DEBUG_FUNCPTR (gst_c2_venc_start);
   venc_class->stop = GST_DEBUG_FUNCPTR (gst_c2_venc_stop);
   venc_class->flush = GST_DEBUG_FUNCPTR (gst_c2_venc_flush);
+  venc_class->getcaps = GST_DEBUG_FUNCPTR (gst_c2_venc_getcaps);
   venc_class->set_format = GST_DEBUG_FUNCPTR (gst_c2_venc_set_format);
   venc_class->handle_frame = GST_DEBUG_FUNCPTR (gst_c2_venc_handle_frame);
   venc_class->finish = GST_DEBUG_FUNCPTR (gst_c2_venc_finish);
@@ -1575,9 +1706,13 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
 
   c2venc->instate = NULL;
   c2venc->isubwc = FALSE;
+  c2venc->isheif = FALSE;
   c2venc->headers = NULL;
 
   c2venc->incomplete_buffers = gst_buffer_list_new ();
+
+  c2venc->prevts = GST_CLOCK_TIME_NONE;
+  c2venc->duration = GST_CLOCK_TIME_NONE;
 
   c2venc->rotate = DEFAULT_PROP_ROTATE;
   c2venc->control_rate = DEFAULT_PROP_RATE_CONTROL;

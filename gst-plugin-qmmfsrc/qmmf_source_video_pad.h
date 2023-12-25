@@ -152,6 +152,9 @@ struct _GstQmmfSrcVideoPad {
   guint               index;
   /// QMMF Recorder master track index, set by the pad capabilities.
   gint                srcidx;
+  /// QMMF Recorder reprocess enable, set by the pad capabilities.
+  gboolean            reprocess_enable;
+
 
   /// ID of the QMMF Recorder track which belongs to this pad.
   guint               id;
@@ -188,6 +191,9 @@ struct _GstQmmfSrcVideoPad {
 
   ///rotate property for stream orientation
   gint                rotate;
+
+  /// Buffer pool
+  GstBufferPool       *pool;
 };
 
 struct _GstQmmfSrcVideoPadClass {
