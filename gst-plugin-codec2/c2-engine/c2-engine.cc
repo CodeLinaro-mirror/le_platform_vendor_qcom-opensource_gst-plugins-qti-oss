@@ -34,7 +34,7 @@
 
 #include "c2-engine.h"
 
-#include "c2-component.h"
+#include "c2-module.h"
 #include "c2-engine-params.h"
 #include "c2-engine-utils.h"
 
@@ -159,6 +159,10 @@ class GstC2Notifier : public IC2Notifier {
       case C2EventType::kEOS:
         GST_C2_ENGINE_ZERO_OUT_PENDING_WORK (engine_);
         type = GST_C2_EVENT_EOS;
+        break;
+      case C2EventType::kDrop:
+        GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
+        type = GST_C2_EVENT_DROP;
         break;
       default:
         GST_WARNING ("Unknown event '%u'!", static_cast<uint32_t>(event));
@@ -451,13 +455,13 @@ gst_c2_engine_drain (GstC2Engine * engine, gboolean eos)
   // }
 
   try {
+    GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);
     c2module->Queue (c2buffer, settings, index, timestamp, flags);
   } catch (std::exception& e) {
+    GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine);
     GST_ERROR ("Failed to queue EOS, error: '%s'!", e.what());
     return FALSE;
   }
-
-  GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);
 
   // Wait until all work is completed or EOS.
   GST_C2_ENGINE_CHECK_AND_WAIT_PENDING_WORK (engine, 0);
@@ -493,12 +497,13 @@ gst_c2_engine_queue (GstC2Engine * engine, GstVideoCodecFrame * frame)
 
     uint32_t width = vmeta->width;
     uint32_t height = vmeta->height;
+    bool isheic = GST_BUFFER_FLAG_IS_SET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
 
     std::shared_ptr<C2GraphicBlock> block;
 
     try {
       std::shared_ptr<C2GraphicMemory> c2mem = c2module->GetGraphicMemory();
-      block = c2mem->Fetch(width, height, format);
+      block = c2mem->Fetch(width, height, format, isheic);
     } catch (std::exception& e) {
       GST_ERROR ("Failed to fetch memory block, error: '%s'!", e.what());
       return FALSE;

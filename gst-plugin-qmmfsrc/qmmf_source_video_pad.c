@@ -348,6 +348,10 @@ video_pad_update_params (GstPad * pad, GstStructure * structure)
   gst_structure_get_int (structure, "height", &height);
   gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
 
+  // Use max-framerate for fps calculation if variable framerate is negotiated.
+  if ((fps_n == 0) && (fps_d == 1))
+    gst_structure_get_fraction (structure, "max-framerate", &fps_n, &fps_d);
+
   vpad->duration = gst_util_uint64_scale_int (GST_SECOND, fps_d, fps_n);
   framerate = 1 / GST_TIME_AS_SECONDS (gst_guint64_to_gdouble (vpad->duration));
 
@@ -430,6 +434,7 @@ GstPad *
 qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
     const guint index)
 {
+  GstBufferPool *pool = NULL;
   GstPad *srcpad = GST_PAD (g_object_new (
       GST_TYPE_QMMFSRC_VIDEO_PAD,
       "name", name,
@@ -446,6 +451,13 @@ qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
   gst_pad_set_activatemode_function (
       srcpad, GST_DEBUG_FUNCPTR (video_pad_activate_mode));
 
+  pool = gst_qmmf_buffer_pool_new ();
+  QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, pool != NULL,
+      gst_object_unref (srcpad), NULL, "Failed to create buffer pool!");
+
+  gst_buffer_pool_set_active (pool, TRUE);
+  GST_QMMFSRC_VIDEO_PAD (srcpad)->pool = pool;
+
   gst_pad_use_fixed_caps (srcpad);
   gst_pad_set_active (srcpad, TRUE);
 
@@ -458,6 +470,10 @@ qmmfsrc_release_video_pad (GstElement * element, GstPad * pad)
   gst_object_ref (pad);
 
   gst_pad_set_active (pad, FALSE);
+
+  gst_buffer_pool_set_active (GST_QMMFSRC_VIDEO_PAD (pad)->pool, FALSE);
+  gst_object_unref (GST_QMMFSRC_VIDEO_PAD (pad)->pool);
+
   gst_child_proxy_child_removed (GST_CHILD_PROXY (element), G_OBJECT (pad),
       GST_OBJECT_NAME (pad));
   gst_element_remove_pad (element, pad);
@@ -490,6 +506,8 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
   }
 
   GST_DEBUG_OBJECT (pad, "Trying to fixate caps: %" GST_PTR_FORMAT, caps);
+
+  g_return_val_if_fail (!gst_caps_is_empty(caps), FALSE);
 
   // Capabilities are not fixated, fixate them.
   caps = gst_caps_make_writable (caps);

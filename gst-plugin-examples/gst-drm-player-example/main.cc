@@ -3,45 +3,18 @@
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
+#include "drm_context.h"
+
 #include <curl/curl.h>
-#include <dlfcn.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <libxml/parser.h>
-
-#include <chrono>
-#include <future>
-#include <map>
-#include <string>
-#include <vector>
-
-#include <utils/Vector.h>
-
-#ifdef ENABLE_WIDEVINE
-#include <ce_cdm/cdm.h>
-#endif
-#include <media/drm/DrmAPI.h>
 
 #define DASH_LINE  "-------------------------------------------------------"
 #define SPACE      "                                                       "
 
 // Manifest will be downloaded here.
 #define MANIFEST_DOWNLOAD_PATH "/data/manifest.xml"
-
-#define DRM_LIB_PATH           "/usr/lib/libprdrmengine.so"
-
-// Type : PERSIST_FALSE_SECURESTOP_FALSE_SL150
-#define CONTENT_TYPE           "Content-Type: text/xml; charset=utf-8"
-#define SOAP_ACTION            "SOAPAction: ""\"http://schemas.microsoft.com/" \
-    "DRM/2007/03/protocols/AcquireLicense\""
-#define LA_URL                 "https://test.playready.microsoft.com/service/" \
-    "rightsmanager.asmx?cfg=(securestop:false,persist:false,sl:150)"
-
-#define CDM_PROV_URL           "https://www.googleapis.com/" \
-    "certificateprovisioning/v1/devicecertificates/create?" \
-    "key=AIzaSyB-5OLKTx2iU5mko18DfdwK5611JIjbUhE&signedRequest="
-
-#define CDM_LIC_URL            "https://proxy.uat.widevine.com/proxy"
 
 // DRM UUIDs
 #define PLAYREADY_UUID         "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
@@ -60,13 +33,6 @@
 #define OPENING_TAG_HLS        "#EXTM3U"
 #define OPENING_TAG_DASH       "<?xml"
 
-#define PRDRM_SUCCESS          0
-#define PRDRM_FAILED           -1
-
-const std::string kProductName = "DRMPlayer";
-const std::string kCompanyName = "Qualcomm";
-const std::string kModelName   = "QRB5165";
-
 typedef enum {
   LICENSE_NONE,
   LICENSE_PLAYREADY,
@@ -76,7 +42,6 @@ typedef enum {
 } DrmLicense;
 
 typedef struct _GstAppContext GstAppContext;
-typedef struct DrmContext DrmContext;
 
 struct _GstAppContext {
   // Instance with variables specific to DRM usecase
@@ -102,186 +67,6 @@ struct _GstAppContext {
 
   // Boolean variable indicating whether the pipeline is live
   gboolean      live;
-};
-
-// TODO: Move the classes DrmContext, PlayreadyContext and WidevineContext
-// definitions to separate file
-class DrmContext {
-  public:
-    DrmContext(gchar * header) : init_data_ (header) {}
-    virtual ~DrmContext() { g_free (init_data_); }
-
-    virtual void SetDecryptorProp(GstElement * decryptor) = 0;
-
-    virtual gint InitSession() = 0;
-    virtual gint CreateLicenseRequest() = 0;
-    virtual gint FetchLicense() = 0;
-    virtual gint ProvideKeyResponse() = 0;
-
-    // Header parsed from manifest
-    gchar                  *init_data_;
-
-    // Session id returned after opening DRM session
-    std::string            session_id_;
-
-    // License challenge used to request license
-    std::string            license_request_;
-
-    // License response returned by license server
-    std::string            license_response_;
-};
-
-class PlayreadyContext : public DrmContext {
-  public:
-    PlayreadyContext(gchar * header) : DrmContext (header),
-                                       lib_handle_ (NULL),
-                                       drm_plugin_ (nullptr) {}
-    ~PlayreadyContext();
-
-    void SetDecryptorProp(GstElement * decryptor) override {
-      g_object_set (G_OBJECT (decryptor), "session-id",
-          session_id_.c_str(), NULL);
-      g_print ("Assigned session-id to the decryptor plugin.\n");
-    }
-
-  private:
-    gint InitSession() override;
-    gint CreateLicenseRequest() override;
-    gint FetchLicense() override;
-    gint ProvideKeyResponse() override;
-
-    void                           *lib_handle_;
-    android::DrmPlugin             *drm_plugin_;
-};
-
-#ifdef ENABLE_WIDEVINE
-class WidevineContext : public DrmContext, public widevine::Cdm::IEventListener {
-  private:
-    class WVStorageImpl : public widevine::Cdm::IStorage {
-      public:
-        WVStorageImpl() { cert_map_.clear(); }
-
-        bool read(const std::string& name, std::string* data) override {
-          auto it = cert_map_.find (name);
-          if (it == cert_map_.end())
-            return false;
-
-          *data = it->second;
-          return true;
-        }
-
-        bool write(const std::string& name, const std::string& data) override {
-          cert_map_[name] = data;
-          return true;
-        }
-
-        bool exists(const std::string& name) override {
-          return (cert_map_.find(name) != cert_map_.end());
-        }
-
-        bool remove(const std::string& name) override {
-          if (name.empty()) {
-            cert_map_.clear();
-            return true;
-          }
-
-          return cert_map_.erase(name) > 0;
-        }
-
-        int32_t size(const std::string& name) override {
-          auto it = cert_map_.find(name);
-
-          if (it == cert_map_.end())
-            return -1;
-
-          return it->second.size();
-        }
-
-        bool list(std::vector<std::string>* names) override {
-          names->clear();
-          for (auto it = cert_map_.begin(); it != cert_map_.end(); it++)
-            names->push_back (it->first);
-
-          return true;
-        }
-
-      private:
-        std::map<std::string, std::string> cert_map_;
-    };
-
-    class WVClockImpl : public widevine::Cdm::IClock {
-      public:
-        WVClockImpl() {
-          auto now = std::chrono::steady_clock().now();
-          curr_time_ = now.time_since_epoch() / std::chrono::milliseconds(1);
-        }
-
-        int64_t now() override { return curr_time_; }
-
-      private:
-        int64_t curr_time_;
-    };
-
-    class WVTimerImpl : public widevine::Cdm::ITimer {
-      public:
-        void setTimeout(int64_t delay_ms, IClient* client, void* context) override {}
-        void cancel(IClient* client) override {}
-    };
-
-    std::string FetchProvisioningResponse(std::string request);
-
-    gint InitSession() override;
-    gint CreateLicenseRequest() override;
-    gint FetchLicense() override;
-    gint ProvideKeyResponse() override;
-
-    widevine::Cdm                  *cdm_;
-    std::promise<std::string>      on_message_;
-
-  public:
-    WidevineContext(gchar * header) : DrmContext (header), cdm_ (nullptr) {
-      storage_impl = new WVStorageImpl();
-      clock_impl = new WVClockImpl();
-      timer_impl = new WVTimerImpl();
-    }
-    ~WidevineContext();
-
-    void SetDecryptorProp(GstElement * decryptor) override {
-      g_object_set (G_OBJECT (decryptor), "cdm-instance", cdm_, NULL);
-      g_object_set (G_OBJECT (decryptor), "session-id",
-          session_id_.c_str(), NULL);
-      g_print ("Assigned cdm-instance and session ID to the decryptor plugin.\n");
-    }
-
-    // widevine::Cdm::IEventListener
-    void onMessage(const std::string& session_id,
-                    widevine::Cdm::MessageType message_type,
-                    const std::string& message) override {
-      if (session_id == session_id_ && message_type == widevine::Cdm::kLicenseRequest)
-        on_message_.set_value (message);
-      else
-        on_message_.set_value (nullptr);
-    }
-    void onKeyStatusesChange (const std::string& session_id,
-        bool has_new_usable_key) override {}
-    void onRemoveComplete(const std::string& session_id) override {}
-
-    WVStorageImpl *storage_impl;
-    WVClockImpl   *clock_impl;
-    WVTimerImpl   *timer_impl;
-};
-#endif
-
-// To store license request and response data
-struct soapbuf {
-  gchar   *pdata;
-  size_t  sdata;
-};
-
-// PlayReady UUID in hex
-static const uint8_t pr_uuid[16] = {
-  0x9A, 0x04, 0xF0, 0x79, 0x98, 0x40, 0x42, 0x86,
-  0xAB, 0x92, 0xE6, 0x5B, 0xE0, 0x88, 0x5F, 0x95
 };
 
 static GstAppContext *
@@ -324,19 +109,6 @@ gst_app_context_free (GstAppContext * ctx)
 
   g_free (ctx);
   return;
-}
-
-static void
-str_to_vec (std::string s, android::Vector<uint8_t> & v)
-{
-  v.appendArray (reinterpret_cast<const uint8_t*> (s.data()), s.size());
-}
-
-static std::string
-vec_to_str (android::Vector<uint8_t> v)
-{
-  std::string s (v.begin(), v.end());
-  return s;
 }
 
 static DrmContext*
@@ -555,7 +327,7 @@ handle_stdin_source (GIOChannel * source, GIOCondition condition, gpointer data)
 
       return FALSE;
     } else if ((status == G_IO_STATUS_ERROR) && (error == NULL)) {
-      g_printerr ("UNKNOWN ERROR: Failed to parse input! %.30s\n", SPACE);
+      g_printerr ("UNKNOWN ERROR: Failed to parse input!\n");
 
       return FALSE;
     }
@@ -681,450 +453,6 @@ handle_bus_message (GstBus * bus, GstMessage * msg, gpointer data)
   // Keep listening to the bus.
   return TRUE;
 }
-
-// WRITEFUNCTION callback for curl for fetching license
-static size_t
-soap_callback (gchar * buffer, size_t size, size_t nitems, void * outstream)
-{
-  struct soapbuf *write_buf = (soapbuf *) outstream;
-  size_t write_buf_size = size * nitems;
-
-  write_buf->pdata = (gchar *) realloc (write_buf->pdata,
-      write_buf->sdata + write_buf_size + 1);
-
-  if (write_buf->pdata == NULL) {
-    g_printerr ("ERROR: Memory allocation failed\n");
-    return 0;
-  }
-
-  memcpy (write_buf->pdata + write_buf->sdata, buffer, write_buf_size);
-  write_buf->sdata += write_buf_size;
-  write_buf->pdata [write_buf->sdata] = '\0';
-
-  return write_buf_size;
-}
-
-static gint
-perform_curl (gchar * url, struct curl_slist * http_header,
-    gchar ** post_data, size_t * post_data_size)
-{
-  CURL *curl = NULL;
-  struct soapbuf soapbuf;
-  glong response_code = -1;
-  gint ret = -1;
-
-  if (post_data == NULL || *post_data_size == 0) {
-    g_print ("ERROR: Post data not available.\n");
-    return ret;
-  }
-
-  if (curl_global_init (CURL_GLOBAL_ALL) != CURLE_OK) {
-    g_printerr ("ERROR: Curl global init failed.\n");
-    return ret;
-  }
-
-  if ((curl = curl_easy_init()) == NULL) {
-    g_printerr ("ERROR: Curl easy init failed.\n");
-    curl_global_cleanup();
-    return ret;
-  }
-
-  curl_easy_setopt (curl, CURLOPT_URL, url);
-  curl_easy_setopt (curl, CURLOPT_HTTPHEADER, http_header);
-  curl_easy_setopt (curl, CURLOPT_POST, 1L);
-  curl_easy_setopt (curl, CURLOPT_POSTFIELDSIZE_LARGE, *post_data_size);
-  curl_easy_setopt (curl, CURLOPT_COPYPOSTFIELDS, *post_data);
-
-  soapbuf.pdata = *post_data;
-  soapbuf.sdata = 0;
-
-  curl_easy_setopt (curl, CURLOPT_WRITEDATA, &soapbuf);
-  curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, soap_callback);
-
-  g_print ("Acquiring message from server...\n");
-
-  if ((ret = curl_easy_perform (curl)) != CURLE_OK) {
-    g_print ("Curl error %d\n", ret);
-    goto curl_error;
-  }
-
-  curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &response_code);
-
-  if (response_code != 200) {
-    g_printerr ("Response error: %ld", response_code);
-    ret = -1;
-    goto curl_error;
-  }
-
-  // Response data
-  *post_data = soapbuf.pdata;
-  *post_data_size = soapbuf.sdata;
-
-curl_error:
-  curl_slist_free_all (http_header);
-  curl_easy_cleanup (curl);
-  curl_global_cleanup();
-
-  return ret;
-}
-
-// TODO: Move the function definitions of PlayreadyContext and WidevineContext
-// to separate file
-gint
-PlayreadyContext::InitSession ()
-{
-  // For PR3.0 and above
-  android::DrmFactory *drm_factory = nullptr;
-  gint result = PRDRM_FAILED;
-
-  {
-    // Load library.
-    gchar *libpath = (gchar *) DRM_LIB_PATH;
-
-    g_print ("Trying to load %s\n", libpath);
-
-    if ((lib_handle_ = dlopen (libpath, RTLD_NOW)) == NULL) {
-      g_printerr ("ERROR: Cannot load library, dlerror = %s\n", dlerror());
-      return result;
-    }
-    g_print ("Library loaded successfully.\n");
-  }
-
-  {
-    // Create DRMFactory object.
-    gchar *err = NULL;
-
-    typedef android::DrmFactory *(*createDrmFactoryFunc)();
-    createDrmFactoryFunc createDrmFactory =
-      (createDrmFactoryFunc) dlsym (lib_handle_, "createDrmFactory");
-
-    if ((drm_factory = createDrmFactory()) == NULL &&
-        (err = dlerror()) != NULL) {
-      g_printerr ("ERROR: Cannot find symbol, dlerror = %s\n", err);
-
-      g_free (err);
-      return result;
-    } else if (drm_factory == NULL) {
-      return result;
-    }
-
-    if (!drm_factory->isCryptoSchemeSupported (pr_uuid)) {
-      g_printerr ("ERROR: Check given PR UUID\n");
-      delete drm_factory;
-      return result;
-    }
-    g_print ("Created DRMFactory.\n");
-  }
-
-  {
-    // Create DRMPlugin object.
-    result = drm_factory->createDrmPlugin (pr_uuid, &drm_plugin_);
-    delete drm_factory;
-
-    if (result != PRDRM_SUCCESS) {
-      g_printerr ("ERROR: Couldn't create DrmPlugin \n");
-      return result;
-    }
-    g_print ("Created DrmPlugin.\n");
-  }
-
-  {
-    // Open DRM session.
-    android::Vector<uint8_t> sid;
-
-    if ((result = drm_plugin_->openSession (sid)) != PRDRM_SUCCESS) {
-      g_printerr ("ERROR: Couldn't create session \n");
-      return result;
-    }
-
-    session_id_ = vec_to_str (sid);
-    g_print ("Opened DRM Session with session ID %s\n", session_id_.c_str());
-  }
-
-  return result;
-}
-
-gint
-PlayreadyContext::CreateLicenseRequest ()
-{
-  guchar *decoded_str = NULL;
-  android::Vector<uint8_t> pro_header, request, sid;
-  android::KeyedVector<android::String8, android::String8> const optional_parameters;
-  android::DrmPlugin::KeyType key_type = android::DrmPlugin::kKeyType_Streaming;
-  android::DrmPlugin::KeyRequestType key_request_type;
-  android::String8 mime_type, default_url;
-  gint result = PRDRM_FAILED;
-  gsize out_len;
-
-  // Decode base64 encoded PlayReady object.
-  decoded_str = g_base64_decode (init_data_, &out_len);
-  pro_header.appendArray (reinterpret_cast<const uint8_t*> (decoded_str),
-      out_len);
-  g_free (decoded_str);
-
-  str_to_vec (session_id_, sid);
-
-  g_print ("Creating license request...\n");
-
-  if ((result = drm_plugin_->getKeyRequest (sid, pro_header,
-      mime_type, key_type, optional_parameters, request, default_url,
-      &key_request_type)) == PRDRM_SUCCESS) {
-    g_print ("License request created successfully.\n");
-    license_request_ = vec_to_str (request);
-  }
-
-  return result;
-}
-
-gint
-PlayreadyContext::FetchLicense ()
-{
-  struct curl_slist *http_header = NULL;
-  gchar *content_type = (gchar *) CONTENT_TYPE;
-  gchar *url = (gchar *) LA_URL;
-  gchar *req_buf = NULL;
-  size_t req_buf_size;
-  gint result = PRDRM_FAILED;
-
-  http_header = curl_slist_append (http_header, SOAP_ACTION);
-  http_header = curl_slist_append (http_header, content_type);
-
-  if (license_request_.empty()) {
-    g_print ("License request object is empty.\n");
-    return result;
-  }
-
-  req_buf_size = license_request_.length();
-  req_buf = g_strndup (license_request_.c_str(), req_buf_size);
-
-  if ((result = perform_curl (url, http_header, &req_buf, &req_buf_size))
-      == PRDRM_SUCCESS) {
-    g_print ("License acquired from license server successfully.\n");
-    license_response_.assign (req_buf, req_buf + req_buf_size);
-  }
-
-  g_free (req_buf);
-
-  return result;
-}
-
-gint
-PlayreadyContext::ProvideKeyResponse ()
-{
-  android::Vector<uint8_t> req_id;
-  android::Vector<uint8_t> sid;
-  android::Vector<uint8_t> response;
-  gint result = PRDRM_FAILED;
-
-  str_to_vec (session_id_, sid);
-  str_to_vec (license_response_, response);
-
-  if ((result = drm_plugin_->provideKeyResponse (sid,
-      response, req_id)) == PRDRM_SUCCESS)
-    g_print ("Provided license response to DRMPlugin successfully.\n");
-
-  return result;
-}
-
-PlayreadyContext::~PlayreadyContext ()
-{
-  android::Vector<uint8_t> sid;
-
-  if (lib_handle_ == NULL)
-    return;
-
-  if (drm_plugin_ == nullptr) {
-    dlclose (lib_handle_);
-    return;
-  }
-
-  str_to_vec (session_id_, sid);
-
-  if (drm_plugin_->closeSession (sid) != PRDRM_SUCCESS)
-    g_printerr ("ERROR: Close session failed\n");
-  else
-    g_print ("Session closed successfully\n");
-
-  delete drm_plugin_;
-  dlclose (lib_handle_);
-}
-
-#ifdef ENABLE_WIDEVINE
-std::string
-WidevineContext::FetchProvisioningResponse (std::string request)
-{
-  struct curl_slist *http_header = NULL;
-  gchar *url = NULL;
-  gchar *req_buf = NULL;
-  std::string response;
-  size_t req_buf_size;
-
-  req_buf_size = request.length();
-  req_buf = g_strndup (request.c_str(), req_buf_size);
-
-  url = g_strconcat ((const gchar *) CDM_PROV_URL, req_buf, NULL);
-
-  http_header = curl_slist_append (http_header, "Host: www.googleapis.com");
-  http_header = curl_slist_append (http_header, "Connection: close");
-  http_header = curl_slist_append (http_header, "User-Agent: Widevine CDM v1.0");
-
-  if (perform_curl (url, http_header, &req_buf, &req_buf_size) != 0) {
-    g_free (url);
-    return nullptr;
-  }
-
-  response.assign (req_buf, req_buf + req_buf_size);
-  g_free (req_buf);
-  g_free (url);
-
-  return response;
-}
-
-gint
-WidevineContext::InitSession ()
-{
-  std::string prov_request, prov_response;
-  widevine::Cdm::Status status = widevine::Cdm::kTypeError;
-  widevine::Cdm::ClientInfo client_info;
-  client_info.product_name = kProductName;
-  client_info.company_name = kCompanyName;
-  client_info.model_name = kModelName;
-
-  // Initialize the CDM Library.
-  if ((status = widevine::Cdm::initialize (widevine::Cdm::kOpaqueHandle,
-      client_info, storage_impl, clock_impl, timer_impl, widevine::Cdm::kErrors))
-      != widevine::Cdm::kSuccess) {
-    g_printerr ("ERROR: Couldn't initialize the CDM Library! \n");
-    return status;
-  }
-  g_print ("Initialized the CDM Library.\n");
-
-  // Create a CDM instance.
-  if ((cdm_ = widevine::Cdm::create (this, storage_impl, FALSE)) == nullptr) {
-    g_printerr ("ERROR: Couldn't create new CDM instance! \n");
-    return widevine::Cdm::kTypeError;
-  }
-  g_print ("Created new CDM instance.\n");
-
-  // Provision the device if not provisioned.
-  if (!cdm_->isProvisioned()) {
-    g_print ("Device is not provisioned. Provisioning first...\n");
-
-    if ((status = cdm_->getProvisioningRequest (&prov_request))
-        != widevine::Cdm::kSuccess) {
-      g_printerr ("ERROR: Creation of Provisioning Request message failed! \n");
-      return status;
-    }
-
-    prov_response = FetchProvisioningResponse (prov_request);
-    if (prov_response.empty()) {
-      g_printerr ("ERROR: Couldn't fetch provisioning response! \n");
-      return widevine::Cdm::kTypeError;
-    }
-
-    if ((status = cdm_->handleProvisioningResponse (prov_response))
-        != widevine::Cdm::kSuccess) {
-      g_printerr ("ERROR: Provisioning device failed! \n");
-      return status;
-    }
-
-    g_print ("Device provisioned successfully! \n");
-  }
-
-  // Create a new CDM session.
-  if ((status = cdm_->createSession (widevine::Cdm::kTemporary,
-      &session_id_)) != widevine::Cdm::kSuccess) {
-    g_printerr ("ERROR: Couldn't create session \n");
-    return status;
-  }
-  g_print ("Opened DRM Session with session ID %s\n", session_id_.c_str());
-
-  return status;
-}
-
-gint
-WidevineContext::CreateLicenseRequest ()
-{
-  guchar *decoded_str = NULL;
-  widevine::Cdm::Status status = widevine::Cdm::kTypeError;
-  std::string wv_header;
-  gsize out_len;
-
-  // Decode base64 encoded Widevine object.
-  decoded_str = g_base64_decode (init_data_, &out_len);
-  wv_header.assign (decoded_str, decoded_str + out_len);
-  g_free (decoded_str);
-
-  if ((status = cdm_->generateRequest (session_id_, widevine::Cdm::kCenc, wv_header)) !=
-      widevine::Cdm::kSuccess) {
-    g_printerr ("ERROR: Creation of license request failed.\n");
-    return status;
-  }
-
-  // Block and wait for onMessage callback to be triggered
-  // to get the license request message.
-  std::future<std::string> req_message = on_message_.get_future();
-  license_request_ = req_message.get();
-  if (license_request_.empty()) {
-    g_printerr ("ERROR: Received empty license request message.\n");
-    return widevine::Cdm::kTypeError;
-  }
-
-  g_print ("License request created successfully.\n");
-  return status;
-}
-
-gint
-WidevineContext::FetchLicense ()
-{
-  struct curl_slist *http_header = NULL;
-  gchar *url = (gchar *) CDM_LIC_URL;
-  gchar *req_buf = NULL;
-  size_t req_buf_size;
-
-  req_buf_size = license_request_.length();
-  req_buf = const_cast <gchar *> (license_request_.c_str());
-
-  http_header = curl_slist_append (http_header, "Host: proxy.uat.widevine.com");
-  http_header = curl_slist_append (http_header, "Connection: close");
-  http_header = curl_slist_append (http_header, "User-Agent: Widevine CDM v1.0");
-
-  if (perform_curl (url, http_header, &req_buf, &req_buf_size) != CURLE_OK)
-    return widevine::Cdm::kTypeError;
-
-  license_response_.assign (req_buf, req_buf + req_buf_size);
-
-  g_print ("License fetched from license server successfully.\n");
-
-  return widevine::Cdm::kSuccess;
-}
-
-gint
-WidevineContext::ProvideKeyResponse ()
-{
-  widevine::Cdm::Status status = widevine::Cdm::kTypeError;
-
-  if ((status = cdm_->update (session_id_, license_response_)) == widevine::Cdm::kSuccess)
-      g_print ("Provided license response to CDM successfully.\n");
-  
-  return status;
-}
-
-WidevineContext::~WidevineContext ()
-{
-  delete storage_impl;
-  delete clock_impl;
-  delete timer_impl;
-
-  if (cdm_ == nullptr)
-    return;
-
-  if (cdm_->close (session_id_) != widevine::Cdm::kSuccess)
-    g_printerr ("ERROR: Close session failed\n");
-  else
-    g_print ("Session closed successfully\n");
-}
-#endif
 
 static xmlNodePtr
 find_xml_sibling_with_name (xmlNodePtr node, gchar * child_name)
@@ -1563,8 +891,8 @@ toggle_play (GstAppContext * appctx)
 
   if (update_pipeline_state (appctx, appctx->desired_state))
     (appctx->desired_state == GST_STATE_PLAYING) ?
-        g_print ("Playing... %.30s\n", SPACE) :
-        g_print ("Paused %.30s\n", SPACE);
+        g_print ("Playing...\n") :
+        g_print ("Paused\n");
 
   appctx->desired_state = appctx->current_state;
 }
@@ -1594,12 +922,12 @@ decide_mp4 (gchar * pipeline, gchar ** manifest_url, gboolean * mp4_content)
 }
 
 static GstElement *
-create_pipeline (gchar * pipeline_des, DrmContext * drmctx)
+create_pipeline (gchar * pipeline_des, DrmContext * drmctx, DrmLicense license)
 {
   GstElement *pipeline = NULL, *decryptor = NULL;
   GError *error = NULL;
 
-  g_print ("\nCreating pipeline %s %.30s\n", pipeline_des, SPACE);
+  g_print ("\nCreating pipeline %s\n", pipeline_des);
   pipeline = gst_parse_launch ((const gchar *) pipeline_des, &error);
 
   if (error != NULL) {
@@ -1613,9 +941,13 @@ create_pipeline (gchar * pipeline_des, DrmContext * drmctx)
         "qtidrmdecryptor");
     GValue value = G_VALUE_INIT;
 
-    while (gst_iterator_next (it, &value) == GST_ITERATOR_OK) {
-      if ((decryptor = GST_ELEMENT (g_value_get_object (&value))) != NULL)
-        drmctx->SetDecryptorProp (decryptor);
+    while (gst_iterator_next (it, &value) == GST_ITERATOR_OK &&
+        (decryptor = GST_ELEMENT (g_value_get_object (&value))) != NULL) {
+      g_object_set (G_OBJECT (decryptor), "session-id", drmctx->GetSessionId(), NULL);
+
+      if (license == LICENSE_WIDEVINE)
+        g_object_set (G_OBJECT (decryptor), "cdm-instance",
+            drmctx->GetCdmInstance(), NULL);
 
       g_value_reset (&value);
     }
@@ -1767,7 +1099,7 @@ main (gint argc, gchar *argv[])
     goto exit;
 
   // Create the pipeline.
-  if ((appctx->pipeline = create_pipeline (*args, appctx->drmctx)) == NULL)
+  if ((appctx->pipeline = create_pipeline (*args, appctx->drmctx, license)) == NULL)
     goto exit;
 
   // Initialize main loop.
@@ -1784,7 +1116,7 @@ main (gint argc, gchar *argv[])
 
   // Create a GIOChannel to listen to the standard input stream.
   if ((gio = g_io_channel_unix_new (fileno (stdin))) == NULL) {
-    g_printerr ("ERROR: Failed to initialize I/O support! %.30s\n", SPACE);
+    g_printerr ("ERROR: Failed to initialize I/O support!\n");
     goto exit;
   }
 

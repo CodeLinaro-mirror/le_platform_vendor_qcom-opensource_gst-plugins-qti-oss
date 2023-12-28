@@ -3,6 +3,7 @@ set(GST_EXAMPLE_BIN gst-drm-player-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
+  drm_context.cc
 )
 
 pkg_check_modules (XML2 REQUIRED libxml-2.0)
