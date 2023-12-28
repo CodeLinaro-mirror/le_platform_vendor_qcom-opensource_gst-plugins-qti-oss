@@ -212,8 +212,6 @@ struct _GstQmmfContext {
   ::qmmf::recorder::Recorder *recorder;
 };
 
-static G_DEFINE_QUARK(QmmfBufferQDataQuark, qmmf_buffer_qdata);
-
 static gboolean
 update_structure (GQuark id, const GValue * value, gpointer data)
 {
@@ -769,9 +767,15 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
   GstMemory *gstmemory = NULL;
   GstBuffer *gstbuffer = NULL;
   GstStructure *structure = NULL;
+  GstBufferPool *pool = NULL;
 
-  // Create a GstBuffer.
-  gstbuffer = gst_buffer_new ();
+  // Create or acquire a GstBuffer.
+  if (GST_IS_QMMFSRC_VIDEO_PAD (pad))
+    pool = GST_QMMFSRC_VIDEO_PAD (pad)->pool;
+  else if (GST_IS_QMMFSRC_IMAGE_PAD (pad))
+    pool = GST_QMMFSRC_IMAGE_PAD (pad)->pool;
+
+  gst_buffer_pool_acquire_buffer (pool, &gstbuffer, NULL);
   g_return_val_if_fail (gstbuffer != NULL, NULL);
 
   // Create a FD backed allocator.
@@ -1557,7 +1561,9 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
   } else if (ipad->codec == GST_IMAGE_CODEC_NONE) {
     switch (ipad->format) {
       case GST_VIDEO_FORMAT_NV12:
-        imgparam.format = ::qmmf::recorder::ImageFormat::kNV12;
+        imgparam.format = (ipad->subformat == GST_IMAGE_SUBFORMAT_HEIF) ?
+            ::qmmf::recorder::ImageFormat::kNV12HEIF :
+            ::qmmf::recorder::ImageFormat::kNV12;
         break;
       case GST_VIDEO_FORMAT_NV21:
         imgparam.format = ::qmmf::recorder::ImageFormat::kNV21;
