@@ -146,7 +146,8 @@ private:
     uint32_t mNumPendingWorks;
     std::mutex mLock;
     std::mutex mLockOut;
-    std::condition_variable mCondition;
+    bool mPendingSignaled;
+    std::condition_variable mPendingWorkCond;
     fnDataCopy mDataCopyFunc;
     void* mDataCopyFuncParam;
 };

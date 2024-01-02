@@ -320,24 +320,32 @@ c2_status_t C2ComponentAdapter::waitForProgressOrStateChange(
 {
 
     std::unique_lock<std::mutex> ul(mLock);
-    LOG_MESSAGE("waitForProgressOrStateChange: pending = %u", mNumPendingWorks);
+    std::chrono::milliseconds timeout(timeoutMs);
+    std::chrono::steady_clock::time_point endTime = std::chrono::steady_clock::now() + timeout;
+    c2_status_t ret = C2_OK;
 
-    while (mNumPendingWorks > maxPendingWorks) {
-        if (timeoutMs > 0) {
-            if (mCondition.wait_for(ul, timeoutMs * 1ms) == std::cv_status::timeout) {
-                LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
-                    mNumPendingWorks);
-                return C2_TIMED_OUT;
-            } else {
-                LOG_MESSAGE("wait done");
-                break;
+    LOG_MESSAGE("work pending:%u, max:%u", mNumPendingWorks, maxPendingWorks);
+
+    // check if it's spurious wakeup
+    if (mNumPendingWorks >= maxPendingWorks) {
+        do {
+            if (timeoutMs > 0) {
+                if (mPendingWorkCond.wait_until(ul, endTime) == std::cv_status::timeout) {
+                    LOG_ERROR("Timed-out waiting for work / state-transition (pending=%u)",
+                            mNumPendingWorks);
+                    ret = C2_TIMED_OUT;
+                    break;
+                }
+            } else if (timeoutMs == 0) {
+                mPendingWorkCond.wait(ul);
             }
-        } else if (timeoutMs == 0) {
-            mCondition.wait(ul);
-        }
+        } while (!mPendingSignaled);
+
+        mPendingSignaled = false;
+        LOG_MESSAGE("wake up");
     }
 
-    return C2_OK;
+    return ret;
 }
 
 void C2ComponentAdapter::registerTrackBuffer(const C2FrameData& input)
@@ -359,6 +367,11 @@ void C2ComponentAdapter::registerTrackBuffer(const C2FrameData& input)
                 mTrackBuffers.emplace(trackbuf);
             }
         }
+    }
+
+    if (!input.buffers.empty()) {
+        std::unique_lock<std::mutex> ul(mLock);
+        mNumPendingWorks++;
     }
 }
 
@@ -442,7 +455,8 @@ void C2ComponentAdapter::onBufferDestroyed(const C2Buffer* buf, void* arg)
             mNumPendingWorks--;
         }
 
-        mCondition.notify_one();
+        mPendingSignaled = true;
+        mPendingWorkCond.notify_one();
     }
 }
 
@@ -597,15 +611,12 @@ c2_status_t C2ComponentAdapter::queue(BufferDescriptor* buffer)
         if (!isEOSFrame) {
             waitForProgressOrStateChange(MAX_PENDING_WORK, 0);
         } else {
-            LOG_MESSAGE("EOS reached");
+            LOG_MESSAGE("queue empty C2 work with EOS");
         }
 
         result = mComp->queue_nb(&workList);
         if (result != C2_OK) {
             LOG_ERROR("Failed to queue work");
-        } else {
-            std::unique_lock<std::mutex> ul(mLock);
-            mNumPendingWorks++;
         }
     }
 

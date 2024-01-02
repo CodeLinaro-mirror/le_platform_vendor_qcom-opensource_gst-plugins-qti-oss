@@ -582,7 +582,7 @@ static GstFlowReturn
 gst_qticodec2vdec_finish (GstVideoDecoder * decoder)
 {
   Gstqticodec2vdec *dec = GST_QTICODEC2VDEC (decoder);
-  gint64 timeout;
+  gint64 end_time = 0;
   BufferDescriptor inBuf;
 
   GST_DEBUG_OBJECT (dec, "finish");
@@ -605,17 +605,19 @@ gst_qticodec2vdec_finish (GstVideoDecoder * decoder)
   /* wait for all the pending buffers to return */
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
   g_mutex_lock (&dec->pending_lock);
-  if (!dec->eos_reached) {
+
+  end_time =
+    g_get_monotonic_time () + (EOS_WAITING_TIMEOUT * G_TIME_SPAN_SECOND);
+  while (!dec->eos_reached) {
     GST_DEBUG_OBJECT (dec, "wait until EOS signal is triggered");
 
-    timeout =
-        g_get_monotonic_time () + (EOS_WAITING_TIMEOUT * G_TIME_SPAN_SECOND);
-    if (!g_cond_wait_until (&dec->pending_cond, &dec->pending_lock, timeout)) {
+    if (!g_cond_wait_until (&dec->pending_cond, &dec->pending_lock, end_time)) {
       GST_ERROR_OBJECT (dec, "Timed out on wait, exiting!");
+      break;
     }
-  } else {
-    GST_DEBUG_OBJECT (dec, "EOS reached on output, finish the decoding");
   }
+
+  dec->eos_reached = FALSE;
 
   g_mutex_unlock (&dec->pending_lock);
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
