@@ -571,12 +571,10 @@ streams_usecase (GstAppContext * appctx)
 
   sleep (5);
 
-  // Release stream 480p in PLAYING state
-  // This function will unlink all elemets of the stream.
-  // It will set all elements to NULL state and will remove them from the bin.
-  // Qmmfsrc pad will be deactivated and released, it cannot be used anymore.
-  g_print ("Release 480p stream\n\n");
-  release_stream (appctx, stream_inf_3);
+  // Remain stream 480p until state changes to NULL, release_all_streams() will
+  // release the stream. Or there are no pads in pipeline which will cause 
+  // Failed to flush source pads when changing state to NULL in 
+  // qmmfsrc_delete_stream().
 }
 
 static void *
