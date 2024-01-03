@@ -270,6 +270,19 @@ gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
 }
 
 static gboolean
+gst_caps_has_subformat (const GstCaps * caps, const gchar * subformat)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "subformat") ?
+      gst_structure_get_string (structure, "subformat") : NULL;
+
+  return (g_strcmp0 (string, subformat) == 0) ? TRUE : FALSE;
+}
+
+static gboolean
 gst_c2_venc_trigger_iframe (GstC2VEncoder * c2venc)
 {
   gboolean success = FALSE, enable = TRUE;
@@ -347,13 +360,16 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
 
 #if defined(CODEC2_CONFIG_VERSION_2_0)
   gboolean enable = TRUE;
-  // enable codec2 avg qp info report
-  success = gst_c2_engine_set_parameter (c2venc->engine,
-      GST_C2_PARAM_REPORT_AVG_QP, GPOINTER_CAST (&(enable)));
 
-  if (!success) {
-    GST_ERROR_OBJECT (c2venc, "Failed to enable QP report parameter!");
-    return FALSE;
+  // Enable codec2 avg qp info report, only avaiable in h264/h265.
+  if (g_str_has_suffix (c2venc->name, "heic.encoder") == FALSE ) {
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_REPORT_AVG_QP, GPOINTER_CAST (&(enable)));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to enable QP report parameter!");
+      return FALSE;
+    }
   }
 #endif // CODEC2_CONFIG_VERSION_2_0
 
@@ -677,6 +693,23 @@ gst_c2_venc_event_handler (guint type, gpointer payload, gpointer userdata)
   } else if (type == GST_C2_EVENT_ERROR) {
     gint32 error = *((gint32*) userdata);
     GST_ERROR_OBJECT (c2venc, "Received engine ERROR: '%x'", error);
+  } else if (type == GST_C2_EVENT_DROP) {
+    guint64 index = *((guint64*) payload);
+    GstVideoCodecFrame *frame = NULL;
+
+    GST_DEBUG_OBJECT (c2venc, "Received engine drop frame: %" G_GUINT64_FORMAT,
+        index);
+
+    frame = gst_video_encoder_get_frame (GST_VIDEO_ENCODER (c2venc), index);
+    if (frame == NULL) {
+      GST_ERROR_OBJECT (c2venc, "Failed to get encoder frame with index %"
+          G_GUINT64_FORMAT, index);
+      return;
+    }
+    frame->output_buffer = NULL;
+    // Calling finish_frame with frame->output_buffer == NULL will drop it.
+    gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
+    gst_video_codec_frame_unref (frame);
   }
 }
 
@@ -724,7 +757,9 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_SYNC);
   // Unset the custom UBWC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
-
+  // Unset the custom HEIC flag if present.
+  GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
+  
   // Check for incomplete buffers and merge them into single buffer.
   if (gst_buffer_list_length (c2venc->incomplete_buffers) > 0) {
     GstMemory *memory = NULL;
@@ -789,11 +824,6 @@ gst_c2_venc_stop (GstVideoEncoder * encoder)
 {
   GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
   GST_DEBUG_OBJECT (c2venc, "Stop engine");
-
-  if ((c2venc->engine != NULL) && !gst_c2_engine_drain (c2venc->engine, TRUE)) {
-    GST_ERROR_OBJECT (c2venc, "Failed to flush engine");
-    return FALSE;
-  }
 
   if ((c2venc->engine != NULL) && !gst_c2_engine_stop (c2venc->engine)) {
     GST_ERROR_OBJECT (c2venc, "Failed to stop engine");
@@ -893,6 +923,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   gboolean success = FALSE;
 
   c2venc->isubwc = gst_caps_has_compression (state->caps, "ubwc");
+
+  c2venc->isheif = gst_caps_has_subformat(state->caps, "heif");
 
   GST_DEBUG_OBJECT (c2venc, "Setting new format %s%s",
       gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)),
@@ -1123,6 +1155,9 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   if (c2venc->isubwc)
     GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
+
+  if (c2venc->isheif)
+    GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
 
   // This mutex was locked in the base class before call this function.
   // Needs to be unlocked when waiting for any pending buffers during drain.
@@ -1639,6 +1674,12 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_mark),
       NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_UINT);
 
+  // TODO: Temporary solution to flush all enqued buffers in the encoder
+  // until proper solution is implemented using flush start/stop
+  g_signal_new_class_handler ("flush-buffers", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_flush),
+      NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
+
   gst_element_class_set_static_metadata (element,
       "Codec2 H.264/H.265/HEIC Video Encoder", "Codec/Encoder/Video",
       "Encode H.264/H.265/HEIC video streams", "QTI");
@@ -1665,6 +1706,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
 
   c2venc->instate = NULL;
   c2venc->isubwc = FALSE;
+  c2venc->isheif = FALSE;
   c2venc->headers = NULL;
 
   c2venc->incomplete_buffers = gst_buffer_list_new ();

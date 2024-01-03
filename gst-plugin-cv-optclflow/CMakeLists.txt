@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(GST_PLUGINS_QTI_OSS_CVP_OPTCLFLOW
+project(GST_PLUGINS_QTI_OSS_CV_OPTCLFLOW
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
 )
@@ -20,6 +20,12 @@ pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GBM REQUIRED gbm)
 
+include(CheckIncludeFileCXX)
+# Check whether CVP OpticalFlow header is present.
+check_include_file_cxx("cvp/v2.0/cvpOpticalFlow.h" HAVE_CVP_OPTICALFLOW_H)
+# Check whether EVA OpticalFlow header is present.
+check_include_file_cxx("evaOpticalFlow.h" HAVE_EVA_OPTICALFLOW_H)
+
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
@@ -31,29 +37,36 @@ add_definitions(-DHAVE_CONFIG_H)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
-# GStreamer CVP OticalFlow plugin.
-set(GST_CVP_OPTCLFLOW gstqticvpoptclflow)
+# GStreamer CV OticalFlow plugin.
+set(GST_CV_OPTCLFLOW gstqticvoptclflow)
 
-add_library(${GST_CVP_OPTCLFLOW} SHARED
+add_library(${GST_CV_OPTCLFLOW} SHARED
   opticalflow.c
-  cvp-opticalflow-engine.cc
+  $<$<BOOL:${HAVE_CVP_OPTICALFLOW_H}>:cvp-opticalflow-engine.cc>
+  $<$<BOOL:${HAVE_EVA_OPTICALFLOW_H}>:eva-opticalflow-engine.cc>
 )
 
-target_include_directories(${GST_CVP_OPTCLFLOW} PUBLIC
+target_include_directories(${GST_CV_OPTCLFLOW} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
-target_link_libraries(${GST_CVP_OPTCLFLOW} PRIVATE
+target_compile_definitions(${GST_CV_OPTCLFLOW} PRIVATE
+  $<$<BOOL:${HAVE_CVP_OPTICALFLOW_H}>:HAVE_CVP_OPTICALFLOW_H>
+  $<$<BOOL:${HAVE_EVA_OPTICALFLOW_H}>:HAVE_EVA_OPTICALFLOW_H>
+)
+
+target_link_libraries(${GST_CV_OPTCLFLOW} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
   ${GBM_LIBRARIES}
   gstqtimemorybase
-  cvp2
+  $<$<BOOL:${HAVE_CVP_OPTICALFLOW_H}>:cvp2>
+  $<$<BOOL:${HAVE_EVA_OPTICALFLOW_H}>:eva>
 )
 
 install(
-  TARGETS ${GST_CVP_OPTCLFLOW}
+  TARGETS ${GST_CV_OPTCLFLOW}
   LIBRARY DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
