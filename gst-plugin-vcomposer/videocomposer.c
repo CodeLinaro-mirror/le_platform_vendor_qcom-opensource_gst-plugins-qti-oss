@@ -147,8 +147,6 @@ struct _GstConverterRequest {
   // Output frame submitted with provided ID.
   GstVideoFrame *outframe;
 
-  GstVideoComposer *vcomposer;
-
   // Time it took for this request to be processed.
   GstClockTime  time;
 };

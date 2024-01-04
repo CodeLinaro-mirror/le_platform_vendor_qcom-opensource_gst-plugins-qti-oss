@@ -42,19 +42,6 @@ G_BEGIN_DECLS
 typedef struct _GstGlesVideoConverter GstGlesVideoConverter;
 
 /**
- * gst_destroy_input_surface:
- *
- * it destroys the surface of the input once the request
- * is done processing
- *
- * return: NONE
- */
-void
-gst_destroy_input_surface (GstGlesVideoConverter *convert,
-    const GstVideoFrame * vframe);
-
-
-/**
  * gst_gles_video_converter_new:
  * @settings: Structure with optional settings.
  *

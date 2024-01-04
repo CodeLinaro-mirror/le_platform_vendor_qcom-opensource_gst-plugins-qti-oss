@@ -114,8 +114,6 @@ struct _GstVSplitRequest {
 
   // Time it took for this request to be processed.
   GstClockTime  time;
-
-  GstVideoSplit *vsplit;
 };
 
 GST_DEFINE_MINI_OBJECT_TYPE (GstVSplitRequest, gst_vsplit_request);
@@ -145,9 +143,6 @@ gst_vsplit_request_free (GstVSplitRequest * request)
   }
 
   if ((buffer = request->inframe->buffer) != NULL) {
-#ifdef USE_GLES_CONVERTER
-    gst_destroy_input_surface (request->vsplit->glesconvert, request->inframe);
-#endif // USE_GLES_CONVERTER
     gst_video_frame_unmap (request->inframe);
     gst_buffer_unref (buffer);
   }
@@ -158,7 +153,7 @@ gst_vsplit_request_free (GstVSplitRequest * request)
 }
 
 static GstVSplitRequest *
-gst_vsplit_request_new (guint n_outputs, GstVideoSplit * vsplit)
+gst_vsplit_request_new (guint n_outputs)
 {
   GstVSplitRequest *request = g_slice_new0 (GstVSplitRequest);
   guint idx = 0;
@@ -176,8 +171,6 @@ gst_vsplit_request_new (guint n_outputs, GstVideoSplit * vsplit)
     g_ptr_array_index (request->outframes, idx) = NULL;
 
   request->time = GST_CLOCK_TIME_NONE;
-
-  request->vsplit = vsplit;
 
   return request;
 }

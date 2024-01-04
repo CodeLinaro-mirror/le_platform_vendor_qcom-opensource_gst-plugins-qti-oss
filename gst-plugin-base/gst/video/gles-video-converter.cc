@@ -222,40 +222,6 @@ gst_gles_destroy_surface (gpointer key, gpointer value, gpointer userdata)
   return;
 }
 
-void
-gst_destroy_input_surface (GstGlesVideoConverter *convert,
-    const GstVideoFrame * vframe)
-{
-  GstMemory *memory = NULL;
-  guint fd = 0;
-  guint64 surface_id = 0;
-
-  GST_GLES_LOCK (convert);
-
-  memory = gst_buffer_peek_memory (vframe->buffer, 0);
-  fd = gst_fd_memory_get_fd (memory);
-
-  surface_id = GPOINTER_TO_ULONG (
-      g_hash_table_lookup (convert->insurfaces, GUINT_TO_POINTER (fd)));
-
-  if (surface_id != 0) {
-    try {
-      convert->engine->DestroySurface(surface_id);
-      GST_DEBUG ("Destroying Input surface with id %lx", surface_id);
-    } catch (std::exception& e) {
-      GST_ERROR ("Failed to destroy Input IB2C surface, error: '%s'!", e.what());
-      return;
-    }
-
-    g_hash_table_remove (convert->insurfaces, GUINT_TO_POINTER (fd));
-  }
-
-  GST_GLES_UNLOCK (convert);
-
-  return;
-}
-
-
 static void
 gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
     const GstVideoFrame * inframe, const guint8 alpha,
@@ -422,7 +388,6 @@ gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
   GstMemory *memory = NULL;
   guint fd = 0;
   guint64 surface_id = 0;
-  GHashTable *surfaces = NULL;
 
   // Get the 1st (and only) memory block from the input GstBuffer.
   memory = gst_buffer_peek_memory (vframe->buffer, 0);
@@ -434,11 +399,6 @@ gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
 
   // Get the input buffer FD from the GstBuffer memory block.
   fd = gst_fd_memory_get_fd (memory);
-
-  if (direction == GST_GLES_INPUT )
-    surfaces = convert->insurfaces;
-  else
-    surfaces = convert->outsurfaces;
 
   if (!g_hash_table_contains (surfaces, GUINT_TO_POINTER (fd))) {
     // Create an input surface and add its ID to the input hash table.
