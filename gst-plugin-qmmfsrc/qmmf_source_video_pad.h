@@ -192,9 +192,6 @@ struct _GstQmmfSrcVideoPad {
   /// Rotate property for stream orientation
   gint                rotate;
 
-  /// Buffer pool
-  GstBufferPool       *pool;
-
   /// Video colorimetry name
   gchar               *colorimetry;
 };

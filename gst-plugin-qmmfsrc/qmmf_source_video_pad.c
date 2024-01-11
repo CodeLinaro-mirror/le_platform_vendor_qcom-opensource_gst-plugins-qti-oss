@@ -444,7 +444,6 @@ GstPad *
 qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
     const guint index)
 {
-  GstBufferPool *pool = NULL;
   GstPad *srcpad = GST_PAD (g_object_new (
       GST_TYPE_QMMFSRC_VIDEO_PAD,
       "name", name,
@@ -461,13 +460,6 @@ qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
   gst_pad_set_activatemode_function (
       srcpad, GST_DEBUG_FUNCPTR (video_pad_activate_mode));
 
-  pool = gst_qmmf_buffer_pool_new ();
-  QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, pool != NULL,
-      gst_object_unref (srcpad), NULL, "Failed to create buffer pool!");
-
-  gst_buffer_pool_set_active (pool, TRUE);
-  GST_QMMFSRC_VIDEO_PAD (srcpad)->pool = pool;
-
   gst_pad_use_fixed_caps (srcpad);
   gst_pad_set_active (srcpad, TRUE);
 
@@ -483,9 +475,6 @@ qmmfsrc_release_video_pad (GstElement * element, GstPad * pad)
 
   if (GST_QMMFSRC_VIDEO_PAD (pad)->colorimetry)
     free(GST_QMMFSRC_VIDEO_PAD (pad)->colorimetry);
-
-  gst_buffer_pool_set_active (GST_QMMFSRC_VIDEO_PAD (pad)->pool, FALSE);
-  gst_object_unref (GST_QMMFSRC_VIDEO_PAD (pad)->pool);
 
   gst_child_proxy_child_removed (GST_CHILD_PROXY (element), G_OBJECT (pad),
       GST_OBJECT_NAME (pad));
