@@ -652,6 +652,36 @@ gst_video_composer_sink_event (GstAggregator * aggregator,
       gst_event_unref (event);
       return success;
     }
+    case GST_EVENT_SEGMENT:
+    {
+      GstSegment segment;
+
+      GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (pad);
+      gst_event_copy_segment (event, &segment);
+      GST_DEBUG_OBJECT (pad, "Got segment: %" GST_SEGMENT_FORMAT, &segment);
+
+      GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
+      if (segment.format == GST_FORMAT_BYTES) {
+        gst_segment_init (&pad->segment, GST_FORMAT_TIME);
+        pad->segment.start = segment.start;
+        GST_DEBUG_OBJECT (pad, "Converted incoming segment to TIME: %"
+            GST_SEGMENT_FORMAT, &pad->segment);
+      } else if (segment.format == GST_FORMAT_TIME) {
+        GST_DEBUG_OBJECT (pad, "Replacing previous segment: %"
+            GST_SEGMENT_FORMAT, &pad->segment);
+        gst_segment_copy_into (&segment, &pad->segment);
+      } else {
+        GST_ERROR_OBJECT (pad, "Unsupported SEGMENT format: %s!",
+            gst_format_get_name (segment.format));
+        GST_OBJECT_UNLOCK (vcomposer);
+        return FALSE;
+      }
+
+      gst_event_unref (event);
+      GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
+
+      return TRUE;
+    }
     default:
       break;
   }
