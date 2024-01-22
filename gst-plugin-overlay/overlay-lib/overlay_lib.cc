@@ -683,7 +683,6 @@ Overlay::~Overlay ()
       uint64_t surface_id = pair.second;
       ib2c_engine_->DestroySurface(surface_id);
     }
-    ib2c_surfaces_.clear();
 #endif // ENABLE_GLES
   }
 
@@ -1248,11 +1247,6 @@ int32_t Overlay::ApplyOverlay_GLES (const OverlayTargetBuffer& buffer)
 
   SyncEnd (buffer.ion_fd);
 
-  if (!in_surf_cache_) {
-    ib2c_engine_->DestroySurface(surface_id);
-    ib2c_surfaces_.erase(buffer.ion_fd);
-  }
-
   OVDBG_VERBOSE ("%s: Exit ", __func__);
   return ret;
 }
@@ -1443,10 +1437,6 @@ int32_t Overlay::ProcessOverlayItems (
 
   return ret;
   OVDBG_VERBOSE ("%s: Exit", __func__);
-}
-
-void Overlay::DisableInputSurfaceCache() {
-  in_surf_cache_ = false;
 }
 
 int32_t Overlay::DeleteOverlayItems ()
