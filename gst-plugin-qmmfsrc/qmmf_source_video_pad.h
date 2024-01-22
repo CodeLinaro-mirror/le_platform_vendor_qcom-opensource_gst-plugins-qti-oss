@@ -191,9 +191,6 @@ struct _GstQmmfSrcVideoPad {
 
   ///rotate property for stream orientation
   gint                rotate;
-
-  /// Buffer pool
-  GstBufferPool       *pool;
 };
 
 struct _GstQmmfSrcVideoPadClass {
