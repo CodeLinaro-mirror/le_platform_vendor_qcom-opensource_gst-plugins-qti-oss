@@ -39,7 +39,7 @@
 #include <string.h>
 #include <gst/allocators/gstfdmemory.h>
 #include <ml-meta/ml_meta.h>
-#include <gst/cvp/gstcvpmeta.h>
+#include <gst/cv/gstcvmeta.h>
 
 #include "gstoverlay.h"
 
@@ -70,6 +70,9 @@ G_DEFINE_TYPE (GstOverlay, gst_overlay, GST_TYPE_VIDEO_FILTER);
 #define DEFAULT_PROP_DEST_RECT_Y      40
 #define DEFAULT_PROP_DEST_RECT_WIDTH  200
 #define DEFAULT_PROP_DEST_RECT_HEIGHT 48
+
+#define CVP_OPTCALFLOW_ARROW_DENSE 4
+#define EVA_OPTCALFLOW_ARROW_DENSE 1
 
 
 /* This is initial value. Size is recalculated runtime and buffer is
@@ -1220,6 +1223,7 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
 
   OverlayParam ov_param;
   int32_t ret = 0;
+  int32_t arrowdense = EVA_OPTCALFLOW_ARROW_DENSE;
 
   if (!(*item_id)) {
     ov_param = {};
@@ -1252,15 +1256,21 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
     }
   }
 
-  GstCvpOptclFlowMeta *meta = (GstCvpOptclFlowMeta *) metadata;
-  g_return_val_if_fail (meta->mvectors->len == meta->stats->len, FALSE);
+  GstCvOptclFlowMeta *meta = (GstCvOptclFlowMeta *) metadata;
+  // meta->stats just used by cvp
+  if (NULL != meta->stats) {
+    g_return_val_if_fail (meta->mvectors->len == meta->stats->len, FALSE);
+    arrowdense = CVP_OPTCALFLOW_ARROW_DENSE;
+  }
 
   gint arrows_cnt = 0;
 
-  // Read each 4th mv in order to skip each 2nd paxel due arrows density
-  for (guint x = 0; x < meta->mvectors->len; x+=4) {
-    GstCvpMotionVector *mvector = &g_array_index (meta->mvectors, GstCvpMotionVector, x);
-    GstCvpOptclFlowStats *stats = &g_array_index (meta->stats, GstCvpOptclFlowStats, x);
+  // Skip due arrows density
+  for (guint x = 0; x < meta->mvectors->len; x += arrowdense) {
+    GstCvMotionVector *mvector = &g_array_index (meta->mvectors, GstCvMotionVector, x);
+    GstCvOptclFlowStats *stats = NULL;
+    if (NULL != meta->stats)
+      stats = &g_array_index (meta->stats, GstCvOptclFlowStats, x);
 
     gint mv_x = mvector->dx;
     gint mv_y = mvector->dy;
@@ -1273,18 +1283,24 @@ gst_overlay_apply_optclflow_item (GstOverlay * gst_overlay, gpointer metadata,
       continue;
     }
 
-    // Filter by variance
-    if (stats->variance < gst_overlay->arrows_filter_var) {
-      continue;
-    }
+    if (NULL != meta->stats) {
+      // Filter by variance
+      if (stats->variance < gst_overlay->arrows_filter_var)
+        continue;
 
-    // Filter by SAD
-    if (stats->sad < gst_overlay->arrows_filter_sad) {
-      continue;
-    }
+      // Filter by SAD
+      if (stats->sad < gst_overlay->arrows_filter_sad)
+        continue;
 
-    if ((stats->sad == 0) && (stats->variance == 0))
-      continue;
+      if ((stats->sad == 0) && (stats->variance == 0))
+        continue;
+    } else {
+      if (mvector-> x % 16 !=0 || mvector-> y % 16 != 0)
+        continue;
+
+      if ((mvector->dx == 0) && (mvector->dy == 0))
+        continue;
+    }
 
     ov_param.arrows[arrows_cnt].end_x = mvector->x;
     ov_param.arrows[arrows_cnt].end_y = mvector->y;
@@ -1522,6 +1538,10 @@ gst_overlay_apply_overlay (GstOverlay *gst_overlay, GstVideoFrame *frame)
   GstMemory *memory = gst_buffer_peek_memory (frame->buffer, 0);
   guint fd = gst_fd_memory_get_fd (memory);
 
+  if (frame->buffer->pool == NULL) {
+    gst_overlay->overlay->DisableInputSurfaceCache ();
+  }
+
   OverlayTargetBuffer overlay_buf;
   overlay_buf.width     = GST_VIDEO_FRAME_WIDTH (frame);
   overlay_buf.height    = GST_VIDEO_FRAME_HEIGHT (frame);
@@ -1567,7 +1587,7 @@ gst_buffer_get_optclflow_meta (GstBuffer * buffer)
   g_return_val_if_fail (buffer != NULL, NULL);
 
   while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
-      GST_CVP_OPTCLFLOW_META_API_TYPE)) != NULL)
+      GST_CV_OPTCLFLOW_META_API_TYPE)) != NULL)
     list = g_slist_prepend (list, meta);
 
   return list;
@@ -2798,7 +2818,7 @@ gst_overlay_set_info (GstVideoFilter * filter, GstCaps * in,
 }
 
 /**
- * gst_overlay_set_info:
+ * gst_overlay_transform_frame_ip:
  * @filter: gst overlay object
  * @frame: GST video buffer
  *

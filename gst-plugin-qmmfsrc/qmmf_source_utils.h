@@ -142,6 +142,17 @@ G_BEGIN_DECLS
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
+/* QMMF bufferpool */
+#define GST_TYPE_QMMF_BUFFER_POOL (gst_qmmf_buffer_pool_get_type())
+#define GST_IS_QMMF_BUFFER_POOL (obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_QMMF_BUFFER_POOL))
+#define GST_QMMF_BUFFER_POOL (obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_QMMF_BUFFER_POOL, GstQmmfBufferPool))
+#define GST_QMMF_BUFFER_POOL_CAST(obj) ((GstQmmfBufferPool*)(obj))
+
+typedef struct _GstQmmfBufferPool GstQmmfBufferPool;
+typedef struct _GstQmmfBufferPoolClass GstQmmfBufferPoolClass;
+
 // Extension to the GstVideoFormat for supporting bayer formats.
 typedef enum {
   GST_BAYER_FORMAT_BGGR = GST_BAYER_FORMAT_OFFSET,
@@ -301,6 +312,7 @@ enum
 typedef enum {
   CAM_OPMODE_NONE,
   CAM_OPMODE_FRAMESELECTION,
+  CAM_OPMODE_FASTSWITCH,
 } GstCamOpMode;
 
 GType gst_qmmfsrc_control_mode_get_type (void);
@@ -368,6 +380,8 @@ guchar gst_qmmfsrc_noise_reduction_android_value (const guint value);
 guint gst_qmmfsrc_android_value_noise_reduction (const guchar value);
 
 const char * gst_qmmf_video_format_to_string (gint format);
+
+GQuark qmmf_buffer_qdata_quark ();
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =
@@ -438,6 +452,20 @@ static const gchar * gst_camera_manual_wb_settings[] =
     "gains",
     "color_temperature",
 };
+
+struct _GstQmmfBufferPool
+{
+  GstBufferPool bufferpool;
+};
+
+struct _GstQmmfBufferPoolClass
+{
+  GstBufferPoolClass parent_class;
+};
+
+GType             gst_qmmf_buffer_pool_get_type      (void);
+
+GstBufferPool *   gst_qmmf_buffer_pool_new           (void);
 
 G_END_DECLS
 

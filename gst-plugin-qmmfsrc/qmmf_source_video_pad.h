@@ -29,7 +29,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -153,6 +153,9 @@ struct _GstQmmfSrcVideoPad {
   guint               index;
   /// QMMF Recorder master track index, set by the pad capabilities.
   gint                srcidx;
+  /// QMMF Recorder reprocess enable, set by the pad capabilities.
+  gboolean            reprocess_enable;
+
 
   /// ID of the QMMF Recorder track which belongs to this pad.
   guint               id;
@@ -187,11 +190,17 @@ struct _GstQmmfSrcVideoPad {
   /// QMMF Recorder Video Type
   gint                type;
 
-  ///rotate property for stream orientation
+  /// Rotate property for stream orientation
   gint                rotate;
 
   /// Flags to distinguish preview mode or video mode.
   gint                stream_mode;
+
+  /// Buffer pool
+  GstBufferPool       *pool;
+
+  /// Video colorimetry name
+  gchar               *colorimetry;
 };
 
 struct _GstQmmfSrcVideoPadClass {

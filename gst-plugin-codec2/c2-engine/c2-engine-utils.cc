@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -46,6 +46,7 @@
 #else
 #include <vidc/media/msm_media_info.h>
 #define MMM_COLOR_FMT_NV12             COLOR_FMT_NV12
+#define MMM_COLOR_FMT_NV12_512         COLOR_FMT_NV12_512
 #define MMM_COLOR_FMT_NV12_UBWC        COLOR_FMT_NV12_UBWC
 #define MMM_COLOR_FMT_NV12_BPP10_UBWC  COLOR_FMT_NV12_BPP10_UBWC
 #define MMM_COLOR_FMT_P010             COLOR_FMT_P010
@@ -185,9 +186,9 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
 static const std::unordered_map<uint32_t, C2Config::profile_t> kProfileMap = {
   { GST_C2_PROFILE_AVC_BASELINE,
       C2Config::profile_t::PROFILE_AVC_BASELINE },
-  { GST_C2_PROFILE_AVC_CONSTRAINT_BASELINE,
+  { GST_C2_PROFILE_AVC_CONSTRAINED_BASELINE,
       C2Config::profile_t::PROFILE_AVC_CONSTRAINED_BASELINE },
-  { GST_C2_PROFILE_AVC_CONSTRAINT_HIGH,
+  { GST_C2_PROFILE_AVC_CONSTRAINED_HIGH,
       C2Config::profile_t::PROFILE_AVC_CONSTRAINED_HIGH },
   { GST_C2_PROFILE_AVC_HIGH,
       C2Config::profile_t::PROFILE_AVC_HIGH },
@@ -353,6 +354,14 @@ static const std::unordered_map<uint32_t, uint32_t> kColorRangeMap = {
   { GST_VIDEO_COLOR_RANGE_UNKNOWN,  C2Color::RANGE_UNSPECIFIED },
   { GST_VIDEO_COLOR_RANGE_0_255,        C2Color::RANGE_FULL },
   { GST_VIDEO_COLOR_RANGE_16_235,       C2Color::RANGE_LIMITED },
+};
+
+// Map for the GstC2PictureType.
+static const std::unordered_map<uint32_t, uint32_t> kPictureTypeMap = {
+  { GST_C2_SYNC_FRAME, C2Config::SYNC_FRAME },
+  { GST_C2_I_FRAME,    C2Config::I_FRAME },
+  { GST_C2_P_FRAME,    C2Config::P_FRAME },
+  { GST_C2_B_FRAME,    C2Config::B_FRAME },
 };
 
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
@@ -1114,6 +1123,7 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
   GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
   uint32_t size = gst_buffer_get_size (buffer);
   int32_t fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
+  int32_t meta_fd = -1;
 
   gboolean isubwc = GST_BUFFER_FLAG_IS_SET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
   C2PixelFormat format = GstC2Utils::PixelFormat(vmeta->format, isubwc);
@@ -1124,9 +1134,21 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
 
   switch (format) {
     case C2PixelFormat::kNV12:
-      handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.slice_height =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      if (GST_BUFFER_FLAG_IS_SET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC)) {
+#ifdef GBM_BO_USAGE_PRIVATE_HEIF
+        handle->mInts.format = GBM_FORMAT_IMPLEMENTATION_DEFINED;
+        handle->mInts.usage_lo |= GBM_BO_USAGE_PRIVATE_HEIF;
+        handle->mInts.slice_height =
+            MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_512, height);
+#else
+        GST_ERROR ("NV12 HEIF is not supported in GBM!");
+        return false;
+#endif // GBM_BO_USAGE_PRIVATE_HEIF
+      } else {
+        handle->mInts.format = GBM_FORMAT_NV12;
+        handle->mInts.slice_height =
+            MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      }
       break;
     case C2PixelFormat::kNV12UBWC:
       handle->mInts.format = GBM_FORMAT_NV12;
@@ -1154,12 +1176,15 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
       return false;
   }
 
+  struct gbm_bo bo = {.ion_fd = fd, .ion_metadata_fd = -1};
+  gbm_perform(GBM_PERFORM_GET_METADATA_ION_FD, &bo, &meta_fd);
+
   handle->version = ::android::C2HandleGBM::VERSION;
   handle->numFds = ::android::C2HandleGBM::NUM_FDS;
   handle->numInts = ::android::C2HandleGBM::NUM_INTS;
 
   handle->mFds.buffer_fd = fd;
-  handle->mFds.meta_buffer_fd = -1;
+  handle->mFds.meta_buffer_fd = meta_fd;
 
   handle->mInts.width = width;
   handle->mInts.height = height;
@@ -1258,9 +1283,14 @@ bool GstC2Utils::AppendCodecMeta(GstBuffer* buffer,
       std::static_pointer_cast<const C2StreamPictureTypeInfo::output>(c2info);
 
   if (pictype) {
+    auto result = std::find_if(kPictureTypeMap.begin(), kPictureTypeMap.end(),
+        [&](const auto& m) { return m.second == pictype->value; });
+
     gst_structure_set (structure,
-        "picture-type", G_TYPE_UINT, static_cast<guint>(pictype->value), NULL);
-    GST_TRACE ("Picture type: %u", static_cast<guint>(pictype->value));
+        "picture-type", G_TYPE_UINT,
+        static_cast<GstC2PictureType>(result->first), NULL);
+
+    GST_TRACE ("Picture type: %u", static_cast<GstC2PictureType>(result->first));
   }
 
 #if defined(CODEC2_CONFIG_VERSION_2_0)
