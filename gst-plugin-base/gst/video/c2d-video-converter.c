@@ -111,10 +111,6 @@ struct _GstC2dVideoConverter
   GHashTable *insurfaces;
   GHashTable *outsurfaces;
 
-  // Map of buffer FDs and their corresponding buffer address.
-  GHashTable *inbufferlist;
-  GHashTable *outbufferlist;
-
   // C2D library handle.
   gpointer   c2dhandle;
 
@@ -991,10 +987,9 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
 
 static guint
 gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
-    GHashTable * surfaces, GHashTable * bufferlist, guint bits,
-    const GstVideoFrame * vframe, const gboolean isubwc)
+    GHashTable * surfaces, guint bits, const GstVideoFrame * vframe,
+    const gboolean isubwc)
 {
-  GstBuffer *buffer = NULL;
   GstMemory *memory = NULL;
   guint fd = 0, surface_id = 0;
 
@@ -1020,8 +1015,6 @@ gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
 
     g_hash_table_insert (surfaces, GUINT_TO_POINTER (fd),
         GUINT_TO_POINTER (surface_id));
-    g_hash_table_insert (bufferlist,  GUINT_TO_POINTER (fd),
-        vframe->buffer);
   } else {
     gpointer vaddress = NULL;
 
@@ -1031,16 +1024,10 @@ gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
     vaddress = g_hash_table_lookup (convert->vaddrlist,
         GUINT_TO_POINTER (surface_id));
 
-    buffer = g_hash_table_lookup (bufferlist,
-        GUINT_TO_POINTER (fd));
-
-    if ((vaddress != GST_VIDEO_FRAME_PLANE_DATA (vframe, 0) || (buffer != vframe->buffer))) {
-        if (gst_c2d_update_surface (convert, vframe, surface_id, bits, isubwc)) {
-          g_hash_table_insert (bufferlist,  GUINT_TO_POINTER (fd), vframe->buffer);
-        } else {
-          GST_ERROR ("Update failed for surface %x", surface_id);
-          return 0;
-        }
+    if (vaddress != GST_VIDEO_FRAME_PLANE_DATA (vframe, 0) &&
+        !gst_c2d_update_surface (convert, vframe, surface_id, bits, isubwc)) {
+      GST_ERROR ("Update failed for surface %x", surface_id);
+      return 0;
     }
   }
 
@@ -1096,7 +1083,7 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
       GST_C2D_LOCK (convert);
 
       surface_id = gst_c2d_retrieve_surface_id (convert, convert->insurfaces,
-          convert->inbufferlist, C2D_SOURCE, blit->frame, blit->isubwc);
+          C2D_SOURCE, blit->frame, blit->isubwc);
 
       GST_C2D_UNLOCK (convert);
 
@@ -1136,7 +1123,7 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
     GST_C2D_LOCK (convert);
 
     surface_id = gst_c2d_retrieve_surface_id (convert, convert->outsurfaces,
-        convert->outbufferlist, C2D_SOURCE | C2D_TARGET, outframe, composition->isubwc);
+        C2D_SOURCE | C2D_TARGET, outframe, composition->isubwc);
 
     GST_C2D_UNLOCK (convert);
 
@@ -1253,12 +1240,6 @@ gst_c2d_video_converter_flush (GstC2dVideoConverter * convert)
   if (convert->vaddrlist != NULL)
     g_hash_table_remove_all (convert->vaddrlist);
 
-  if (convert->inbufferlist != NULL)
-    g_hash_table_remove_all (convert->inbufferlist);
-
-  if (convert->outbufferlist != NULL)
-    g_hash_table_remove_all (convert->outbufferlist);
-
   GST_C2D_UNLOCK (convert);
   return;
 }
@@ -1339,16 +1320,6 @@ gst_c2d_video_converter_new (GstStructure * settings)
     goto cleanup;
   }
 
-  if ((convert->inbufferlist = g_hash_table_new (NULL, NULL)) == NULL) {
-    GST_ERROR ("Failed to create hash table for source buffer list!");
-    goto cleanup;
-  }
-
-  if ((convert->outbufferlist = g_hash_table_new (NULL, NULL)) == NULL) {
-    GST_ERROR ("Failed to create hash table for target buffer list!");
-    goto cleanup;
-  }
-
   setup.max_object_list_needed = C2D_INIT_MAX_OBJECT;
   setup.max_surface_template_needed = C2D_INIT_MAX_TEMPLATE;
 
@@ -1421,12 +1392,6 @@ gst_c2d_video_converter_free (GstC2dVideoConverter * convert)
 
   if (convert->vaddrlist != NULL)
     g_hash_table_destroy (convert->vaddrlist);
-
-  if (convert->inbufferlist != NULL)
-    g_hash_table_destroy(convert->inbufferlist);
-
-  if (convert->outbufferlist != NULL)
-    g_hash_table_destroy (convert->outbufferlist);
 
   G_LOCK (c2d);
 
