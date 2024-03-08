@@ -1,18 +1,24 @@
-# GStreamer depth-assist-autofocus-example example
-set(GST_EXAMPLE_BIN gst-depth-assist-autofocus-example)
+# GStreamer app source exmaple
+set(GST_EXAMPLE_BIN gst-gbm-appsrc-example)
 
 add_executable(${GST_EXAMPLE_BIN}
-  main.cc
+  main.c
 )
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-   $<$<BOOL:${HAVE_CAMX_API}>:${SYSROOT_INCDIR}/camx-api/camx/service>
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
-  qmmf_camera_metadata
   ${GST_LIBRARIES}
+  ${GST_BASE_LIBRARIES}
+  ${GST_ALLOC_LIBRARIES}
+  ${GST_VIDEO_LIBRARIES}
+  gstqtivideobase
+)
+
+target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
+  $<$<BOOL:${CODEC2_ENCODE}>:CODEC2_ENCODE>
 )
 
 install(
@@ -22,3 +28,5 @@ install(
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
 )
+
+
