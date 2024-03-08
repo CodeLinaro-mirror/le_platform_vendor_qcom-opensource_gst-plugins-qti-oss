@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -71,18 +71,14 @@
 #include <qmmf-sdk/qmmf_recorder.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param_tags.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param.h>
-#include <camera/VendorTagDescriptor.h>
-#include <camera/CameraMetadata.h>
+#include <qmmf-sdk/qmmf_vendor_tag_descriptor.h>
+#include <qmmf-sdk/qmmf_camera_metadata.h>
 
 #include "qmmf_source_utils.h"
 #include "qmmf_source_image_pad.h"
 #include "qmmf_source_video_pad.h"
 
-#ifndef CAMERA_METADATA_1_0_NS
-namespace camera = android;
-#else
-namespace camera = android::hardware::camera::common::V1_0::helper;
-#endif
+namespace camera = qmmf;
 #define GST_QMMF_CONTEXT_GET_LOCK(obj) (&GST_QMMF_CONTEXT_CAST(obj)->lock)
 #define GST_QMMF_CONTEXT_LOCK(obj) \
   g_mutex_lock(GST_QMMF_CONTEXT_GET_LOCK(obj))
@@ -327,18 +323,18 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
 static guint
 get_vendor_tag_by_name (const gchar * section, const gchar * name)
 {
-  ::android::sp<::camera::VendorTagDescriptor> vtags;
-  ::android::status_t status = 0;
+  std::shared_ptr<VendorTagDescriptor> vtags;
+  status_t status = 0;
   guint tag_id = 0;
 
-  vtags = ::camera::VendorTagDescriptor::getGlobalVendorTagDescriptor();
+  vtags = VendorTagDescriptor::getGlobalVendorTagDescriptor();
   if (vtags.get() == NULL) {
     GST_WARNING ("Failed to retrieve Global Vendor Tag Descriptor!");
     return 0;
   }
 
-  status = vtags->lookupTag(::android::String8(name),
-      ::android::String8(section), &tag_id);
+  status = vtags->lookupTag(std::string(name),
+      std::string(section), &tag_id);
   if (status != 0) {
     GST_WARNING ("Unable to locate tag for '%s', section '%s'!", name, section);
     return 0;
@@ -861,6 +857,22 @@ qmmfsrc_gst_get_stream_rotaion (gint rotate)
   }
 }
 
+::qmmf::recorder::VideoColorimetry
+qmmfsrc_gst_get_stream_colorimetry (gchar *colorimetry)
+{
+  if (colorimetry == NULL)
+    return ::qmmf::recorder::VideoColorimetry::kBT601;
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  else if (g_strcmp0(colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT2100HLG;
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  else {
+    GST_WARNING ("Colorimetry value %s is invalid default to BT.601",
+        colorimetry);
+    return ::qmmf::recorder::VideoColorimetry::kBT601;
+  }
+}
+
 static void
 video_event_callback (uint32_t track_id, ::qmmf::recorder::EventType type,
     void * data, size_t size)
@@ -1305,7 +1317,11 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   ::qmmf::recorder::VideoExtraParam extraparam;
   ::qmmf::recorder::SessionCb session_cbs;
   ::qmmf::recorder::Rotation rotate;
+  ::qmmf::recorder::VideoColorimetry colorimetry;
   gint status = 0;
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+  guchar streamhdrmode = 0;
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
   GST_TRACE ("Create QMMF context session");
 
@@ -1408,9 +1424,10 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   }
 
   rotate = qmmfsrc_gst_get_stream_rotaion (vpad->rotate);
+  colorimetry = qmmfsrc_gst_get_stream_colorimetry (vpad->colorimetry);
   ::qmmf::recorder::VideoTrackParam params (
       context->camera_id, vpad->width, vpad->height, vpad->framerate, format,
-      rotate, vpad->xtrabufs
+      colorimetry, rotate, vpad->xtrabufs
   );
 
 #ifdef GST_VIDEO_TYPE_SUPPORT
@@ -1502,6 +1519,17 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
         "org.codeaurora.qcamera3.c2dCropParam", "c2dCropHeight");
     if (meta.update (tag_id, &vpad->crop.h, 1) != 0)
       GST_WARNING ("Failed to update crop height");
+
+#if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
+    tag_id = get_vendor_tag_by_name (
+        "org.quic.camera2.streamconfigs", "HDRVideoMode");
+    if (g_strcmp0(vpad->colorimetry , GST_VIDEO_COLORIMETRY_BT2100_HLG) == 0)
+      streamhdrmode = 1;
+    else
+      streamhdrmode = 0;
+    if (meta.update (tag_id, &streamhdrmode, 1) != 0)
+      GST_WARNING ("Failed to update stream HDR mode");
+#endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 
     recorder->SetCameraParam (context->camera_id, meta);
   }
