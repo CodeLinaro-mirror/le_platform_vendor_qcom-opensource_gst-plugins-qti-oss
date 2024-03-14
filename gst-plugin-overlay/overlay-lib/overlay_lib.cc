@@ -65,10 +65,16 @@
 
 namespace overlay {
 
-using namespace android;
 using namespace std;
 
 #define ROUND_TO(val, round_to) ((val + round_to - 1) & ~(round_to - 1))
+
+#define CL_CONTEXT_PERF_HINT_QCOM                   0x40C2
+
+/*cl_perf_hint*/
+#define CL_PERF_HINT_HIGH_QCOM                      0x40C3
+#define CL_PERF_HINT_NORMAL_QCOM                    0x40C4
+#define CL_PERF_HINT_LOW_QCOM                       0x40C5
 
 cl_device_id OpenClKernel::device_id_ = nullptr;
 cl_context OpenClKernel::context_ = nullptr;
@@ -137,7 +143,7 @@ int32_t OpenClKernel::OpenCLInit ()
 
   OVDBG_VERBOSE ("%s: Enter ", __func__);
 
-  cl_context_properties properties[] = { CL_CONTEXT_PLATFORM, 0, 0 };
+  cl_context_properties properties[] = {CL_CONTEXT_PLATFORM, (cl_context_properties)0, CL_CONTEXT_PERF_HINT_QCOM, CL_PERF_HINT_NORMAL_QCOM, 0};
   cl_platform_id plat = 0;
   cl_uint ret_num_platform = 0;
   cl_uint ret_num_devices = 0;
@@ -683,6 +689,7 @@ Overlay::~Overlay ()
       uint64_t surface_id = pair.second;
       ib2c_engine_->DestroySurface(surface_id);
     }
+    ib2c_surfaces_.clear();
 #endif // ENABLE_GLES
   }
 
@@ -711,7 +718,7 @@ int32_t Overlay::Init ()
     return -1;
   }
 
-  char prop_val[PROPERTY_VALUE_MAX];
+  char prop_val[PROP_VALUE_MAX];
   property_get("persist.overlay.use_c2d_blit", prop_val, "1");
   auto value = atoi(prop_val);
 
@@ -1247,6 +1254,11 @@ int32_t Overlay::ApplyOverlay_GLES (const OverlayTargetBuffer& buffer)
 
   SyncEnd (buffer.ion_fd);
 
+  if (!in_surf_cache_) {
+    ib2c_engine_->DestroySurface(surface_id);
+    ib2c_surfaces_.erase(buffer.ion_fd);
+  }
+
   OVDBG_VERBOSE ("%s: Exit ", __func__);
   return ret;
 }
@@ -1437,6 +1449,10 @@ int32_t Overlay::ProcessOverlayItems (
 
   return ret;
   OVDBG_VERBOSE ("%s: Exit", __func__);
+}
+
+void Overlay::DisableInputSurfaceCache() {
+  in_surf_cache_ = false;
 }
 
 int32_t Overlay::DeleteOverlayItems ()
@@ -2592,7 +2608,7 @@ int32_t OverlayItemBoundingBox::Init (OverlayParam& param)
 
   box_stroke_width_ = (kStrokeWidth * surface_.width_ + width_ - 1) / width_;
 
-  char prop_val[PROPERTY_VALUE_MAX];
+  char prop_val[PROP_VALUE_MAX];
   property_get (PROP_BOX_STROKE_WIDTH, prop_val, "4");
   box_stroke_width_ =
       (static_cast<uint32_t> (atoi (prop_val)) > box_stroke_width_) ?

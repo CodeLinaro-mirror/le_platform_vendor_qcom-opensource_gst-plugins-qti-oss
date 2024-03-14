@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -423,6 +423,16 @@ video_pad_update_params (GstPad * pad, GstStructure * structure)
     vpad->compression = compression;
   }
 
+  if (gst_structure_has_field (structure, "colorimetry")) {
+    const gchar *string = gst_structure_get_string (structure, "colorimetry");
+
+    reconfigure |= (g_strcmp0 (string, vpad->colorimetry) != 0);
+
+    if (vpad->colorimetry != NULL)
+      free(vpad->colorimetry);
+    vpad->colorimetry = g_strdup (string);
+  }
+
   GST_QMMFSRC_VIDEO_PAD_UNLOCK (pad);
 
   // Send reconfigurtion signal only when paramters have changed.
@@ -434,6 +444,7 @@ GstPad *
 qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
     const guint index)
 {
+  GstBufferPool *pool = NULL;
   GstPad *srcpad = GST_PAD (g_object_new (
       GST_TYPE_QMMFSRC_VIDEO_PAD,
       "name", name,
@@ -450,6 +461,13 @@ qmmfsrc_request_video_pad (GstPadTemplate * templ, const gchar * name,
   gst_pad_set_activatemode_function (
       srcpad, GST_DEBUG_FUNCPTR (video_pad_activate_mode));
 
+  pool = gst_qmmf_buffer_pool_new ();
+  QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, pool != NULL,
+      gst_object_unref (srcpad), NULL, "Failed to create buffer pool!");
+
+  gst_buffer_pool_set_active (pool, TRUE);
+  GST_QMMFSRC_VIDEO_PAD (srcpad)->pool = pool;
+
   gst_pad_use_fixed_caps (srcpad);
   gst_pad_set_active (srcpad, TRUE);
 
@@ -462,6 +480,13 @@ qmmfsrc_release_video_pad (GstElement * element, GstPad * pad)
   gst_object_ref (pad);
 
   gst_pad_set_active (pad, FALSE);
+
+  if (GST_QMMFSRC_VIDEO_PAD (pad)->colorimetry)
+    free(GST_QMMFSRC_VIDEO_PAD (pad)->colorimetry);
+
+  gst_buffer_pool_set_active (GST_QMMFSRC_VIDEO_PAD (pad)->pool, FALSE);
+  gst_object_unref (GST_QMMFSRC_VIDEO_PAD (pad)->pool);
+
   gst_child_proxy_child_removed (GST_CHILD_PROXY (element), G_OBJECT (pad),
       GST_OBJECT_NAME (pad));
   gst_element_remove_pad (element, pad);
@@ -558,6 +583,17 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
             DEFAULT_VIDEO_RAW_COMPRESSION);
       GST_DEBUG_OBJECT (pad, "Compression not set, using default value: %s",
             DEFAULT_VIDEO_RAW_COMPRESSION);
+    }
+  }
+
+  if (gst_structure_has_field (structure, "colorimetry")) {
+    const gchar *colorimetry = gst_structure_get_string (structure,
+        "colorimetry");
+
+    if (!colorimetry) {
+      gst_structure_fixate_field_string (structure, "colorimetry",
+          NULL);
+      GST_DEBUG_OBJECT (pad, "colorimetry not set, using default value bt601");
     }
   }
 
@@ -811,6 +847,7 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->format       = GST_VIDEO_FORMAT_UNKNOWN;
   pad->compression  = GST_VIDEO_COMPRESSION_NONE;
   pad->codec        = GST_VIDEO_CODEC_UNKNOWN;
+  pad->colorimetry  = NULL;
 
   pad->crop.x       = DEFAULT_PROP_CROP_X;
   pad->crop.y       = DEFAULT_PROP_CROP_Y;

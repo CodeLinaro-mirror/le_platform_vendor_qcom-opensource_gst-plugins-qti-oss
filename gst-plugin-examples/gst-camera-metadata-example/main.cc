@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -37,14 +37,10 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 
-#include <camera/CameraMetadata.h>
-#include <camera/VendorTagDescriptor.h>
+#include <qmmf-sdk/qmmf_camera_metadata.h>
+#include <qmmf-sdk/qmmf_vendor_tag_descriptor.h>
 
-#ifndef CAMERA_METADATA_1_0_NS
-namespace camera = android;
-#else
-namespace camera = android::hardware::camera::common::V1_0::helper;
-#endif
+namespace camera = qmmf;
 
 #define DASH_LINE   "----------------------------------------------------------------------"
 #define SPACE       "                                                                      "
@@ -427,6 +423,10 @@ handle_stdin_source (GIOChannel * source, GIOCondition condition,
       g_printerr ("ERROR: Unknown error!\n");
 
       return FALSE;
+    } else if ((G_IO_STATUS_AGAIN != status) && (NULL == input)) {
+      g_printerr ("ERROR: Input is NULL!\n");
+
+      return FALSE;
     }
   } while (status == G_IO_STATUS_AGAIN);
 
@@ -447,8 +447,7 @@ wait_stdin_message (GAsyncQueue * queue, gchar ** input)
   GstStructure *message = NULL;
 
   // Clear input from previous use.
-  g_free (*input);
-  *input = NULL;
+  g_clear_pointer (input, g_free);
 
   // Block the thread until there's no input from the user
   // or eos/error msg occurs.
@@ -459,10 +458,11 @@ wait_stdin_message (GAsyncQueue * queue, gchar ** input)
       return FALSE;
     }
 
-    if (gst_structure_has_name (message, STDIN_MESSAGE)) {
+    if (gst_structure_has_name (message, STDIN_MESSAGE))
       *input = g_strdup (gst_structure_get_string (message, "input"));
+
+    if (*input != NULL)
       break;
-    }
 
     // Clear message to terminate the loop after having popped the data.
     gst_structure_free (message);
@@ -672,7 +672,7 @@ find_tag_by_name (const gchar * section_name, const gchar * tag_name,
 {
   gchar *tag = NULL;
   gint tag_type = -1;
-  const ::android::sp<::camera::VendorTagDescriptor> vtags =
+  const std::shared_ptr<::camera::VendorTagDescriptor> vtags =
      ::camera::VendorTagDescriptor::getGlobalVendorTagDescriptor();
 
   if (vtags.get() == NULL) {
@@ -703,7 +703,7 @@ get_tag_typechar (const gchar * section_name, const gchar * tag_name,
     ::camera::CameraMetadata * meta, gchar ** type, guint32 * tag_id)
 {
   gchar *tag_value = NULL;
-  ::android::status_t status = 0;
+  status_t status = 0;
   gint tag_type = -1;
 
   if ((tag_type =
@@ -751,7 +751,7 @@ get_tag (const gchar * section_name, const gchar * tag_name,
     ::camera::CameraMetadata * meta, gchar ** type)
 {
   gchar *tag_value = NULL;
-  ::android::status_t status = 0;
+  status_t status = 0;
   guint32 tag_id = 0;
   gint tag_type = -1;
 
@@ -825,7 +825,7 @@ set_tag (GstElement * pipeline, const gchar * section_name,
 {
   GstElement *camsrc = get_element_from_pipeline (pipeline, "qtiqmmfsrc");
   ::camera::CameraMetadata *meta = nullptr;
-  ::android::status_t status = -1;
+  status_t status = -1;
   guint32 tag_id = 0;
   gint tag_type = -1;
 
@@ -954,8 +954,8 @@ set_tag (GstElement * pipeline, const gchar * section_name,
 
 free:
   if (meta != NULL) {
-    meta->clear ();
     delete meta;
+    meta = NULL;
   }
   gst_object_unref (camsrc);
 
@@ -967,7 +967,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
     const gchar * tag_name, gchar * new_value, ::camera::CameraMetadata * meta,
     gint tag_type, guint32 tag_id)
 {
-  ::android::status_t status = -1;
+  status_t status = -1;
 
   switch (tag_type) {
     case TYPE_BYTE:
@@ -1125,7 +1125,7 @@ static void
 print_vendor_tags (::camera::CameraMetadata * meta, FILE * file)
 {
   gchar *header = NULL;
-  const ::android::sp<::camera::VendorTagDescriptor> vtags =
+  const std::shared_ptr<::camera::VendorTagDescriptor> vtags =
       ::camera::VendorTagDescriptor::getGlobalVendorTagDescriptor();
 
   if (vtags.get() == NULL) {
@@ -1458,11 +1458,14 @@ print_menu ()
 
 static gboolean
 handle_tag_menu (GstAppContext * appctx, gchar * prop,
-    ::camera::CameraMetadata * meta, GstMetadataMenuOption option)
+    GstMetadataMenuOption option)
 {
   gchar *str = NULL;
   gchar *section = NULL, *tag = NULL, *type = NULL, *value = NULL;
   gboolean active = TRUE;
+
+  ::camera::CameraMetadata *meta = nullptr;
+  GstElement *camsrc = NULL;
 
   while (TRUE) {
     g_print ("Enter section name and tag name separated by space " \
@@ -1478,21 +1481,24 @@ handle_tag_menu (GstAppContext * appctx, gchar * prop,
     if (!validate_input_tag (str, &section, &tag))
       continue;
 
-    {
-      // Refresh stale metadata.
-      if (meta != NULL) {
-        meta->clear ();
-        delete meta;
-      }
+    camsrc = get_element_from_pipeline (appctx->pipeline,
+        "qtiqmmfsrc");
+    g_object_get (G_OBJECT (camsrc), prop, &meta, NULL);
+    gst_object_unref (camsrc);
 
-      GstElement *camsrc = get_element_from_pipeline (appctx->pipeline,
-          "qtiqmmfsrc");
-      g_object_get (G_OBJECT (camsrc), prop, &meta, NULL);
-      gst_object_unref (camsrc);
+    if (meta == NULL) {
+      g_printerr ("ERROR: Meta not found\n");
+      goto exit;
     }
 
     value = get_tag (section, tag, meta, &type);
     g_print ("Current value = %s\n", value);
+
+    // Delete metadata after being used.
+    if (meta != NULL) {
+      delete meta;
+      meta = NULL;
+    }
 
     if (value == NULL) {
       g_free (section);
@@ -1572,8 +1578,8 @@ collect_tags_menu_sessionmetadata (GstAppContext * appctx, gchar * prop,
 
 exit:
   if (meta_static != NULL) {
-    meta_static->clear ();
     delete meta_static;
+    meta_static = NULL;
   }
   gst_object_unref (camsrc);
 
@@ -1632,11 +1638,11 @@ handle_metadata_menu (GstAppContext * appctx,
         }
         break;
       case GET_TAG:
-        active = handle_tag_menu (appctx, *prop, meta, GET_TAG);
+        active = handle_tag_menu (appctx, *prop, GET_TAG);
         break;
       case SET_TAG:
         if (g_str_equal (*prop, "video-metadata"))
-          active = handle_tag_menu (appctx, *prop, meta, SET_TAG);
+          active = handle_tag_menu (appctx, *prop, SET_TAG);
         break;
       default:
         break;
@@ -1658,8 +1664,8 @@ handle_metadata_menu (GstAppContext * appctx,
 
 exit:
   if (meta != NULL) {
-    meta->clear ();
     delete meta;
+    meta = NULL;
   }
 
   g_free (str);
@@ -2033,8 +2039,8 @@ main_menu (gpointer userdata)
   }
 
   if (meta_collect != NULL) {
-    meta_collect->clear ();
     delete meta_collect;
+    meta_collect = NULL;
   }
 
   if (element != NULL)
