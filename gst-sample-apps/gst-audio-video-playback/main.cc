@@ -38,6 +38,7 @@
   "This app enables the user to Decode a Audio Video mp4 file show the output \
   on the display E.g: gst-audio-video-playback -v 1 -a 1 -i <filename>.mp4"
 
+<<<<<<< HEAD
 // Define the types of video codecs that user can set
 enum GstVideoCodecType {
   GST_VDEFAULT,
@@ -60,6 +61,22 @@ struct GstVideoAppContext : GstAppContext {
 };
 
 // Function to link the dynamic pad to video and audio track to demux
+=======
+// Structure to hold the application context
+struct GstVideoAppContext : GstAppContext {
+  gchar *input_file;
+  GstVideoPlayerCodecType vc_format;
+  GstAudioPlayerCodecType ac_format;
+};
+
+/**
+ * Link video and audio track to demux dynamically
+ *
+ * @param Gst element pointer
+ * @param Gst pad pointer
+ * @param data pointer
+ */
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 static void
 on_pad_added (GstElement * element, GstPad * pad, gpointer data)
 {
@@ -74,7 +91,15 @@ on_pad_added (GstElement * element, GstPad * pad, gpointer data)
   gst_object_unref (sinkpad);
 }
 
+<<<<<<< HEAD
 // Function to create a new application context
+=======
+/**
+ * Create and initialize application context:
+ *
+ * @param NULL
+ */
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 static GstVideoAppContext*
 gst_app_context_new ()
 {
@@ -92,13 +117,26 @@ gst_app_context_new ()
   ctx->mloop = NULL;
   ctx->plugins = NULL;
   ctx->input_file = NULL;
+<<<<<<< HEAD
   ctx->vc_format = GST_VDEFAULT;
   ctx->ac_format = GST_ADEFAULT;
+=======
+  ctx->vc_format = GST_VCODEC_NONE;
+  ctx->ac_format = GST_ACODEC_NONE;
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 
   return ctx;
 }
 
+<<<<<<< HEAD
 // Function to free the application context
+=======
+/**
+ * Free Application context:
+ *
+ * @param appctx Application Context object
+ */
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 static void
 gst_app_context_free (GstVideoAppContext *appctx)
 {
@@ -140,7 +178,18 @@ gst_app_context_free (GstVideoAppContext *appctx)
     g_free (appctx);
 }
 
+<<<<<<< HEAD
 // Function to create the pipeline and link all elements
+=======
+/**
+ * Create GST pipeline involves 3 main steps
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin and connect pad signal
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Object.
+ */
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 static gboolean
 create_pipe (GstVideoAppContext *appctx)
 {
@@ -156,22 +205,38 @@ create_pipe (GstVideoAppContext *appctx)
   qtdemux = gst_element_factory_make ("qtdemux", "qtdemux");
 
   // create the video decoder and parse element based on codec type
+<<<<<<< HEAD
   if (appctx->vc_format == GST_AVC) {
     g_print ("Creating the AVC...\n");
     vparse = gst_element_factory_make ("h264parse", "vparse");
     vdecoder = gst_element_factory_make ("v4l2h264dec", "vdecoder");
   } else if (appctx->vc_format == GST_HEVC) {
+=======
+  if (appctx->vc_format == GST_VCODEC_AVC) {
+    g_print ("Creating the AVC...\n");
+    vparse = gst_element_factory_make ("h264parse", "vparse");
+    vdecoder = gst_element_factory_make ("v4l2h264dec", "vdecoder");
+  } else if (appctx->vc_format == GST_VCODEC_HEVC) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     g_print ("Creating the HEVC...\n");
     vparse = gst_element_factory_make ("h265parse", "vparse");
     vdecoder = gst_element_factory_make ("v4l2h265dec", "vdecoder");
   }
 
   // create the audio decoder and parse element based on codec type
+<<<<<<< HEAD
   if (appctx->ac_format == GST_FLAC) {
     g_print ("Creating the FLAC...\n");
     aparse = gst_element_factory_make ("flacparse", "aparse");
     adecoder = gst_element_factory_make ("flacdec", "adecoder");
   } else if (appctx->ac_format == GST_MP3) {
+=======
+  if (appctx->ac_format == GST_ACODEC_FLAC) {
+    g_print ("Creating the FLAC...\n");
+    aparse = gst_element_factory_make ("flacparse", "aparse");
+    adecoder = gst_element_factory_make ("flacdec", "adecoder");
+  } else if (appctx->ac_format == GST_ACODEC_MP3) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     g_print ("Creating the MP3...\n");
     aparse = gst_element_factory_make ("mpegaudioparse", "aparse");
     adecoder = gst_element_factory_make ("mpg123audiodec", "adecoder");
@@ -334,8 +399,13 @@ main (gint argc, gchar *argv[])
   }
 
   // Check the input parameters from the user
+<<<<<<< HEAD
   if (appctx->vc_format < GST_AVC || appctx->vc_format > GST_HEVC ||
       appctx->ac_format < GST_FLAC || appctx->ac_format > GST_MP3 ||
+=======
+  if (appctx->vc_format < GST_VCODEC_AVC || appctx->vc_format > GST_VCODEC_HEVC ||
+      appctx->ac_format < GST_ACODEC_FLAC || appctx->ac_format > GST_ACODEC_MP3 ||
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       appctx->input_file == NULL) {
     g_printerr ("\n one of input parameters is not given -v %d -a %d -i %s\n",
         appctx->vc_format, appctx->ac_format, appctx->input_file);
@@ -378,7 +448,10 @@ main (gint argc, gchar *argv[])
   // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("Failed to retrieve pipeline bus!\n");
+<<<<<<< HEAD
     g_main_loop_unref (mloop);
+=======
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     gst_app_context_free (appctx);
     return -1;
   }
@@ -401,7 +474,14 @@ main (gint argc, gchar *argv[])
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
       g_printerr ("Failed to transition to PAUSED state!\n");
+<<<<<<< HEAD
       break;
+=======
+      if (intrpt_watch_id)
+        g_source_remove (intrpt_watch_id);
+      gst_app_context_free (appctx);
+      return -1;
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     case GST_STATE_CHANGE_NO_PREROLL:
       g_print ("Pipeline is live and does not need PREROLL.\n");
       break;
@@ -418,7 +498,12 @@ main (gint argc, gchar *argv[])
   g_main_loop_run (mloop);
 
   // Remove the interrupt signal handler
+<<<<<<< HEAD
   g_source_remove (intrpt_watch_id);
+=======
+  if (intrpt_watch_id)
+    g_source_remove (intrpt_watch_id);
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 
   // Set the pipeline to the NULL state
   g_print ("Setting pipeline to NULL state ...\n");

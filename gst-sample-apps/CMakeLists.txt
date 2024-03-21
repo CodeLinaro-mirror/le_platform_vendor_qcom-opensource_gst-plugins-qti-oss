@@ -10,6 +10,13 @@ find_package(PkgConfig)
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 
+<<<<<<< HEAD
+=======
+# Check whether Camx libs are present
+include(CheckIncludeFileCXX)
+check_include_file_cxx("camx-api/camx/service/system/camera_metadata.h" HAVE_CAMX_API)
+
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 if (ENABLE_AUDIO)
   add_subdirectory(gst-audio-decode-example)
   add_subdirectory(gst-audio-encode-example)
@@ -26,10 +33,20 @@ endif () # ENABLE_AUDIO AND ENABLE_DISPLAY AND ENABLE_VIDEO_DECODE
 
 if (ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-camera-single-stream-example)
+<<<<<<< HEAD
+=======
+  add_subdirectory(gst-snapshot-stream-example)
+  add_subdirectory(gst-transform-example)
+  add_subdirectory(gst-activate-deactivate-streams-runtime)
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA)
   add_subdirectory(gst-appsink-example)
+<<<<<<< HEAD
+=======
+  add_subdirectory(gst-camera-metadata-example)
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 endif () # ENABLE_CAMERA
 
 if (ENABLE_ML AND ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
@@ -38,6 +55,10 @@ if (ENABLE_ML AND ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-ai-pose-detection)
   add_subdirectory(gst-ai-segmentation)
   add_subdirectory(gst-ai-parallel-inference)
+<<<<<<< HEAD
+=======
+  add_subdirectory(gst-ai-multi-input-output-object-detection)
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_VIDEO_DECODE)

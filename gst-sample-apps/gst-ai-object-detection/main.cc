@@ -10,6 +10,7 @@
  * Description:
  * The application takes live video stream from camera and gives same to
  * Yolo models  for object detection and display preview with overlayed
+<<<<<<< HEAD
  * AI Model outout (Labels & Bounding Boxes).
  *
  * Pipeline for Gstreamer:
@@ -17,6 +18,15 @@
  *     | tee -> qtivcomposer
  *     |     -> Pre process-> ML Framework -> Post process -> qtivcomposer
  *     qtivcomposer (COMPOSITION) -> waylandsink (Display)
+=======
+ * AI Model output (Labels & Bounding Boxes).
+ *
+ * Pipeline for Gstreamer:
+ * qtiqmmfsrc (Camera) -> qmmfsrc_caps -> qtivtransform -> tee (SPLIT)
+ *     | tee -> qtivcomposer
+ *     |     -> Pre process-> ML Framework -> Post process -> qtivcomposer
+ *     qtivcomposer (COMPOSITION) -> fpsdisplaysink (Display)
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
  *     Pre process: qtimlvconverter
  *     ML Framework: qtimlsnpe/qtimltflite
  *     Post process: qtimlvdetection -> detection_filter
@@ -39,7 +49,11 @@
 #define DEFAULT_YOLONAS_LABELS "/opt/yolonas.labels"
 
 /**
+<<<<<<< HEAD
  * Default setting of camera output resolution, Scaling of camera output
+=======
+ * Default settings of camera output resolution, Scaling of camera output
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
  * will be done in qtimlvconverter based on model input
  */
 #define DEFAULT_CAMERA_OUTPUT_WIDTH 1280
@@ -63,6 +77,7 @@
  * @param labels_path Location of Model Labels.
  */
 static gboolean
+<<<<<<< HEAD
 create_pipe (GstAppContext * appctx, YoloModelType model_type,
     const char * model_path, const char * labels_path)
 {
@@ -83,6 +98,27 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   // 1. Create the elements or Plugins
 
   // get live camera stream using qtiqmmfsrc plugin
+=======
+create_pipe (GstAppContext * appctx, GstYoloModelType model_type,
+    const gchar * model_path, const gchar * labels_path)
+{
+  GstElement *qtiqmmfsrc, *qmmfsrc_caps, *qtivtransform, *queue[QUEUE_COUNT];
+  GstElement *tee, *qtimlvconverter, *qtimlelement;
+  GstElement *qtimlvdetection, *detection_filter;
+  GstElement *qtivcomposer, *fpsdisplaysink, *waylandsink;
+  GstCaps *pad_filter, *filtercaps;
+  GValue layers = G_VALUE_INIT;
+  GValue value = G_VALUE_INIT;
+  gboolean ret = FALSE;
+  gchar element_name[128];
+  gint width = DEFAULT_CAMERA_OUTPUT_WIDTH;
+  gint height = DEFAULT_CAMERA_OUTPUT_HEIGHT;
+  gint framerate = DEFAULT_CAMERA_FRAME_RATE;
+  gint module_id;
+
+  // 1. Create the elements or Plugins
+  // Create qtiqmmfsrc plugin for camera stream
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
   if (!qtiqmmfsrc) {
     g_printerr ("Failed to create qtiqmmfsrc\n");
@@ -90,6 +126,7 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   }
 
   // Use capsfilter to define the camera output settings
+<<<<<<< HEAD
   main_capsfilter = gst_element_factory_make ("capsfilter", "main_capsfilter");
   if (!main_capsfilter) {
     g_printerr ("Failed to create main_capsfilter\n");
@@ -98,6 +135,25 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
 
   // Creating queue to decouple the processing on sink and source pad.
   for (int i = 0; i < QUEUE_COUNT; i++) {
+=======
+  qmmfsrc_caps = gst_element_factory_make ("capsfilter", "qmmfsrc_caps");
+  if (!qmmfsrc_caps) {
+    g_printerr ("Failed to create qmmfsrc_caps\n");
+    return FALSE;
+  }
+
+  // Create qtivtransform to convert UBWC Buffers to Non-UBWC buffers
+  // for fpsdisplaysink
+  qtivtransform = gst_element_factory_make ("qtivtransform",
+      "qtivtransform");
+  if (!qtivtransform) {
+    g_printerr ("Failed to create qtivtransform\n");
+    return FALSE;
+  }
+
+  // Create queue to decouple the processing on sink and source pad.
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     snprintf (element_name, 127, "queue-%d", i);
     queue[i] = gst_element_factory_make ("queue", element_name);
     if (!queue[i]) {
@@ -114,7 +170,11 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
     return FALSE;
   }
 
+<<<<<<< HEAD
   // Creating qtimlvconverter for Input preprocessing
+=======
+  // Create qtimlvconverter for Input preprocessing
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   qtimlvconverter = gst_element_factory_make ("qtimlvconverter",
       "qtimlvconverter");
   if (!qtimlvconverter) {
@@ -122,14 +182,22 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
     return FALSE;
   }
 
+<<<<<<< HEAD
   // Creating the ML inferencing plugin
+=======
+  // Create the ML inferencing plugin
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   qtimlelement = gst_element_factory_make ("qtimlsnpe", "qtimlsnpe");
   if (!qtimlelement) {
     g_printerr ("Failed to create qtimlelement\n");
     return FALSE;
   }
 
+<<<<<<< HEAD
   // Creating plugin for ML postprocessing for object detection
+=======
+  // Create plugin for ML postprocessing for object detection
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   qtimlvdetection = gst_element_factory_make ("qtimlvdetection",
       "qtimlvdetection");
   if (!qtimlvdetection) {
@@ -151,43 +219,84 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
     return FALSE;
   }
 
+<<<<<<< HEAD
   // Creating Wayland compositor to render output on Display
+=======
+  // Create Wayland compositor to render output on Display
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   waylandsink = gst_element_factory_make ("waylandsink", "waylandsink");
   if (!waylandsink) {
     g_printerr ("Failed to create waylandsink \n");
     return FALSE;
   }
 
+<<<<<<< HEAD
   // 1.1 Append all elements in a list for cleanup
   appctx->plugins = NULL;
   appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
   appctx->plugins = g_list_append (appctx->plugins, main_capsfilter);
+=======
+  // Create fpsdisplaysink to display the current and
+  // average framerate as a text overlay
+  fpsdisplaysink = gst_element_factory_make ("fpsdisplaysink", "fpsdisplaysink");
+  if (!fpsdisplaysink ) {
+    g_printerr ("Failed to create fpsdisplaysink\n");
+    return FALSE;
+  }
+
+  // 1.1 Append all elements in a list for cleanup
+  appctx->plugins = NULL;
+  appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
+  appctx->plugins = g_list_append (appctx->plugins, qmmfsrc_caps);
+  appctx->plugins = g_list_append (appctx->plugins, qtivtransform );
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   appctx->plugins = g_list_append (appctx->plugins, tee);
   appctx->plugins = g_list_append (appctx->plugins, qtimlvconverter);
   appctx->plugins = g_list_append (appctx->plugins, qtimlelement);
   appctx->plugins = g_list_append (appctx->plugins, qtimlvdetection);
   appctx->plugins = g_list_append (appctx->plugins, detection_filter);
   appctx->plugins = g_list_append (appctx->plugins, qtivcomposer);
+<<<<<<< HEAD
   appctx->plugins = g_list_append (appctx->plugins, waylandsink);
 
   for (int i = 0; i < QUEUE_COUNT; i++) {
+=======
+  appctx->plugins = g_list_append (appctx->plugins, fpsdisplaysink);
+
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     appctx->plugins = g_list_append (appctx->plugins, queue[i]);
   }
 
   // 2. Set properties for all GST plugin elements
+<<<<<<< HEAD
 
   // 2.1 Set the capabilities of camera plugin output
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
       "width", G_TYPE_INT, width, "height", G_TYPE_INT, height,
+=======
+  // 2.1 Set the capabilities of camera plugin output
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12",
+      "width", G_TYPE_INT, width,
+      "height", G_TYPE_INT, height,
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       "framerate", GST_TYPE_FRACTION, framerate, 1,
       "compression", G_TYPE_STRING, "ubwc", NULL);
   gst_caps_set_features (filtercaps, 0,
       gst_caps_features_new ("memory:GBM", NULL));
+<<<<<<< HEAD
   g_object_set (G_OBJECT (main_capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
   // 2.2 Selecting the HW to DSP for model inferencing using delegate property
+=======
+  g_object_set (G_OBJECT (qmmfsrc_caps), "caps", filtercaps, NULL);
+  gst_caps_unref (filtercaps);
+
+  // 2.2 Select the HW to DSP for model inferencing using delegate property
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   g_object_set (G_OBJECT (qtimlelement), "model", model_path,
       "delegate", GST_ML_SNPE_DELEGATE_DSP, NULL);
 
@@ -196,7 +305,11 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   g_value_init (&value, G_TYPE_STRING);
   switch (model_type) {
     // Set Yolov5 specific settings
+<<<<<<< HEAD
     case YOLO_TYPE_V5:
+=======
+    case GST_YOLO_TYPE_V5:
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       g_object_set (G_OBJECT (qtimlelement), "model", model_path, NULL);
       g_value_set_string (&value, "Conv_198");
       gst_value_array_append_value (&layers, &value);
@@ -207,11 +320,19 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
       g_object_set_property (G_OBJECT (qtimlelement), "layers", &layers);
 
       // Get enum value of module property from qtimlvdetection plugin
+<<<<<<< HEAD
       module_enum = get_enum_value (qtimlvdetection, "module" , "yolov5");
       if (module_enum != -1) {
         g_object_set (G_OBJECT (qtimlvdetection), "module", module_enum, NULL);
       } else {
         g_printerr ("Module \"yolov5s\" is not available in qtimlvdetection\n");
+=======
+      module_id = get_enum_value (qtimlvdetection, "module", "yolov5");
+      if (module_id != -1) {
+        g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
+      } else {
+        g_printerr ("Module yolov5s is not available in qtimlvdetection\n");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
         goto error;
       }
       g_object_set (G_OBJECT (qtimlvdetection), "labels", labels_path, NULL);
@@ -222,20 +343,36 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
       break;
 
     // Set Yolov8 specific settings
+<<<<<<< HEAD
     case YOLO_TYPE_V8:
       g_object_set (G_OBJECT (qtimlelement), "model", model_path, NULL);
       g_value_set_string (&value, "/model.22/Sigmoid");
       gst_value_array_append_value (&layers, &value);
       g_value_set_string (&value, "/model.22/Mul_2");
+=======
+    case GST_YOLO_TYPE_V8:
+      g_object_set (G_OBJECT (qtimlelement), "model", model_path, NULL);
+      g_value_set_string (&value, "Mul_248");
+      gst_value_array_append_value (&layers, &value);
+      g_value_set_string (&value, "Sigmoid_249");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       gst_value_array_append_value (&layers, &value);
       g_object_set_property (G_OBJECT (qtimlelement), "layers", &layers);
 
       // Get enum value of module property from qtimlvdetection plugin
+<<<<<<< HEAD
       module_enum = get_enum_value (qtimlvdetection, "module" , "yolov8");
       if (module_enum != -1) {
         g_object_set (G_OBJECT (qtimlvdetection), "module", module_enum, NULL);
       } else {
         g_printerr ("Module yolov5s is not available in qtimlvdetection\n");
+=======
+      module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
+      if (module_id != -1) {
+        g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
+      } else {
+        g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
         goto error;
       }
       g_object_set (G_OBJECT (qtimlvdetection), "labels", labels_path, NULL);
@@ -246,7 +383,11 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
       break;
 
     // Set YoloNas specific settings
+<<<<<<< HEAD
     case YOLO_TYPE_NAS:
+=======
+    case GST_YOLO_TYPE_NAS:
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       g_object_set (G_OBJECT (qtimlelement), "model", model_path, NULL);
       g_value_set_string (&value, "/heads/Mul");
       gst_value_array_append_value (&layers, &value);
@@ -255,9 +396,15 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
       g_object_set_property (G_OBJECT (qtimlelement), "layers", &layers);
 
       // Get enum value of module property from qtimlvdetection plugin
+<<<<<<< HEAD
       module_enum = get_enum_value (qtimlvdetection, "module" , "yolo-nas");
       if (module_enum != -1) {
         g_object_set (G_OBJECT (qtimlvdetection), "module", module_enum, NULL);
+=======
+      module_id = get_enum_value (qtimlvdetection, "module", "yolo-nas");
+      if (module_id != -1) {
+        g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
       } else {
         g_printerr ("Module yolo-nas is not available in qtimlvdetection\n");
         goto error;
@@ -277,7 +424,17 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   g_object_set (G_OBJECT (waylandsink), "sync", FALSE, NULL);
   g_object_set (G_OBJECT (waylandsink), "fullscreen", true, NULL);
 
+<<<<<<< HEAD
   // Setting the properties of pad_filter for negotiation with qtivcomposer
+=======
+  // 2.5 Set the properties of fpsdisplaysink plugin- sync,
+  // signal-fps-measurements, text-overlay and video-sink
+  g_object_set (G_OBJECT (fpsdisplaysink), "signal-fps-measurements", true, NULL);
+  g_object_set (G_OBJECT (fpsdisplaysink), "text-overlay", true, NULL);
+  g_object_set (G_OBJECT (fpsdisplaysink), "video-sink", waylandsink, NULL);
+
+  // Set the properties of pad_filter for negotiation with qtivcomposer
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   pad_filter = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "BGRA",
       "width", G_TYPE_INT, 640,
@@ -287,6 +444,7 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   gst_caps_unref (pad_filter);
 
   // 3. Setup the pipeline
+<<<<<<< HEAD
 
   g_print ("Adding all elements to the pipeline...\n");
 
@@ -295,11 +453,21 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
       detection_filter, qtivcomposer, waylandsink, NULL);
 
   for (int i = 0; i < QUEUE_COUNT; i++) {
+=======
+  g_print ("Adding all elements to the pipeline...\n");
+
+  gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, qmmfsrc_caps,
+      qtivtransform, tee, qtimlvconverter, qtimlelement, qtimlvdetection,
+      detection_filter, qtivcomposer, fpsdisplaysink, NULL);
+
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
   }
 
   g_print ("Linking elements...\n");
 
+<<<<<<< HEAD
   //  Creating Pipeline for Classification:
   //  qtiqmmfsrc (Camera) -> main_capsfilter -> tee (SPLIT)
   //      | tee -> qtivcomposer
@@ -309,15 +477,27 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
   //      ML Framework: qtimlsnpe/qtimltflite
   //      Post process: qtimlvdetection -> detection_filter
   ret = gst_element_link_many (qtiqmmfsrc, main_capsfilter, queue[0], tee, NULL);
+=======
+  // Create Pipeline for Object Detection
+  ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_caps,
+      qtivtransform, queue[0], tee, NULL);
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked for qmmfsource->tee\n");
     goto error;
   }
 
+<<<<<<< HEAD
   ret = gst_element_link_many (qtivcomposer, queue[1], waylandsink, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked for"
         "qtivcomposer->waylandsink.\n");
+=======
+  ret = gst_element_link_many (qtivcomposer, queue[1], fpsdisplaysink, NULL);
+  if (!ret) {
+    g_printerr ("Pipeline elements cannot be linked for"
+        "qtivcomposer->fpsdisplaysink\n");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     goto error;
   }
 
@@ -339,6 +519,7 @@ create_pipe (GstAppContext * appctx, YoloModelType model_type,
 
   return TRUE;
 
+<<<<<<< HEAD
   // For any errors in plugin creation, cleanup earlier created ones
 error:
   gst_bin_remove_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, main_capsfilter,
@@ -346,6 +527,13 @@ error:
       detection_filter, waylandsink, NULL);
 
   for (int i = 0; i < QUEUE_COUNT; i++) {
+=======
+error:
+  gst_bin_remove_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, qmmfsrc_caps,
+      qtivtransform, tee, qtimlvconverter, qtimlelement, qtimlvdetection,
+      detection_filter, qtivcomposer, fpsdisplaysink, NULL);
+  for (gint i = 0; i < QUEUE_COUNT; i++) {
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     gst_bin_remove_many (GST_BIN (appctx->pipeline), queue[i], NULL);
   }
 
@@ -362,8 +550,13 @@ destroy_pipe (GstAppContext * appctx)
 {
   GstElement *curr = (GstElement *) appctx->plugins->data;
   GstElement *next;
+<<<<<<< HEAD
 
   GList *list = appctx->plugins->next;
+=======
+  GList *list = appctx->plugins->next;
+
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   for ( ; list != NULL; list = list->next) {
     next = (GstElement *) list->data;
     gst_element_unlink (curr, next);
@@ -377,6 +570,7 @@ destroy_pipe (GstAppContext * appctx)
   gst_object_unref (appctx->pipeline);
 }
 
+<<<<<<< HEAD
 /**
  * Main Function Of the Application.
  */
@@ -385,10 +579,18 @@ main (gint argc, gchar * argv[])
 {
   GMainLoop *mloop = NULL;
   GstBus *bus = NULL;
+=======
+gint
+main (gint argc, gchar * argv[])
+{
+  GstBus *bus = NULL;
+  GMainLoop *mloop = NULL;
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   GstElement *pipeline = NULL;
   GOptionContext *ctx = NULL;
   const gchar *model_path = NULL;
   const gchar *labels_path = NULL;
+<<<<<<< HEAD
   const char *app_name = strrchr (argv[0], '/') ?
       (strrchr (argv[0], '/') + 1) : argv[0];
   GstAppContext appctx = {};
@@ -416,6 +618,25 @@ main (gint argc, gchar * argv[])
       &yolonas,
       "Execute yolonas Model",
       NULL
+=======
+  const gchar *app_name = NULL;
+  GstAppContext appctx = {};
+  GstYoloModelType model_type = GST_YOLO_TYPE_V5;
+  gboolean ret = FALSE;
+  gchar help_description[1024];
+  guint intrpt_watch_id = 0;
+
+  // Set Display environment variables
+  setenv("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv("WAYLAND_DISPLAY", "wayland-1", 0);
+
+  // Structure to define the user options selection
+  GOptionEntry entries[] = {
+    { "model-type", 't', 0, G_OPTION_ARG_INT,
+      &model_type,
+      "Yolo Model version to Execute: Yolov5 (1), Yolov8 (2), YoloNas (3)",
+      "1 or 2 or 3"
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     },
     { "model", 'm', 0, G_OPTION_ARG_STRING,
       &model_path,
@@ -436,6 +657,7 @@ main (gint argc, gchar * argv[])
     { NULL }
   };
 
+<<<<<<< HEAD
   snprintf (help_description, 1023, "\nExample:\n"
       "  %s --yolov5\n"
       "  %s --yolonas --model=%s --labels=%s\n"
@@ -446,6 +668,21 @@ main (gint argc, gchar * argv[])
   if ((ctx = g_option_context_new (help_description)) != NULL) {
     gboolean success = FALSE;
     GError *error = NULL;
+=======
+  app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
+
+  snprintf (help_description, 1023, "\nExample:\n"
+      "  %s --model-type=1\n"
+      "  %s -t 3 --model=%s --labels=%s\n"
+      "\nThis Sample App demonstrates Object Detection on Live Stream",
+      app_name, app_name, DEFAULT_SNPE_YOLONAS_MODEL, DEFAULT_YOLONAS_LABELS);
+  help_description[1023] = '\0';
+
+  // Parse command line entries.
+  if ((ctx = g_option_context_new (help_description)) != NULL) {
+    GError *error = NULL;
+    gboolean success = FALSE;
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 
     g_option_context_add_main_entries (ctx, entries, NULL);
     g_option_context_add_group (ctx, gst_init_get_option_group ());
@@ -467,6 +704,7 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
+<<<<<<< HEAD
   // No Yolo Model selected, default to Yolov5
   if ((yolov5 == FALSE) && (yolov8 == FALSE) &&  (yolonas == FALSE)) {
     g_print ("Using Yolov5 as default Model.\n");
@@ -491,10 +729,35 @@ main (gint argc, gchar * argv[])
   labels_path = labels_path ? labels_path:
       (yolov5 ? DEFAULT_YOLOV5_LABELS :
       (yolov8 ? DEFAULT_YOLOV8_LABELS : DEFAULT_YOLONAS_LABELS));
+=======
+  if (model_type < GST_YOLO_TYPE_V5 ||
+      model_type > GST_YOLO_TYPE_NAS) {
+    g_printerr ("Invalid model-version option selected\n"
+        "Available options:\n"
+        "    Yolov5: %d\n"
+        "    Yolov8: %d\n"
+        "    YoloNas: %d\n",
+        GST_YOLO_TYPE_V5, GST_YOLO_TYPE_V8, GST_YOLO_TYPE_NAS);
+    return -EINVAL;
+  }
+
+  // Set model path for execution
+  model_path = model_path ? model_path:
+      (model_type == GST_YOLO_TYPE_V5 ? DEFAULT_SNPE_YOLOV5_MODEL :
+      (model_type == GST_YOLO_TYPE_V8 ? DEFAULT_SNPE_YOLOV8_MODEL :
+      DEFAULT_SNPE_YOLONAS_MODEL));
+
+  // Set default Label path for execution
+  labels_path = labels_path ? labels_path:
+      (model_type == GST_YOLO_TYPE_V5 ? DEFAULT_YOLOV5_LABELS :
+      (model_type == GST_YOLO_TYPE_V8 ? DEFAULT_YOLOV8_LABELS :
+      DEFAULT_YOLONAS_LABELS));
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
 
   g_print ("Running app with model: %s and labels: %s\n",
       model_path, labels_path);
 
+<<<<<<< HEAD
   if (model_path == NULL || labels_path == NULL) {
     g_printerr ("Model or Labels cannot be null\n");
     return -EINVAL;
@@ -502,6 +765,9 @@ main (gint argc, gchar * argv[])
 
   // Initialize GST library.
   argc = 1;
+=======
+  // Initialize GST library.
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   gst_init (&argc, &argv);
 
   // Create the pipeline that will form connection with other elements
@@ -541,7 +807,11 @@ main (gint argc, gchar * argv[])
   // Watch for messages on the pipeline's bus.
   gst_bus_add_signal_watch (bus);
 
+<<<<<<< HEAD
   // Call respective callback function based on message
+=======
+  // Register respective callback function based on message
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   g_signal_connect (bus, "message::state-changed",
       G_CALLBACK (state_changed_cb), pipeline);
 
@@ -556,7 +826,11 @@ main (gint argc, gchar * argv[])
 
   // On successful transition to PAUSED state, state_changed_cb is called.
   // state_changed_cb callback is used to send pipeline to play state.
+<<<<<<< HEAD
   g_print ("Setting pipeline to PAUSED state ...\n");
+=======
+  g_print ("Set pipeline to PAUSED state ...\n");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
       g_printerr ("ERROR: Failed to transition to PAUSED state!\n");
@@ -581,10 +855,17 @@ error:
   g_source_remove (intrpt_watch_id);
   g_main_loop_unref (mloop);
 
+<<<<<<< HEAD
   g_print ("Setting pipeline to NULL state ...\n");
   gst_element_set_state (pipeline, GST_STATE_NULL);
 
   g_print ("Destory pipeline\n");
+=======
+  g_print ("Set pipeline to NULL state ...\n");
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+
+  g_print ("Destroy pipeline\n");
+>>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   destroy_pipe (&appctx);
 
   g_print ("gst_deinit\n");
