@@ -126,7 +126,7 @@ RETRY:
 #ifdef SECURE_PLAYBACK
   if (ret > 0) {
     SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
-        data, (unsigned long)free_sec_ion_buf->pBuffer, length);
+        data, (unsigned long)free_sec_ion_buf->pBuffer, &length);
     g_free (data);
     if (ret1 != SECURE_COPY_SUCCESS) {
       GST_ERROR ("copy non-secure buf to secure buf failed");
@@ -228,14 +228,22 @@ int main(int argc, char **argv)
 #endif
           break;
         case 2:
-        in_caps = "video/x-h265secure";
-        break;
+#ifdef SECURE_PLAYBACK
+          in_caps = "video/x-h265secure";
+#else
+          in_caps = "video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, level=(string)4, profile=(string)high, width=(int)1920, height=(int)1080, pixel-aspect-ratio=(fraction)1/1, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true";
+#endif
+          break;
         case 3:
-        in_caps = "video/x-vp9secure";
-        break;
+#ifdef SECURE_PLAYBACK
+          in_caps = "video/x-vp9secure";
+#else
+          in_caps = "video/x-vp9, stream-format=(string)byte-stream, alignment=(string)au, level=(string)4, profile=(string)high, width=(int)1920, height=(int)1080, pixel-aspect-ratio=(fraction)1/1, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true";
+#endif
+          break;
         case 4:
-        in_caps = "video/x-mpeg2secure";
-        break;
+          in_caps = "video/x-mpeg2secure";
+          break;
       }
     }
   }
@@ -265,7 +273,19 @@ int main(int argc, char **argv)
 #ifdef SECURE_PLAYBACK
   decodebin = gst_element_factory_make("decodebin", "decodebin");
 #else
-  decodebin = gst_element_factory_make("omxh264dec", "omxh264dec");
+  if (code_type == 1)
+  {
+    decodebin = gst_element_factory_make("omxh264dec", "omxh264dec");
+  }
+  else if (code_type == 2)
+  {
+    decodebin = gst_element_factory_make("omxh265dec", "omxh265dec");
+  }
+  else if (code_type == 3)
+  {
+    decodebin = gst_element_factory_make("omxvp9dec", "omxvp9dec");
+  }
+
   g_object_set (decodebin, "input-buffer-sharing", 1, NULL);
 #endif
   pipeline = gst_pipeline_new("pipeline");
