@@ -25,6 +25,7 @@ endif() # ENABLE_AUDIO
 if (ENABLE_DISPLAY AND ENABLE_VIDEO_DECODE)
   add_subdirectory(gst-videocodec-concurrent-playback)
   add_subdirectory(gst-weston-composition-example)
+  add_subdirectory(gst-concurrent-videoplay-composition)
 endif () # ENABLE_DISPLAY AND ENABLE_VIDEO_DECODE
 
 if (ENABLE_AUDIO AND ENABLE_DISPLAY AND ENABLE_VIDEO_DECODE)
@@ -38,7 +39,12 @@ if (ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-snapshot-stream-example)
   add_subdirectory(gst-transform-example)
   add_subdirectory(gst-activate-deactivate-streams-runtime)
+<<<<<<< HEAD
 >>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
+=======
+  add_subdirectory(gst-multi-camera-example)
+  add_subdirectory(gst-multi-stream-example)
+>>>>>>> 36dfe8e20739610c366f2671200ec5156658808f
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA)
@@ -64,3 +70,11 @@ endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 if (ENABLE_VIDEO_DECODE)
   add_subdirectory(gst-video-playback-example)
 endif () # ENABLE_VIDEO_DECODE
+
+if (ENABLE_VIDEO_DECODE AND ENABLE_VIDEO_ENCODE)
+  add_subdirectory(gst-video-transcode-example)
+endif () # ENABLE_VIDEO_DECODE AND ENABLE_VIDEO_ENCODE
+
+if (ENABLE_AUDIO AND ENABLE_VIDEO_ENCODE)
+  add_subdirectory(gst-audio-video-encode)
+endif () # ENABLE_AUDIO AND ENABLE_VIDEO_ENCODE

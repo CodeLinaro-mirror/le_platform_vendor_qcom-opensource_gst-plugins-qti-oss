@@ -621,20 +621,21 @@ main (gint argc, gchar * argv[])
 =======
   const gchar *app_name = NULL;
   GstAppContext appctx = {};
-  GstYoloModelType model_type = GST_YOLO_TYPE_V5;
+  GstYoloModelType model_type = GST_YOLO_TYPE_NAS;
   gboolean ret = FALSE;
   gchar help_description[1024];
   guint intrpt_watch_id = 0;
 
   // Set Display environment variables
-  setenv("XDG_RUNTIME_DIR", "/run/user/root", 0);
-  setenv("WAYLAND_DISPLAY", "wayland-1", 0);
+  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Structure to define the user options selection
   GOptionEntry entries[] = {
     { "model-type", 't', 0, G_OPTION_ARG_INT,
       &model_type,
-      "Yolo Model version to Execute: Yolov5 (1), Yolov8 (2), YoloNas (3)",
+      "Yolo Model version to Execute: Yolov5 (1), Yolov8 (2), YoloNas (3)"
+      "[Default]",
       "1 or 2 or 3"
 >>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
     },
@@ -753,6 +754,16 @@ main (gint argc, gchar * argv[])
       (model_type == GST_YOLO_TYPE_V8 ? DEFAULT_YOLOV8_LABELS :
       DEFAULT_YOLONAS_LABELS));
 >>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
+
+  if (!file_exists (model_path)) {
+    g_print ("Invalid model file path: %s\n", model_path);
+    return -EINVAL;
+  }
+
+  if (!file_exists (labels_path)) {
+    g_print ("Invalid labels file path: %s\n", labels_path);
+    return -EINVAL;
+  }
 
   g_print ("Running app with model: %s and labels: %s\n",
       model_path, labels_path);
