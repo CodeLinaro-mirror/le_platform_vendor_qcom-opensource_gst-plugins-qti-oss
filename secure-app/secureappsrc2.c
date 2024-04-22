@@ -85,10 +85,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define HEVC_NAL_UNIT_TYPE_RESERVED_UNSPECIFIED 0x29
 #define HEVC_FIRST_MB_IN_SLICE_MASK 0x80
 
-#define MAX_WIDTH               4096
-#define MAX_HEIGHT              2304
-#define MAX_INPUT_BUFFER_SIZE   (((MAX_WIDTH) * (MAX_HEIGHT) * (3) / (2)) / (2))
-
 typedef struct _secureappsrc {
   GMainLoop *loop;
   GQueue *sec_buf_queue;
@@ -101,6 +97,7 @@ typedef struct _secureappsrc {
 
 FILE *fp = NULL;
 static uint8_t *input_nonsecure_buffer = NULL;
+static int max_input_buffer_size = 0;
 int64_t timeStamp_fromIVF = -1;
 uint32_t ts_scaler_fromIVF_d = 0;
 uint32_t ts_scaler_fromIVF_n = 0;
@@ -115,24 +112,6 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data);
 static int Read_Buffer_From_Size_Nal(uint8_t *data);
 static int Read_Buffer_From_Ivf_File(uint8_t *data);
-
-static void onNewPad(GstElement *decodebin, GstPad *pad, GstElement *userData)
-{
-  GstPad *newpad;
-  newpad = gst_element_get_static_pad(GST_ELEMENT(userData), "sink");
-  gst_pad_link(pad, newpad);
-  g_object_unref(newpad);
-}
-
-static void onOMXVideoDecCreated (GstBin * bin, GstBin * sub_bin,
-    GstElement * element, gpointer user_data)
-{
-#ifdef SECURE_PLAYBACK
-  // for the secure playback, make sure the following properties have been set
-  g_object_set (element, "secure", 1, NULL);
-#endif
-  g_object_set (element, "input-buffer-sharing", 1, NULL);
-}
 
 /* The function is triggered when element GST_APPSRC queue is empty. It requires more buffers to
    fill. Firstly, it reads raw video data, then copies the data to input buffer of OMX input
@@ -388,7 +367,7 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
         } // !done
       } // (startcode != 0)
     } // (!done)
-  } while ((!done) && (cnt < MAX_INPUT_BUFFER_SIZE));
+  } while ((!done) && (cnt < max_input_buffer_size));
 
   return cnt;
 }
@@ -565,7 +544,7 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
         } // !done
       } // (startcode != 0)
     } // (!done)
-  } while ((!done) && (cnt < MAX_INPUT_BUFFER_SIZE));
+  } while ((!done) && (cnt < max_input_buffer_size));
 
   return cnt;
 }
@@ -703,7 +682,7 @@ int main(int argc, char **argv)
   GMainLoop *loop;
   GstElement *appsrc;
   GstElement *waylandsink;
-  GstElement *decodebin;
+  GstElement *decode;
   GstElement *pipeline;
   int code_type = 0;
   char *stream_file;
@@ -730,39 +709,28 @@ int main(int argc, char **argv)
       switch (code_type) {
         case 1:
           Read_Buffer = Read_Buffer_From_H264_Start_Code_File;
-#ifdef SECURE_PLAYBACK
-          snprintf(in_caps, sizeof(in_caps), "video/x-h264secure, width=(int)%d, height=(int)%d", width, height);
-#else
           snprintf(in_caps, sizeof(in_caps), "video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, \
             width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
             bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
-#endif
           break;
         case 2:
           Read_Buffer = Read_Buffer_From_H265_Start_Code_File;
-#ifdef SECURE_PLAYBACK
-          snprintf(in_caps, sizeof(in_caps), "video/x-h265secure, width=(int)%d, height=(int)%d", width, height);
-#else
           snprintf(in_caps, sizeof(in_caps), "video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, \
             width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
-            bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height); 
-#endif
+            bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
           break;
         case 3:
           Read_Buffer = Read_Buffer_From_Ivf_File;
-#ifdef SECURE_PLAYBACK
-          snprintf(in_caps, sizeof(in_caps), "video/x-vp9secure, width=(int)%d, height=(int)%d", width, height);
-#else
           snprintf(in_caps, sizeof(in_caps), "video/x-vp9, stream-format=(string)byte-stream, alignment=(string)au, \
             width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
             bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
-#endif
           break;
       }
     }
   }
   fp = fopen( stream_file , "r" );
-  input_nonsecure_buffer = g_malloc0(MAX_INPUT_BUFFER_SIZE);
+  max_input_buffer_size = (width * height * 3 / 2) / 2;
+  input_nonsecure_buffer = g_malloc0(max_input_buffer_size);
   secureappsrc *appsrc_struct = g_new0(secureappsrc, 1);
   g_mutex_init (&appsrc_struct->file_lock);
   g_mutex_init (&appsrc_struct->buf_lock);
@@ -784,45 +752,34 @@ int main(int argc, char **argv)
   caps = gst_caps_from_string (in_caps);
   g_object_set (appsrc, "caps", caps, NULL);
   gst_caps_unref (caps);
-
   waylandsink = gst_element_factory_make("waylandsink", "waylandsink");
-#ifdef SECURE_PLAYBACK
-  decodebin = gst_element_factory_make("decodebin", "decodebin");
-#else
   if (code_type == 1)
   {
-    decodebin = gst_element_factory_make("omxh264dec", "omxh264dec");
+    decode = gst_element_factory_make("omxh264dec", "omxh264dec");
   }
   else if (code_type == 2)
   {
-    decodebin = gst_element_factory_make("omxh265dec", "omxh265dec");
+    decode = gst_element_factory_make("omxh265dec", "omxh265dec");
   }
   else if (code_type == 3)
   {
-    decodebin = gst_element_factory_make("omxvp9dec", "omxvp9dec");
+    decode = gst_element_factory_make("omxvp9dec", "omxvp9dec");
   }
 
-  g_object_set (decodebin, "input-buffer-sharing", 1, NULL);
-#endif
-  pipeline = gst_pipeline_new("pipeline");
-
-  gst_bin_add_many(GST_BIN(pipeline), appsrc, decodebin, waylandsink, NULL);
 #ifdef SECURE_PLAYBACK
-  gst_element_link_many(appsrc, decodebin, NULL);
-#else
-  gst_element_link_many(appsrc, decodebin, waylandsink, NULL);
+  // for the secure playback, make sure the following properties have been set
+  g_object_set (decode, "secure", 1, NULL);
 #endif
-
+  g_object_set (decode, "input-buffer-sharing", 1, NULL);
+  pipeline = gst_pipeline_new("pipeline");
+  gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, waylandsink, NULL);
+  gst_element_link_many(appsrc, decode, waylandsink, NULL);
   if (code_type == 3)
   {
     g_mutex_lock (&appsrc_struct->file_lock);
     Parse_Ivf_File();
     g_mutex_unlock (&appsrc_struct->file_lock);
   }
-#ifdef SECURE_PLAYBACK
-  g_signal_connect(G_OBJECT(decodebin), "pad-added", G_CALLBACK(onNewPad), waylandsink);
-  g_signal_connect(GST_BIN(decodebin), "deep-element-added", G_CALLBACK(onOMXVideoDecCreated), appsrc_struct);
-#endif
 
   g_signal_connect(G_OBJECT(appsrc), "need-data", G_CALLBACK(onNeedData), appsrc_struct);
 
