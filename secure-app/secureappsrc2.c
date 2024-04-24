@@ -44,9 +44,37 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ion/ion.h>
 #include <sys/mman.h>
 #include <linux/dma-buf.h>
+#include "crypto.h"
+#include <sys/syscall.h>
 
 #define SECURE_PLAYBACK
-#include "crypto.h"
+#define gettid() syscall(SYS_gettid)
+#define getpid() syscall(SYS_getpid)
+
+enum {
+  PRIO_ERROR=0x1,
+  PRIO_INFO=0x2,
+  PRIO_DEBUG=0x4,
+  PRIO_LOW=0x8
+};
+
+static int secure_debug_level = PRIO_ERROR;
+void secure_debug_level_init(void)
+{
+  char *ptr = getenv("SECURE_DEBUG_LEVEL");
+  secure_debug_level = ptr ? atoi(ptr) : secure_debug_level;
+  printf("secure_debug_level=0x%x\n", secure_debug_level);
+}
+
+#define DEBUG_PRINT_CTL(level, fmt, args...)   \
+  do {                                        \
+    if (level & secure_debug_level)           \
+       printf("[%ld:%ld][%s:%d] " fmt "\n", getpid(), \
+       gettid(), __func__, __LINE__, ##args); \
+  } while(0)
+#define DEBUG_PRINT(fmt, args...) DEBUG_PRINT_CTL(PRIO_DEBUG, fmt, ##args)
+#define ERROR_PRINT(fmt,args...) DEBUG_PRINT_CTL(PRIO_ERROR, fmt, ##args)
+#define DETAIL_PRINT(fmt,args...) DEBUG_PRINT_CTL(PRIO_LOW, fmt, ##args)
 
 /************************************************************************/
 /*              #DEFINES                            */
@@ -91,13 +119,16 @@ typedef struct _secureappsrc {
   Crypto *crypto;
   GMutex file_lock;
   GMutex buf_lock;
+  GMutex secure_copy_lock;
   GCond buf_cond;
   void *sec_buf_addr;
 } secureappsrc;
 
-FILE *fp = NULL;
+FILE *input_fp = NULL;
 static uint8_t *input_nonsecure_buffer = NULL;
 static int max_input_buffer_size = 0;
+FILE *output_fp = NULL;
+static uint8_t *output_nonsecure_buffer = NULL;
 int64_t timeStamp_fromIVF = -1;
 uint32_t ts_scaler_fromIVF_d = 0;
 uint32_t ts_scaler_fromIVF_n = 0;
@@ -146,8 +177,10 @@ RETRY:
   g_mutex_unlock (&secureappsrc->file_lock);
   if (length > 0) {
 #ifdef SECURE_PLAYBACK
+    g_mutex_lock (&secureappsrc->secure_copy_lock);
     SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
       input_nonsecure_buffer, (unsigned long)free_sec_ion_buf->pBuffer, &length);
+    g_mutex_unlock (&secureappsrc->secure_copy_lock);
     if (ret1 != SECURE_COPY_SUCCESS) {
       GST_ERROR ("copy non-secure buf to secure buf failed");
     }
@@ -176,6 +209,56 @@ RETRY:
   {
     gst_app_src_end_of_stream(GST_APP_SRC(appsrc));
     GST_DEBUG ("sent eos");
+  }
+}
+
+static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc)
+{
+  GstSample *sample;
+  GstBuffer *buffer;
+  GstMapInfo map;
+  int ret = 0;
+  int length = 0;
+  OMX_BUFFERHEADERTYPE *sec_ion_buf = NULL;
+
+  //Retrieve the buffer
+  g_signal_emit_by_name(appsink, "pull-sample", &sample);
+  if (sample) {
+    buffer = gst_sample_get_buffer(sample);
+    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+      GST_DEBUG("gst map data size:%d \n", map.size);
+#ifdef SECURE_PLAYBACK
+      sec_ion_buf = (OMX_BUFFERHEADERTYPE *)map.data;
+      length = sec_ion_buf->nFilledLen;
+      g_mutex_lock (&secureappsrc->secure_copy_lock);
+      SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_SECURE_TO_NONSECURE,
+        output_nonsecure_buffer, (unsigned long)sec_ion_buf->pBuffer, &length);
+      g_mutex_unlock (&secureappsrc->secure_copy_lock);
+      if (ret1 != SECURE_COPY_SUCCESS) {
+        GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", sec_ion_buf->pBuffer);
+      }
+
+      //yuv data is NV12_UBWC format
+      ret = fwrite(output_nonsecure_buffer, 1, length, output_fp);
+#else
+      //yuv data is NV12_UBWC format
+      length = map.size;
+      ret = fwrite(map.data, 1, length, output_fp);
+#endif
+      if (ret == length) {
+        GST_DEBUG("Successed to write %d bytes to the file ", ret);
+      } else {
+        GST_ERROR("Failed to write to the file, want %d bytes, ret %d", length, ret);
+      }
+      gst_buffer_unmap (buffer, &map);
+    } else {
+      GST_ERROR("gst buffer map error");
+    }
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
+  } else {
+    GST_ERROR("pull-sample error");
+    return GST_FLOW_ERROR;
   }
 }
 
@@ -228,15 +311,15 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
   int adjust = 0;
   char *dataptr = (char *)data;
 
-  GST_DEBUG("Inside %s", __FUNCTION__);
+  DEBUG_PRINT("Inside");
   do
   {
     newFrame = 0;
-    byte_read = fread(&abyte, 1, 1, fp);
-    GST_DEBUG("00 READ Byte[%d] = 0x%x", cnt, dataptr[cnt]);
+    byte_read = fread(&abyte, 1, 1, input_fp);
+    DETAIL_PRINT("00 READ Byte[%d] = 0x%x", cnt, dataptr[cnt]);
     if (!byte_read)
     {
-      GST_DEBUG("Bytes read Zero, cnt=%d", cnt);
+      DEBUG_PRINT("Bytes read Zero, cnt=%d", cnt);
       done = TRUE;
     }
 
@@ -264,17 +347,17 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
 
       if (startcode != 0)
       {
-        GST_DEBUG("Read_Buffer_From_H264_File.Found H264_START_CODE");
-        byte_read = fread(&abyte, 1, 1, fp);
+        DETAIL_PRINT("Read_Buffer_From_H264_File.Found H264_START_CODE");
+        byte_read = fread(&abyte, 1, 1, input_fp);
         if (byte_read == 0)
         {
-          GST_DEBUG("Bytes read Zero, cnt=%d", cnt);
+          DEBUG_PRINT("Bytes read Zero, cnt=%d", cnt);
           done = TRUE;
         }
 
         if (!done)
         {
-          GST_DEBUG("Read_Buffer_From_H264_File.READ.Byte[%d] = 0x%x", cnt, abyte);
+          DETAIL_PRINT("Read_Buffer_From_H264_File.READ.Byte[%d] = 0x%x", cnt, abyte);
           naluType = abyte & 0x1F;
           if (cnt == 0)
           {
@@ -325,7 +408,7 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
                 {
                   /* dataptr has frame content
                   need to determine the frame boundary at IDR/NIDR NAL */
-                  byte_read = fread(&abyte, 1, 1, fp);
+                  byte_read = fread(&abyte, 1, 1, input_fp);
                   if (byte_read == 0)
                   {
                     done = TRUE;
@@ -339,9 +422,9 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
                     {
                       /* first mb address in the slice is 0 => assume non-ASO,
                       frame-based clip and non-error stream */
-                      GST_DEBUG("newFrame startcode:%d", startcode);
+                      DEBUG_PRINT("newFrame startcode:%d", startcode);
                       adjust = -(startcode + 2);
-                      fseek(fp, adjust, SEEK_CUR);
+                      fseek(input_fp, adjust, SEEK_CUR);
                       cnt += adjust;
                       done = TRUE;
                     }
@@ -356,9 +439,9 @@ static int Read_Buffer_From_H264_Start_Code_File(uint8_t *data)
                 {
                   // dataptr has frame content
                   // it is the frame boundary if SPS, PPS, SEI or AUD
-                  GST_DEBUG("hasFrameContent startcode:%d", startcode);
+                  DEBUG_PRINT("hasFrameContent startcode:%d", startcode);
                   adjust = -(startcode + 1);
-                  fseek(fp, adjust, SEEK_CUR);
+                  fseek(input_fp, adjust, SEEK_CUR);
                   cnt += adjust;
                   done = TRUE;
                 }
@@ -386,15 +469,15 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
   int adjust = 0;
   char *dataptr = (char *)data;
 
-  GST_DEBUG("Inside %s", __FUNCTION__);
+  DEBUG_PRINT("Inside");
   do
   {
     newFrame = 0;
-    byte_read = fread(&abyte, 1, 1, fp);
-    GST_DEBUG("00 READ Byte[%d] = 0x%x", cnt, dataptr[cnt]);
+    byte_read = fread(&abyte, 1, 1, input_fp);
+    DETAIL_PRINT("00 READ Byte[%d] = 0x%x", cnt, dataptr[cnt]);
     if (!byte_read)
     {
-      GST_DEBUG("Bytes read Zero, cnt=%d", cnt);
+      DEBUG_PRINT("Bytes read Zero, cnt=%d", cnt);
       done = TRUE;
     }
 
@@ -422,17 +505,17 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
 
       if (startcode != 0)
       {
-        GST_DEBUG("Read_Buffer_From_H265_File.Found H265_START_CODE");
-        byte_read = fread(&abyte, 1, 1, fp);
+        DETAIL_PRINT("Read_Buffer_From_H265_File.Found H265_START_CODE");
+        byte_read = fread(&abyte, 1, 1, input_fp);
         if (byte_read == 0)
         {
-          GST_DEBUG("Bytes read Zero, cnt=%d", cnt);
+          DEBUG_PRINT("Bytes read Zero, cnt=%d", cnt);
           done = TRUE;
         }
 
         if (!done)
         {
-          GST_DEBUG("Read_Buffer_From_H265_File.READ.Byte[%d] = 0x%x", cnt, abyte);
+          DETAIL_PRINT("Read_Buffer_From_H265_File.READ.Byte[%d] = 0x%x", cnt, abyte);
           naluType = (abyte & 0x7F) >> 1;
           if (cnt == 0)
           {
@@ -461,7 +544,7 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
                 }
                 dataptr[cnt++]=abyte;
                 //2 Bytes header for H265, so need to read next byte
-                byte_read = fread(&abyte, 1, 1, fp);
+                byte_read = fread(&abyte, 1, 1, input_fp);
                 if (byte_read == 0)
                 {
                   done = TRUE;
@@ -491,7 +574,7 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
                 else
                 {
                   //2 Bytes header for H265, so need to read next byte
-                  byte_read = fread(&abyte, 1, 1, fp);
+                  byte_read = fread(&abyte, 1, 1, input_fp);
                   if (byte_read == 0)
                   {
                     done = TRUE;
@@ -501,7 +584,7 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
 
                   /* dataptr has frame content
                   need to determine the frame boundary at IDR/NIDR NAL */
-                  byte_read = fread(&abyte, 1, 1, fp);
+                  byte_read = fread(&abyte, 1, 1, input_fp);
                   if (byte_read == 0)
                   {
                     done = TRUE;
@@ -515,9 +598,9 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
                     {
                       /* first mb address in the slice is 0 => assume non-ASO,
                       frame-based clip and non-error stream */
-                      GST_DEBUG("newFrame startcode:%d", startcode);
+                      DEBUG_PRINT("newFrame startcode:%d", startcode);
                       adjust = -(startcode + 3);
-                      fseek(fp, adjust, SEEK_CUR);
+                      fseek(input_fp, adjust, SEEK_CUR);
                       cnt += adjust;
                       done = TRUE;
                     }
@@ -533,9 +616,9 @@ static int Read_Buffer_From_H265_Start_Code_File(uint8_t *data)
                 {
                   // dataptr has frame content
                   // it is the frame boundary if SPS, PPS, SEI or AUD
-                  GST_DEBUG("hasFrameContent startcode:%d", startcode);
+                  DEBUG_PRINT("hasFrameContent startcode:%d", startcode);
                   adjust = -(startcode + 1);
-                  fseek(fp, adjust, SEEK_CUR);
+                  fseek(input_fp, adjust, SEEK_CUR);
                   cnt += adjust;
                   done = TRUE;
                 }
@@ -558,7 +641,7 @@ static int Read_Frame_Length_From_Ivf_File(int bytes_count, int *frame_length)
 
   for (int i = 0; i < bytes_count; i++) {
     len = 0;
-    ret = fread(&len, 1, 1, fp);
+    ret = fread(&len, 1, 1, input_fp);
     if (ret > 0) {
       length += ( len<< (8*i));
       bytes_read++;
@@ -581,7 +664,7 @@ static int Read_Frame_Timestamp_From_Ivf_File(int bytes_count, uint64_t *frame_t
 
   for (int i = 0; i < bytes_count; i++) {
     len = 0;
-    ret = fread(&len, 1, 1, fp);
+    ret = fread(&len, 1, 1, input_fp);
     if (ret > 0) {
       timestamp += ( len<< (8*i));
       bytes_read++;
@@ -601,10 +684,10 @@ static int Read_Buffer_From_Ivf_File(uint8_t *data)
   long frame_ts = 0;
   int bytes_read = 0;
 
-  GST_DEBUG("Inside");
+  DEBUG_PRINT("Inside");
   bytes_read = Read_Frame_Length_From_Ivf_File(4, &length);
   if ( bytes_read > 0 && bytes_read < 4) {
-    GST_ERROR("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
+    ERROR_PRINT("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
     return 0;
   }else if ( 0 == bytes_read ) {
     printf("0 bytes read from IVF file, really meet EOF\n");
@@ -612,12 +695,12 @@ static int Read_Buffer_From_Ivf_File(uint8_t *data)
   }
   bytes_read = Read_Frame_Timestamp_From_Ivf_File(8, &frame_ts);
   if ( 8 != bytes_read ) {
-    GST_ERROR("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
+    ERROR_PRINT("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
     return 0;
   }
-  bytes_read = fread(data, 1, length, fp);
+  bytes_read = fread(data, 1, length, input_fp);
   if (bytes_read != length) {
-    GST_ERROR("Reading IVF frame data, %d bytes read, not equal to %d bytes, treat as EOF", bytes_read, length);
+    ERROR_PRINT("Reading IVF frame data, %d bytes read, not equal to %d bytes, treat as EOF", bytes_read, length);
     return 0;
   }
 
@@ -637,9 +720,9 @@ static int Parse_Ivf_File()
   unsigned long ts1, ts2 = 0;
   int bytes_read = 0;
 
-  int ivfheaderlen = fread(ivfheader, 1, 32, fp);
+  int ivfheaderlen = fread(ivfheader, 1, 32, input_fp);
   if(ivfheaderlen != 32 || !(ivfheader[0] == 'D' && ivfheader[1] == 'K' && ivfheader[2] == 'I' && ivfheader[3] == 'F')) {
-    GST_ERROR("IVF file not begin with \"DKIF\", it's corrupted IVF file");
+    printf("IVF file not begin with \"DKIF\", it's corrupted IVF file\n");
     return -1;
   }
   width = ivfheader[12] + ((unsigned int)ivfheader[13] << 8);
@@ -651,7 +734,7 @@ static int Parse_Ivf_File()
 
   bytes_read = Read_Frame_Length_From_Ivf_File(4, &length);
   if ( bytes_read > 0 && bytes_read < 4) {
-    GST_ERROR("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
+    ERROR_PRINT("Reading IVF frame size, %d bytes read, not equal to 4 bytes, treat as EOF", bytes_read);
     return -1;
   } else if ( 0 == bytes_read ) {
     printf("0 bytes read from IVF file, really meet EOF\n");
@@ -659,16 +742,16 @@ static int Parse_Ivf_File()
   }
   bytes_read = Read_Frame_Timestamp_From_Ivf_File(8, &ts1);
   if ( 8 != bytes_read ) {
-    GST_ERROR("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
+    ERROR_PRINT("Reading IVF frame ts, %d bytes read, not equal to 8 bytes, treat as EOF", bytes_read);
     return -1;
   }
-  fseek(fp, length + 4, SEEK_CUR);
+  fseek(input_fp, length + 4, SEEK_CUR);
   bytes_read = Read_Frame_Timestamp_From_Ivf_File(8, &ts2);
   if ( 8 != bytes_read ) {
-    GST_ERROR("This IVF not contain 2 frames, won't continue decoding");
+    ERROR_PRINT("This IVF not contain 2 frames, won't continue decoding");
     return -1;
   }
-  fseek(fp, 32, SEEK_SET);
+  fseek(input_fp, 32, SEEK_SET);
 
   printf("first 2 frames timestamps are %ld, %ld\n", ts1, ts2);
   if ((ts2 - ts1) != 0 && ts_scaler_fromIVF_n != 0)
@@ -681,21 +764,32 @@ int main(int argc, char **argv)
   gst_init(NULL, NULL);
   GMainLoop *loop;
   GstElement *appsrc;
+  GstElement *tee;
   GstElement *waylandsink;
+  GstElement *appsink;
   GstElement *decode;
+  GstElement *waylandsink_queue;
+  GstElement *appsink_queue;
   GstElement *pipeline;
+  GstPad *tee_waylandsink_pad;
+  GstPad *tee_appsink_pad;
+  GstPad *waylandsink_pad;
+  GstPad *appsink_pad;
+  GstCaps *caps;
   int code_type = 0;
   char *stream_file;
   guint bus_watch_id;
   int width;
   int height;
+  int max_output_buffer_size = 0;
   char in_caps[512] = {0,};
+  char outputfilename[512] = {0,};
 
   if (argc != 5) {
-    GST_ERROR ("error input argument passed, e.g. ./secureappsrc2"
-      "<id (h264:1;h265:2;vp9:3)> <width> <height> <stream file path>");
-    GST_ERROR ("example usage:");
-    GST_ERROR ("./secureappsrc2 1 1920 1080 test.h264");
+    printf ("error input argument passed, e.g. secureappsrc2"
+      "<id (h264:1;h265:2;vp9:3)> <width> <height> <stream file path>\n");
+    printf ("example usage:\n");
+    printf ("secureappsrc2 1 1920 1080 test.h264\n");
     return 0;
   } else {
     code_type = atoi(argv[1]);
@@ -703,7 +797,7 @@ int main(int argc, char **argv)
     height = atoi(argv[3]);
     stream_file = argv[4];
     if (code_type > 4 || code_type < 1 || stream_file == NULL) {
-      GST_ERROR (" code_type or stream file input error");
+      printf ("code_type or stream file input error\n");
       return 0;
     } else {
       switch (code_type) {
@@ -728,12 +822,21 @@ int main(int argc, char **argv)
       }
     }
   }
-  fp = fopen( stream_file , "r" );
+
+  secure_debug_level_init();
+  input_fp = fopen( stream_file , "r" );
   max_input_buffer_size = (width * height * 3 / 2) / 2;
   input_nonsecure_buffer = g_malloc0(max_input_buffer_size);
+
+  snprintf(outputfilename, sizeof(outputfilename), "yuvframes.yuv");
+  output_fp = fopen (outputfilename, "wb");
+  max_output_buffer_size = width * height * 4;
+  output_nonsecure_buffer = g_malloc0(max_output_buffer_size);
+
   secureappsrc *appsrc_struct = g_new0(secureappsrc, 1);
   g_mutex_init (&appsrc_struct->file_lock);
   g_mutex_init (&appsrc_struct->buf_lock);
+  g_mutex_init (&appsrc_struct->secure_copy_lock);
   g_cond_init (&appsrc_struct->buf_cond);
   appsrc_struct->sec_buf_queue = g_queue_new ();
 
@@ -742,17 +845,20 @@ int main(int argc, char **argv)
   crypto_init (appsrc_struct->crypto);
 #endif
 
-  gboolean rett = FALSE;
-
   loop = g_main_loop_new(NULL, FALSE);
   appsrc_struct->loop = loop;
   appsrc = gst_element_factory_make("appsrc", "appsrc");
-  GstCaps *caps;
 
   caps = gst_caps_from_string (in_caps);
   g_object_set (appsrc, "caps", caps, NULL);
   gst_caps_unref (caps);
+
+  tee = gst_element_factory_make("tee", "tee");
   waylandsink = gst_element_factory_make("waylandsink", "waylandsink");
+  waylandsink_queue = gst_element_factory_make("queue", "waylandsink_queue");
+  appsink_queue = gst_element_factory_make("queue", "appsink_queue");
+  appsink = gst_element_factory_make("appsink", "appsink");
+  g_object_set (appsink, "emit-signals", TRUE, NULL);
   if (code_type == 1)
   {
     decode = gst_element_factory_make("omxh264dec", "omxh264dec");
@@ -772,8 +878,19 @@ int main(int argc, char **argv)
 #endif
   g_object_set (decode, "input-buffer-sharing", 1, NULL);
   pipeline = gst_pipeline_new("pipeline");
-  gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, waylandsink, NULL);
-  gst_element_link_many(appsrc, decode, waylandsink, NULL);
+  gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, tee, waylandsink_queue, appsink_queue, waylandsink, appsink, NULL);
+  gst_element_link_many(appsrc, decode, tee, NULL);
+  gst_element_link_many(waylandsink_queue, waylandsink, NULL);
+  gst_element_link_many(appsink_queue, appsink, NULL);
+
+  tee_waylandsink_pad = gst_element_get_request_pad(tee, "src_%u");
+  DEBUG_PRINT ("Obtained request pad %s for waylandsink branch.", gst_pad_get_name(tee_waylandsink_pad));
+  waylandsink_pad = gst_element_get_static_pad(waylandsink_queue, "sink");
+  tee_appsink_pad = gst_element_get_request_pad(tee, "src_%u");
+  DEBUG_PRINT ("Obtained request pad %s for appsink branch.", gst_pad_get_name(tee_appsink_pad));
+  appsink_pad = gst_element_get_static_pad(appsink_queue, "sink");
+  gst_pad_link(tee_waylandsink_pad, waylandsink_pad);
+  gst_pad_link(tee_appsink_pad, appsink_pad);
   if (code_type == 3)
   {
     g_mutex_lock (&appsrc_struct->file_lock);
@@ -782,21 +899,23 @@ int main(int argc, char **argv)
   }
 
   g_signal_connect(G_OBJECT(appsrc), "need-data", G_CALLBACK(onNeedData), appsrc_struct);
+  g_signal_connect(G_OBJECT(appsink), "new-sample", G_CALLBACK(onNewSample), appsrc_struct);
 
   GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
   bus_watch_id = gst_bus_add_watch (bus, msg_handler, appsrc_struct);
   gst_object_unref(bus);
 
   gst_element_set_state(pipeline, GST_STATE_PLAYING);
-  GST_DEBUG ("pipeline set playing");
+  printf ("pipeline set playing\n");
   g_main_loop_run(loop);
   gst_element_set_state(pipeline, GST_STATE_NULL);
-  GST_DEBUG ("pipeline set null");
+  printf ("pipeline set null\n");
   g_source_remove (bus_watch_id);
 
   g_main_loop_unref(loop);
   g_mutex_clear (&appsrc_struct->file_lock);
   g_mutex_clear (&appsrc_struct->buf_lock);
+  g_mutex_clear (&appsrc_struct->secure_copy_lock);
   g_cond_clear (&appsrc_struct->buf_cond);
   g_queue_free (appsrc_struct->sec_buf_queue);
 #ifdef SECURE_PLAYBACK
@@ -805,14 +924,24 @@ int main(int argc, char **argv)
 #endif
   g_free(appsrc_struct);
 
-  if (fp) {
-    fclose(fp);
-    fp = NULL;
+  if (input_fp) {
+    fclose(input_fp);
+    input_fp = NULL;
+  }
+
+  if (output_fp) {
+    fclose(output_fp);
+    output_fp = NULL;
   }
 
   if (input_nonsecure_buffer)  {
     g_free(input_nonsecure_buffer);
     input_nonsecure_buffer = NULL;
+  }
+
+  if (output_nonsecure_buffer)  {
+    g_free(output_nonsecure_buffer);
+    output_nonsecure_buffer = NULL;
   }
   return 0;
 }

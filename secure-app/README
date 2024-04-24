@@ -4,7 +4,7 @@ Secure application:
 
 Now the demo only supports the special clips. In the clips, there are a four bytes header before every frame data.
 If disable the macro SECURE_PLAYBACK in file secureappsrc.c, the demo will be changed to non-secure version. The
-non-secure demo only support h264 decoding now.
+non-secure demo only supports h264 decoding now.
 
 ./secureappsrc [OPTION]... [FILE]...
 
@@ -20,20 +20,19 @@ non-secure demo only support h264 decoding now.
 The demo secureappsrc2 is used for verifying the secure video playback in secure memory by supporting new input buffer
 sharing mechanism. The secure input buffers are allocated in GST-OMX, which is different with the previous secureappsrc.
 
-Now the demo only supports the special clips. In the clips, there are a four bytes header before every frame data.
-If disable the macro SECURE_PLAYBACK in file secureappsrc2.c, the demo will be changed to non-secure version. The
-non-secure demo only support h264 decoding now.
+Now the demo supports h264/h265 raw stream and vp9 ivf format. If disable the macro SECURE_PLAYBACK in file secureappsrc2.c,
+the demo will be changed to non-secure version.The non-secure demo supports h264, h265 and vp9 decoding now.
 
-./secureappsrc2 [OPTION]... [FILE]...
+./secureappsrc2 [OPTION]...[WIDTH HEIGHT]...[FILE]...
 
 [OPTION]
 1. h264
 2. hevc
 3. vp9
 
-./secureappsrc2 1 video.raw.h264
-./secureappsrc2 2 video.raw.hevc
-./secureappsrc2 3 video.raw.vp9
+./secureappsrc2 1 640 352 640x352.h264
+./secureappsrc2 2 640 352 640x352.h265
+./secureappsrc2 3 640 352 vp9_640x352.ivf
 
 Some definitions in the project have been replaced by self-defined ones.
 Please make sure the alignment of some definitions:
