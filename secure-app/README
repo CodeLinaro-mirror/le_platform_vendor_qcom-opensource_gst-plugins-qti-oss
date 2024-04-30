@@ -17,22 +17,25 @@ non-secure demo only supports h264 decoding now.
 ./secureappsrc 2 video.raw.hevc
 ./secureappsrc 3 video.raw.vp9
 
-The demo secureappsrc2 is used for verifying the secure video playback in secure memory by supporting new input buffer
+The demo secureappsrc2 supports secure video playback and non-secure video playabck. There is a new input buffer
 sharing mechanism. The secure input buffers are allocated in GST-OMX, which is different with the previous secureappsrc.
+The demo also supports dumping decoded data to file.
 
-Now the demo supports h264/h265 raw stream and vp9 ivf format. If disable the macro SECURE_PLAYBACK in file secureappsrc2.c,
-the demo will be changed to non-secure version.The non-secure demo supports h264, h265 and vp9 decoding now.
+Now the demo supports h264/h265 raw stream and vp9 ivf format.
 
-./secureappsrc2 [OPTION]...[WIDTH HEIGHT]...[FILE]...
+secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path]
 
-[OPTION]
-1. h264
-2. hevc
-3. vp9
+codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf
+width:             video's width
+height:            video's height
+stream file path:  input video file path
+m0|m1:             m0:secure mode(default); m1:common mode
+s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink
+o:outputfile path: output file path when s1 or s2, default is output.ubwc
 
-./secureappsrc2 1 640 352 640x352.h264
-./secureappsrc2 2 640 352 640x352.h265
-./secureappsrc2 3 640 352 vp9_640x352.ivf
+secureappsrc2 1 1920 1080 test.h264
+secureappsrc2 2 1920 1080 test.h265 s1 m1
+secureappsrc2 3 1920 1080 vp9.ivf m1 s2 o:/data/output.dat
 
 Some definitions in the project have been replaced by self-defined ones.
 Please make sure the alignment of some definitions:

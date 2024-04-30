@@ -48,7 +48,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "crypto.h"
 #include <sys/syscall.h>
 
-#define SECURE_PLAYBACK
 #define gettid() syscall(SYS_gettid)
 #define getpid() syscall(SYS_getpid)
 
@@ -58,6 +57,12 @@ enum {
   PRIO_DEBUG=0x4,
   PRIO_LOW=0x8
 };
+
+typedef enum {
+  SECURE_WAYLANDSINK         = 0,
+  SECURE_WAYLANDSINK_APPSINK = 1,
+  SECURE_APPSINK             = 2,
+} secure_sink_type;
 
 static int secure_debug_level = PRIO_ERROR;
 void secure_debug_level_init(void)
@@ -125,15 +130,16 @@ typedef struct _secureappsrc {
   void *sec_buf_addr;
 } secureappsrc;
 
-FILE *input_fp = NULL;
+static FILE *input_fp = NULL;
 static uint8_t *input_nonsecure_buffer = NULL;
 static int max_input_buffer_size = 0;
-FILE *output_fp = NULL;
+static FILE *output_fp = NULL;
 static uint8_t *output_nonsecure_buffer = NULL;
-int64_t timeStamp_fromIVF = -1;
-uint32_t ts_scaler_fromIVF_d = 0;
-uint32_t ts_scaler_fromIVF_n = 0;
-float fps = 30.0;
+static int64_t timeStamp_fromIVF = -1;
+static uint32_t ts_scaler_fromIVF_d = 0;
+static uint32_t ts_scaler_fromIVF_n = 0;
+static float fps = 30.0;
+static gboolean secure_mode = TRUE;
 
 static int (*Read_Buffer)(uint8_t *data);
 
@@ -175,23 +181,23 @@ RETRY:
   free_sec_ion_buf->nFilledLen = length;
   g_mutex_unlock (&secureappsrc->file_lock);
   if (length > 0) {
-#ifdef SECURE_PLAYBACK
-    g_mutex_lock (&secureappsrc->secure_copy_lock);
-    SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
-      input_nonsecure_buffer, (unsigned long)free_sec_ion_buf->pBuffer, &length);
-    g_mutex_unlock (&secureappsrc->secure_copy_lock);
-    if (ret1 != SECURE_COPY_SUCCESS) {
-      GST_ERROR ("copy non-secure buf to secure buf failed");
-    }
-#else
-    char *bufaddr = (char*)mmap(NULL, free_sec_ion_buf->nAllocLen, PROT_READ|PROT_WRITE, MAP_SHARED,
-      (gint64)free_sec_ion_buf->pBuffer, 0);
-    if (bufaddr == MAP_FAILED) {
-      GST_ERROR ("mmap failed");
+    if (secure_mode) {
+      g_mutex_lock (&secureappsrc->secure_copy_lock);
+      SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
+        input_nonsecure_buffer, (unsigned long)free_sec_ion_buf->pBuffer, &length);
+      g_mutex_unlock (&secureappsrc->secure_copy_lock);
+      if (ret1 != SECURE_COPY_SUCCESS) {
+        GST_ERROR ("copy non-secure buf to secure buf failed");
+      }
     } else {
-      memcpy (bufaddr, input_nonsecure_buffer, length);
+      char *bufaddr = (char*)mmap(NULL, free_sec_ion_buf->nAllocLen, PROT_READ|PROT_WRITE, MAP_SHARED,
+        (gint64)free_sec_ion_buf->pBuffer, 0);
+      if (bufaddr == MAP_FAILED) {
+        GST_ERROR ("mmap failed");
+      } else {
+        memcpy (bufaddr, input_nonsecure_buffer, length);
+      }
     }
-#endif
   }
 
 
@@ -230,36 +236,37 @@ static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc
   g_signal_emit_by_name(appsink, "pull-sample", &sample);
   if (sample) {
     buffer = gst_sample_get_buffer(sample);
-#ifdef SECURE_PLAYBACK
-    int secure_fd = 0;
-    GstVideoMeta* meta = gst_buffer_get_video_meta(buffer);
-    if (meta && meta->n_planes <= 2 && SIG_OF_QVMETA(meta) == SECURE_MAKE_FOURCC('Q','a','U','T')) {
-      secure_fd = FD_OF_QVMETA(meta);
-      length = DATASZ_OF_QVMETA(meta);
-      GST_DEBUG("Found QVMeta signature, fd %d, size %d", secure_fd, length);
-      g_mutex_lock (&secureappsrc->secure_copy_lock);
-      SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_SECURE_TO_NONSECURE,
-        output_nonsecure_buffer, (unsigned long)secure_fd, &length);
-      g_mutex_unlock (&secureappsrc->secure_copy_lock);
-      if (ret1 != SECURE_COPY_SUCCESS) {
-        GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", sec_ion_buf->pBuffer);
-      }
+    if (secure_mode) {
+      int secure_fd = 0;
+      GstVideoMeta* meta = gst_buffer_get_video_meta(buffer);
+      if (meta && meta->n_planes <= 2 && SIG_OF_QVMETA(meta) == SECURE_MAKE_FOURCC('Q','a','U','T')) {
+        secure_fd = FD_OF_QVMETA(meta);
+        length = DATASZ_OF_QVMETA(meta);
+        GST_DEBUG("Found QVMeta signature, fd %d, size %d", secure_fd, length);
+        g_mutex_lock (&secureappsrc->secure_copy_lock);
+        SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_SECURE_TO_NONSECURE,
+          output_nonsecure_buffer, (unsigned long)secure_fd, &length);
+        g_mutex_unlock (&secureappsrc->secure_copy_lock);
+        if (ret1 != SECURE_COPY_SUCCESS) {
+          GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", sec_ion_buf->pBuffer);
+        }
 
-      //yuv data is NV12_UBWC format
-      ret = fwrite(output_nonsecure_buffer, 1, length, output_fp);
+        //yuv data is NV12_UBWC format
+        ret = fwrite(output_nonsecure_buffer, 1, length, output_fp);
+      } else {
+        GST_ERROR("Unable to read QVMeta from buffer %p.", buffer);
+      }
     } else {
-      GST_ERROR("Unable to read QVMeta from buffer %p.", buffer);
+      if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+        //yuv data is NV12_UBWC format
+        length = map.size;
+        ret = fwrite(map.data, 1, length, output_fp);
+        gst_buffer_unmap (buffer, &map);
+      } else {
+        GST_ERROR("gst buffer map error");
+      }
     }
-#else
-    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-      //yuv data is NV12_UBWC format
-      length = map.size;
-      ret = fwrite(map.data, 1, length, output_fp);
-      gst_buffer_unmap (buffer, &map);
-    } else {
-      GST_ERROR("gst buffer map error");
-    }
-#endif
+
     if (ret == length) {
       GST_DEBUG("Successed to write %d bytes to the file ", ret);
     } else {
@@ -770,6 +777,23 @@ static int Parse_Ivf_File()
   printf("IVF FPS = %.2f\n", fps);
 }
 
+static void print_usage(void)
+{
+  printf ("Error command line argument passed, should be:\n");
+  printf ("secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path]\n");
+  printf ("codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf\n");
+  printf ("width:             video's width\n");
+  printf ("height:            video's height\n");
+  printf ("stream file path:  input video file path\n");
+  printf ("m0|m1:             m0:secure mode(default); m1:common mode\n");
+  printf ("s0|s1|s2:          so:waylandsink(default); s1:waylandsink+appsink; s2:appsink\n");
+  printf ("o:outputfile path: output file path when s1 or s2, default is output.ubwc\n");
+  printf ("example:\n");
+  printf ("secureappsrc2 1 1920 1080 test.h264\n");
+  printf ("secureappsrc2 2 1920 1080 test.h265 s1 m1\n");
+  printf ("secureappsrc2 3 1920 1080 vp9.ivf m1 s2 o:/data/output.dat\n");
+}
+
 int main(int argc, char **argv)
 {
   gst_init(NULL, NULL);
@@ -789,24 +813,47 @@ int main(int argc, char **argv)
   GstCaps *caps;
   int code_type = 0;
   char *stream_file;
+  char *output_file;
   guint bus_watch_id;
   int width;
   int height;
   int max_output_buffer_size = 0;
   char in_caps[512] = {0,};
   char outputfilename[512] = {0,};
+  secure_sink_type sink_type = SECURE_WAYLANDSINK;
 
-  if (argc != 5) {
-    printf ("error input argument passed, e.g. secureappsrc2"
-      "<id (h264:1;h265:2;vp9:3)> <width> <height> <stream file path>\n");
-    printf ("example usage:\n");
-    printf ("secureappsrc2 1 1920 1080 test.h264\n");
+  if (argc < 5) {
+    print_usage();
     return 0;
   } else {
     code_type = atoi(argv[1]);
     width = atoi(argv[2]);
     height = atoi(argv[3]);
     stream_file = argv[4];
+
+    //parse optional param
+    int option_param_count = argc - 5;
+    int i = 0;
+    snprintf(outputfilename, sizeof(outputfilename), "output.ubwc");
+    while(i < option_param_count) {
+      if (!memcmp(argv[5 + i], "m0", 2)) {
+        secure_mode = TRUE;
+      } else if (!memcmp(argv[5 + i], "m1", 2)) {
+        secure_mode = FALSE;
+      } else if (!memcmp(argv[5 + i], "s0", 2)) {
+        sink_type = SECURE_WAYLANDSINK;
+      } else if (!memcmp(argv[5 + i], "s1", 2)) {
+        sink_type = SECURE_WAYLANDSINK_APPSINK;
+      } else if (!memcmp(argv[5 + i], "s2", 2)) {
+        sink_type = SECURE_APPSINK;
+      } else if (!memcmp(argv[5 + i], "o:", 2)) {
+        //remove pre "o:"
+        char *filename = argv[5 + i];
+        memset(outputfilename, 0, sizeof(filename));
+        memcpy(outputfilename, &filename[2], strlen(filename) - 2);
+      }
+      i++;
+    }
     if (code_type > 4 || code_type < 1 || stream_file == NULL) {
       printf ("code_type or stream file input error\n");
       return 0;
@@ -839,8 +886,9 @@ int main(int argc, char **argv)
   max_input_buffer_size = (width * height * 3 / 2) / 2;
   input_nonsecure_buffer = g_malloc0(max_input_buffer_size);
 
-  snprintf(outputfilename, sizeof(outputfilename), "yuvframes.yuv");
-  output_fp = fopen (outputfilename, "wb");
+  if(sink_type != SECURE_WAYLANDSINK) {
+    output_fp = fopen (outputfilename, "wb");
+  }
   max_output_buffer_size = width * height * 4;
   output_nonsecure_buffer = g_malloc0(max_output_buffer_size);
 
@@ -851,10 +899,10 @@ int main(int argc, char **argv)
   g_cond_init (&appsrc_struct->buf_cond);
   appsrc_struct->sec_buf_queue = g_queue_new ();
 
-#ifdef SECURE_PLAYBACK
-  appsrc_struct->crypto = (Crypto*)g_new0(Crypto, 1);
-  crypto_init (appsrc_struct->crypto);
-#endif
+  if (secure_mode) {
+    appsrc_struct->crypto = (Crypto*)g_new0(Crypto, 1);
+    crypto_init (appsrc_struct->crypto);
+  }
 
   loop = g_main_loop_new(NULL, FALSE);
   appsrc_struct->loop = loop;
@@ -864,12 +912,20 @@ int main(int argc, char **argv)
   g_object_set (appsrc, "caps", caps, NULL);
   gst_caps_unref (caps);
 
-  tee = gst_element_factory_make("tee", "tee");
-  waylandsink = gst_element_factory_make("waylandsink", "waylandsink");
-  waylandsink_queue = gst_element_factory_make("queue", "waylandsink_queue");
-  appsink_queue = gst_element_factory_make("queue", "appsink_queue");
-  appsink = gst_element_factory_make("appsink", "appsink");
-  g_object_set (appsink, "emit-signals", TRUE, NULL);
+  if (sink_type == SECURE_WAYLANDSINK) {
+    waylandsink = gst_element_factory_make("waylandsink", "waylandsink");
+  } else if (sink_type == SECURE_WAYLANDSINK_APPSINK) {
+    tee = gst_element_factory_make("tee", "tee");
+    waylandsink_queue = gst_element_factory_make("queue", "waylandsink_queue");
+    appsink_queue = gst_element_factory_make("queue", "appsink_queue");
+    waylandsink = gst_element_factory_make("waylandsink", "waylandsink");
+    appsink = gst_element_factory_make("appsink", "appsink");
+    g_object_set (appsink, "emit-signals", TRUE, NULL);
+  } else if (sink_type == SECURE_APPSINK) {
+    appsink = gst_element_factory_make("appsink", "appsink");
+    g_object_set (appsink, "emit-signals", TRUE, NULL);
+  }
+
   if (code_type == 1)
   {
     decode = gst_element_factory_make("omxh264dec", "omxh264dec");
@@ -883,34 +939,46 @@ int main(int argc, char **argv)
     decode = gst_element_factory_make("omxvp9dec", "omxvp9dec");
   }
 
-#ifdef SECURE_PLAYBACK
-  // for the secure playback, make sure the following properties have been set
-  g_object_set (decode, "secure", 1, NULL);
-#endif
+  // for the secure mode, make sure the following properties have been set
+  if (secure_mode) {
+    g_object_set (decode, "secure", 1, NULL);
+  }
+
   g_object_set (decode, "input-buffer-sharing", 1, NULL);
   pipeline = gst_pipeline_new("pipeline");
-  gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, tee, waylandsink_queue, appsink_queue, waylandsink, appsink, NULL);
-  gst_element_link_many(appsrc, decode, tee, NULL);
-  gst_element_link_many(waylandsink_queue, waylandsink, NULL);
-  gst_element_link_many(appsink_queue, appsink, NULL);
 
-  tee_waylandsink_pad = gst_element_get_request_pad(tee, "src_%u");
-  DEBUG_PRINT ("Obtained request pad %s for waylandsink branch.", gst_pad_get_name(tee_waylandsink_pad));
-  waylandsink_pad = gst_element_get_static_pad(waylandsink_queue, "sink");
-  tee_appsink_pad = gst_element_get_request_pad(tee, "src_%u");
-  DEBUG_PRINT ("Obtained request pad %s for appsink branch.", gst_pad_get_name(tee_appsink_pad));
-  appsink_pad = gst_element_get_static_pad(appsink_queue, "sink");
-  gst_pad_link(tee_waylandsink_pad, waylandsink_pad);
-  gst_pad_link(tee_appsink_pad, appsink_pad);
-  if (code_type == 3)
-  {
+  if (sink_type == SECURE_WAYLANDSINK) {
+    gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, waylandsink, NULL);
+    gst_element_link_many(appsrc, decode, waylandsink, NULL);
+  } else if (sink_type == SECURE_WAYLANDSINK_APPSINK) {
+    gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, tee, waylandsink_queue, appsink_queue, waylandsink, appsink, NULL);
+    gst_element_link_many(appsrc, decode, tee, NULL);
+    gst_element_link_many(waylandsink_queue, waylandsink, NULL);
+    gst_element_link_many(appsink_queue, appsink, NULL);
+
+    tee_waylandsink_pad = gst_element_get_request_pad(tee, "src_%u");
+    DEBUG_PRINT ("Obtained request pad %s for waylandsink branch.", gst_pad_get_name(tee_waylandsink_pad));
+    waylandsink_pad = gst_element_get_static_pad(waylandsink_queue, "sink");
+    tee_appsink_pad = gst_element_get_request_pad(tee, "src_%u");
+    DEBUG_PRINT ("Obtained request pad %s for appsink branch.", gst_pad_get_name(tee_appsink_pad));
+    appsink_pad = gst_element_get_static_pad(appsink_queue, "sink");
+    gst_pad_link(tee_waylandsink_pad, waylandsink_pad);
+    gst_pad_link(tee_appsink_pad, appsink_pad);
+  } else if (sink_type == SECURE_APPSINK) {
+    gst_bin_add_many(GST_BIN(pipeline), appsrc, decode, appsink, NULL);
+    gst_element_link_many(appsrc, decode, appsink, NULL);
+  }
+
+  if (code_type == 3) {
     g_mutex_lock (&appsrc_struct->file_lock);
     Parse_Ivf_File();
     g_mutex_unlock (&appsrc_struct->file_lock);
   }
 
   g_signal_connect(G_OBJECT(appsrc), "need-data", G_CALLBACK(onNeedData), appsrc_struct);
-  g_signal_connect(G_OBJECT(appsink), "new-sample", G_CALLBACK(onNewSample), appsrc_struct);
+  if (sink_type != SECURE_WAYLANDSINK) {
+    g_signal_connect(G_OBJECT(appsink), "new-sample", G_CALLBACK(onNewSample), appsrc_struct);
+  }
 
   GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
   bus_watch_id = gst_bus_add_watch (bus, msg_handler, appsrc_struct);
@@ -929,12 +997,12 @@ int main(int argc, char **argv)
   g_mutex_clear (&appsrc_struct->secure_copy_lock);
   g_cond_clear (&appsrc_struct->buf_cond);
   g_queue_free (appsrc_struct->sec_buf_queue);
-#ifdef SECURE_PLAYBACK
-  crypto_deinit (appsrc_struct->crypto);
-  g_free (appsrc_struct->crypto);
-#endif
-  g_free(appsrc_struct);
+  if (secure_mode) {
+    crypto_deinit (appsrc_struct->crypto);
+    g_free (appsrc_struct->crypto);
+  }
 
+  g_free(appsrc_struct);
   if (input_fp) {
     fclose(input_fp);
     input_fp = NULL;
