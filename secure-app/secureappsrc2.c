@@ -36,6 +36,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
+#include <gst/video/gstvideometa.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -165,8 +166,6 @@ RETRY:
     g_mutex_unlock (&secureappsrc->buf_lock);
     GST_DEBUG ("cond waited");
     goto RETRY;
-  } else {
-
   }
 
   g_mutex_unlock (&secureappsrc->buf_lock);
@@ -212,6 +211,12 @@ RETRY:
   }
 }
 
+#define SIG_OF_QVMETA(vmeta)	(unsigned int)((vmeta)->offset[2])
+#define DATASZ_OF_QVMETA(vmeta)	(unsigned int)((vmeta)->offset[3])
+#define FD_OF_QVMETA(vmeta)		(int)((vmeta)->stride[2])
+#define SECURE_MAKE_FOURCC(a,b,c,d) \
+  ( (guint32)(a) | ((guint32) (b)) << 8  | ((guint32) (c)) << 16 | ((guint32) (d)) << 24 )
+
 static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc)
 {
   GstSample *sample;
@@ -225,14 +230,16 @@ static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc
   g_signal_emit_by_name(appsink, "pull-sample", &sample);
   if (sample) {
     buffer = gst_sample_get_buffer(sample);
-    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-      GST_DEBUG("gst map data size:%d \n", map.size);
 #ifdef SECURE_PLAYBACK
-      sec_ion_buf = (OMX_BUFFERHEADERTYPE *)map.data;
-      length = sec_ion_buf->nFilledLen;
+    int secure_fd = 0;
+    GstVideoMeta* meta = gst_buffer_get_video_meta(buffer);
+    if (meta && meta->n_planes <= 2 && SIG_OF_QVMETA(meta) == SECURE_MAKE_FOURCC('Q','a','U','T')) {
+      secure_fd = FD_OF_QVMETA(meta);
+      length = DATASZ_OF_QVMETA(meta);
+      GST_DEBUG("Found QVMeta signature, fd %d, size %d", secure_fd, length);
       g_mutex_lock (&secureappsrc->secure_copy_lock);
       SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_SECURE_TO_NONSECURE,
-        output_nonsecure_buffer, (unsigned long)sec_ion_buf->pBuffer, &length);
+        output_nonsecure_buffer, (unsigned long)secure_fd, &length);
       g_mutex_unlock (&secureappsrc->secure_copy_lock);
       if (ret1 != SECURE_COPY_SUCCESS) {
         GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", sec_ion_buf->pBuffer);
@@ -240,19 +247,23 @@ static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc
 
       //yuv data is NV12_UBWC format
       ret = fwrite(output_nonsecure_buffer, 1, length, output_fp);
+    } else {
+      GST_ERROR("Unable to read QVMeta from buffer %p.", buffer);
+    }
 #else
+    if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
       //yuv data is NV12_UBWC format
       length = map.size;
       ret = fwrite(map.data, 1, length, output_fp);
-#endif
-      if (ret == length) {
-        GST_DEBUG("Successed to write %d bytes to the file ", ret);
-      } else {
-        GST_ERROR("Failed to write to the file, want %d bytes, ret %d", length, ret);
-      }
       gst_buffer_unmap (buffer, &map);
     } else {
       GST_ERROR("gst buffer map error");
+    }
+#endif
+    if (ret == length) {
+      GST_DEBUG("Successed to write %d bytes to the file ", ret);
+    } else {
+      GST_ERROR("Failed to write to the file, want %d bytes, ret %d", length, ret);
     }
     gst_sample_unref(sample);
     return GST_FLOW_OK;
