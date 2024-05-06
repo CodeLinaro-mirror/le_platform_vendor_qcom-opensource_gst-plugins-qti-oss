@@ -123,7 +123,6 @@ typedef struct _secureappsrc {
   GMainLoop *loop;
   GQueue *sec_buf_queue;
   Crypto *crypto;
-  GMutex file_lock;
   GMutex buf_lock;
   GMutex secure_copy_lock;
   GCond buf_cond;
@@ -139,7 +138,10 @@ static int64_t timeStamp_fromIVF = -1;
 static uint32_t ts_scaler_fromIVF_d = 0;
 static uint32_t ts_scaler_fromIVF_n = 0;
 static float fps = 30.0;
+static uint64_t pts = 0;
+static uint32_t timestampInterval = 33333333;  //ns
 static gboolean secure_mode = TRUE;
+static gboolean fps_setting = FALSE;
 
 static int (*Read_Buffer)(uint8_t *data);
 
@@ -162,7 +164,6 @@ static void onNeedData(GstElement *appsrc, guint dataSize, secureappsrc *securea
   int len = 0;
   OMX_BUFFERHEADERTYPE *free_sec_ion_buf = NULL;
 
-  g_mutex_lock (&secureappsrc->file_lock);
 RETRY:
   g_mutex_lock (&secureappsrc->buf_lock);
   free_sec_ion_buf = (OMX_BUFFERHEADERTYPE *)g_queue_pop_head (secureappsrc->sec_buf_queue);
@@ -179,7 +180,6 @@ RETRY:
     free_sec_ion_buf, free_sec_ion_buf->nFilledLen, free_sec_ion_buf->nAllocLen, free_sec_ion_buf->pBuffer, length);
   length = Read_Buffer(input_nonsecure_buffer);
   free_sec_ion_buf->nFilledLen = length;
-  g_mutex_unlock (&secureappsrc->file_lock);
   if (length > 0) {
     if (secure_mode) {
       g_mutex_lock (&secureappsrc->secure_copy_lock);
@@ -208,6 +208,22 @@ RETRY:
       free_sec_ion_buf->nFilledLen, free_sec_ion_buf->nAllocLen, free_sec_ion_buf->pBuffer, length);
     buffer = gst_buffer_new_allocate(NULL, sizeof(OMX_BUFFERHEADERTYPE*), NULL);
     gst_buffer_fill (buffer, 0, &free_sec_ion_buf, sizeof(OMX_BUFFERHEADERTYPE*));
+
+    //For IVF file, use TS from file if fps is not set
+    if (Read_Buffer == Read_Buffer_From_Ivf_File) {
+      if (timeStamp_fromIVF >= 0) {
+        GST_BUFFER_PTS(buffer) = timeStamp_fromIVF;
+      }else{
+        GST_ERROR("TS from IVF has eror %lld", timeStamp_fromIVF);
+      }
+    }
+
+    //calculate pts by setting fps
+    if (fps_setting) {
+      GST_BUFFER_PTS(buffer) = pts;
+      pts += timestampInterval;
+    }
+
     gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
   }
   else
@@ -723,13 +739,13 @@ static int Read_Buffer_From_Ivf_File(uint8_t *data)
   }
 
   if (ts_scaler_fromIVF_d != 0 && ts_scaler_fromIVF_n != 0) {
-    timeStamp_fromIVF = frame_ts * 1000000 * ts_scaler_fromIVF_n / ts_scaler_fromIVF_d;
+    timeStamp_fromIVF = frame_ts * 1000000000 * ts_scaler_fromIVF_n / ts_scaler_fromIVF_d;
   }
 
   return bytes_read;
 }
 
-static int Parse_Ivf_File()
+static int Parse_Ivf_FileHeader()
 {
   unsigned char ivfheader[32] = {0};
   int width;
@@ -780,18 +796,20 @@ static int Parse_Ivf_File()
 static void print_usage(void)
 {
   printf ("Error command line argument passed, should be:\n");
-  printf ("secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path]\n");
+  printf ("secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path] [f:fps]\n");
   printf ("codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf\n");
   printf ("width:             video's width\n");
   printf ("height:            video's height\n");
   printf ("stream file path:  input video file path\n");
   printf ("m0|m1:             m0:secure mode(default); m1:common mode\n");
-  printf ("s0|s1|s2:          so:waylandsink(default); s1:waylandsink+appsink; s2:appsink\n");
+  printf ("s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink\n");
   printf ("o:outputfile path: output file path when s1 or s2, default is output.ubwc\n");
+  printf ("f:fps:             video's fps, valid for no B frame video, default is unavailable\n");
   printf ("example:\n");
   printf ("secureappsrc2 1 1920 1080 test.h264\n");
   printf ("secureappsrc2 2 1920 1080 test.h265 s1 m1\n");
   printf ("secureappsrc2 3 1920 1080 vp9.ivf m1 s2 o:/data/output.dat\n");
+  printf ("secureappsrc2 1 640 480 IPonly.h264 s0 m1 f:29.97\n");
 }
 
 int main(int argc, char **argv)
@@ -851,49 +869,94 @@ int main(int argc, char **argv)
         char *filename = argv[5 + i];
         memset(outputfilename, 0, sizeof(filename));
         memcpy(outputfilename, &filename[2], strlen(filename) - 2);
+      } else if (!memcmp(argv[5 + i], "f:", 2)) {
+        //remove pre "f:"
+        char *fps_str = argv[5 + i];
+        fps = atof(&fps_str[2]);
+        timestampInterval = round(1000000000/fps);  //ns
+        fps_setting = TRUE;
+        printf ("setting fps:%.2f, timestampInterval:%d\n", fps, timestampInterval);
       }
       i++;
     }
+
     if (code_type > 4 || code_type < 1 || stream_file == NULL) {
       printf ("code_type or stream file input error\n");
       return 0;
-    } else {
-      switch (code_type) {
-        case 1:
-          Read_Buffer = Read_Buffer_From_H264_Start_Code_File;
-          snprintf(in_caps, sizeof(in_caps), "video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, \
-            width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
-            bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
-          break;
-        case 2:
-          Read_Buffer = Read_Buffer_From_H265_Start_Code_File;
-          snprintf(in_caps, sizeof(in_caps), "video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, \
-            width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
-            bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
-          break;
-        case 3:
-          Read_Buffer = Read_Buffer_From_Ivf_File;
-          snprintf(in_caps, sizeof(in_caps), "video/x-vp9, stream-format=(string)byte-stream, alignment=(string)au, \
-            width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
-            bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
-          break;
-      }
     }
   }
 
   secure_debug_level_init();
+  switch (code_type) {
+    case 1:
+      Read_Buffer = Read_Buffer_From_H264_Start_Code_File;
+      snprintf(in_caps, sizeof(in_caps), "video/x-h264, stream-format=(string)byte-stream, alignment=(string)au, \
+        width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
+        bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
+      break;
+    case 2:
+      Read_Buffer = Read_Buffer_From_H265_Start_Code_File;
+      snprintf(in_caps, sizeof(in_caps), "video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, \
+        width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
+        bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
+      break;
+    case 3:
+      Read_Buffer = Read_Buffer_From_Ivf_File;
+      snprintf(in_caps, sizeof(in_caps), "video/x-vp9, stream-format=(string)byte-stream, alignment=(string)au, \
+        width=(int)%d, height=(int)%d, interlace-mode=(string)progressive, chroma-format=(string)4:2:0, \
+        bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, parsed=(boolean)true", width, height);
+      break;
+  }
+
   input_fp = fopen( stream_file , "r" );
-  max_input_buffer_size = (width * height * 3 / 2) / 2;
-  input_nonsecure_buffer = g_malloc0(max_input_buffer_size);
+  if (!input_fp) {
+    printf ("Failed to open input file\n");
+    return 0;
+  }
 
   if(sink_type != SECURE_WAYLANDSINK) {
     output_fp = fopen (outputfilename, "wb");
+    if (!output_fp) {
+      fclose(input_fp);
+      input_fp = NULL;
+      printf ("Failed to open output file\n");
+      return 0;
+    }
   }
+
+  max_input_buffer_size = (width * height * 3 / 2) / 2;
+  input_nonsecure_buffer = g_malloc0(max_input_buffer_size);
+  if(!input_nonsecure_buffer) {
+    fclose(input_fp);
+    input_fp = NULL;
+    if (output_fp) {
+      fclose(output_fp);
+      output_fp = NULL;
+    }
+    printf ("Failed to malloc input none secure buffer\n");
+    return 0;
+  }
+
   max_output_buffer_size = width * height * 4;
   output_nonsecure_buffer = g_malloc0(max_output_buffer_size);
+  if (!output_nonsecure_buffer) {
+    fclose(input_fp);
+    input_fp = NULL;
+    if (output_fp) {
+      fclose(output_fp);
+      output_fp = NULL;
+    }
+    g_free(input_nonsecure_buffer);
+    input_nonsecure_buffer = NULL;
+    printf ("Failed to malloc output none secure buffer\n");
+    return 0;
+  }
+
+  if (code_type == 3) {
+    Parse_Ivf_FileHeader();
+  }
 
   secureappsrc *appsrc_struct = g_new0(secureappsrc, 1);
-  g_mutex_init (&appsrc_struct->file_lock);
   g_mutex_init (&appsrc_struct->buf_lock);
   g_mutex_init (&appsrc_struct->secure_copy_lock);
   g_cond_init (&appsrc_struct->buf_cond);
@@ -969,12 +1032,6 @@ int main(int argc, char **argv)
     gst_element_link_many(appsrc, decode, appsink, NULL);
   }
 
-  if (code_type == 3) {
-    g_mutex_lock (&appsrc_struct->file_lock);
-    Parse_Ivf_File();
-    g_mutex_unlock (&appsrc_struct->file_lock);
-  }
-
   g_signal_connect(G_OBJECT(appsrc), "need-data", G_CALLBACK(onNeedData), appsrc_struct);
   if (sink_type != SECURE_WAYLANDSINK) {
     g_signal_connect(G_OBJECT(appsink), "new-sample", G_CALLBACK(onNewSample), appsrc_struct);
@@ -992,7 +1049,6 @@ int main(int argc, char **argv)
   g_source_remove (bus_watch_id);
 
   g_main_loop_unref(loop);
-  g_mutex_clear (&appsrc_struct->file_lock);
   g_mutex_clear (&appsrc_struct->buf_lock);
   g_mutex_clear (&appsrc_struct->secure_copy_lock);
   g_cond_clear (&appsrc_struct->buf_cond);

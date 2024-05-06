@@ -23,7 +23,7 @@ The demo also supports dumping decoded data to file.
 
 Now the demo supports h264/h265 raw stream and vp9 ivf format.
 
-secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path]
+secureappsrc2 <codec-id> <width> <height> <stream file path> [m0|m1] [s0|s1|s2] [o:output file path] [f:fps]
 
 codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf
 width:             video's width
@@ -32,10 +32,12 @@ stream file path:  input video file path
 m0|m1:             m0:secure mode(default); m1:common mode
 s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink
 o:outputfile path: output file path when s1 or s2, default is output.ubwc
+f:fps:             video's fps, valid for no B frame video, default is unavailable
 
 secureappsrc2 1 1920 1080 test.h264
 secureappsrc2 2 1920 1080 test.h265 s1 m1
 secureappsrc2 3 1920 1080 vp9.ivf m1 s2 o:/data/output.dat
+secureappsrc2 1 640 480 IPonly.h264 s0 m1 f:29.97
 
 Some definitions in the project have been replaced by self-defined ones.
 Please make sure the alignment of some definitions:
