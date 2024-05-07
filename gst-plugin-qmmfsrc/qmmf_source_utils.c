@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -637,6 +637,33 @@ gst_qmmfsrc_frc_mode_get_type (void)
 
   return gtype;
 }
+
+#ifdef EIS_MODES_ENABLE
+GType
+gst_qmmfsrc_eis_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { EIS_OFF,
+        "EIS is not applied.", "eis-off"
+    },
+    { EIS_ON_SINGLE_STREAM,
+        "EIS is applied on first stream.", "eis-on-single-stream"
+    },
+    { EIS_ON_DUAL_STREAM,
+        "EIS is applied on both streams in case of two streams use case, "
+        "undefined behavior for more than two streams use case.",
+        "eis-on-dual-stream"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstEisMode", variants);
+
+  return gtype;
+}
+#endif // EIS_MODES_ENABLE
 
 GType
 gst_qmmfsrc_rotate_get_type (void)
