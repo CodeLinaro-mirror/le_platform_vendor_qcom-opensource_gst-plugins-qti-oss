@@ -1047,6 +1047,7 @@ int main(int argc, char **argv)
   gst_element_set_state(pipeline, GST_STATE_NULL);
   printf ("pipeline set null\n");
   g_source_remove (bus_watch_id);
+  gst_object_unref (GST_OBJECT (pipeline));
 
   g_main_loop_unref(loop);
   g_mutex_clear (&appsrc_struct->buf_lock);
