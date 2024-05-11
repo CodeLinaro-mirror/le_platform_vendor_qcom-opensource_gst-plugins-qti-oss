@@ -875,7 +875,7 @@ int main(int argc, char **argv)
         fps = atof(&fps_str[2]);
         timestampInterval = round(1000000000/fps);  //ns
         fps_setting = TRUE;
-        printf ("setting fps:%.2f, timestampInterval:%d\n", fps, timestampInterval);
+        printf ("setting fps:%.2f, timestampInterval:%dns\n", fps, timestampInterval);
       }
       i++;
     }
@@ -957,15 +957,29 @@ int main(int argc, char **argv)
   }
 
   secureappsrc *appsrc_struct = g_new0(secureappsrc, 1);
+  if (secure_mode) {
+    appsrc_struct->crypto = (Crypto*)g_new0(Crypto, 1);
+    if (crypto_init (appsrc_struct->crypto)) {
+      printf("Secure issue: crypto init failed !!!\n");
+      fclose(input_fp);
+      input_fp = NULL;
+      if (output_fp) {
+        fclose(output_fp);
+        output_fp = NULL;
+      }
+      g_free(input_nonsecure_buffer);
+      input_nonsecure_buffer = NULL;
+      g_free(output_nonsecure_buffer);
+      output_nonsecure_buffer = NULL;
+      g_free(appsrc_struct);
+      return 0;
+    }
+  }
   g_mutex_init (&appsrc_struct->buf_lock);
   g_mutex_init (&appsrc_struct->secure_copy_lock);
   g_cond_init (&appsrc_struct->buf_cond);
   appsrc_struct->sec_buf_queue = g_queue_new ();
 
-  if (secure_mode) {
-    appsrc_struct->crypto = (Crypto*)g_new0(Crypto, 1);
-    crypto_init (appsrc_struct->crypto);
-  }
 
   loop = g_main_loop_new(NULL, FALSE);
   appsrc_struct->loop = loop;
@@ -1079,5 +1093,7 @@ int main(int argc, char **argv)
     g_free(output_nonsecure_buffer);
     output_nonsecure_buffer = NULL;
   }
+
+  printf("\nProgram is finished!\n");
   return 0;
 }

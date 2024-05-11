@@ -35,6 +35,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "crypto.h"
 #include <dlfcn.h>
+#include <stdio.h>
 
 #define SymOEMCryptoLib "libcontentcopy.so"
 #define SymOEMCryptoAppName "smpcpyap64"
@@ -42,6 +43,18 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define SymOEMCryptoInit "Content_Protection_Copy_Init"
 #define SymOEMCryptoTerminate "Content_Protection_Copy_Terminate"
 #define SymOEMCryptoCopy "Content_Protection_Copy"
+
+static char dlerr_cached_str[512] = {0};
+char* dlerr_tip()
+{
+    //As dlerror() will clean that error string once it's called, need cache the string if need call dlerror() multiple times for one error
+    char* new_err = dlerror();
+    if (new_err) {
+      snprintf(dlerr_cached_str, sizeof(dlerr_cached_str), "%s", new_err);
+    }
+    return dlerr_cached_str;
+}
+
 
 OMX_ERRORTYPE crypto_init(Crypto *crypto) {
 
@@ -52,6 +65,7 @@ OMX_ERRORTYPE crypto_init(Crypto *crypto) {
     crypto->m_crypto_deinit = NULL;
     crypto->m_crypto_copy = NULL;
     GST_DEBUG ("Crypto init");
+    printf ("Crypto init\n");
     OMX_ERRORTYPE result = load_crypto_lib(crypto);
     if (result == OMX_ErrorNone) {
         if (crypto->m_crypto_init) {
@@ -60,10 +74,12 @@ OMX_ERRORTYPE crypto_init(Crypto *crypto) {
                 result = (OMX_ERRORTYPE)crypto->m_crypto_set_appname(SymOEMCryptoAppName);
             } else {
                 GST_ERROR("Invalid method handle to OEMCryptoSetAppName");
+                printf("Invalid method handle to OEMCryptoSetAppName\n");
                 result = OMX_ErrorBadParameter;
             }
         } else {
             GST_ERROR("Invalid method handle to OEMCryptoInit");
+            printf("Invalid method handle to OEMCryptoInit\n");
             result = OMX_ErrorBadParameter;
         }
     }
@@ -78,6 +94,7 @@ OMX_ERRORTYPE crypto_deinit(Crypto *crypto) {
         result = (OMX_ERRORTYPE)crypto->m_crypto_deinit(&crypto->m_secure_handle);
     } else {
         GST_ERROR("Invalid method handle to OEMCryptoTerminate");
+        printf("Invalid method handle to OEMCryptoTerminate\n");
         result = OMX_ErrorBadParameter;
     }
     unload_crypto_lib(crypto);
@@ -93,17 +110,23 @@ OMX_ERRORTYPE crypto_copy(Crypto *crypto, SecureCopyDir eCopyDir,
 
     if (crypto->m_crypto_copy == NULL) {
         GST_ERROR("Invalid method handle to OEMCryptoCopy");
+        printf("Invalid method handle to OEMCryptoCopy\n");
         return OMX_ErrorBadParameter;
     }
 
     GST_DEBUG ("CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d",
         (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir);
+    //printf ("CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d\n",
+    //    (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir);
     result = crypto->m_crypto_copy(crypto->m_secure_handle, pBuffer, nBufferSize,
             nBufferFd, 0, &nBytesCopied, eCopyDir);
 
     if (result != SECURE_COPY_SUCCESS) {
         GST_ERROR(
             "Error in CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d result:%d",
+            (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir, result);
+        printf(
+            "Error in CryptoCopy, fd: %u, buf: %p, size: %u, byte_ct: %u, copy_dir: %d result:%d\n",
             (unsigned int)nBufferFd, pBuffer, (unsigned int)nBufferSize, (unsigned int)nBytesCopied, eCopyDir, result);
         return OMX_ErrorBadParameter;
     }
@@ -118,35 +141,41 @@ OMX_ERRORTYPE load_crypto_lib(Crypto *crypto) {
     OMX_ERRORTYPE result = OMX_ErrorNone;
 
     GST_DEBUG ("Loading crypto lib");
+    printf ("Loading crypto lib\n");
 
     crypto->m_lib_handle = dlopen(SymOEMCryptoLib, RTLD_NOW);
     if (crypto->m_lib_handle == NULL) {
-        GST_ERROR("Failed to open %s, error : %s", SymOEMCryptoLib, dlerror());
+        GST_ERROR("Failed to open %s, error : %s", SymOEMCryptoLib, dlerr_tip());
+        printf("Failed to open %s, error : %s\n", SymOEMCryptoLib, dlerr_tip());
         return OMX_ErrorUndefined;
     }
 
     crypto->m_crypto_set_appname = (Crypto_Set_AppName)dlsym(crypto->m_lib_handle, SymOEMCryptoSetAppName);
     if (crypto->m_crypto_set_appname == NULL) {
-        GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerror());
+        GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerr_tip());
+        printf("Failed to find symbol for OEMCryptoInit: %s\n", dlerr_tip());
         result = OMX_ErrorUndefined;
     }
 
     crypto->m_crypto_init = (Crypto_Init)dlsym(crypto->m_lib_handle, SymOEMCryptoInit);
     if (crypto->m_crypto_init == NULL) {
-        GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerror());
+        GST_ERROR("Failed to find symbol for OEMCryptoInit: %s", dlerr_tip());
+        printf("Failed to find symbol for OEMCryptoInit: %s\n", dlerr_tip());
         result = OMX_ErrorUndefined;
     }
     if (result == OMX_ErrorNone) {
         crypto->m_crypto_deinit = (Crypto_Deinit)dlsym(crypto->m_lib_handle, SymOEMCryptoTerminate);
         if (crypto->m_crypto_deinit == NULL) {
-            GST_ERROR("Failed to find symbol for OEMCryptoTerminate: %s", dlerror());
+            GST_ERROR("Failed to find symbol for OEMCryptoTerminate: %s", dlerr_tip());
+            printf("Failed to find symbol for OEMCryptoTerminate: %s\n", dlerr_tip());
             result = OMX_ErrorUndefined;
         }
     }
     if (result == OMX_ErrorNone) {
         crypto->m_crypto_copy = (Crypto_Copy)dlsym(crypto->m_lib_handle, SymOEMCryptoCopy);
         if (crypto->m_crypto_copy == NULL) {
-            GST_ERROR("Failed to find symbol for OEMCryptoCopy: %s", dlerror());
+            GST_ERROR("Failed to find symbol for OEMCryptoCopy: %s", dlerr_tip());
+            printf("Failed to find symbol for OEMCryptoCopy: %s\n", dlerr_tip());
             result = OMX_ErrorUndefined;
         }
     }
