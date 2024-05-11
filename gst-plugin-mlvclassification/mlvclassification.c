@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -113,11 +113,15 @@ G_DEFINE_TYPE (GstMLVideoClassification, gst_ml_video_classification,
 #define GST_ML_VIDEO_CLASSIFICATION_SINK_CAPS \
     "neural-network/tensors"
 
-#define DEFAULT_PROP_MODULE        0
-#define DEFAULT_PROP_LABELS        NULL
-#define DEFAULT_PROP_NUM_RESULTS   5
-#define DEFAULT_PROP_THRESHOLD     10.0F
+#define GST_TYPE_VIDEO_CLASSIFICATION_OPERATION \
+    (gst_ml_video_classification_xtra_opration_get_type())
 
+#define DEFAULT_PROP_MODULE           0
+#define DEFAULT_PROP_LABELS           NULL
+#define DEFAULT_PROP_NUM_RESULTS      5
+#define DEFAULT_PROP_THRESHOLD        10.0F
+#define DEFAULT_PROP_CONSTANTS        NULL
+#define DEFAULT_PROP_EXTRA_OPERATION  GST_VIDEO_CLASSIFICATION_OPERATION_NONE
 
 #define DEFAULT_MIN_BUFFERS        2
 #define DEFAULT_MAX_BUFFERS        10
@@ -138,6 +142,8 @@ enum
   PROP_LABELS,
   PROP_NUM_RESULTS,
   PROP_THRESHOLD,
+  PROP_CONSTANTS,
+  PROP_EXTRA_OPERATIONS,
 };
 
 enum {
@@ -202,6 +208,26 @@ gst_ml_modules_get_type (void)
 
   variants = gst_ml_enumarate_modules ("ml-vclassification-");
   gtype = g_enum_register_static ("GstMLVideoClassificationModules", variants);
+
+  return gtype;
+}
+
+static GType
+gst_ml_video_classification_xtra_opration_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue methods[] = {
+    { GST_VIDEO_CLASSIFICATION_OPERATION_NONE,
+        "No extra operation", "none"
+    },
+    { GST_VIDEO_CLASSIFICATION_OPERATION_SOFTMAX,
+        "SoftMax operation", "softmax"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstVideoClassificationOperation", methods);
 
   return gtype;
 }
@@ -853,7 +879,13 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
       GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
       GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, classification->labels,
       GST_ML_MODULE_OPT_THRESHOLD, G_TYPE_DOUBLE, classification->threshold,
+      GST_ML_MODULE_OPT_XTRA_OPERATION, G_TYPE_ENUM, classification->operation,
       NULL);
+
+  if (classification->mlconstants != NULL) {
+    gst_structure_set (structure, GST_ML_MODULE_OPT_CONSTANTS,
+        GST_TYPE_STRUCTURE, classification->mlconstants, NULL);
+  }
 
   if (!gst_ml_module_set_opts (classification->module, structure)) {
     GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
@@ -981,6 +1013,62 @@ gst_ml_video_classification_set_property (GObject * object, guint prop_id,
     case PROP_THRESHOLD:
       classification->threshold = g_value_get_double (value);
       break;
+    case PROP_CONSTANTS:
+    {
+      const gchar *input = g_value_get_string (value);
+      GValue value = G_VALUE_INIT;
+
+      g_value_init (&value, GST_TYPE_STRUCTURE);
+
+      if (g_file_test (input, G_FILE_TEST_IS_REGULAR)) {
+        GString *string = NULL;
+        GError *error = NULL;
+        gchar *contents = NULL;
+        gboolean success = FALSE;
+
+        if (!g_file_get_contents (input, &contents, NULL, &error)) {
+          GST_ERROR ("Failed to get file contents, error: %s!",
+              GST_STR_NULL (error->message));
+          g_clear_error (&error);
+          break;
+        }
+
+        // Remove trailing space and replace new lines with a comma delimiter.
+        contents = g_strstrip (contents);
+        contents = g_strdelimit (contents, "\n", ',');
+
+        string = g_string_new (contents);
+        g_free (contents);
+
+        // Add opening and closing brackets.
+        string = g_string_prepend (string, "{ ");
+        string = g_string_append (string, " }");
+
+        // Get the raw character data.
+        contents = g_string_free (string, FALSE);
+
+        success = gst_value_deserialize (&value, contents);
+        g_free (contents);
+
+        if (!success) {
+          GST_ERROR ("Failed to deserialize file contents!");
+          break;
+        }
+      } else if (!gst_value_deserialize (&value, input)) {
+        GST_ERROR ("Failed to deserialize string!");
+        break;
+      }
+
+      if (classification->mlconstants != NULL)
+        gst_structure_free (classification->mlconstants);
+
+      classification->mlconstants = GST_STRUCTURE (g_value_dup_boxed (&value));
+      g_value_unset (&value);
+      break;
+    }
+    case PROP_EXTRA_OPERATIONS:
+      classification->operation = g_value_get_enum (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1006,6 +1094,20 @@ gst_ml_video_classification_get_property (GObject * object, guint prop_id,
     case PROP_THRESHOLD:
       g_value_set_double (value, classification->threshold);
       break;
+    case PROP_CONSTANTS:
+    {
+      gchar *string = NULL;
+
+      if (classification->mlconstants != NULL)
+        string = gst_structure_to_string (classification->mlconstants);
+
+      g_value_set_string (value, string);
+      g_free (string);
+      break;
+    }
+    case PROP_EXTRA_OPERATIONS:
+      g_value_set_enum (value, classification->operation);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1026,6 +1128,9 @@ gst_ml_video_classification_finalize (GObject * object)
     gst_object_unref (classification->outpool);
 
   g_free (classification->labels);
+
+  if (classification->mlconstants != NULL)
+    gst_structure_free (classification->mlconstants);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (classification));
 }
@@ -1060,6 +1165,18 @@ gst_ml_video_classification_class_init (GstMLVideoClassificationClass * klass)
       g_param_spec_double ("threshold", "Threshold",
           "Confidence threshold in %", 10.0F, 100.0F, DEFAULT_PROP_THRESHOLD,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CONSTANTS,
+      g_param_spec_string ("constants", "Constants",
+          "Constants, offsets and coefficients used by the chosen module for "
+          "post-processing of incoming tensors in GstStructure string format. "
+          "Applicable only for some modules.",
+          DEFAULT_PROP_CONSTANTS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_EXTRA_OPERATIONS,
+      g_param_spec_enum ("extra-operation", "Extra Operation",
+          "Extra operation to perform on the inference data",
+          GST_TYPE_VIDEO_CLASSIFICATION_OPERATION,
+          GST_VIDEO_CLASSIFICATION_OPERATION_NONE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,
       "Machine Learning image classification", "Filter/Effect/Converter",
@@ -1094,6 +1211,8 @@ gst_ml_video_classification_init (GstMLVideoClassification * classification)
   classification->labels = DEFAULT_PROP_LABELS;
   classification->n_results = DEFAULT_PROP_NUM_RESULTS;
   classification->threshold = DEFAULT_PROP_THRESHOLD;
+  classification->mlconstants = DEFAULT_PROP_CONSTANTS;
+  classification->operation = DEFAULT_PROP_EXTRA_OPERATION;
 
   // Handle buffers with GAP flag internally.
   gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM (classification), TRUE);

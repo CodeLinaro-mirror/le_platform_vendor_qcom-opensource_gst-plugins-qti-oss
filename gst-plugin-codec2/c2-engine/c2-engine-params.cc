@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -52,6 +52,36 @@ static const std::unordered_map<std::string, uint32_t> kH265Profiles = {
   { "main-still-picture", GST_C2_PROFILE_HEVC_MAIN_STILL },
 };
 
+static const std::unordered_map<std::string, uint32_t> kAACProfiles = {
+  { "lc", GST_C2_PROFILE_AAC_LC },
+  { "main", GST_C2_PROFILE_AAC_MAIN },
+  { "ssr", GST_C2_PROFILE_AAC_SSR },
+  { "ltp", GST_C2_PROFILE_AAC_LTP },
+  { "he", GST_C2_PROFILE_AAC_HE },
+  { "scalable", GST_C2_PROFILE_AAC_SCALABLE },
+  { "er-lc", GST_C2_PROFILE_AAC_ER_LC },
+  { "er-scalable", GST_C2_PROFILE_AAC_ER_SCALABLE },
+  { "ld", GST_C2_PROFILE_AAC_LD },
+  { "he-ps", GST_C2_PROFILE_AAC_HE_PS },
+  { "eld", GST_C2_PROFILE_AAC_ELD },
+  { "xhe", GST_C2_PROFILE_AAC_XHE },
+};
+
+static const std::unordered_map<uint32_t, uint32_t> kAACProfilesAOT = {
+  { GST_C2_PROFILE_AAC_LC, AOT_AAC_LC },
+  { GST_C2_PROFILE_AAC_MAIN, AOT_AAC_MAIN },
+  { GST_C2_PROFILE_AAC_SSR, AOT_AAC_SSR },
+  { GST_C2_PROFILE_AAC_LTP, AOT_AAC_LTP },
+  { GST_C2_PROFILE_AAC_HE, AOT_AAC_LC },
+  { GST_C2_PROFILE_AAC_SCALABLE, AOT_AAC_SCALABLE },
+  { GST_C2_PROFILE_AAC_ER_LC, AOT_ER_AAC_LC },
+  { GST_C2_PROFILE_AAC_ER_SCALABLE, AOT_ER_AAC_SCALABLE },
+  { GST_C2_PROFILE_AAC_LD, AOT_ER_AAC_LD },
+  { GST_C2_PROFILE_AAC_HE_PS, AOT_AAC_LC },
+  { GST_C2_PROFILE_AAC_ELD, AOT_ER_AAC_ELD },
+  { GST_C2_PROFILE_AAC_XHE, AOT_AAC_LC },
+};
+
 static const std::unordered_map<std::string, uint32_t> kH264Levels = {
   { "1", GST_C2_LEVEL_AVC_1 },
   { "1b", GST_C2_LEVEL_AVC_1B },
@@ -102,6 +132,11 @@ static const std::unordered_map<std::string, uint32_t> kH265HighLevels = {
   { "6.2", GST_C2_LEVEL_HEVC_HIGH_6_2 },
 };
 
+static const std::unordered_map<std::string, uint32_t> kAACLevels = {
+  { "1", GST_C2_LEVEL_UNUSED },
+  { "2", GST_C2_LEVEL_UNUSED },
+};
+
 guint
 gst_c2_utils_h264_profile_from_string (const gchar * profile)
 {
@@ -116,6 +151,15 @@ gst_c2_utils_h265_profile_from_string (const gchar * profile)
 {
   if (kH265Profiles.count(profile) != 0)
     return kH265Profiles.at(profile);
+
+  return GST_C2_PROFILE_INVALID;
+}
+
+guint
+gst_c2_utils_aac_profile_from_string (const gchar * profile)
+{
+  if (kAACProfiles.count(profile) != 0)
+    return kAACProfiles.at(profile);
 
   return GST_C2_PROFILE_INVALID;
 }
@@ -138,6 +182,24 @@ gst_c2_utils_h265_profile_to_string (guint profile)
   return (it != kH265Profiles.end()) ? it->first.c_str() : NULL;
 }
 
+const gchar *
+gst_c2_utils_aac_profile_to_string (guint profile)
+{
+  auto it = std::find_if(kAACProfiles.begin(), kAACProfiles.end(),
+      [&](const auto& m) { return m.second == profile; });
+
+  return (it != kAACProfiles.end()) ? it->first.c_str() : NULL;
+}
+
+guint
+gst_c2_utils_aac_profile_to_aot (guint profile)
+{
+  if (kAACProfilesAOT.count(profile) != 0)
+    return kAACProfilesAOT.at(profile);
+
+  return AOT_INVALID;
+}
+
 guint
 gst_c2_utils_h264_level_from_string (const gchar * level)
 {
@@ -150,10 +212,21 @@ gst_c2_utils_h264_level_from_string (const gchar * level)
 guint
 gst_c2_utils_h265_level_from_string (const gchar * level, const gchar * tier)
 {
-  if (g_str_equal (tier, "main") && (kH265MainLevels.count(level) != 0))
+  // If tier is null, returns main level.
+  if ((tier == NULL || g_str_equal (tier, "main")) &&
+      (kH265MainLevels.count(level) != 0))
     return kH265MainLevels.at(level);
   else if (g_str_equal (tier, "high") && (kH265HighLevels.count(level) != 0))
     return kH265HighLevels.at(level);
+
+  return GST_C2_LEVEL_INVALID;
+}
+
+guint
+gst_c2_utils_aac_level_from_string (const gchar * level)
+{
+  if (kAACLevels.count(level) != 0)
+    return kAACLevels.at(level);
 
   return GST_C2_LEVEL_INVALID;
 }
@@ -183,4 +256,13 @@ gst_c2_utils_h265_level_to_string (guint level)
     return iter->first.c_str();
 
   return NULL;
+}
+
+const gchar *
+gst_c2_utils_aac_level_to_string (guint level)
+{
+  auto it = std::find_if(kAACLevels.begin(), kAACLevels.end(),
+      [&](const auto& m) { return m.second == level; });
+
+  return (it != kAACLevels.end()) ? it->first.c_str() : NULL;
 }

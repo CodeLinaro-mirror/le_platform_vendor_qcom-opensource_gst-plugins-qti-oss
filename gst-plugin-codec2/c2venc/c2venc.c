@@ -318,11 +318,12 @@ gst_c2_venc_ltr_mark (GstC2VEncoder * c2venc, guint id)
 
 static gboolean
 gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
-    GstVideoCodecState * state)
+    GstVideoCodecState * instate, GstVideoCodecState * outstate)
 {
-  GstVideoInfo *info = &state->info;
+  GstVideoInfo *info = &instate->info;
   GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, FALSE };
-  GstC2Resolution resolution = { 0, 0 };
+  GstC2Resolution inresolution = { 0, 0 };
+  GstC2Resolution outresolution = { 0, 0 };
   GstC2Gop gop = { 0, 0 };
   GstC2HeaderMode csdmode = GST_C2_PREPEND_HEADER_TO_ALL_SYNC;
   gdouble framerate = 0.0;
@@ -332,20 +333,50 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
   pixinfo.isubwc = c2venc->isubwc;
 
   success = gst_c2_engine_set_parameter (c2venc->engine,
-      GST_C2_PARAM_IN_FORMAT, GPOINTER_CAST (&pixinfo));
+      GST_C2_PARAM_IN_PIXEL_FORMAT, GPOINTER_CAST (&pixinfo));
   if (!success) {
     GST_ERROR_OBJECT (c2venc, "Failed to set input format parameter!");
     return FALSE;
   }
 
-  resolution.width = GST_VIDEO_INFO_WIDTH (info);
-  resolution.height = GST_VIDEO_INFO_HEIGHT (info);
+  inresolution.width = GST_VIDEO_INFO_WIDTH (info);
+  inresolution.height = GST_VIDEO_INFO_HEIGHT (info);
 
   success = gst_c2_engine_set_parameter (c2venc->engine,
-      GST_C2_PARAM_IN_RESOLUTION, GPOINTER_CAST (&resolution));
+      GST_C2_PARAM_IN_RESOLUTION, GPOINTER_CAST (&inresolution));
   if (!success) {
     GST_ERROR_OBJECT (c2venc, "Failed to set input resolution parameter!");
     return FALSE;
+  }
+
+  outresolution.width = GST_VIDEO_INFO_WIDTH (&outstate->info);
+  outresolution.height = GST_VIDEO_INFO_HEIGHT (&outstate->info);
+
+  // Down Scalar enabled.
+  if (outresolution.width < inresolution.width ||
+      outresolution.height < inresolution.height) {
+
+    if (c2venc->rotate == GST_C2_ROTATE_90_CW ||
+        c2venc->rotate ==  GST_C2_ROTATE_90_CCW) {
+      outresolution.width = GST_VIDEO_INFO_HEIGHT (&outstate->info);
+      outresolution.height = GST_VIDEO_INFO_WIDTH (&outstate->info);
+    }
+
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_OUT_RESOLUTION, GPOINTER_CAST (&outresolution));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set output resolution parameter!");
+      return FALSE;
+    }
+
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_DOWN_SCALAR, GPOINTER_CAST (&outresolution));
+
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set down scalar parameter!");
+      return FALSE;
+    }
   }
 
   gst_util_fraction_to_double (GST_VIDEO_INFO_FPS_N (info),
@@ -700,7 +731,8 @@ gst_c2_venc_event_handler (guint type, gpointer payload, gpointer userdata)
     GST_DEBUG_OBJECT (c2venc, "Received engine EOS");
   } else if (type == GST_C2_EVENT_ERROR) {
     gint32 error = *((gint32*) userdata);
-    GST_ERROR_OBJECT (c2venc, "Received engine ERROR: '%x'", error);
+    GST_ELEMENT_ERROR (c2venc, RESOURCE, FAILED,
+        ("Codec2 encountered an un-recovarable error '%x' !", error), (NULL));
   } else if (type == GST_C2_EVENT_DROP) {
     guint64 index = *((guint64*) payload);
     GstVideoCodecFrame *frame = NULL;
@@ -725,7 +757,6 @@ static void
 gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
 {
   GstC2VEncoder *c2venc = GST_C2_VENC (userdata);
-  GstVideoInfo *vinfo = &(c2venc->instate->info);
   GstVideoCodecFrame *frame = NULL;
   GstFlowReturn ret = GST_FLOW_OK;
   guint64 index = 0;
@@ -767,7 +798,9 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
   // Unset the custom HEIC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
-  
+  // Unset the custom GBM flag if present.
+  GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_GBM);
+
   // Check for incomplete buffers and merge them into single buffer.
   if (gst_buffer_list_length (c2venc->incomplete_buffers) > 0) {
     GstMemory *memory = NULL;
@@ -851,10 +884,14 @@ gst_c2_venc_flush (GstVideoEncoder * encoder)
   GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
   GST_DEBUG_OBJECT (c2venc, "Flush engine");
 
+  GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
+
   if ((c2venc->engine != NULL) && !gst_c2_engine_flush (c2venc->engine)) {
     GST_ERROR_OBJECT (c2venc, "Failed to flush engine");
     return FALSE;
   }
+
+  GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
 
   g_list_free_full (c2venc->headers, (GDestroyNotify) gst_buffer_unref);
   c2venc->headers = NULL;
@@ -870,6 +907,8 @@ gst_c2_venc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
   GstCaps *caps = NULL, *intermeadiary = NULL;
   GstStructure *structure = NULL;
   const GValue *framerate = NULL, *maxframerate = NULL;
+  const GValue *inwidth = NULL, *inheight = NULL;
+  const GValue *outwidth = NULL, *outheight = NULL;
   guint idx = 0, length = 0;
 
   GST_LOG_OBJECT (c2venc, "Filter caps %" GST_PTR_FORMAT, filter);
@@ -887,12 +926,20 @@ gst_c2_venc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
 
     if (gst_structure_has_field (structure, "max-framerate"))
       maxframerate = gst_structure_get_value (structure, "max-framerate");
+
+    // Fetch the ignored width and height fields from the filter caps.
+    if (gst_structure_has_field (structure, "width"))
+      inwidth = gst_structure_get_value (structure, "width");
+
+    if (gst_structure_has_field (structure, "height"))
+      inheight = gst_structure_get_value (structure, "height");
   }
 
   // Remove framerate and max-framerate fields as different fps are supported.
   for (idx = 0; idx < length; idx++) {
     structure = gst_caps_get_structure (intermeadiary, idx);
     gst_structure_remove_fields (structure, "framerate", "max-framerate", NULL);
+    gst_structure_remove_fields (structure, "width", "height", NULL);
   }
 
   GST_LOG_OBJECT (c2venc, "Intermeadiary caps %" GST_PTR_FORMAT, intermeadiary);
@@ -901,15 +948,34 @@ gst_c2_venc_getcaps (GstVideoEncoder * encoder, GstCaps * filter)
   if (intermeadiary != NULL)
     gst_caps_unref (intermeadiary);
 
-  // Restore the framerate and max-framerate fields into the returned caps.
+  // Restore the framerate, max-framerate, width and height fields into the
+  // returned caps.
   for (idx = 0; idx < gst_caps_get_size (caps); idx++) {
     structure = gst_caps_get_structure (caps, idx);
+
+    outwidth = gst_structure_get_value (structure, "width");
+    outheight = gst_structure_get_value (structure, "height");
+
+    if (outwidth != NULL && !GST_VALUE_HOLDS_INT_RANGE (outwidth)) {
+      gst_structure_set (structure,
+          "width", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+    }
+    if (outheight != NULL && !GST_VALUE_HOLDS_INT_RANGE (outheight)) {
+      gst_structure_set (structure,
+          "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, NULL);
+    }
 
     if (framerate != NULL)
       gst_structure_set_value (structure, "framerate", framerate);
 
     if (maxframerate != NULL)
       gst_structure_set_value (structure, "max-framerate", maxframerate);
+
+    if (inwidth != NULL)
+      gst_structure_set_value (structure, "width", inwidth);
+
+    if (inheight != NULL)
+      gst_structure_set_value (structure, "height", inheight);
   }
 
   GST_LOG_OBJECT (c2venc, "Returning caps %" GST_PTR_FORMAT, caps);
@@ -928,11 +994,15 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   GstC2Profile profile = GST_C2_PROFILE_INVALID;
   GstC2Level level = GST_C2_LEVEL_INVALID;
   guint32 param = 0;
+  gint32 outwidth = 0, outheight = 0;
   gboolean success = FALSE;
 
   c2venc->isubwc = gst_caps_has_compression (state->caps, "ubwc");
 
   c2venc->isheif = gst_caps_has_subformat(state->caps, "heif");
+
+  c2venc->isgbm = gst_caps_features_contains
+      (gst_caps_get_features (state->caps, 0), GST_CAPS_FEATURE_MEMORY_GBM);
 
   GST_DEBUG_OBJECT (c2venc, "Setting new format %s%s",
       gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)),
@@ -980,7 +1050,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     c2venc->name = g_strdup (name);
 
   if (c2venc->engine == NULL) {
-    c2venc->engine = gst_c2_engine_new (c2venc->name, &callbacks, c2venc);
+    c2venc->engine = gst_c2_engine_new (c2venc->name, GST_C2_MODE_VIDEO_ENCODE,
+        &callbacks, c2venc);
     g_return_val_if_fail (c2venc->engine != NULL, FALSE);
   }
 
@@ -1083,6 +1154,32 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
       outstate->info.flags &= ~(GST_VIDEO_FLAG_VARIABLE_FPS);
   }
 
+  // Check if output width need to be updated.
+  if (gst_structure_has_field (structure, "width")) {
+    gst_structure_get_int (structure, "width", &outwidth);
+
+    if (outwidth > 0 && outwidth < info->width) {
+      outstate->info.width = outwidth;
+      GST_DEBUG_OBJECT (c2venc, "Set output width to %d", outwidth);
+    } else if (outwidth > 0) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set output width to %d", outwidth);
+      return FALSE;
+    }
+  }
+
+  // Check if output height need to be updated.
+  if (gst_structure_has_field (structure, "height")) {
+    gst_structure_get_int (structure, "height", &outheight);
+
+    if (outheight > 0 && outheight < info->height) {
+      outstate->info.height = outheight;
+      GST_DEBUG_OBJECT (c2venc, "Set output height to %d", outheight);
+    } else if (outheight > 0) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set output height to %d", outheight);
+      return FALSE;
+    }
+  }
+
   gst_video_codec_state_unref (outstate);
 
   if (!gst_video_encoder_negotiate (encoder)) {
@@ -1101,12 +1198,12 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
         GST_VIDEO_INFO_FPS_D (info), GST_VIDEO_INFO_FPS_N (info));
   }
 
-  gst_video_codec_state_unref (outstate);
-
-  if (!gst_c2_venc_setup_parameters (c2venc, state)) {
+  if (!gst_c2_venc_setup_parameters (c2venc, state, outstate)) {
     GST_ERROR_OBJECT (c2venc, "Failed to setup parameters!");
     return FALSE;
   }
+
+  gst_video_codec_state_unref (outstate);
 
   if (!gst_c2_engine_start (c2venc->engine)) {
     GST_ERROR_OBJECT (c2venc, "Failed to start engine!");
@@ -1126,6 +1223,7 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 {
   GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
   GstClockTimeDiff deadline;
+  GstC2QueueItem item;
 
   // GAP input buffer, drop the frame.
   if ((gst_buffer_get_size (frame->input_buffer) == 0) &&
@@ -1167,11 +1265,18 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   if (c2venc->isheif)
     GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
 
+  if (c2venc->isgbm)
+    GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_GBM);
+
   // This mutex was locked in the base class before call this function.
   // Needs to be unlocked when waiting for any pending buffers during drain.
   GST_VIDEO_ENCODER_STREAM_UNLOCK (encoder);
 
-  if (!gst_c2_engine_queue (c2venc->engine, frame)) {
+  item.buffer = frame->input_buffer;
+  item.index = frame->system_frame_number;
+  item.userdata = gst_video_codec_frame_get_user_data (frame);
+
+  if (!gst_c2_engine_queue (c2venc->engine, &item)) {
     GST_ERROR_OBJECT(c2venc, "Failed to send input frame to be emptied!");
     return GST_FLOW_ERROR;
   }
@@ -1715,6 +1820,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->instate = NULL;
   c2venc->isubwc = FALSE;
   c2venc->isheif = FALSE;
+  c2venc->isgbm = FALSE;
   c2venc->headers = NULL;
 
   c2venc->incomplete_buffers = gst_buffer_list_new ();
