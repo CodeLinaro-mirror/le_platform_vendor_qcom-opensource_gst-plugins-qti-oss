@@ -29,7 +29,7 @@ codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf
 width:             video's width
 height:            video's height
 stream file path:  input video file path
-m0|m1:             m0:secure mode(default); m1:common mode
+m0|m1:             m0:common mode; m1:secure mode(default)
 s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink
 o:outputfile path: output file path when s1 or s2, default is output.ubwc
 f:fps:             video's fps, valid for no B frame video, default is unavailable

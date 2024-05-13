@@ -121,13 +121,14 @@ void secure_debug_level_init(void)
 
 typedef struct _secureappsrc {
   GMainLoop *loop;
-  GQueue *sec_buf_queue;
-  Crypto *crypto;
-  GMutex buf_lock;
-  GMutex secure_copy_lock;
-  GCond buf_cond;
-  void *sec_buf_addr;
-} secureappsrc;
+
+  GQueue * share_inbuf_idle_queue;
+  GMutex share_inbuf_lock;
+  GCond share_inbuf_cond;
+
+  Crypto * crypto;
+  GMutex crypto_copy_lock;
+}secureappsrc;
 
 static FILE *input_fp = NULL;
 static uint8_t *input_nonsecure_buffer = NULL;
@@ -162,36 +163,36 @@ static void onNeedData(GstElement *appsrc, guint dataSize, secureappsrc *securea
   GstBuffer *buffer;
   int length = 0;
   int len = 0;
-  OMX_BUFFERHEADERTYPE *free_sec_ion_buf = NULL;
+  OMX_BUFFERHEADERTYPE *idle_share_inbuf = NULL;
 
 RETRY:
-  g_mutex_lock (&secureappsrc->buf_lock);
-  free_sec_ion_buf = (OMX_BUFFERHEADERTYPE *)g_queue_pop_head (secureappsrc->sec_buf_queue);
-  if (free_sec_ion_buf == NULL) {
-    GST_DEBUG ("no empty input secure buffer");
-    g_cond_wait (&secureappsrc->buf_cond, &secureappsrc->buf_lock);
-    g_mutex_unlock (&secureappsrc->buf_lock);
+  g_mutex_lock (&secureappsrc->share_inbuf_lock);
+  idle_share_inbuf = (OMX_BUFFERHEADERTYPE *)g_queue_pop_head (secureappsrc->share_inbuf_idle_queue);
+  if (idle_share_inbuf == NULL) {
+    GST_DEBUG ("no idle share input buffer");
+    g_cond_wait (&secureappsrc->share_inbuf_cond, &secureappsrc->share_inbuf_lock);
+    g_mutex_unlock (&secureappsrc->share_inbuf_lock);
     GST_DEBUG ("cond waited");
     goto RETRY;
   }
 
-  g_mutex_unlock (&secureappsrc->buf_lock);
-  GST_DEBUG ("sec2 etb:%p size:%d sec ion nAllocLen:%d fd:%d len:%d\n",
-    free_sec_ion_buf, free_sec_ion_buf->nFilledLen, free_sec_ion_buf->nAllocLen, free_sec_ion_buf->pBuffer, length);
+  g_mutex_unlock (&secureappsrc->share_inbuf_lock);
+  GST_DEBUG ("share2 etb:%p size:%d share inbuf nAllocLen:%d fd:%d len:%d\n",
+    idle_share_inbuf, idle_share_inbuf->nFilledLen, idle_share_inbuf->nAllocLen, idle_share_inbuf->pBuffer, length);
   length = Read_Buffer(input_nonsecure_buffer);
-  free_sec_ion_buf->nFilledLen = length;
+  idle_share_inbuf->nFilledLen = length;
   if (length > 0) {
     if (secure_mode) {
-      g_mutex_lock (&secureappsrc->secure_copy_lock);
+      g_mutex_lock (&secureappsrc->crypto_copy_lock);
       SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_NONSECURE_TO_SECURE,
-        input_nonsecure_buffer, (unsigned long)free_sec_ion_buf->pBuffer, &length);
-      g_mutex_unlock (&secureappsrc->secure_copy_lock);
+        input_nonsecure_buffer, (unsigned long)idle_share_inbuf->pBuffer, &length);
+      g_mutex_unlock (&secureappsrc->crypto_copy_lock);
       if (ret1 != SECURE_COPY_SUCCESS) {
         GST_ERROR ("copy non-secure buf to secure buf failed");
       }
     } else {
-      char *bufaddr = (char*)mmap(NULL, free_sec_ion_buf->nAllocLen, PROT_READ|PROT_WRITE, MAP_SHARED,
-        (gint64)free_sec_ion_buf->pBuffer, 0);
+      char *bufaddr = (char*)mmap(NULL, idle_share_inbuf->nAllocLen, PROT_READ|PROT_WRITE, MAP_SHARED,
+        (gint64)idle_share_inbuf->pBuffer, 0);
       if (bufaddr == MAP_FAILED) {
         GST_ERROR ("mmap failed");
       } else {
@@ -204,10 +205,10 @@ RETRY:
   if (length > 0)
   {
     GstBuffer *buffer;
-    GST_DEBUG ("sec1 etb:%p size:%d sec ion nAllocLen:%d fd:%d len:%d\n",free_sec_ion_buf,
-      free_sec_ion_buf->nFilledLen, free_sec_ion_buf->nAllocLen, free_sec_ion_buf->pBuffer, length);
+    GST_DEBUG ("share1 etb:%p size:%d share inbuf nAllocLen:%d fd:%d len:%d\n", idle_share_inbuf,
+      idle_share_inbuf->nFilledLen, idle_share_inbuf->nAllocLen, idle_share_inbuf->pBuffer, length);
     buffer = gst_buffer_new_allocate(NULL, sizeof(OMX_BUFFERHEADERTYPE*), NULL);
-    gst_buffer_fill (buffer, 0, &free_sec_ion_buf, sizeof(OMX_BUFFERHEADERTYPE*));
+    gst_buffer_fill (buffer, 0, &idle_share_inbuf, sizeof(OMX_BUFFERHEADERTYPE*));
 
     //For IVF file, use TS from file if fps is not set
     if (Read_Buffer == Read_Buffer_From_Ivf_File) {
@@ -246,7 +247,6 @@ static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc
   GstMapInfo map;
   int ret = 0;
   int length = 0;
-  OMX_BUFFERHEADERTYPE *sec_ion_buf = NULL;
 
   //Retrieve the buffer
   g_signal_emit_by_name(appsink, "pull-sample", &sample);
@@ -259,12 +259,12 @@ static GstFlowReturn onNewSample(GstElement *appsink, secureappsrc *secureappsrc
         secure_fd = FD_OF_QVMETA(meta);
         length = DATASZ_OF_QVMETA(meta);
         GST_DEBUG("Found QVMeta signature, fd %d, size %d", secure_fd, length);
-        g_mutex_lock (&secureappsrc->secure_copy_lock);
+        g_mutex_lock (&secureappsrc->crypto_copy_lock);
         SecureCopyResult ret1 = crypto_copy (secureappsrc->crypto, SECURE_COPY_SECURE_TO_NONSECURE,
           output_nonsecure_buffer, (unsigned long)secure_fd, &length);
-        g_mutex_unlock (&secureappsrc->secure_copy_lock);
+        g_mutex_unlock (&secureappsrc->crypto_copy_lock);
         if (ret1 != SECURE_COPY_SUCCESS) {
-          GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", sec_ion_buf->pBuffer);
+          GST_ERROR ("copy secure buf to non-secure buf failed, fd:%d", secure_fd);
         }
 
         //yuv data is NV12_UBWC format
@@ -308,24 +308,22 @@ static gboolean msg_handler(GstBus *bus, GstMessage *msg, gpointer data)
   } else if (msg->type == GST_MESSAGE_ERROR) {
     g_main_loop_quit (loop);
     GST_ERROR ("the pipiple post a error");
-  } else {
-    if (gst_message_has_name (msg, "omx-dec-buf-fd")) {
-      const GstStructure *s = gst_message_get_structure (msg);
-      gst_structure_get (s, "buf-fd", G_TYPE_POINTER, &omx_buf_header, NULL);
-      GST_DEBUG ("buf:%p fd:%d freed\n", omx_buf_header, omx_buf_header->pBuffer);
-      g_mutex_lock (&appsrc->buf_lock);
-      if (omx_buf_header) {
-        g_queue_push_tail (appsrc->sec_buf_queue, omx_buf_header);
-        GST_DEBUG ("add buf to queue");
-      } else {
-        GST_ERROR ("error buf fd:%p", omx_buf_header);
-        g_main_loop_quit(loop);
-      }
-      g_cond_broadcast (&appsrc->buf_cond);
-      g_mutex_unlock (&appsrc->buf_lock);
+  } else if (gst_message_has_name (msg, "omx-dec-buf-fd")) {
+    const GstStructure *s = gst_message_get_structure (msg);
+    gst_structure_get (s, "buf-fd", G_TYPE_POINTER, &omx_buf_header, NULL);
+    GST_DEBUG ("buf:%p fd:%d become idle\n", omx_buf_header, omx_buf_header->pBuffer);
+    g_mutex_lock (&appsrc->share_inbuf_lock);
+    if (omx_buf_header) {
+      g_queue_push_tail (appsrc->share_inbuf_idle_queue, omx_buf_header);
+      GST_DEBUG ("add buf to queue");
     } else {
-      GST_DEBUG ("didn't handle msg type:%d", msg->type);
+      GST_ERROR ("error: omx buf is NULL");
+      g_main_loop_quit(loop);
     }
+    g_cond_broadcast (&appsrc->share_inbuf_cond);
+    g_mutex_unlock (&appsrc->share_inbuf_lock);
+  } else {
+    GST_DEBUG ("didn't handle msg type:%d", msg->type);
   }
 
   return TRUE;
@@ -801,7 +799,7 @@ static void print_usage(void)
   printf ("width:             video's width\n");
   printf ("height:            video's height\n");
   printf ("stream file path:  input video file path\n");
-  printf ("m0|m1:             m0:secure mode(default); m1:common mode\n");
+  printf ("m0|m1:             m0:common mode; m1:secure mode(default)\n");
   printf ("s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink\n");
   printf ("o:outputfile path: output file path when s1 or s2, default is output.ubwc\n");
   printf ("f:fps:             video's fps, valid for no B frame video, default is unavailable\n");
@@ -854,9 +852,9 @@ int main(int argc, char **argv)
     int i = 0;
     snprintf(outputfilename, sizeof(outputfilename), "output.ubwc");
     while(i < option_param_count) {
-      if (!memcmp(argv[5 + i], "m0", 2)) {
+      if (!memcmp(argv[5 + i], "m1", 2)) {
         secure_mode = TRUE;
-      } else if (!memcmp(argv[5 + i], "m1", 2)) {
+      } else if (!memcmp(argv[5 + i], "m0", 2)) {
         secure_mode = FALSE;
       } else if (!memcmp(argv[5 + i], "s0", 2)) {
         sink_type = SECURE_WAYLANDSINK;
@@ -975,10 +973,12 @@ int main(int argc, char **argv)
       return 0;
     }
   }
-  g_mutex_init (&appsrc_struct->buf_lock);
-  g_mutex_init (&appsrc_struct->secure_copy_lock);
-  g_cond_init (&appsrc_struct->buf_cond);
-  appsrc_struct->sec_buf_queue = g_queue_new ();
+
+  g_mutex_init (&appsrc_struct->crypto_copy_lock);
+
+  g_mutex_init (&appsrc_struct->share_inbuf_lock);
+  g_cond_init (&appsrc_struct->share_inbuf_cond);
+  appsrc_struct->share_inbuf_idle_queue = g_queue_new ();
 
 
   loop = g_main_loop_new(NULL, FALSE);
@@ -1064,10 +1064,11 @@ int main(int argc, char **argv)
   gst_object_unref (GST_OBJECT (pipeline));
 
   g_main_loop_unref(loop);
-  g_mutex_clear (&appsrc_struct->buf_lock);
-  g_mutex_clear (&appsrc_struct->secure_copy_lock);
-  g_cond_clear (&appsrc_struct->buf_cond);
-  g_queue_free (appsrc_struct->sec_buf_queue);
+  g_mutex_clear (&appsrc_struct->share_inbuf_lock);
+  g_cond_clear (&appsrc_struct->share_inbuf_cond);
+  g_queue_free (appsrc_struct->share_inbuf_idle_queue);
+
+  g_mutex_clear (&appsrc_struct->crypto_copy_lock);
   if (secure_mode) {
     crypto_deinit (appsrc_struct->crypto);
     g_free (appsrc_struct->crypto);
