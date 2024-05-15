@@ -304,9 +304,6 @@ gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
   engine = g_new0 (GstC2Engine, 1);
   g_return_val_if_fail (engine != NULL, NULL);
 
-  engine->c2module = C2Factory::GetModule (name);
-  g_return_val_if_fail (engine->c2module != NULL, NULL);
-
   engine->mode = mode;
 
   C2ModeType component_mode;
@@ -327,6 +324,9 @@ gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
       component_mode = C2ModeType::kVideoEncode;
       break;
   }
+
+  engine->c2module = C2Factory::GetModule (name, component_mode);
+  g_return_val_if_fail (engine->c2module != NULL, NULL);
 
   try {
     std::shared_ptr<IC2Notifier> notifier =
