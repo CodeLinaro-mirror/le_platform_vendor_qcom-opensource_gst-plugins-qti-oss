@@ -15,10 +15,24 @@ GST_DEBUG_CATEGORY_STATIC (c2_aenc_debug);
 #define gst_c2_aenc_parent_class parent_class
 G_DEFINE_TYPE (GstC2AEncoder, gst_c2_aenc, GST_TYPE_AUDIO_ENCODER);
 
+#define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
+  ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
+      : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
+          : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
+              : (state <= GST_STATE_NULL))))
+
+#define DEFAULT_PROP_BITRATE      (48000)
+
 #define GPOINTER_CAST(ptr)                ((gpointer) ptr)
 
 #define GST_AUDIO_FORMATS "{ S16LE }"
 #define SAMPLES_CNT_IN_BUFFER 1024
+
+enum
+{
+  PROP_0,
+  PROP_BITRATE,
+};
 
 static GstStaticPadTemplate gst_c2_aenc_sink_pad_template =
 GST_STATIC_PAD_TEMPLATE("sink",
@@ -32,22 +46,23 @@ GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("audio/mpeg,"
-        "mpegversion = (int) 4,"
+        "mpegversion = (int) { 2, 4 },"
         "stream-format = (string) { raw, adts }")
 );
 
 static gboolean
-gst_c2_aenc_setup_parameters (GstC2AEncoder * c2aenc, GstAudioInfo * info)
+gst_c2_aenc_setup_parameters (GstC2AEncoder * c2aenc, GstAudioInfo * info,
+    GstC2AACStreamFormat streamformat)
 {
   gboolean success = FALSE;
 
   guint32 samplerate = info->rate;
   guint32 channels = info->channels;
   GstC2Bitdepth depth = GST_C2_PCM_16;
-  GstC2AACStreamFormat streamformat = GST_C2_AAC_PACKAGING_ADTS;
 
   GST_TRACE_OBJECT (c2aenc, "samplerate - %d", samplerate);
   GST_TRACE_OBJECT (c2aenc, "channels - %d", channels);
+  GST_TRACE_OBJECT (c2aenc, "streamformat - %d", streamformat);
 
   success = gst_c2_engine_set_parameter (c2aenc->engine,
       GST_C2_PARAM_IN_SAMPLE_RATE, GPOINTER_CAST (&samplerate));
@@ -77,6 +92,13 @@ gst_c2_aenc_setup_parameters (GstC2AEncoder * c2aenc, GstAudioInfo * info)
     return FALSE;
   }
 
+  success = gst_c2_engine_set_parameter (c2aenc->engine,
+      GST_C2_PARAM_BITRATE, GPOINTER_CAST (&c2aenc->bitrate));
+  if (!success) {
+    GST_ERROR_OBJECT (c2aenc, "Failed to set output streamformat parameter!");
+    return FALSE;
+  }
+
   return TRUE;
 }
 
@@ -89,7 +111,8 @@ gst_c2_aenc_event_handler (guint type, gpointer payload, gpointer userdata)
     GST_DEBUG_OBJECT (c2aenc, "Received engine EOS");
   } else if (type == GST_C2_EVENT_ERROR) {
     gint32 error = *((gint32*) userdata);
-    GST_ERROR_OBJECT (c2aenc, "Received engine ERROR: '%x'", error);
+    GST_ELEMENT_ERROR (c2aenc, RESOURCE, FAILED,
+        ("Codec2 encountered an un-recovarable error '%x' !", error), (NULL));
   }
 }
 
@@ -210,13 +233,17 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
   GstCaps *caps = NULL;
   GstStructure *structure = NULL;
   const gchar *name = NULL, *string = NULL;
-  GstC2Profile profile = GST_C2_PROFILE_INVALID;
+  GstC2Profile profile = GST_C2_PROFILE_AAC_LC;
   GstC2Level level = GST_C2_LEVEL_INVALID;
   gint sample_rate_idx;
   guint8 codec_data[2];
   guint32 param = 0;
   gboolean success = FALSE;
   GstBuffer *codec_data_buffer;
+  GstC2AACStreamFormat streamformat = GST_C2_AAC_PACKAGING_RAW;
+  gint mpegversion = 0;
+  guint audio_object_type = AOT_AAC_LC;
+  gint samples_in_buffer = SAMPLES_CNT_IN_BUFFER;
 
   if (!gst_audio_info_is_equal (info, &c2aenc->ainfo)) {
     if (!gst_c2_aenc_stop (encoder)) {
@@ -260,21 +287,6 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
     g_return_val_if_fail (c2aenc->engine != NULL, FALSE);
   }
 
-  // Set the codec_data data according to AudioSpecificConfig,
-  // ISO/IEC 14496-3, 1.6.2.1
-  sample_rate_idx =
-      gst_codec_utils_aac_get_index_from_sample_rate (info->rate);
-  // LC profile only
-  codec_data[0] = ((0x02 << 3) | (sample_rate_idx >> 1));
-  codec_data[1] = ((sample_rate_idx & 0x01) << 7) | (info->channels << 3);
-  gst_codec_utils_aac_caps_set_level_and_profile (caps, codec_data, 2);
-
-  codec_data_buffer = gst_buffer_new_and_alloc (2);
-  gst_buffer_fill (codec_data_buffer, 0, codec_data, 2);
-  gst_structure_set (structure, "codec_data", GST_TYPE_BUFFER,
-      codec_data_buffer, NULL);
-  gst_buffer_unref (codec_data_buffer);
-
   gst_structure_set (structure, "rate", G_TYPE_INT, info->rate, NULL);
   gst_structure_set (structure, "channels", G_TYPE_INT, info->channels, NULL);
 
@@ -302,6 +314,23 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
     }
   }
 
+  if (profile != GST_C2_PROFILE_INVALID) {
+    audio_object_type = gst_c2_utils_aac_profile_to_aot (profile);
+  }
+
+  // Set the codec_data data according to AudioSpecificConfig,
+  // ISO/IEC 14496-3, 1.6.2.1
+  sample_rate_idx =
+      gst_codec_utils_aac_get_index_from_sample_rate (info->rate);
+  codec_data[0] = ((audio_object_type << 3) | (sample_rate_idx >> 1));
+  codec_data[1] = ((sample_rate_idx & 0x01) << 7) | (info->channels << 3);
+
+  codec_data_buffer = gst_buffer_new_and_alloc (2);
+  gst_buffer_fill (codec_data_buffer, 0, codec_data, 2);
+  gst_structure_set (structure, "codec_data", GST_TYPE_BUFFER,
+      codec_data_buffer, NULL);
+  gst_buffer_unref (codec_data_buffer);
+
   success = gst_c2_engine_get_parameter (c2aenc->engine,
       GST_C2_PARAM_PROFILE_LEVEL, &param);
   if (!success) {
@@ -312,6 +341,7 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
 
   GST_DEBUG_OBJECT (c2aenc, "profile - %d", profile);
   GST_DEBUG_OBJECT (c2aenc, "level - %d", level);
+  GST_DEBUG_OBJECT (c2aenc, "Audio object type - %d", audio_object_type);
 
   if (profile != GST_C2_PROFILE_INVALID)
     param = (param & 0xFFFF0000) + (profile & 0xFFFF);
@@ -331,10 +361,22 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
     return FALSE;
   }
 
+  // Codec2 requires double buffer size in case of High efficiency profile
+  // 8192 bytes - 16bit/2ch, 4096 bytes - 16bit/1ch
+  if (profile == GST_C2_PROFILE_AAC_HE || profile == GST_C2_PROFILE_AAC_HE_PS) {
+    samples_in_buffer *= 2;
+  }
+
   if (gst_structure_has_name (structure, "audio/mpeg")) {
     if (profile != GST_C2_PROFILE_INVALID) {
       string = gst_c2_utils_aac_profile_to_string (profile);
-      gst_structure_set (structure, "profile", G_TYPE_STRING, string, NULL);
+      gst_structure_get_int (structure, "mpegversion", &mpegversion);
+      if (mpegversion == 4) {
+        gst_structure_set (structure, "base-profile", G_TYPE_STRING, string,
+            "profile", G_TYPE_STRING, string, NULL);
+      } else {
+        gst_structure_set (structure, "profile", G_TYPE_STRING, string, NULL);
+      }
     }
 
     if (level != GST_C2_LEVEL_INVALID) {
@@ -353,9 +395,9 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
   }
 
   gst_audio_encoder_set_frame_samples_min (GST_AUDIO_ENCODER (encoder),
-      SAMPLES_CNT_IN_BUFFER);
+      samples_in_buffer);
   gst_audio_encoder_set_frame_samples_max (GST_AUDIO_ENCODER (encoder),
-      SAMPLES_CNT_IN_BUFFER);
+      samples_in_buffer);
   gst_audio_encoder_set_frame_max (GST_AUDIO_ENCODER (encoder), 1);
 
   if (!gst_audio_encoder_negotiate (encoder)) {
@@ -363,7 +405,12 @@ gst_c2_aenc_set_format (GstAudioEncoder * encoder, GstAudioInfo * info)
     return FALSE;
   }
 
-  if (!gst_c2_aenc_setup_parameters (c2aenc, info)) {
+  if ((string = gst_structure_get_string (structure, "stream-format")) != NULL) {
+    if (g_str_equal (string, "adts"))
+      streamformat = GST_C2_AAC_PACKAGING_ADTS;
+  }
+
+  if (!gst_c2_aenc_setup_parameters (c2aenc, info, streamformat)) {
     GST_ERROR_OBJECT (c2aenc, "Failed to setup parameters!");
     return FALSE;
   }
@@ -428,7 +475,8 @@ gst_c2_aenc_handle_frame (GstAudioEncoder * encoder, GstBuffer * inbuf)
 
   samples = gst_buffer_get_size (inbuf) / bytes_per_sample;
   samples /= c2aenc->ainfo.channels;
-  GST_TRACE_OBJECT (c2aenc, "Samples queued - %d", samples);
+  GST_TRACE_OBJECT (c2aenc, "Samples queued - %d, Buffer size - %ld",
+      samples, gst_buffer_get_size (inbuf));
 
   item.buffer = inbuf;
   item.index = c2aenc->framenum;
@@ -451,6 +499,63 @@ gst_c2_aenc_handle_frame (GstAudioEncoder * encoder, GstBuffer * inbuf)
 }
 
 static void
+gst_c2_aenc_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstC2AEncoder *c2aenc = GST_C2_AENC (object);
+  const gchar *propname = g_param_spec_get_name (pspec);
+  GstState state = GST_STATE (c2aenc);
+
+  if (!GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE (pspec, state)) {
+    GST_WARNING_OBJECT (c2aenc, "Property '%s' change not supported in %s "
+        "state!", propname, gst_element_state_get_name (state));
+    return;
+  }
+
+  GST_OBJECT_LOCK (c2aenc);
+
+  switch (prop_id) {
+    case PROP_BITRATE: {
+      c2aenc->bitrate = g_value_get_uint (value);
+
+      if ((c2aenc->engine == NULL) || (c2aenc->bitrate == DEFAULT_PROP_BITRATE))
+        break;
+
+      gboolean success = gst_c2_engine_set_parameter (c2aenc->engine,
+          GST_C2_PARAM_BITRATE, GPOINTER_CAST (&(c2aenc->bitrate)));
+      if (!success)
+        GST_ERROR_OBJECT (c2aenc, "Failed to set bitrate parameter!");
+      break;
+    }
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+
+  GST_OBJECT_UNLOCK (c2aenc);
+}
+
+static void
+gst_c2_aenc_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  GstC2AEncoder *c2aenc = GST_C2_AENC (object);
+
+  GST_OBJECT_LOCK (c2aenc);
+
+  switch (prop_id) {
+    case PROP_BITRATE:
+      g_value_set_uint (value, c2aenc->bitrate);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+
+  GST_OBJECT_UNLOCK (c2aenc);
+}
+
+static void
 gst_c2_aenc_finalize (GObject * object)
 {
   GstC2AEncoder *c2aenc = GST_C2_AENC (object);
@@ -470,7 +575,15 @@ gst_c2_aenc_class_init (GstC2AEncoderClass * klass)
   GstElementClass *element = GST_ELEMENT_CLASS (klass);
   GstAudioEncoderClass *aenc_class = GST_AUDIO_ENCODER_CLASS (klass);
 
+  gobject->set_property = GST_DEBUG_FUNCPTR (gst_c2_aenc_set_property);
+  gobject->get_property = GST_DEBUG_FUNCPTR (gst_c2_aenc_get_property);
   gobject->finalize     = GST_DEBUG_FUNCPTR (gst_c2_aenc_finalize);
+
+  g_object_class_install_property (gobject, PROP_BITRATE,
+      g_param_spec_uint ("bitrate", "Bitrate",
+          "Bitrate in bits per second",
+          0, G_MAXUINT, DEFAULT_PROP_BITRATE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
 
   gst_element_class_set_static_metadata (element,
       "Codec2 AAC Audio Encoder", "Codec/Encoder/Audio",
@@ -493,6 +606,8 @@ gst_c2_aenc_init (GstC2AEncoder * c2aenc)
 {
   c2aenc->name = NULL;
   c2aenc->engine = NULL;
+
+  c2aenc->bitrate = DEFAULT_PROP_BITRATE;
 
   c2aenc->framenum = 0;
   c2aenc->framesmap = g_hash_table_new (NULL, NULL);

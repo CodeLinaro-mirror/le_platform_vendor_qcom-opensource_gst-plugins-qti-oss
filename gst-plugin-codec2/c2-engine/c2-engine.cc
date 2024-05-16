@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -152,13 +152,13 @@ class GstC2Notifier : public IC2Notifier {
     switch (event) {
       case C2EventType::kError:
         type = GST_C2_EVENT_ERROR;
+        GST_C2_ENGINE_ZERO_OUT_PENDING_WORK (engine_);
         break;
       case C2EventType::kEOS:
         GST_C2_ENGINE_ZERO_OUT_PENDING_WORK (engine_);
         type = GST_C2_EVENT_EOS;
         break;
       case C2EventType::kDrop:
-        GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
         type = GST_C2_EVENT_DROP;
         break;
       default:
@@ -167,6 +167,9 @@ class GstC2Notifier : public IC2Notifier {
     }
 
     engine_->callbacks->event (type, payload, engine_->userdata);
+
+    if (event == C2EventType::kDrop)
+      GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
   }
 
   void FrameAvailable(std::shared_ptr<C2Buffer>& c2buffer, uint64_t index,
