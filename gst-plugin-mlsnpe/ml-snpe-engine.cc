@@ -175,10 +175,15 @@ static GstMLType
 snpe_to_ml_type (zdl::DlSystem::UserBufferEncoding::ElementType_t type)
 {
   switch (type) {
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT16:
+      return GST_ML_TYPE_FLOAT16;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT:
       return GST_ML_TYPE_FLOAT32;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT8:
+      return GST_ML_TYPE_INT8;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::UNSIGNED8BIT:
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::TF8:
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::UINT8:
       return GST_ML_TYPE_UINT8;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT32:
       return GST_ML_TYPE_INT32;
@@ -244,8 +249,6 @@ gst_ml_snpe_engine_new (gchar * model, GstMLSnpeDelegate delegate,
 
   for (idx = 0; idx < g_list_length (outputs_list); idx++)
     outputs.append ((const gchar *) g_list_nth_data (outputs_list, idx));
-
-  g_list_free_full (outputs_list, (GDestroyNotify) g_free);
 
   if (is_tensor)
     builder.setOutputTensors(outputs).setRuntimeProcessorOrder(rtlist);
