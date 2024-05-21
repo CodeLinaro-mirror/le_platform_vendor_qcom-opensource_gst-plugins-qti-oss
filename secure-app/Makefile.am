@@ -15,5 +15,5 @@ noinst_HEADERS = \
 bin_PROGRAMS=secureappsrc2
 secureappsrc2_SOURCES = secureappsrc2.c crypto.c
 secureappsrc2_CFLAGS = $(GST_CFLAGS)
-secureappsrc2_LDFLAGS = $(GST_LIBS) $(GST_PLUGIN_LDFLAGS) -lion -ldl -lgstvideo-1.0
+secureappsrc2_LDFLAGS = $(GST_LIBS) $(GST_PLUGIN_LDFLAGS) -lion -ldl -lgstvideo-1.0 -lgstallocators-1.0
 secureappsrc2_LIBTOOLFLAGS = --tag=disable-static

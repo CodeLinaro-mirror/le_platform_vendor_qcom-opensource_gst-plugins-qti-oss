@@ -29,13 +29,17 @@ codec-id:          1:h264 raw stream; 2:h265 raw stream; 3:vp9 ivf
 width:             video's width
 height:            video's height
 stream file path:  input video file path
-m0|m1:             m0:common mode; m1:secure mode(default)
+m0|m1|m2|m3:       m0:none secure and internal input buffer; m1:secure and internal input buffer(default)
+                   m2:none secure and external input buffer; m3:secure and external input buffer
+                   For internal input buffer mode, omx decoder allocate those buffers.
+                   For external input buffer mode, upstream component allocate those buffers.
 s0|s1|s2:          s0:waylandsink(default); s1:waylandsink+appsink; s2:appsink
 o:outputfile path: output file path when s1 or s2, default is output.ubwc
 f:fps:             video's fps, valid for no B frame video, default is unavailable
 
 secureappsrc2 1 1920 1080 test.h264
 secureappsrc2 2 1920 1080 test.h265 s1 m1
+secureappsrc2 2 1920 1080 test.h265 s1 m2
 secureappsrc2 3 1920 1080 vp9.ivf m1 s2 o:/data/output.dat
 secureappsrc2 1 640 480 IPonly.h264 s0 m1 f:29.97
 

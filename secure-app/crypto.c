@@ -44,6 +44,9 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define SymOEMCryptoTerminate "Content_Protection_Copy_Terminate"
 #define SymOEMCryptoCopy "Content_Protection_Copy"
 
+GST_DEBUG_CATEGORY (crypto_debug);
+#define GST_CAT_DEFAULT crypto_debug
+
 static char dlerr_cached_str[512] = {0};
 char* dlerr_tip()
 {
@@ -57,6 +60,7 @@ char* dlerr_tip()
 
 
 OMX_ERRORTYPE crypto_init(Crypto *crypto) {
+    GST_DEBUG_CATEGORY_INIT (crypto_debug, "cryptoapi", 0, "crypto copy api");
 
     crypto->m_lib_handle = NULL;
     crypto->m_secure_handle = NULL;
