@@ -40,34 +40,30 @@
 
 #include <glib-unix.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <gst/gst.h>
 
 #include "include/gst_sample_apps_utils.h"
 
 #define GST_APP_SUMMARY                                                       \
-  "This app enables the users for weston and qtivcomposer composition\n"      \
-  "for both picture in picture and side by side\n"                            \
+  "This application showcases the composition of various sources, " \
+  "specifically live camera input and an offline file. \n  The composition " \
+  "can be configured in two formats: picture-in-picture or side-by-side. \n" \
+  "  The choice of composition is performed using either the waylandsink or " \
+  "qtivcomposer plugins, depending on the user preference.\n" \
+  "\nCommand:\n" \
   "\nFor waylandsink composing picture in picture:\n"                         \
-  "gst-weston-composition-example -c 0 -t 0 -i /opt/<h264_file>.mp4\n"        \
+  "  gst-weston-composition-example -c 0 -t 0 -i /opt/<h264_file>.mp4\n"      \
   "\nFor waylandsink composing side by side:\n"                               \
-  "gst-weston-composition-example -c 0 -t 1 -i /opt/<h264_file>.mp4\n"        \
+  "  gst-weston-composition-example -c 0 -t 1 -i /opt/<h264_file>.mp4\n"      \
   "\nFor qtivcomposer composing picture in picture:\n"                        \
-  "gst-weston-composition-example -c 1 -t 0 -i /opt/<h264_file>.mp4\n"        \
+  "  gst-weston-composition-example -c 1 -t 0 -i /opt/<h264_file>.mp4\n"      \
   "\nFor qtivcomposer composing side by side:\n"                              \
-  "gst-weston-composition-example -c 1 -t 1 -i /opt/<h264_file>.mp4\n"
-
-// Enum to define the type of composition that user can set
-enum GstAppCompositionType {
-  GST_PIP_COMPOSE,
-  GST_SIDE_BY_SIDE_COMPOSE,
-};
-
-// Enum to define the type of composer types that user can select
-enum GstAppComposerOutput {
-  GST_APP_OUTPUT_WAYLANDSINK,
-  GST_APP_OUTPUT_QTIVCOMPOSER,
-};
+  "  gst-weston-composition-example -c 1 -t 1 -i /opt/<h264_file>.mp4\n"      \
+  "\nOutput:\n" \
+  "  Upon executing the application, the offline video and live camera " \
+  "composition can be observed on the display."
 
 // Structure to hold the application context
 struct GstComposeAppContext : GstAppContext {
@@ -76,7 +72,11 @@ struct GstComposeAppContext : GstAppContext {
   GstAppComposerOutput composer;
 };
 
-// Function to create a new application context
+/**
+ * Create and initialize application context:
+ *
+ * @param NULL
+ */
 static GstComposeAppContext *
 gst_app_context_new ()
 {
@@ -99,7 +99,11 @@ gst_app_context_new ()
   return ctx;
 }
 
-// Function to free the application context
+/**
+ * Free Application context:
+ *
+ * @param appctx Application Context object
+ */
 static void
 gst_app_context_free (GstComposeAppContext * appctx)
 {
@@ -139,7 +143,13 @@ gst_app_context_free (GstComposeAppContext * appctx)
     g_free (appctx);
 }
 
-// Linking of the pad
+/**
+ * Create pad property parser callback
+ *
+ * @param Gst Element parser
+ * @param pad to link with sinkpad
+ * @param data pointer
+ */
 static void
 on_pad_added (GstElement * element, GstPad * pad, gpointer data)
 {
@@ -152,9 +162,15 @@ on_pad_added (GstElement * element, GstPad * pad, gpointer data)
   gst_object_unref (sinkpad);
 }
 
-// create pad property to set the position and dimensions
+/**
+ * Create pad property to set the position and dimensions for composition
+ *
+ * @param property to set position and dimension
+ * @param values to be set for position and dimension
+ * @param number of index as an integer
+ */
 static void
-build_pad_property (GValue * property, gint values[], int num)
+build_pad_property (GValue * property, gint values[], gint num)
 {
   GValue val = G_VALUE_INIT;
   g_value_init (&val, G_TYPE_INT);
@@ -167,7 +183,14 @@ build_pad_property (GValue * property, gint values[], int num)
   g_value_unset (&val);
 }
 
-// Function to create pipeline for waylandsink composition & link all elements
+/**
+ * Create the pipeline for waylandsink composition
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Object.
+ */
 static gboolean
 create_pipe_waylandsink (GstComposeAppContext * appctx)
 {
@@ -195,20 +218,18 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
 
   // create the sink element for camera feed and set the position and dimensions
   waylandsink_cam = gst_element_factory_make ("waylandsink", "waylandsink_cam");
-  g_object_set (G_OBJECT (waylandsink_cam), "async", true, NULL);
-  g_object_set (G_OBJECT (waylandsink_cam), "sync", false, NULL);
 
   // Camera preview will start from top left corner
   g_object_set (G_OBJECT (waylandsink_cam), "x", 0, NULL);
   g_object_set (G_OBJECT (waylandsink_cam), "y", 0, NULL);
   if (appctx->composition == GST_PIP_COMPOSE) {
-    // For PIP camera preview will be in small window: dimesion are 320*240
-    g_object_set (G_OBJECT (waylandsink_cam), "width", 320, NULL);
-    g_object_set (G_OBJECT (waylandsink_cam), "height", 240, NULL);
+    // For PIP camera preview will be in small window: dimesion are 480*270
+    g_object_set (G_OBJECT (waylandsink_cam), "width", 480, NULL);
+    g_object_set (G_OBJECT (waylandsink_cam), "height", 270, NULL);
   } else {
     // For SIDE_BY_SIDE we divide screen into two euqal parts
-    g_object_set (G_OBJECT (waylandsink_cam), "width", 640, NULL);
-    g_object_set (G_OBJECT (waylandsink_cam), "height", 480, NULL);
+    g_object_set (G_OBJECT (waylandsink_cam), "width", 960, NULL);
+    g_object_set (G_OBJECT (waylandsink_cam), "height", 1080, NULL);
   }
 
   // Create Source element for reading from a file
@@ -230,8 +251,6 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
 
   // create the sink element for file source and set the position and dimensions
   waylandsink_filesrc = gst_element_factory_make ("waylandsink", "waylandsink_filesrc");
-  g_object_set (G_OBJECT (waylandsink_filesrc), "async", true, NULL);
-  g_object_set (G_OBJECT (waylandsink_filesrc), "sync", false, NULL);
   if (appctx->composition == GST_PIP_COMPOSE) {
     // For PIP filesrc is full screen and camera preview is in small window
     g_object_set (G_OBJECT (waylandsink_filesrc), "width", 1280, NULL);
@@ -240,9 +259,9 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
     g_object_set (G_OBJECT (waylandsink_filesrc), "y", 0, NULL);
   } else {
     // For SIDE_BY_SIDE divide screen into two euqal parts for camera & filesrc
-    g_object_set (G_OBJECT (waylandsink_filesrc), "width", 640, NULL);
-    g_object_set (G_OBJECT (waylandsink_filesrc), "height", 480, NULL);
-    g_object_set (G_OBJECT (waylandsink_filesrc), "x", 640, NULL);
+    g_object_set (G_OBJECT (waylandsink_filesrc), "width", 960, NULL);
+    g_object_set (G_OBJECT (waylandsink_filesrc), "height", 1080, NULL);
+    g_object_set (G_OBJECT (waylandsink_filesrc), "x", 960, NULL);
     g_object_set (G_OBJECT (waylandsink_filesrc), "y", 0, NULL);
   }
 
@@ -296,7 +315,14 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
   return TRUE;
 }
 
-// Function to create the qtivcomposer composition pipeline & link all elements
+/**
+ * Create the qtivcomposer composition pipeline
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Object.
+ */
 static gboolean
 create_pipe_qtivcomposer (GstComposeAppContext * appctx)
 {
@@ -322,7 +348,7 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
 
   // create camera source element and add capsfilter
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
-  g_object_set(G_OBJECT(qtiqmmfsrc), "camera", 1, NULL);
+
   capsfilter = gst_element_factory_make ("capsfilter", "capsfilter");
 
   filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "NV12",
@@ -339,8 +365,6 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
   // create waylandsink element to render output on Display
   waylandsink = gst_element_factory_make ("waylandsink", "waylandsink");
   g_object_set (G_OBJECT (waylandsink), "fullscreen", true, NULL);
-  g_object_set (G_OBJECT (waylandsink), "async", true, NULL);
-  g_object_set (G_OBJECT (waylandsink), "sync", false, NULL);
 
   gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, capsfilter,
       qtivcomposer, filesrc, qtdemux, h264parse, v4l2h264dec, waylandsink, NULL);
@@ -356,7 +380,7 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
     return FALSE;
   }
 
-  // Linking filesrc video streams element
+  // Link filesrc video streams element
   ret = gst_element_link (filesrc, qtdemux);
   if (!ret) {
     g_printerr (
@@ -466,6 +490,10 @@ main (gint argc, gchar *argv[])
     return -1;
   }
 
+  // Setting Display environment variables
+  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
+
   // create the app context
   appctx = gst_app_context_new ();
   if (appctx == NULL) {
@@ -495,11 +523,10 @@ main (gint argc, gchar *argv[])
   };
 
   // Parse command line entries.
-  if ((ctx = g_option_context_new ("gst-weston-composition-example")) != NULL) {
+  if ((ctx = g_option_context_new (GST_APP_SUMMARY)) != NULL) {
     gboolean success = FALSE;
     GError *error = NULL;
 
-    g_option_context_set_summary (ctx, GST_APP_SUMMARY);
     g_option_context_add_main_entries (ctx, entries, NULL);
     g_option_context_add_group (ctx, gst_init_get_option_group ());
 
@@ -575,7 +602,6 @@ main (gint argc, gchar *argv[])
   // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("\n Failed to retrieve pipeline bus!\n");
-    g_main_loop_unref (mloop);
     gst_app_context_free (appctx);
     return -1;
   }
@@ -598,7 +624,10 @@ main (gint argc, gchar *argv[])
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
       g_printerr ("\n Failed to transition to PAUSED state!\n");
-      break;
+      if (intrpt_watch_id)
+        g_source_remove (intrpt_watch_id);
+      gst_app_context_free (appctx);
+      return -1;
     case GST_STATE_CHANGE_NO_PREROLL:
       g_print ("\n Pipeline is live and does not need PREROLL.\n");
       break;
@@ -615,7 +644,8 @@ main (gint argc, gchar *argv[])
   g_main_loop_run (mloop);
 
   // Remove the interrupt signal handler
-  g_source_remove (intrpt_watch_id);
+  if (intrpt_watch_id)
+    g_source_remove (intrpt_watch_id);
 
   // Set the pipeline to the NULL state
   g_print ("\n Setting pipeline to NULL state ...\n");

@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -1551,7 +1551,8 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   g_object_class_install_property (gobject, PROP_CAMERA_ZOOM,
       gst_param_spec_array ("zoom", "Zoom Rectangle",
           "Camera zoom rectangle ('<X, Y, WIDTH, HEIGHT >') in sensor active "
-          "pixel array coordinates",
+          "pixel array coordinates. Defaults to active-sensor-size values"
+          " for 1x or no zoom",
           g_param_spec_int ("value", "Zoom Value",
               "One of X, Y, WIDTH or HEIGHT value.", 0, G_MAXINT, 0,
               G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS),
@@ -1591,26 +1592,26 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   g_object_class_install_property (gobject, PROP_CAMERA_VIDEO_METADATA,
       g_param_spec_pointer ("video-metadata", "Video Metadata",
           "Settings and parameters used for submitting capture requests for "
-          "video streams in the form of Android CameraMetadata object. "
+          "video streams in the form of CameraMetadata object. "
           "Caller is responsible for releasing the object.",
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_IMAGE_METADATA,
       g_param_spec_pointer ("image-metadata", "Image Metadata",
           "Settings and parameters used for submitting capture requests for high "
-          "quality images via the capture-image signal in the form of Android "
+          "quality images via the capture-image signal in the form of "
           "CameraMetadata object. Caller is responsible for releasing the object.",
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_STATIC_METADATA,
       g_param_spec_pointer ("static-metadata", "Static Metadata",
-          "Supported camera capabilities as Android CameraMetadata object. "
+          "Supported camera capabilities as CameraMetadata object. "
           "Caller is responsible for releasing the object.",
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_SESSION_METADATA,
       g_param_spec_pointer ("session-metadata", "Session Metadata",
-          "Settings parameters used for configure stream as Android"
+          "Settings parameters used for configure stream as "
           "CameraMetadata object. Caller is responsible for releasing the object.",
           G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));

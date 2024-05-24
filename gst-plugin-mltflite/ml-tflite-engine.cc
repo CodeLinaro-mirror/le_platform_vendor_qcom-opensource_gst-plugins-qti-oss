@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -71,13 +71,16 @@
 #include <tensorflow/lite/interpreter.h>
 #include <tensorflow/lite/kernels/register.h>
 #include <tensorflow/lite/delegates/nnapi/nnapi_delegate.h>
+#include <tensorflow/lite/delegates/gpu/delegate.h>
+#include <tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h>
+
+#ifdef HAVE_HEXAGON_DELEGATE_H
 #if TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION <= 2
 #include <tensorflow/lite/experimental/delegates/hexagon/hexagon_delegate.h>
 #else
 #include <tensorflow/lite/delegates/hexagon/hexagon_delegate.h>
-#endif
-#include <tensorflow/lite/delegates/gpu/delegate.h>
-#include <tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h>
+#endif // TF_MAJOR_VERSION <= 2 && TF_MINOR_VERSION <= 2
+#endif // HAVE_HEXAGON_DELEGATE_H
 
 #if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 10)
 #include "tensorflow/lite/delegates/external/external_delegate.h"
@@ -179,23 +182,25 @@ gst_ml_tflite_delegate_get_type (void)
         "No delegate, CPU is used for all operations", "none"
     },
     { GST_ML_TFLITE_DELEGATE_NNAPI_DSP,
-        "Run the processing on the DSP through the Android NN API. "
+        "Run the processing on the DSP through NN API. "
         "Unsupported operations will fallback on NPU, GPU or CPU",
         "nnapi-dsp"
     },
     { GST_ML_TFLITE_DELEGATE_NNAPI_GPU,
-        "Run the processing on the GPU through the Android NN API. "
+        "Run the processing on the GPU through NN API. "
         "Unsupported operations will fallback on DSP, NPU or CPU",
         "nnapi-gpu"
     },
     { GST_ML_TFLITE_DELEGATE_NNAPI_NPU,
-        "Run the processing on the NPU through the Android NN API. "
+        "Run the processing on the NPU through NN API. "
         "Unsupported operations will fallback on DSP, GPU or CPU",
         "nnapi-npu"
     },
+#ifdef HAVE_HEXAGON_DELEGATE_H
     { GST_ML_TFLITE_DELEGATE_HEXAGON,
         "Run the processing directly on the Hexagon DSP", "hexagon"
     },
+#endif // HAVE_HEXAGON_DELEGATE_H
     { GST_ML_TFLITE_DELEGATE_GPU,
         "Run the processing directly on the GPU", "gpu"
     },
@@ -269,11 +274,11 @@ gst_ml_tflite_engine_delegate_new (GstStructure * settings)
       options.use_burst_computation  = true;
 #endif
       if ((delegate = new tflite::StatefulNnApiDelegate (options)) == NULL) {
-        GST_WARNING ("Failed to create Android NN Framework DSP delegate!");
+        GST_WARNING ("Failed to create NN Framework DSP delegate!");
         break;
       }
 
-      GST_INFO ("Using Android NN Framework DSP delegate");
+      GST_INFO ("Using NN Framework DSP delegate");
       return delegate;
     }
     case GST_ML_TFLITE_DELEGATE_NNAPI_GPU:
@@ -291,11 +296,11 @@ gst_ml_tflite_engine_delegate_new (GstStructure * settings)
       options.allow_fp16             = true;
 #endif
       if ((delegate = new tflite::StatefulNnApiDelegate (options)) == NULL) {
-        GST_WARNING ("Failed to create Android NN Framework DSP delegate!");
+        GST_WARNING ("Failed to create NN Framework DSP delegate!");
         break;
       }
 
-      GST_INFO ("Using Android NN Framework GPU delegate");
+      GST_INFO ("Using NN Framework GPU delegate");
       return delegate;
     }
     case GST_ML_TFLITE_DELEGATE_NNAPI_NPU:
@@ -311,13 +316,14 @@ gst_ml_tflite_engine_delegate_new (GstStructure * settings)
       options.use_burst_computation  = true;
 #endif
       if ((delegate = new tflite::StatefulNnApiDelegate (options)) == NULL) {
-        GST_WARNING ("Failed to create Android NN Framework NPU delegate!");
+        GST_WARNING ("Failed to create NN Framework NPU delegate!");
         break;
       }
 
-      GST_INFO ("Using Android NN Framework NPU delegate");
+      GST_INFO ("Using NN Framework NPU delegate");
       return delegate;
     }
+#ifdef HAVE_HEXAGON_DELEGATE_H
     case GST_ML_TFLITE_DELEGATE_HEXAGON:
     {
       TfLiteHexagonDelegateOptions options = {};
@@ -338,6 +344,7 @@ gst_ml_tflite_engine_delegate_new (GstStructure * settings)
       GST_INFO ("Using Hexagon delegate");
       return delegate;
     }
+#endif // HAVE_HEXAGON_DELEGATE_H
     case GST_ML_TFLITE_DELEGATE_GPU:
     {
       TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
@@ -424,10 +431,12 @@ gst_ml_tflite_engine_delegate_free (TfLiteDelegate * delegate, gint type)
     case GST_ML_TFLITE_DELEGATE_NNAPI_NPU:
       delete reinterpret_cast<tflite::StatefulNnApiDelegate*>(delegate);
       break;
+#ifdef HAVE_HEXAGON_DELEGATE_H
     case GST_ML_TFLITE_DELEGATE_HEXAGON:
       TfLiteHexagonDelegateDelete (delegate);
       TfLiteHexagonTearDown ();
-      break;;
+      break;
+#endif // HAVE_HEXAGON_DELEGATE_H
     case GST_ML_TFLITE_DELEGATE_GPU:
       TfLiteGpuDelegateV2Delete (delegate);
       break;
@@ -509,11 +518,22 @@ gst_ml_tflite_engine_new (GstStructure * settings)
   idx = engine->interpreter->inputs()[0];
 
   switch (engine->interpreter->tensor(idx)->type) {
+    case kTfLiteFloat16:
+      engine->ininfo->type = GST_ML_TYPE_FLOAT16;
+      break;
     case kTfLiteFloat32:
       engine->ininfo->type = GST_ML_TYPE_FLOAT32;
       break;
     case kTfLiteInt32:
       engine->ininfo->type = GST_ML_TYPE_INT32;
+      break;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+    case kTfLiteUInt32:
+      engine->ininfo->type = GST_ML_TYPE_UINT32;
+      break;
+#endif // TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+    case kTfLiteInt8:
+      engine->ininfo->type = GST_ML_TYPE_INT8;
       break;
     case kTfLiteUInt8:
       engine->ininfo->type = GST_ML_TYPE_UINT8;
@@ -527,11 +547,22 @@ gst_ml_tflite_engine_new (GstStructure * settings)
   idx = engine->interpreter->outputs()[0];
 
   switch (engine->interpreter->tensor(idx)->type) {
+    case kTfLiteFloat16:
+      engine->outinfo->type = GST_ML_TYPE_FLOAT16;
+      break;
     case kTfLiteFloat32:
       engine->outinfo->type = GST_ML_TYPE_FLOAT32;
       break;
     case kTfLiteInt32:
       engine->outinfo->type = GST_ML_TYPE_INT32;
+      break;
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+    case kTfLiteUInt32:
+      engine->outinfo->type = GST_ML_TYPE_UINT32;
+      break;
+#endif // TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+    case kTfLiteInt8:
+      engine->outinfo->type = GST_ML_TYPE_INT8;
       break;
     case kTfLiteUInt8:
       engine->outinfo->type = GST_ML_TYPE_UINT8;
