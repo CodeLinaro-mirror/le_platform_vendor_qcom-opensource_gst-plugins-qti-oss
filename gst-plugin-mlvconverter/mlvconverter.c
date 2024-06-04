@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -95,12 +95,18 @@ G_DEFINE_TYPE (GstMLVideoConverter, gst_ml_video_converter,
 
 #define DEFAULT_PROP_ENGINE_BACKEND  (gst_video_converter_default_backend())
 #define DEFAULT_PROP_SUBPIXEL_LAYOUT GST_ML_VIDEO_PIXEL_LAYOUT_REGULAR
-#define DEFAULT_PROP_MEAN            128.0
-#define DEFAULT_PROP_SIGMA           1.0
+#define DEFAULT_PROP_MEAN            0.0
+#define DEFAULT_PROP_SIGMA           (1.0 / 255.0)
 
-#define GET_MEAN_VALUE(mean, idx) (mean->len >= (guint) (idx + 1)) ? \
+#define GINT8_PTR_CAST(data)         ((gint8*) data)
+#define GUINT8_PTR_CAST(data)        ((guint8*) data)
+#define GINT32_PTR_CAST(data)        ((gint32*) data)
+#define GUINT32_PTR_CAST(data)       ((guint32*) data)
+#define GFLOAT_PTR_CAST(data)        ((gfloat*) data)
+
+#define GET_MEAN_VALUE(mean, idx) (mean->len > idx) ? \
     g_array_index (mean, gdouble, idx) : DEFAULT_PROP_MEAN
-#define GET_SIGMA_VALUE(sigma, idx) (sigma->len >= (guint) (idx + 1)) ? \
+#define GET_SIGMA_VALUE(sigma, idx) (sigma->len > idx) ? \
     g_array_index (sigma, gdouble, idx) : DEFAULT_PROP_SIGMA
 
 #define GST_PROTECTION_META_CAST(obj) ((GstProtectionMeta *) obj)
@@ -118,7 +124,7 @@ G_DEFINE_TYPE (GstMLVideoConverter, gst_ml_video_converter,
     "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "              \
     "format = (string) " GST_ML_VIDEO_FORMATS
 
-#define GST_ML_TENSOR_TYPES "{ UINT8, INT32, FLOAT16, FLOAT32 }"
+#define GST_ML_TENSOR_TYPES "{ INT8, UINT8, INT32, UINT32, FLOAT16, FLOAT32 }"
 
 #define GST_ML_VIDEO_CONVERTER_SRC_CAPS    \
     "neural-network/tensors, "             \
@@ -219,13 +225,6 @@ is_conversion_required (GstVideoFrame * inframe, GstVideoFrame * outframe)
   return conversion;
 }
 
-static inline gboolean
-is_normalization_required (GstMLInfo * mlinfo)
-{
-  return (mlinfo->type == GST_ML_TYPE_FLOAT16) ||
-      (mlinfo->type == GST_ML_TYPE_FLOAT32);
-}
-
 static inline void
 init_formats (GValue * formats, ...)
 {
@@ -261,19 +260,24 @@ gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
 }
 
 static inline void
-gst_calculate_dimensions (gint outwidth, gint outheight, gint out_par_n,
-    gint out_par_d, gint sar_n, gint sar_d, gint * width, gint * height)
+gst_calculate_dimensions (gint maxwidth, gint maxheight, gint par_n, gint par_d,
+    gint sar_n, gint sar_d, gint * width, gint * height)
 {
   gint num = 0, den = 0;
 
-  gst_util_fraction_multiply (sar_n, sar_d, out_par_d, out_par_n, &num, &den);
+  // Aspect ratio of the destination, usually same as SAR (as PAR is 1/1)
+  gst_util_fraction_multiply (sar_n, sar_d, par_d, par_n, &num, &den);
 
-  if (num > den) {
-    *width = outwidth;
-    *height = gst_util_uint64_scale_int (outwidth, den, num);
-  } else if (num < den) {
-    *width = gst_util_uint64_scale_int (outheight, num, den);
-    *height = outheight;
+  // Based on the end aspect ratio different dimension will be used as base.
+  if ((num * maxheight) > (maxwidth * den)) {
+    *width = maxwidth;
+    *height = gst_util_uint64_scale_int (maxwidth, den, num);
+  } else if ((num * maxheight) < (maxwidth * den)) {
+    *height = maxheight;
+    *width = gst_util_uint64_scale_int (maxheight, num, den);
+  } else { // (num * maxheight) == (maxwidth * den)
+    *width = maxwidth;
+    *height = maxheight;
   }
 }
 
@@ -306,6 +310,31 @@ gst_video_frame_unmap_and_reset (GstVideoFrame * frame)
   memset (frame->map, 0, sizeof (GstMapInfo) * GST_VIDEO_MAX_PLANES);
 
   gst_video_info_init (&(frame->info));
+}
+
+static inline void
+gst_ml_tensor_assign_value (GstMLType mltype, gpointer data, guint index,
+    gdouble value)
+{
+  switch (mltype) {
+    case GST_ML_TYPE_INT8:
+      GINT8_PTR_CAST (data)[index] = (gint8) value;
+      break;
+    case GST_ML_TYPE_UINT8:
+      GUINT8_PTR_CAST (data)[index] = (guint8) value;
+      break;
+    case GST_ML_TYPE_INT32:
+      GINT32_PTR_CAST (data)[index] = (gint32) value;
+      break;
+    case GST_ML_TYPE_UINT32:
+      GUINT32_PTR_CAST (data)[index] = (guint32) value;
+      break;
+    case GST_ML_TYPE_FLOAT32:
+      GFLOAT_PTR_CAST (data)[index] = (gfloat) value;
+      break;
+    default:
+      break;
+  }
 }
 
 static void
@@ -508,12 +537,11 @@ static gboolean
 gst_ml_video_converter_normalize_ip (GstMLVideoConverter * mlconverter,
     GstVideoFrame * vframe)
 {
-  GstProtectionMeta *pmeta = NULL;
   guint8 *source = NULL;
-  gfloat *destination = NULL;
+  gpointer destination = NULL;
   gdouble mean[4] = {0}, sigma[4] = {0};
-  gint idx = 0, row = 0, column = 0, width = 0, height = 0, bpp = 0;
-  gint sar_n = 1, sar_d = 1;
+  gint row = 0, column = 0, width = 0, height = 0;
+  guint idx = 0, bpp = 0;
 
   // Retrive the video frame Bytes Per Pixel for later calculations.
   bpp = GST_VIDEO_FORMAT_INFO_BITS (vframe->info.finfo) *
@@ -532,25 +560,13 @@ gst_ml_video_converter_normalize_ip (GstMLVideoConverter * mlconverter,
   width = GST_VIDEO_FRAME_WIDTH (vframe);
   height = GST_VIDEO_FRAME_HEIGHT (vframe);
 
-  // Extract the SAR (Source Aspect Ratio).
-  if ((pmeta = gst_buffer_get_protection_meta (vframe->buffer)) != NULL) {
-    sar_n = gst_value_get_fraction_numerator (
-        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
-    sar_d = gst_value_get_fraction_denominator (
-        gst_structure_get_value (pmeta->info, "source-aspect-ratio"));
-  }
-
-  // Adjust dimensions so that only the image pixels will be normalized.
-  if (sar_n > sar_d)
-    height = gst_util_uint64_scale_int (width, sar_d, sar_n);
-  else if (sar_n < sar_d)
-    width = gst_util_uint64_scale_int (height, sar_n, sar_d);
-
   // Normalize in reverse as front bytes are occupied.
   for (row = (height - 1); row >= 0; row--) {
     for (column = ((width * bpp) - 1); column >= 0; column--) {
       idx = (row * width * bpp) + column;
-      destination[idx] = (source[idx] - mean[idx % bpp]) * sigma[idx % bpp];
+
+      gst_ml_tensor_assign_value (GST_ML_INFO_TYPE (mlconverter->mlinfo),
+          destination, idx, (source[idx] - mean[idx % bpp]) * sigma[idx % bpp]);
     }
   }
 
@@ -562,7 +578,7 @@ gst_ml_video_converter_normalize (GstMLVideoConverter * mlconverter,
     GstVideoFrame * inframe, GstVideoFrame * outframe)
 {
   guint8 *source = NULL;
-  gfloat *destination = NULL;
+  gpointer destination = NULL;
   gdouble mean[4] = {0}, sigma[4] = {0};
   guint idx = 0, size = 0, bpp = 0;
 
@@ -595,8 +611,10 @@ gst_ml_video_converter_normalize (GstMLVideoConverter * mlconverter,
   source = GST_VIDEO_FRAME_PLANE_DATA (inframe, 0);
   destination = GST_VIDEO_FRAME_PLANE_DATA (outframe, 0);
 
-  for (idx = 0; idx < size; idx++)
-    destination[idx] = (source[idx] - mean[idx % bpp]) * sigma[idx % bpp];
+  for (idx = 0; idx < size; idx++) {
+    gst_ml_tensor_assign_value (GST_ML_INFO_TYPE (mlconverter->mlinfo),
+        destination, idx, (source[idx] - mean[idx % bpp]) * sigma[idx % bpp]);
+  }
 
   return TRUE;
 }
@@ -1213,16 +1231,16 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
   outframe = mlconverter->composition.frame;
 
   if ((n_blits > 1) || is_conversion_required (inframe, outframe) ||
-      is_normalization_required (mlconverter->mlinfo)) {
+      ((mlconverter->mean->len != 0) && (mlconverter->sigma->len != 0))) {
     success = gst_video_converter_engine_compose (mlconverter->converter,
         &(mlconverter->composition), 1, NULL);
 
     // If the conversion request was successful apply normalization.
     if (success && (mlconverter->backend != GST_VCE_BACKEND_GLES) &&
-        is_normalization_required (mlconverter->mlinfo))
+        ((mlconverter->mean->len != 0) && (mlconverter->sigma->len != 0)))
       success = gst_ml_video_converter_normalize_ip (mlconverter, outframe);
   } else if ((mlconverter->backend != GST_VCE_BACKEND_GLES) &&
-             is_normalization_required (mlconverter->mlinfo)) {
+             ((mlconverter->mean->len != 0) && (mlconverter->sigma->len != 0))) {
     // There is not need for frame conversion, apply only normalization.
     success = gst_ml_video_converter_normalize (mlconverter, inframe, outframe);
   }

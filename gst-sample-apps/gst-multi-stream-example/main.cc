@@ -187,7 +187,7 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
   g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5, NULL);
   g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", 5, NULL);
   controls = gst_structure_from_string (
-      "controls,video_bitrate=512000,video_bitrate_mode=0", NULL);
+      "controls,video_bitrate_mode=0", NULL);
   g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", controls, NULL);
 
   // Create h264parse element for parsing the stream
@@ -299,7 +299,7 @@ main (gint argc, gchar *argv[])
   guint intrpt_watch_id = 0;
 
   // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // create the application context
