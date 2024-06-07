@@ -33,26 +33,28 @@
 
 #include "include/gst_sample_apps_utils.h"
 
-#define GST_APP_SUMMARY                                                      \
-  "This app enables the users to encode audio i.e. wav or flac "             \
-  "format.\n"                                                                \
-  "flac:gst-audio-encode-example -o /opt/<filename>.flac --audio_format=1 \n" \
-  "wav: gst-audio-encode-example -o /opt/<filename>.wav  --audio_format=2"
+#define DEFAULT_OUTPUT_FILENAME "/opt/audio_record.flac"
 
-// Enum to define the type of audio codec that user can set
-enum GstAudioCodecType {
-  GST_ADEFAULT,
-  GST_FLAC,
-  GST_WAV,
-};
+#define GST_APP_SUMMARY "This app enables the users to encode audio with " \
+  "wav or flac format.\n" \
+  "\nCommand:\n" \
+  "flac: gst-audio-encode-example -o /opt/<filename>.flac --audio_format=1 \n" \
+  "wav:  gst-audio-encode-example -o /opt/<filename>.wav  --audio_format=2 \n" \
+  "\nOutput:\n" \
+  "  Upon execution, application will generates recorded audio files " \
+  "at output path (/opt/)."
 
 // Structure to hold the application context
 struct GstAudioAppContext : GstAppContext {
   gchar *output_file;
-  GstAudioCodecType format;
+  GstAudioEncodeCodecType format;
 };
 
-// Function to create a new application context
+/**
+ * Create and initialize application context:
+ *
+ * @param NULL
+ */
 static GstAudioAppContext *
 gst_app_context_new ()
 {
@@ -69,13 +71,17 @@ gst_app_context_new ()
   ctx->pipeline = NULL;
   ctx->mloop = NULL;
   ctx->plugins = NULL;
-  ctx->output_file = NULL;
-  ctx->format = GST_ADEFAULT;
+  ctx->output_file = DEFAULT_OUTPUT_FILENAME;
+  ctx->format = GST_AENCODE_FLAC;
 
   return ctx;
 }
 
-// Function to free the application context
+/**
+ * Free Application context:
+ *
+ * @param appctx Application Context object
+ */
 static void
 gst_app_context_free (GstAudioAppContext * appctx)
 {
@@ -109,7 +115,7 @@ gst_app_context_free (GstAudioAppContext * appctx)
     appctx->pipeline = NULL;
   }
 
-  if (appctx->output_file != NULL)
+  if (appctx->output_file != NULL && appctx->output_file != DEFAULT_OUTPUT_FILENAME)
     g_free (appctx->output_file);
 
   // Finally, free the application context itself
@@ -117,7 +123,14 @@ gst_app_context_free (GstAudioAppContext * appctx)
     g_free (appctx);
 }
 
-// Function to create the pipeline and link all elements
+/**
+ * Create GST pipeline invloves 3 main steps
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Object.
+ */
 static gboolean
 create_pipe (GstAudioAppContext * appctx)
 {
@@ -134,7 +147,7 @@ create_pipe (GstAudioAppContext * appctx)
   pulsesrc = gst_element_factory_make ("pulsesrc", "pulsesrc");
 
   // Depending on the format, create the audio encoder and capsfilter for flac
-  if (appctx->format == GST_WAV)
+  if (appctx->format == GST_AENCODE_WAV)
     encoder = gst_element_factory_make ("wavenc", "wavenc");
   else {
     encoder = gst_element_factory_make ("flacenc", "encoder");
@@ -168,7 +181,7 @@ create_pipe (GstAudioAppContext * appctx)
   }
 
   // add objects to the main pipeline and link src to sink elemnets
-  if (appctx->format == GST_WAV) {
+  if (appctx->format == GST_AENCODE_WAV) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), pulsesrc, audioconvert,
         encoder, filesink, NULL);
     ret = gst_element_link_many (pulsesrc, audioconvert, encoder, filesink, NULL);
@@ -196,7 +209,7 @@ create_pipe (GstAudioAppContext * appctx)
   appctx->plugins = g_list_append (appctx->plugins, audioconvert);
   appctx->plugins = g_list_append (appctx->plugins, encoder);
   appctx->plugins = g_list_append (appctx->plugins, filesink);
-  if (appctx->format == GST_FLAC)
+  if (appctx->format == GST_AENCODE_FLAC)
     appctx->plugins = g_list_append (appctx->plugins, main_capsfilter);
 
   g_print ("\n All elements are linked successfully\n");
@@ -214,12 +227,6 @@ main (gint argc, gchar *argv[])
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
 
-  // If the user only provided the application name, print the help option
-  if (argc < 2) {
-    g_print ("\n usage: gst-audio-encode-example --help \n");
-    return -1;
-  }
-
   // Create the application context
   appctx = gst_app_context_new ();
   if (appctx == NULL) {
@@ -231,8 +238,8 @@ main (gint argc, gchar *argv[])
   GOptionEntry entries[] = {
       {"audio_format", 'f', 0, G_OPTION_ARG_INT, &appctx->format,
        "\t\t\t  format",
-       "\n\t1-FLAC"
-       "\n\t2-WAV"
+       "\n\t1-GST_AENCODE_FLAC"
+       "\n\t2-GST_AENCODE_WAV"
       },
       {"output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
        "Output Filename , \
@@ -242,8 +249,7 @@ main (gint argc, gchar *argv[])
   };
 
   // Parse the command line entries
-  if ((ctx = g_option_context_new ("gst-audio-encode-example")) != NULL) {
-    g_option_context_set_summary (ctx, GST_APP_SUMMARY);
+  if ((ctx = g_option_context_new (GST_APP_SUMMARY)) != NULL) {
     gboolean success = FALSE;
     GError *error = NULL;
 
@@ -270,8 +276,8 @@ main (gint argc, gchar *argv[])
     return -1;
   }
 
-// check for input parameters from user
-  if (appctx->format < GST_FLAC || appctx->format > GST_WAV ||
+  // check for input parameters from user
+  if (appctx->format < GST_AENCODE_FLAC || appctx->format > GST_AENCODE_WAV ||
       appctx->output_file == NULL) {
     g_printerr ("\n one of input parameters is not given -f %d -i %s\n",
         appctx->format, appctx->output_file);
@@ -314,7 +320,6 @@ main (gint argc, gchar *argv[])
   // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("\n Failed to retrieve pipeline bus!\n");
-    g_main_loop_unref (mloop);
     gst_app_context_free (appctx);
     return -1;
   }
@@ -337,7 +342,10 @@ main (gint argc, gchar *argv[])
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
       g_printerr ("\n Failed to transition to PAUSED state!\n");
-      break;
+      if (intrpt_watch_id)
+        g_source_remove (intrpt_watch_id);
+      gst_app_context_free (appctx);
+      return -1;
     case GST_STATE_CHANGE_NO_PREROLL:
       g_print ("\n Pipeline is live and does not need PREROLL.\n");
       break;
@@ -354,11 +362,14 @@ main (gint argc, gchar *argv[])
   g_main_loop_run (mloop);
 
   // Remove the interrupt signal handler
-  g_source_remove (intrpt_watch_id);
+  if (intrpt_watch_id)
+    g_source_remove (intrpt_watch_id);
 
   // Set the pipeline to the NULL state
   g_print ("\n Setting pipeline to NULL state ...\n");
   gst_element_set_state (appctx->pipeline, GST_STATE_NULL);
+
+  g_print ("Recorded Audio file %s\n", appctx->output_file);
 
   // Free the application context
   g_print ("\n Free the Application context\n");

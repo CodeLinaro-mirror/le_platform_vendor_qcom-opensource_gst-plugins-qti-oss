@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -204,6 +204,21 @@ static inline void
 gst_converter_request_unref (GstConverterRequest * request)
 {
   gst_mini_object_unref (GST_MINI_OBJECT_CAST (request));
+}
+
+static inline void
+gst_video_composition_free (GstVideoComposition * composition)
+{
+  guint idx = 0;
+
+  // Free only source/destination rectangles, frames are owned by the request.
+  for (idx = 0; idx < composition->n_blits; idx++) {
+    g_slice_free (GstVideoRectangle, composition->blits[idx].sources);
+    g_slice_free (GstVideoRectangle, composition->blits[idx].destinations);
+  }
+
+  // Free only video blits, output frame is owned by the request.
+  g_free (composition->blits);
 }
 
 static void
@@ -880,6 +895,14 @@ gst_video_composer_update_src_caps (GstAggregator * aggregator,
   }
 
   GST_DEBUG_OBJECT (vcomposer, "Updated caps %" GST_PTR_FORMAT, *othercaps);
+
+  // Applicable for 1.20 version, since the GstAggregator base class is not
+  // marking src pad for reconfigure in case NEED_DATA is returned.
+  // On older versions, mark reconfigure is already happening but it won't
+  // cause any problem since it is just about setting the flag.
+  if (!configured)
+    gst_pad_mark_reconfigure (GST_AGGREGATOR_SRC_PAD (vcomposer));
+
   return configured ? GST_FLOW_OK : GST_AGGREGATOR_FLOW_NEED_DATA;
 }
 
@@ -1118,6 +1141,7 @@ gst_video_composer_aggregate (GstAggregator * aggregator, gboolean timeout)
       request->inframes, request->outframe, &composition);
 
   if (!success) {
+    gst_video_composition_free (&composition);
     gst_converter_request_unref (request);
     return GST_AGGREGATOR_FLOW_NEED_DATA;
   }
@@ -1128,6 +1152,7 @@ gst_video_composer_aggregate (GstAggregator * aggregator, gboolean timeout)
   if ((composition.blits != NULL) && (composition.n_blits != 0)) {
     success = gst_video_converter_engine_compose (vcomposer->converter,
         &composition, 1, &(request->fence));
+    gst_video_composition_free (&composition);
   }
 
   if (!success) {

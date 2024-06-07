@@ -16,7 +16,7 @@
 * Usage:
 * For mp3: gst-audio-decode-example -i path/<filename>.mp3 -f 1
 * For wavefile: gst-audio-decode-example -i path/<filename>.wav -f 2
-*
+* For flacfile: gst-audio-decode-example -i path/<filename>.flac -f 3
 * *******************************************************************
 * Pipeline used for wavfile: filesrc->wavparse->pulsesink
 * Pipeline used for mp3: filesrc->mpegaudioparse->mpg123audiodec->pulsesink
@@ -30,26 +30,27 @@
 
 #include "include/gst_sample_apps_utils.h"
 
-#define GST_APP_SUMMARY                                                       \
-  "This audio decode app enables the users to decode audio i.e wav "          \
-  "file or mp3.\n"                                                            \
-  "For mp3: gst-audio-decode-example -i /opt/<filename>.mp3  -f 1 \n" \
-  "For wav: gst-audio-decode-example -i /opt/<filename>.wav  -f 2"
-
-// Enum to define the type of audio codec that user can set
-enum GstAudioCodecType {
-  GST_ADEFAULT,
-  GST_MP3,
-  GST_WAV,
-};
+#define GST_APP_SUMMARY \
+  "This audio decoding application allows users to decode audio files " \
+  "such as MP3, WAV, or FLAC. \n" \
+  "\nCommand \n" \
+  "  For mp3: gst-audio-decode-example -i /opt/<filename>.mp3  -f 1 \n" \
+  "  For wav: gst-audio-decode-example -i /opt/<filename>.wav  -f 2 \n" \
+  "  For flac: gst-audio-decode-example -i /opt/<filename>.flac  -f 3" \
+  "\nOutput:\n" \
+  "\n  Upon executing the application user can perceive the audio over speaker"
 
 // Structure to hold the application context
 struct GstAudioAppContext : GstAppContext {
   gchar *input_file;
-  GstAudioCodecType format;
+  GstAudioDecodeCodecType format;
 };
 
-// Function to create a new application context
+/**
+ * Create and initialize application context:
+ *
+ * @param NULL
+ */
 static GstAudioAppContext *
 gst_app_context_new ()
 {
@@ -67,12 +68,16 @@ gst_app_context_new ()
   ctx->mloop = NULL;
   ctx->plugins = NULL;
   ctx->input_file = NULL;
-  ctx->format = GST_ADEFAULT;
+  ctx->format = GST_ADECODE_NONE;
 
   return ctx;
 }
 
-// Function to free the application context
+/**
+ * Free Application context:
+ *
+ * @param appctx Application Context object
+ */
 static void
 gst_app_context_free (GstAudioAppContext * appctx)
 {
@@ -113,7 +118,14 @@ gst_app_context_free (GstAudioAppContext * appctx)
     g_free (appctx);
 }
 
-// Function to create the pipeline and link all elements
+/**
+ * Create GST pipeline involves 3 main steps
+ * 1. Create all elements/GST Plugins
+ * 2. Set Paramters for each plugin
+ * 3. Link plugins to create GST pipeline
+ *
+ * @param appctx Application Context Object.
+ */
 static gboolean
 create_pipe (GstAudioAppContext * appctx)
 {
@@ -132,7 +144,7 @@ create_pipe (GstAudioAppContext * appctx)
   audiosink = gst_element_factory_make ("pulsesink", "audiosink");
 
   // Depending on the format, create the parser and decoder elements, and link all elements
-  if (appctx->format == GST_WAV) {
+  if (appctx->format == GST_ADECODE_WAV) {
     parse = gst_element_factory_make ("wavparse", "parse");
 
     // Check if all elements are created successfully
@@ -151,7 +163,7 @@ create_pipe (GstAudioAppContext * appctx)
           audiosink, NULL);
       return FALSE;
     }
-  } else if (appctx->format == GST_MP3) {
+  } else if (appctx->format == GST_ADECODE_MP3) {
     parse = gst_element_factory_make ("mpegaudioparse", "parse");
     decoder = gst_element_factory_make ("mpg123audiodec", "decoder");
 
@@ -171,13 +183,33 @@ create_pipe (GstAudioAppContext * appctx)
           audiosink, NULL);
       return FALSE;
     }
+  } else if (appctx->format == GST_ADECODE_FLAC) {
+    parse = gst_element_factory_make ("flacparse", "parse");
+    decoder = gst_element_factory_make ("flacdec", "decoder");
+
+    // Check if all elements are created successfully
+    if (!filesrc || !parse || !decoder || !audiosink) {
+      g_printerr ("\n One element could not be created for flac decoding. Exiting.\n");
+      return FALSE;
+    }
+    gst_bin_add_many (GST_BIN (appctx->pipeline), filesrc, parse, decoder,
+        audiosink, NULL);
+
+    g_print ("\n Linking All elements ..\n");
+    ret = gst_element_link_many (filesrc, parse, decoder, audiosink, NULL);
+    if (!ret) {
+      g_printerr ("\n Pipeline elements cannot be linked. Exiting.\n");
+      gst_bin_remove_many (GST_BIN (appctx->pipeline), filesrc, parse, decoder,
+          audiosink, NULL);
+      return FALSE;
+    }
   }
 
   // Append all elements to the plugins list
   appctx->plugins = g_list_append (appctx->plugins, filesrc);
   appctx->plugins = g_list_append (appctx->plugins, parse);
   appctx->plugins = g_list_append (appctx->plugins, audiosink);
-  if (appctx->format == GST_MP3)
+  if (appctx->format == GST_ADECODE_MP3 || appctx->format == GST_ADECODE_FLAC)
     appctx->plugins = g_list_append (appctx->plugins, decoder);
 
   g_print ("\n All elements are linked successfully\n");
@@ -216,6 +248,7 @@ main (gint argc, gchar *argv[])
        "\t\t\t  format",
        "\n\t1-MP3"
        "\n\t2-WAV"
+       "\n\t3-FLAC"
       },
       {"input_file", 'i', 0, G_OPTION_ARG_STRING, &appctx->input_file,
        "Input Filename , \
@@ -225,8 +258,7 @@ main (gint argc, gchar *argv[])
   };
 
   // Parse the command line entries
-  if ((ctx = g_option_context_new ("gst-audio-decode-example")) != NULL) {
-    g_option_context_set_summary (ctx, GST_APP_SUMMARY);
+  if ((ctx = g_option_context_new (GST_APP_SUMMARY)) != NULL) {
     gboolean success = FALSE;
     GError *error = NULL;
 
@@ -254,11 +286,11 @@ main (gint argc, gchar *argv[])
   }
 
   // Check the input parameters from the user
-  if (appctx->format < GST_MP3 || appctx->format > GST_WAV ||
+  if (appctx->format < GST_ADECODE_MP3 || appctx->format > GST_ADECODE_FLAC ||
       appctx->input_file == NULL) {
     g_printerr ("\n one of input parameters is not given -f %d -i %s\n",
         appctx->format, appctx->input_file);
-    g_print ("\n usage: gst-audio-video-playback --help \n");
+    g_print ("\n usage: gst-audio-decode-example --help \n");
     gst_app_context_free (appctx);
     return -1;
   }
@@ -297,7 +329,6 @@ main (gint argc, gchar *argv[])
   // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("\n Failed to retrieve pipeline bus!\n");
-    g_main_loop_unref (mloop);
     gst_app_context_free (appctx);
     return -1;
   }
@@ -320,7 +351,10 @@ main (gint argc, gchar *argv[])
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
       g_printerr ("\n Failed to transition to PAUSED state!\n");
-      break;
+      if (intrpt_watch_id)
+        g_source_remove (intrpt_watch_id);
+      gst_app_context_free (appctx);
+      return -1;
     case GST_STATE_CHANGE_NO_PREROLL:
       g_print ("\n Pipeline is live and does not need PREROLL.\n");
       break;
@@ -333,15 +367,18 @@ main (gint argc, gchar *argv[])
   }
 
   // Start the main loop
-  g_print ("\n Application is running... \n");
+  g_print ("\n Application is running. i.e. Decoding of %s \n", appctx->input_file);
   g_main_loop_run (mloop);
 
   // Remove the interrupt signal handler
-  g_source_remove (intrpt_watch_id);
+  if (intrpt_watch_id)
+    g_source_remove (intrpt_watch_id);
 
   // Set the pipeline to the NULL state
   g_print ("\n Setting pipeline to NULL state ...\n");
   gst_element_set_state (appctx->pipeline, GST_STATE_NULL);
+
+  g_print ("\n Accomplished the Audio Decoding of %s \n", appctx->input_file);
 
   // Free the application context
   g_print ("\n Free the Application context\n");

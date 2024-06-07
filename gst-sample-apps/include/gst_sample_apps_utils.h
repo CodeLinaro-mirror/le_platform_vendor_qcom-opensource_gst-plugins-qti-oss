@@ -10,6 +10,18 @@
 #ifndef GST_SAMPLE_APPS_UTILS_H
 #define GST_SAMPLE_APPS_UTILS_H
 
+#include <stdio.h>
+#include <stdarg.h>
+
+#include <glib-unix.h>
+#include <gst/gst.h>
+
+/**
+ * Preprocessor to Convert variable value to string
+ */
+#define _TO_STR(x) #x
+#define TO_STR(x) _TO_STR(x)
+
 /**
  * GstAppContext:
  * @pipeline: Pipeline connecting all the elements for Use Case.
@@ -43,6 +55,20 @@ typedef enum {
 } GstModelType;
 
 /**
+ * GstModelFormatType:
+ * @GST_MODEL_FORMAT_NONE   : Invalid Model Format.
+ * @GST_MODEL_FORMAT_UINT8  : INT8 Model.
+ * @GST_MODEL_FORMAT_INT8   : UINT8 Model.
+ *
+ * Type of Model format.
+ */
+typedef enum {
+  GST_MODEL_FORMAT_NONE,
+  GST_MODEL_FORMAT_UINT8,
+  GST_MODEL_FORMAT_INT8
+} GstModelFormatType;
+
+/**
  * GstYoloModelType:
  * @GST_YOLO_TYPE_NONE: Invalid Model Type.
  * @GST_YOLO_TYPE_V5  : Yolov5 Object Detection Model.
@@ -57,6 +83,34 @@ typedef enum {
   GST_YOLO_TYPE_V8,
   GST_YOLO_TYPE_NAS
 } GstYoloModelType;
+
+/**
+ * GstSegmentationModelType:
+ * @GST_SEGMENTATION_TYPE_NONE       : Invalid Model Type.
+ * @GST_SEGMENTATION_TYPE_DEEPLABV3  : DEEPLABV3 Segmentation Model.
+ * @GST_SEGMENTATION_TYPE_FFNET40S   : FFNET40S Segmentation Model.
+ *
+ * Type of Segmentation Model.
+ */
+typedef enum {
+  GST_SEGMENTATION_TYPE_NONE,
+  GST_SEGMENTATION_TYPE_DEEPLABV3,
+  GST_SEGMENTATION_TYPE_FFNET40S
+} GstSegmentationModelType;
+
+/**
+ * GstStreamSourceType:
+ * @GST_STREAM_TYPE_NONE    : Invalid Stream Type.
+ * @GST_STREAM_TYPE_CAMERA  : Camera Stream.
+ * @GST_STREAM_TYPE_FILE    : Video File Stream.
+ *
+ * Type of Stream.
+ */
+typedef enum {
+  GST_STREAM_TYPE_NONE,
+  GST_STREAM_TYPE_CAMERA,
+  GST_STREAM_TYPE_FILE
+} GstStreamSourceType;
 
 /**
  * GstInferenceType:
@@ -93,6 +147,18 @@ typedef enum {
 } GstMLSnpeDelegate;
 
 /**
+ * GstQmmfSrcStreamType:
+ * @GST_SOURCE_STREAM_TYPE_VIDEO   : Stream fitted for encoding the buffer.
+ * @GST_SOURCE_STREAM_TYPE_PREVIEW : Stream fitted for visualizing the buffers.
+ *
+ * Type of qmmfsrc stream.
+ */
+typedef enum {
+  GST_SOURCE_STREAM_TYPE_VIDEO,
+  GST_SOURCE_STREAM_TYPE_PREVIEW
+} GstQmmfSrcStreamType;
+
+/**
  * GstMLTFLiteDelegate:
  * @GST_ML_TFLITE_DELEGATE_NONE     : CPU is used for all operations
  * @GST_ML_TFLITE_DELEGATE_NNAPI_DSP: DSP through Android NN API
@@ -115,6 +181,221 @@ typedef enum {
   GST_ML_TFLITE_DELEGATE_XNNPACK,
   GST_ML_TFLITE_DELEGATE_EXTERNAL,
 } GstMLTFLiteDelegate;
+
+/**
+ * GstAudioDecodeCodecType:
+ * @GST_ADECODE_NONE: Default Audio Decode Codec Type.
+ * @GST_ADECODE_MP3: Audio mp3 Codec Type.
+ * @GST_ADECODE_WAV: Audio wav Codec Type.
+ * @GST_ADECODE_FLAC: Audio flac Codec Type.
+ * Type of Audio Decode Codec.
+ */
+enum GstAudioDecodeCodecType {
+  GST_ADECODE_NONE,
+  GST_ADECODE_MP3,
+  GST_ADECODE_WAV,
+  GST_ADECODE_FLAC,
+};
+
+/**
+ * GstAudioEncodeCodecType:
+ * @GST_AENCODE_NONE: Default Audio Encode Codec Type.
+ * @GST_AENCODE_FLAC: Audio flac Codec Type.
+ * @GST_AENCODE_WAV: Audio wav Codec Type.
+ *
+ * Type of Audio Encode Codec.
+ */
+enum GstAudioEncodeCodecType {
+  GST_AENCODE_NONE,
+  GST_AENCODE_FLAC,
+  GST_AENCODE_WAV,
+};
+
+/**
+ * GstVideoPlayerCodecType:
+ * @GST_VCODEC_NONE: Default Video codec Type.
+ * @GST_VCODEC_AVC: Video AVC Codec Type.
+ * @GST_VCODEC_HEVC: Video HEVC Codec Type.
+ *
+ * Type of Video Codec for AV Player.
+ */
+enum GstVideoPlayerCodecType {
+  GST_VCODEC_NONE,
+  GST_VCODEC_AVC,
+  GST_VCODEC_HEVC,
+};
+
+/**
+ * GstAudioPlayerCodecType:
+ * @GST_ACODEC_NONE: Default Audio Codec Type.
+ * @GST_ACODEC_FLAC: Audio flac Codec Type.
+ * @GST_ACODEC_MP3: Audio wav Codec Type.
+ *
+ * Type of Audio Codec for AV Player.
+ */
+enum GstAudioPlayerCodecType {
+  GST_ACODEC_NONE,
+  GST_ACODEC_FLAC,
+  GST_ACODEC_MP3,
+};
+
+/**
+ * GstSinkType:
+ * @GST_WAYLANDSINK: Waylandsink Type.
+ * @GST_VIDEO_ENCODE : Video Encode Type.
+ * @GST_YUV_DUMP: YUV Filesink Type.
+ * @GST_RTSP_STREAMING : RTSP streaming Type.
+ * Type of App Sink.
+ */
+enum GstSinkType {
+  GST_WAYLANDSINK,
+  GST_VIDEO_ENCODE,
+  GST_YUV_DUMP,
+  GST_RTSP_STREAMING,
+};
+
+/**
+ * GstMainMenuOption:
+ * @GST_PLAY_OPTION: Option to play video.
+ * @GST_PAUSE_OPTION  : Option to pause video.
+ * @GST_FAST_FORWARD_OPTION  : Option to fast forward video.
+ * @GST_REWIND_OPTION  : Option to rewind video.
+ *
+ * Options to select from Main Menu.
+ */
+typedef enum {
+  GST_PLAY_OPTION = 1,
+  GST_PAUSE_OPTION,
+  GST_FAST_FORWARD_OPTION,
+  GST_REWIND_OPTION
+} GstMainMenuOption;
+
+/**
+ * GstFFRMenuOption:
+ * @GST_TIME_BASED: Option to seek based on time.
+ * @GST_SPEED_BASED  : Option to seek based on speed.
+ *
+ * Options to select from FFR Menu.
+ */
+typedef enum {
+  GST_TIME_BASED = 1,
+  GST_SPEED_BASED
+} GstFFRMenuOption;
+
+/**
+ * GstAppCompositionType:
+ * @GST_PIP_COMPOSE: Option to set composition position and dimension.
+ * @GST_SIDE_BY_SIDE_COMPOSE  : Option to set composition side by side.
+ *
+ * Options to select App composition.
+ */
+enum GstAppCompositionType {
+  GST_PIP_COMPOSE,
+  GST_SIDE_BY_SIDE_COMPOSE,
+};
+
+/**
+ * GstAppComposerOutput:
+ * @GST_APP_OUTPUT_WAYLANDSINK: Option to set waylandsink type.
+ * @GST_APP_OUTPUT_QTIVCOMPOSER  : Option to set composer type.
+ *
+ * Options to select composer type.
+ */
+// Enum to define the type of composer types that user can select
+enum GstAppComposerOutput {
+  GST_APP_OUTPUT_WAYLANDSINK,
+  GST_APP_OUTPUT_QTIVCOMPOSER,
+};
+
+/*
+ * Check if File Exists
+ *
+ * @param path file path to check for existence
+ * @result TRUE if file exists and can be accessed, FALSE otherwise
+ */
+static gboolean
+file_exists (const gchar * path)
+{
+  FILE *fp = fopen (path, "r+");
+  if (fp) {
+    fclose (fp);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/*
+ * Check if File Location is Valid
+ *
+ * @param path file path to check for valid path
+ * @result TRUE if path exists and can be accessed, FALSE otherwise
+ */
+static gboolean
+file_location_exists (const gchar * path)
+{
+  FILE *fp = fopen (path, "ab");
+  if (fp) {
+    fclose (fp);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/*
+ * Get Active Display Mode
+ *
+ * @param width fill display current width
+ * @param height fill display current height
+ * @result TRUE if api is able to provide information, FALSE otherwise
+ */
+static gboolean
+get_active_display_mode (gint * width, gint * height)
+{
+  gchar line[128];
+  FILE *fp = fopen ("/sys/class/drm/card0-DSI-1/modes", "rb");
+  if (!fp) {
+    return FALSE;
+  }
+
+  fgets (line, 128, fp);
+  fclose (fp);
+  if (strlen (line) > 0) {
+    if (2 == sscanf (line, "%dx%d", width, height)) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * GstFlipVideoType:
+ * @GST_FLIP_TYPE_NONE: No video image flip.
+ * @GST_FLIP_TYPE_HORIZONTAL: Video image flip horizontal.
+ * @GST_FLIP_TYPE_VERTICAL: Video image flip vertical
+ * @GST_FLIP_TYPE_BOTH: Video image flip vertical and horizontal
+ * Options to select Flip type.
+ */
+typedef enum {
+  GST_FLIP_TYPE_NONE,
+  GST_FLIP_TYPE_HORIZONTAL,
+  GST_FLIP_TYPE_VERTICAL,
+  GST_FLIP_TYPE_BOTH
+} GstFlipVideoType;
+
+/**
+ * GstRotateVideoType:
+ * @GST_ROTATE_TYPE_NONE: No video rotation.
+ * @GST_ROTATE_TYPE_90CW: 90 degree video rotation.
+ * @GST_ROTATE_TYPE_90CCW: 270 degree video rotation.
+ * @GST_ROTATE_TYPE_180: 180 degree video rotation.
+ * Options to select Rotate type.
+ */
+typedef enum {
+  GST_ROTATE_TYPE_NONE,
+  GST_ROTATE_TYPE_90CW,
+  GST_ROTATE_TYPE_90CCW,
+  GST_ROTATE_TYPE_180
+} GstRotateVideoType;
 
 /**
  * Handles interrupt by CTRL+C.
@@ -224,7 +505,9 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 
   gst_message_parse_state_changed (message, &old, &new_st, &pending);
 
-  g_print("state change: %d -> %d\n", old, new_st);
+  g_print ("\nPipeline state changed from %s to %s:\n",
+      gst_element_state_get_name (old),
+      gst_element_state_get_name (new_st));
 
   if ((new_st == GST_STATE_PAUSED) && (old == GST_STATE_READY) &&
       (pending == GST_STATE_VOID_PENDING)) {
@@ -288,6 +571,32 @@ get_enum_value (GstElement * element, const gchar * prop_name,
 
   g_free (property_specs);
   return ret;
+}
+
+/**
+ * Unref Gstreamer plugin elements
+ *
+ * @param element Plugins.
+ *
+ * Unref all elements if any fails to create.
+ */
+static void
+unref_elements(void *first_elem, ...) {
+  va_list args;
+
+  va_start(args, first_elem);
+
+  while (1) {
+    if (first_elem) {
+      if (!strcmp((char *) first_elem, "NULL"))
+        break;
+      gst_object_unref (first_elem);
+    }
+
+    first_elem = va_arg(args, void *);
+  }
+
+  va_end(args);
 }
 
 #endif //GST_SAMPLE_APPS_UTILS_H
