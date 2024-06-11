@@ -48,6 +48,7 @@ GST_DEBUG_CATEGORY (gst_ml_module_debug);
 #define GST_ML_MODULE_CAPS_FUNC      "gst_ml_module_caps"
 #define GST_ML_MODULE_CONFIGURE_FUNC "gst_ml_module_configure"
 #define GST_ML_MODULE_PROCESS_FUNC   "gst_ml_module_process"
+#define MAX_COLORS                    21
 
 /**
  * _GstMLModule:
@@ -75,6 +76,16 @@ struct _GstMLModule {
   GstMLModuleConfigure configure;
   GstMLModuleProcess   process;
 };
+
+const gchar * colors[MAX_COLORS] =  {
+        "(guint)0xFFFFFFFF", "(guint)0x800000FF", "(guint)0x008000FF",
+        "(guint)0x808000FF", "(guint)0x000080FF", "(guint)0x800080FF",
+        "(guint)0x008080FF", "(guint)0xC0C0C0FF", "(guint)0x808080FF",
+        "(guint)0xFF0000FF", "(guint)0x00FF00FF", "(guint)0xFFFF00FF",
+        "(guint)0x0000FFFF", "(guint)0xFF00FFFF", "(guint)0xFFCC6600",
+        "(guint)0x6600CCFF", "(guint)0xD7FFD7FF", "(guint)0xFF875FFF",
+        "(guint)0xFFAF00FF", "(guint)0xFFD700FF", "(guint)0xFFD7FFFF",
+        };
 
 static inline void
 gst_ml_module_initialize_debug_category (void)
@@ -239,6 +250,7 @@ gst_ml_parse_labels (const gchar * input, GValue * list)
     GError *error = NULL;
     gchar *contents = NULL;
     gboolean success = FALSE;
+    gboolean is_not_open_text = TRUE;
 
     if (!g_file_get_contents (input, &contents, NULL, &error)) {
       GST_ERROR ("Failed to get labels file contents, error: %s!",
@@ -249,6 +261,54 @@ gst_ml_parse_labels (const gchar * input, GValue * list)
 
     // Remove trailing space and replace new lines with a comma delimiter.
     contents = g_strstrip (contents);
+
+    gchar * temp = g_strdelimit(g_strdup (contents), ")\n", '(');
+    gchar ** string_arr = g_strsplit(temp, "(", -1);
+
+    g_free (temp);
+
+    is_not_open_text = g_strv_contains((const gchar * const*)string_arr,
+        "structure");
+    g_strfreev(string_arr);
+
+    if (!is_not_open_text){
+      char * dup = g_strdup (contents);
+      gchar **arr = g_strsplit(dup, "\n", -1);
+      gchar  temp_str[100];
+
+      g_free (dup);
+
+      g_snprintf (temp_str, sizeof(temp_str), "id=(guint)0x%x,color=%s;\"",
+          0, colors[0 % 21]);
+      gchar * formatted_string = g_strconcat("(structure)", "\"", arr[0],
+          ",", temp_str, "\n", NULL);
+
+      for (guint i = 1; i < g_strv_length(arr); i++) {
+        if (arr[i]) {
+          g_snprintf (temp_str, sizeof(temp_str), "id=(guint)0x%x,color=%s;\"",
+              i, colors[i % 21]);
+          if (i == (g_strv_length(arr) - 1)) {
+            dup = g_strconcat(formatted_string, "(structure)", "\"", arr[i],
+              ",", temp_str, NULL);
+          } else {
+            dup = g_strconcat(formatted_string, "(structure)", "\"", arr[i],
+              ",", temp_str, "\n", NULL);
+          }
+
+          g_free (formatted_string);
+
+          formatted_string = g_strdup (dup);
+          g_free (dup);
+        }
+      }
+      contents = g_strdup (formatted_string);
+      contents = g_strdelimit (contents, " ", '-');
+      contents = g_strdelimit (contents, "'", '-');
+
+      g_free(formatted_string);
+      g_strfreev(arr);
+    }
+
     contents = g_strdelimit (contents, "\n", ',');
 
     string = g_string_new (contents);
@@ -260,7 +320,6 @@ gst_ml_parse_labels (const gchar * input, GValue * list)
 
     // Get the raw character data.
     contents = g_string_free (string, FALSE);
-
     success = gst_value_deserialize (list, contents);
     g_free (contents);
 
