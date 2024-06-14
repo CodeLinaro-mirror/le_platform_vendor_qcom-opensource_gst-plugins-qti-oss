@@ -1,5 +1,4 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+set(GST_EXAMPLE_BIN gst-ai-daisychain-detection-classification)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -7,13 +6,11 @@ add_executable(${GST_EXAMPLE_BIN}
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-  $<$<STREQUAL:${CAMERA_SERVICE},LECAM>:${SYSROOT_INCDIR}/camx-api/camx/service>
+  ${CMAKE_SOURCE_DIR}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_LIBRARIES}
-  qmmf_camera_metadata
-  camera_metadata
 )
 
 install(
@@ -23,4 +20,3 @@ install(
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
 )
-

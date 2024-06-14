@@ -1,5 +1,11 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+cmake_minimum_required(VERSION 3.8.2)
+
+# Get the pkgconfigs exported by the automake tools
+pkg_check_modules(GST
+  REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+
+# GStreamer gst-add-remove-streams-runtime
+set(GST_EXAMPLE_BIN gst-add-remove-streams-runtime)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -7,13 +13,12 @@ add_executable(${GST_EXAMPLE_BIN}
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-  $<$<STREQUAL:${CAMERA_SERVICE},LECAM>:${SYSROOT_INCDIR}/camx-api/camx/service>
+  ${CMAKE_SOURCE_DIR}
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
+  pthread
   ${GST_LIBRARIES}
-  qmmf_camera_metadata
-  camera_metadata
 )
 
 install(
@@ -21,6 +26,5 @@ install(
   RUNTIME DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_BINDIR}
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
               GROUP_EXECUTE GROUP_READ
-              WORLD_EXECUTE WORLD_READ
+              GROUP_EXECUTE GROUP_READ
 )
-

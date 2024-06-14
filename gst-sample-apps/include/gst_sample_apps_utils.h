@@ -99,6 +99,20 @@ typedef enum {
 } GstSegmentationModelType;
 
 /**
+ * GstStreamSourceType:
+ * @GST_STREAM_TYPE_NONE    : Invalid Stream Type.
+ * @GST_STREAM_TYPE_CAMERA  : Camera Stream.
+ * @GST_STREAM_TYPE_FILE    : Video File Stream.
+ *
+ * Type of Stream.
+ */
+typedef enum {
+  GST_STREAM_TYPE_NONE,
+  GST_STREAM_TYPE_CAMERA,
+  GST_STREAM_TYPE_FILE
+} GstStreamSourceType;
+
+/**
  * GstInferenceType:
  * @param GST_OBJECT_DETECTION: Object detection Pipeline.
  * @param GST_CLASSIFICATION: Classification Pipeline.
@@ -131,6 +145,18 @@ typedef enum {
   GST_ML_SNPE_DELEGATE_GPU,
   GST_ML_SNPE_DELEGATE_AIP,
 } GstMLSnpeDelegate;
+
+/**
+ * GstQmmfSrcStreamType:
+ * @GST_SOURCE_STREAM_TYPE_VIDEO   : Stream fitted for encoding the buffer.
+ * @GST_SOURCE_STREAM_TYPE_PREVIEW : Stream fitted for visualizing the buffers.
+ *
+ * Type of qmmfsrc stream.
+ */
+typedef enum {
+  GST_SOURCE_STREAM_TYPE_VIDEO,
+  GST_SOURCE_STREAM_TYPE_PREVIEW
+} GstQmmfSrcStreamType;
 
 /**
  * GstMLTFLiteDelegate:

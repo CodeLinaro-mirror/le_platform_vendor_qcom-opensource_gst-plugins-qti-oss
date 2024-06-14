@@ -1,5 +1,7 @@
-# GStreamer camera-metadata-example example
-set(GST_EXAMPLE_BIN gst-camera-metadata-example)
+cmake_minimum_required(VERSION 3.8.2)
+
+# GStreamer gst-camera-burst-capture-example
+set(GST_EXAMPLE_BIN gst-camera-burst-capture-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -23,4 +25,3 @@ install(
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
 )
-
