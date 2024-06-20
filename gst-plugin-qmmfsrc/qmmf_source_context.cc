@@ -1232,8 +1232,8 @@ gst_qmmf_context_open (GstQmmfContext * context)
   hdr.enable = context->shdr;
 #else
   switch (context->vhdr) {
-    case SHDR_MODE_DISABLE:
-      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDROff;
+    case VHDR_OFF:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kVHDROff;
       break;
     case SHDR_MODE_RAW:
       hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRRaw;
@@ -1241,17 +1241,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
     case SHDR_MODE_YUV:
       hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRYuv;
       break;
-    case SHDR_SWITCH_DISABLE:
-      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRSwitchDisable;
-      break;
     case SHDR_SWITCH_ENABLE:
       hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRSwitchEnable;
       break;
-    case QBC_HDR_MODE_DISABLE:
-      hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRDisable;
-      break;
-    case QBC_HDR_MODE_PREVIEW:
-      hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRPreview;
+    case QBC_HDR_MODE_VIDEO:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRVideo;
       break;
     case QBC_HDR_MODE_SNAPSHOT:
       hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRSnapshot;
