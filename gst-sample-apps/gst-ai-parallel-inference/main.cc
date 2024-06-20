@@ -1130,7 +1130,7 @@ main (gint argc, gchar * argv[])
   argc = 1;
 =======
   // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {

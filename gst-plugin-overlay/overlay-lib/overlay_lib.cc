@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -3340,6 +3340,38 @@ int32_t OverlayItemPrivacyMask::UpdateAndDraw ()
   }
     break;
 
+  case OverlayPrivacyMaskType::kPolygon: {
+    uint32_t* x_coords = config_.polygon.x_coords;
+    uint32_t* y_coords = config_.polygon.y_coords;
+    uint32_t n_sides = config_.polygon.n_sides;
+    cairo_move_to (cr_context_, (((*x_coords) * surface_.width_) / width_),
+            (((*y_coords) * surface_.height_) / height_));
+    for (uint32_t j = 1; j < n_sides; j++) {
+      cairo_line_to (cr_context_, (((*(x_coords + j)) * surface_.width_) / width_),
+            (((*(y_coords + j)) * surface_.height_) / height_));
+    }
+    cairo_close_path (cr_context_);
+    cairo_fill (cr_context_);
+  }
+    break;
+
+  case OverlayPrivacyMaskType::kInversePolygon: {
+    uint32_t* x_coords = config_.polygon.x_coords;
+    uint32_t* y_coords = config_.polygon.y_coords;
+    uint32_t n_sides = config_.polygon.n_sides;
+    cairo_move_to (cr_context_, (((*x_coords) * surface_.width_) / width_),
+            (((*y_coords) * surface_.height_) / height_));
+    for (uint32_t j = 1; j < n_sides; j++) {
+      cairo_line_to (cr_context_, (((*(x_coords + j)) * surface_.width_) / width_),
+            (((*(y_coords + j)) * surface_.height_) / height_));
+    }
+    cairo_close_path (cr_context_);
+    cairo_rectangle (cr_context_, 0, 0, surface_.width_, surface_.height_);
+    cairo_set_fill_rule (cr_context_, CAIRO_FILL_RULE_EVEN_ODD);
+    cairo_fill (cr_context_);
+  }
+    break;
+
   default:
     OVDBG_ERROR ("%s: Unsupported privacy mask type %d", __func__,
         (int32_t) config_.type);
@@ -3413,7 +3445,7 @@ int32_t OverlayItemPrivacyMask::UpdateParameters (OverlayParam& param)
   mask_color_ = param.color;
   config_ = param.privacy_mask;
 
-  surface_.width_ = kMaskBoxBufWidth;
+  surface_.width_ = GST_ROUND_UP_128 (std::min (width_, kMaskBoxBufWidth));
   surface_.height_ = (surface_.width_ * height_) / width_;
   surface_.height_ = ROUND_TO(surface_.height_, 2);
   surface_.stride_ = CalcStride (surface_.width_, surface_.format_);
