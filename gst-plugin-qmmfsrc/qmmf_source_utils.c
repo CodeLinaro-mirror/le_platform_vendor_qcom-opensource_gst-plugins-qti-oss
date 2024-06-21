@@ -648,11 +648,13 @@ gst_qmmfsrc_eis_mode_get_type (void)
         "EIS is not applied.", "eis-off"
     },
     { EIS_ON_SINGLE_STREAM,
-        "EIS is applied on first stream.", "eis-on-single-stream"
+        "EIS is applied on first (non-snapshot) stream. Maximum number of "
+	"each of preview, video and snapshot streams can be one.",
+	"eis-on-single-stream"
     },
     { EIS_ON_DUAL_STREAM,
-        "EIS is applied on both streams in case of two streams use case, "
-        "undefined behavior for more than two streams use case.",
+        "EIS is applied on both preview and video streams. Maximum number of "
+        "each of preview, video and snapshot streams can be one.",
         "eis-on-dual-stream"
     },
     {0, NULL, NULL},
@@ -672,10 +674,7 @@ gst_qmmfsrc_vhdr_mode_get_type (void)
   static GType gtype = 0;
   static const GEnumValue variants[] = {
     { VHDR_OFF,
-        "VHDR is not applied.", "off"
-    },
-    { SHDR_MODE_DISABLE,
-        "SHDR is not applied.", "shdr-off"
+        "VHDR is not disabled.", "off"
     },
     { SHDR_MODE_RAW,
         "Raw SHDR line interleaved mode with 2 frame. "
@@ -687,26 +686,16 @@ gst_qmmfsrc_vhdr_mode_get_type (void)
         "Use this mode for better quality on supporting sensor. "
         "This mode may result in reduced framerate.", "shdr-yuv"
     },
-    { SHDR_SWITCH_DISABLE,
-        "Disable SHDR switch. "
-        "Use this mode for disabling shdr switch in camera backend",
-        "shdr-switch-disable"
-    },
     { SHDR_SWITCH_ENABLE,
         "Enable SHDR switch. "
-        "Use this mode for enabling shdr switch in camera backend",
-        "shdr-switch-enable"
+        "Use this mode for enabling shdr switch in camera backend based on lux value. ",
+        "The switch is between linear and other SHDR type based on support in camera.",
+	"shdr-switch-enable"
     },
-    { QBC_HDR_MODE_DISABLE,
-        "Disable in-sensor HDR. "
-        "Use this mode for disabling in sensor hdr. "
-        "This mode is applicable for sensor that support this feature only.",
-        "qbc-hdr-disable"
-    },
-    { QBC_HDR_MODE_PREVIEW,
-        "Enable in-sensor HDR for preview stream. "
+    { QBC_HDR_MODE_VIDEO,
+        "Enable in-sensor HDR for video stream. "
         "This mode is applicable for sensor that support this feature only. ",
-        "qbc-hdr-preview"
+        "qbc-hdr-video"
     },
     { QBC_HDR_MODE_SNAPSHOT,
         "Enable in-sensor HDR for snapshot. "
