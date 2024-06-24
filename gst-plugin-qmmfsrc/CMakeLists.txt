@@ -65,6 +65,7 @@ target_compile_definitions(${GST_QMMFSRC_PLUGIN} PRIVATE
   $<$<BOOL:${GST_VIDEO_TYPE_SUPPORT}>:GST_VIDEO_TYPE_SUPPORT>
   $<$<BOOL:${MULTI_CAMERA_ENABLE}>:MULTI_CAMERA_ENABLE>
   $<$<BOOL:${HAVE_C2D2_H}>:C2D_ENABLE>
+  $<$<BOOL:${EIS_MODES_ENABLE}>:EIS_MODES_ENABLE>
 )
 
 target_include_directories(${GST_QMMFSRC_PLUGIN} PRIVATE
@@ -74,6 +75,7 @@ target_include_directories(${GST_QMMFSRC_PLUGIN} PRIVATE
 
 target_link_libraries(${GST_QMMFSRC_PLUGIN} PRIVATE
   qmmf_recorder_client
+  qmmf_camera_metadata
   ${GST_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}

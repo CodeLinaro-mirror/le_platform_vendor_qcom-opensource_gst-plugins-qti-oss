@@ -26,9 +26,9 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,57 +61,57 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_ML_SNPE_ENGINE_H__
-#define __GST_ML_SNPE_ENGINE_H__
+#ifndef __GST_QTI_ML_VIDEO_SUPERRESOLUTION_H__
+#define __GST_QTI_ML_VIDEO_SUPERRESOLUTION_H__
 
 #include <gst/gst.h>
-#include <gst/allocators/allocators.h>
+#include <gst/base/gstbasetransform.h>
+#include <gst/video/video.h>
 #include <gst/ml/ml-info.h>
-#include <gst/ml/ml-frame.h>
+
+#include "modules/ml-video-superresolution-module.h"
 
 G_BEGIN_DECLS
 
-/**
- * GstMLSnpeDelegate:
- * @GST_ML_SNPE_DELEGATE_NONE: CPU is used for all operations
- * @GST_ML_SNPE_DELEGATE_DSP: Hexagon Digital Signal Processor
- * @GST_ML_SNPE_DELEGATE_GPU: Graphics Processing Unit
- * @GST_ML_SNPE_DELEGATE_AIP: Snapdragon AIX + HVX
- *
- * Different delegates for transferring part or all of the model execution.
- */
-typedef enum {
-  GST_ML_SNPE_DELEGATE_NONE,
-  GST_ML_SNPE_DELEGATE_DSP,
-  GST_ML_SNPE_DELEGATE_GPU,
-  GST_ML_SNPE_DELEGATE_AIP,
-} GstMLSnpeDelegate;
+#define GST_TYPE_ML_VIDEO_SUPERRESOLUTION (gst_ml_video_superresolution_get_type())
+#define GST_ML_VIDEO_SUPERRESOLUTION(obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_ML_VIDEO_SUPERRESOLUTION, \
+                              GstMLVideoSuperresolution))
+#define GST_ML_VIDEO_SUPERRESOLUTION_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_ML_VIDEO_SUPERRESOLUTION, \
+                           GstMLVideoSuperresolutionClass))
+#define GST_IS_ML_VIDEO_SUPERRESOLUTION(obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_ML_VIDEO_SUPERRESOLUTION))
+#define GST_IS_ML_VIDEO_SUPERRESOLUTION_CLASS(klass) \
+  (G_TYPE_CHECK_CLASS_TYPE((klass), GST_TYPE_ML_VIDEO_SUPERRESOLUTION))
+#define GST_ML_VIDEO_SUPERRESOLUTION_CAST(obj) ((GstMLVideoSuperresolution *)(obj))
 
-GST_API GType gst_ml_snpe_delegate_get_type (void);
-#define GST_TYPE_ML_SNPE_DELEGATE (gst_ml_snpe_delegate_get_type())
+typedef struct _GstMLVideoSuperresolution GstMLVideoSuperresolution;
+typedef struct _GstMLVideoSuperresolutionClass GstMLVideoSuperresolutionClass;
 
-typedef struct _GstMLSnpeEngine GstMLSnpeEngine;
+struct _GstMLVideoSuperresolution {
+  GstBaseTransform  parent;
 
-GST_API GstMLSnpeEngine *
-gst_ml_snpe_engine_new (const gchar * modelfile, GstMLSnpeDelegate delegate,
-                        gboolean is_tensor, GList *outputs);
+  GstMLInfo         *mlinfo;
+  GstVideoInfo      *vinfo;
 
-GST_API void
-gst_ml_snpe_engine_free (GstMLSnpeEngine * engine);
+  /// Buffer pools.
+  GstBufferPool     *outpool;
 
-GST_API GstCaps *
-gst_ml_snpe_engine_get_input_caps (GstMLSnpeEngine * engine);
+  /// Tensor deciphering module.
+  GstMLModule       *module;
 
-GST_API GstCaps *
-gst_ml_snpe_engine_get_output_caps (GstMLSnpeEngine * engine);
+  /// Properties.
+  gint              mdlenum;
+  GstStructure      *mlconstants;
+};
 
-GST_API gboolean
-gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps);
+struct _GstMLVideoSuperresolutionClass {
+  GstBaseTransformClass parent;
+};
 
-GST_API gboolean
-gst_ml_snpe_engine_execute (GstMLSnpeEngine * engine, GstMLFrame * inframe,
-                            GstMLFrame * outframe);
+G_GNUC_INTERNAL GType gst_ml_video_Superresolution_get_type (void);
 
 G_END_DECLS
 
-#endif /* __GST_ML_SNPE_ENGINE_H__ */
+#endif // __GST_QTI_ML_VIDEO_SUPERRESOLUTION_H__

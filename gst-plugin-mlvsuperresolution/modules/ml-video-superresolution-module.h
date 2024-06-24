@@ -26,9 +26,9 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
+ * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022,2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,57 +61,37 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_ML_SNPE_ENGINE_H__
-#define __GST_ML_SNPE_ENGINE_H__
+#ifndef __GST_QTI_ML_VIDEO_SUPERRESOLUTION_MODULE_H__
+#define __GST_QTI_ML_VIDEO_SUPERRESOLUTION_MODULE_H__
 
 #include <gst/gst.h>
-#include <gst/allocators/allocators.h>
-#include <gst/ml/ml-info.h>
-#include <gst/ml/ml-frame.h>
+#include <gst/ml/gstmlmodule.h>
+#include <gst/video/video.h>
 
 G_BEGIN_DECLS
 
 /**
- * GstMLSnpeDelegate:
- * @GST_ML_SNPE_DELEGATE_NONE: CPU is used for all operations
- * @GST_ML_SNPE_DELEGATE_DSP: Hexagon Digital Signal Processor
- * @GST_ML_SNPE_DELEGATE_GPU: Graphics Processing Unit
- * @GST_ML_SNPE_DELEGATE_AIP: Snapdragon AIX + HVX
+ * gst_ml_video_superresolution_module_execute:
+ * @module: Pointer to ML post-processing module.
+ * @mlframe: Frame containing mapped tensor memory blocks that need processing.
+ * @vframe: Frame containing image.
  *
- * Different delegates for transferring part or all of the model execution.
+ * Convenient wrapper function used on plugin level to call the module
+ * 'gst_ml_module_process' API via 'gst_ml_module_execute' wrapper in order
+ * to process input tensors.
+ *
+ * Post-processing module must define the 3rd argument of the implemented
+ * 'gst_ml_module_process' API as 'GArray *'.
+ *
+ * return: TRUE on success or FALSE on failure
  */
-typedef enum {
-  GST_ML_SNPE_DELEGATE_NONE,
-  GST_ML_SNPE_DELEGATE_DSP,
-  GST_ML_SNPE_DELEGATE_GPU,
-  GST_ML_SNPE_DELEGATE_AIP,
-} GstMLSnpeDelegate;
-
-GST_API GType gst_ml_snpe_delegate_get_type (void);
-#define GST_TYPE_ML_SNPE_DELEGATE (gst_ml_snpe_delegate_get_type())
-
-typedef struct _GstMLSnpeEngine GstMLSnpeEngine;
-
-GST_API GstMLSnpeEngine *
-gst_ml_snpe_engine_new (const gchar * modelfile, GstMLSnpeDelegate delegate,
-                        gboolean is_tensor, GList *outputs);
-
-GST_API void
-gst_ml_snpe_engine_free (GstMLSnpeEngine * engine);
-
-GST_API GstCaps *
-gst_ml_snpe_engine_get_input_caps (GstMLSnpeEngine * engine);
-
-GST_API GstCaps *
-gst_ml_snpe_engine_get_output_caps (GstMLSnpeEngine * engine);
-
 GST_API gboolean
-gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps);
-
-GST_API gboolean
-gst_ml_snpe_engine_execute (GstMLSnpeEngine * engine, GstMLFrame * inframe,
-                            GstMLFrame * outframe);
+gst_ml_video_superresolution_module_execute (GstMLModule * module,
+    GstMLFrame * mlframe, GstVideoFrame * vframe)
+{
+  return gst_ml_module_execute (module, mlframe, (gpointer) vframe);
+}
 
 G_END_DECLS
 
-#endif /* __GST_ML_SNPE_ENGINE_H__ */
+#endif // __GST_QTI_ML_VIDEO_SUPERRESOLUTION_MODULE_H__
