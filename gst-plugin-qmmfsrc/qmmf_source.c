@@ -91,7 +91,11 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #else
 #define DEFAULT_PROP_CAMERA_EIS_MODE                  EIS_OFF
 #endif // EIS_MODES_ENABLE
+#ifndef VHDR_MODES_ENABLE
 #define DEFAULT_PROP_CAMERA_SHDR_MODE                 FALSE
+#else
+#define DEFAULT_PROP_CAMERA_VHDR_MODE                 VHDR_OFF
+#endif // VHDR_MODES_ENABLE
 #define DEFAULT_PROP_CAMERA_ADRC                      FALSE
 #define DEFAULT_PROP_CAMERA_CONTROL_MODE              CONTROL_MODE_AUTO
 #define DEFAULT_PROP_CAMERA_EFFECT_MODE               EFFECT_MODE_OFF
@@ -150,7 +154,11 @@ enum
   PROP_CAMERA_LDC,
   PROP_CAMERA_LCAC,
   PROP_CAMERA_EIS,
+#ifndef VHDR_MODES_ENABLE
   PROP_CAMERA_SHDR,
+#else
+  PROP_CAMERA_VHDR,
+#endif // VHDR_MODES_ENABLE
   PROP_CAMERA_ADRC,
   PROP_CAMERA_CONTROL_MODE,
   PROP_CAMERA_EFFECT_MODE,
@@ -980,7 +988,7 @@ qmmfsrc_set_property (GObject * object, guint property_id,
   const gchar *propname = g_param_spec_get_name (pspec);
   GstState state = GST_STATE (qmmfsrc);
 
-  if (!QMMFSRC_IS_PROPERTY_MUTABLE_IN_CURRENT_STATE(pspec, state)) {
+  if (!GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state)) {
     GST_WARNING ("Property '%s' change not supported in %s state!",
         propname, gst_element_state_get_name (state));
     return;
@@ -1007,10 +1015,17 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_EIS, value);
       break;
+#ifndef VHDR_MODES_ENABLE
     case PROP_CAMERA_SHDR:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_SHDR, value);
       break;
+#else
+    case PROP_CAMERA_VHDR:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_VHDR, value);
+      break;
+#endif // VHDR_MODES_ENABLE
     case PROP_CAMERA_ADRC:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ADRC, value);
@@ -1189,10 +1204,17 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_EIS, value);
       break;
+#ifndef VHDR_MODES_ENABLE
     case PROP_CAMERA_SHDR:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_SHDR, value);
       break;
+#else
+    case PROP_CAMERA_VHDR:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_VHDR, value);
+      break;
+#endif // VHDR_MODES_ENABLE
     case PROP_CAMERA_ADRC:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_ADRC, value);
@@ -1429,11 +1451,20 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           GST_TYPE_QMMFSRC_EIS_MODE, DEFAULT_PROP_CAMERA_EIS_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #endif // EIS_MODES_ENABLE
+#ifndef VHDR_MODES_ENABLE
   g_object_class_install_property (gobject, PROP_CAMERA_SHDR,
       g_param_spec_boolean ("shdr", "SHDR",
           "Super High Dynamic Range Imaging", DEFAULT_PROP_CAMERA_SHDR_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+#else
+  g_object_class_install_property (gobject, PROP_CAMERA_VHDR,
+      g_param_spec_enum ("vhdr", "VHDR",
+          "Video High Dynamic Range Imaging Modes",
+          GST_TYPE_QMMFSRC_VHDR_MODE, DEFAULT_PROP_CAMERA_VHDR_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
+#endif // VHDR_MODES_ENABLE
   g_object_class_install_property (gobject, PROP_CAMERA_ADRC,
       g_param_spec_boolean ("adrc", "ADRC",
           "Automatic Dynamic Range Compression", DEFAULT_PROP_CAMERA_ADRC,
@@ -1661,13 +1692,16 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif  // MULTI_CAMERA_ENABLE
+
   g_object_class_install_property (gobject, PROP_CAMERA_OPERATION_MODE,
-      g_param_spec_enum ("op-mode", "Camera operation mode",
-           "provide camera operation mode to support specified camera function "
-           "support mode : none | frameselection "
-           "by default camera operation mode is none.",
-           GST_TYPE_QMMFSRC_CAM_OPMODE, DEFAULT_PROP_CAMERA_OPERATION_MODE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      g_param_spec_flags ("op-mode", "Camera operation mode",
+          "provide camera operation mode to support specified camera function "
+          "support mode : none, frameselection and fastswitch"
+          "by default camera operation mode is none.",
+          GST_TYPE_QMMFSRC_CAM_OPMODE, DEFAULT_PROP_CAMERA_OPERATION_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+
   g_object_class_install_property (gobject, PROP_CAMERA_INPUT_ROI,
       g_param_spec_boolean ("input-roi-enable", "Input ROI reprocess enable",
           "Input ROI if enabled, Input ROI reprocess usecase will be selected",

@@ -26,19 +26,15 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the
+ *     following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #pragma once
 
-#ifdef HAVE_ANDROID_UTILS
-#include <cutils/properties.h>
-#else
-#include <properties.h>
-#endif
 #include <gst/gst.h>
 #include <cairo/cairo.h>
 #include <sys/time.h>
@@ -51,9 +47,11 @@
 #include <adreno/c2d2.h>
 #endif // ENABLE_C2D
 
-#ifdef HAVE_LINUX_DMA_HEAP_H
+#ifdef HAVE_CL_EXT_QCOM_H
 #include <CL/cl_ext_qcom.h>
-#endif // HAVE_LINUX_DMA_HEAP_H
+#endif // HAVE_CL_EXT_QCOM_H
+
+#include "open_cl_funcs.h"
 
 namespace overlay {
 
@@ -71,7 +69,6 @@ namespace overlay {
 // Remove comment marker to measure time taken in overlay drawing.
 //#define DEBUG_BLIT_TIME
 
-#define PROP_DUMP_BLOB_IMAGE        "persist.overlay.dump.blob"
 #define PROP_BOX_STROKE_WIDTH       "persist.overlay.stroke.width"
 
 #define OV_UNUSED(a) (void)(a)
@@ -205,6 +202,8 @@ class OpenClKernel {
   size_t local_size_[2];
   size_t global_size_[2];
   size_t global_offset_[2];
+
+  static std::shared_ptr<OpenClFuncs> ocl_;
 
   static const gint64 kWaitProcessTimeout =
       G_GINT64_CONSTANT (2000000); // 2 sec.
@@ -685,10 +684,10 @@ public:
         *avr_time = diff;
       }
       *avr_time = (15 * (*avr_time) + diff) / 16;
-      OVDBG_INFO ("%s: Current: %.2f ms Avrg: %.2f ms", str.c_str(),
+      GST_INFO ("%s: Current: %.2f ms Avrg: %.2f ms", str.c_str(),
           diff / 1000.0, (*avr_time) / 1000.0);
     } else {
-      OVDBG_INFO ("%s: %.2f ms", str.c_str(), diff / 1000.0);
+      GST_INFO ("%s: %.2f ms", str.c_str(), diff / 1000.0);
     }
   }
 

@@ -17,7 +17,7 @@
  * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
  * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYright OWNER OR CONTRIBUTORS
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
  * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
@@ -26,9 +26,9 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * ​​​​​Changes from Qualcomm Innovation Center are provided under the following license:
+ * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -61,86 +61,11 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __GST_QTI_ML_VIDEO_POSE_MODULE_H__
-#define __GST_QTI_ML_VIDEO_POSE_MODULE_H__
+#include "ml-module-video-super-resolution.h"
 
-#include <gst/gst.h>
-#include <gst/ml/gstmlmodule.h>
-
-G_BEGIN_DECLS
-
-typedef struct _GstPoseKeypoint GstPoseKeypoint;
-typedef struct _GstPoseLink GstPoseLink;
-typedef struct _GstMLPrediction GstMLPrediction;
-
-/**
- * GstPoseKeypoint:
- * @label: Name of the keypoint.
- * @color: Color of the keypoint.
- * @confidence: Confidence score for this keypoint.
- * @x: X axis coordinate of the keypoint.
- * @y: Y axis coordinate of the keypoint.
- *
- * Information describing keypoint location and confidence score.
- *
- * The fields x and y must be set in (0.0 to 1.0) relative coordinate system.
- */
-struct _GstPoseKeypoint {
-  gchar  *label;
-  guint  color;
-  gfloat confidence;
-  gfloat x;
-  gfloat y;
-};
-
-/**
- * GstPoseLink:
- * @s_kp_idx: ID of the source keypoint.
- * @d_kp_idx: ID of the destination keypoint.
- *
- * Information describing a link between two keypoints.
- */
-struct _GstPoseLink {
-  guint s_kp_id;
-  guint d_kp_id;
-};
-
-/**
- * GstMLPrediction:
- * @confidence: The overall confidence for the estimated pose.
- * @keypoints: List of #GstPoseKeypoint.
- * @connections: List of #GstPoseLink.
- *
- * Information describing prediction result from pose estimation models.
- * All fields are mandatory and need to be filled by the submodule.
- */
-struct _GstMLPrediction {
-  float  confidence;
-  GArray *keypoints;
-  GArray *connections;
-};
-
-/**
- * gst_ml_video_pose_module_execute:
- * @module: Pointer to ML post-processing module.
- * @mlframe: Frame containing mapped tensor memory blocks that need processing.
- * @predictions: GArray of #GstMLPrediction.
- *
- * Convenient wrapper function used on plugin level to call the module
- * 'gst_ml_module_process' API via 'gst_ml_module_execute' wrapper in order
- * to process input tensors.
- *
- * Post-processing module must define the 3rd argument of the implemented
- * 'gst_ml_module_process' API as 'GArray *'.
- *
- * return: TRUE on success or FALSE on failure
- */
 GST_API gboolean
-gst_ml_video_pose_module_execute (GstMLModule * module,
-    GstMLFrame * mlframe, GArray * predictions)
+gst_ml_module_video_super_resolution_execute (GstMLModule * module,
+    GstMLFrame * mlframe, GstVideoFrame * vframe)
 {
-  return gst_ml_module_execute (module, mlframe, (gpointer) predictions);
+  return gst_ml_module_execute (module, mlframe, (gpointer) vframe);
 }
-
-G_END_DECLS
-#endif // __GST_QTI_ML_VIDEO_POSE_MODULE_H__
