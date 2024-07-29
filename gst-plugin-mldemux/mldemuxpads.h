@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -63,6 +63,35 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_ML_DEMUX_SRCPAD))
 #define GST_ML_DEMUX_SRCPAD_CAST(obj) ((GstMLDemuxSrcPad *)(obj))
 
+#define GST_ML_DEMUX_PAD_SIGNAL_IDLE(pad, idle) \
+{\
+  g_mutex_lock (&(pad->lock));                                     \
+                                                                   \
+  if (pad->is_idle != idle) {                                      \
+    pad->is_idle = idle;                                           \
+    GST_TRACE_OBJECT (pad, "State %s", idle ? "Idle" : "Running"); \
+    g_cond_signal (&(pad->drained));                               \
+  }                                                                \
+                                                                   \
+  g_mutex_unlock (&(pad->lock));                                   \
+}
+
+#define GST_ML_DEMUX_PAD_WAIT_IDLE(pad) \
+{\
+  g_mutex_lock (&(pad->lock));                                         \
+  GST_TRACE_OBJECT (pad, "Waiting until idle");                        \
+                                                                       \
+  while (!pad->is_idle) {                                              \
+    gint64 endtime = g_get_monotonic_time () + 1 * G_TIME_SPAN_SECOND; \
+                                                                       \
+    if (!g_cond_wait_until (&(pad->drained), &(pad->lock), endtime))   \
+      GST_WARNING_OBJECT (pad, "Timeout while waiting for idle!");     \
+  }                                                                    \
+                                                                       \
+  GST_TRACE_OBJECT (pad, "Received idle");                             \
+  g_mutex_unlock (&(pad->lock));                                       \
+}
+
 typedef struct _GstMLDemuxSinkPad GstMLDemuxSinkPad;
 typedef struct _GstMLDemuxSinkPadClass GstMLDemuxSinkPadClass;
 typedef struct _GstMLDemuxSrcPad GstMLDemuxSrcPad;
@@ -71,6 +100,9 @@ typedef struct _GstMLDemuxSrcPadClass GstMLDemuxSrcPadClass;
 struct _GstMLDemuxSinkPad {
   /// Inherited parent structure.
   GstPad     parent;
+
+  /// ML tensors info from caps.
+  GstMLInfo  *mlinfo;
 
   /// Segment.
   GstSegment segment;
@@ -84,6 +116,16 @@ struct _GstMLDemuxSinkPadClass {
 struct _GstMLDemuxSrcPad {
   /// Inherited parent structure.
   GstPad       parent;
+
+  /// Global mutex lock.
+  GMutex       lock;
+  /// ID/Index with which this pad was created.
+  guint        id;
+
+  /// Condition for signalling that last buffer was submitted downstream.
+  GCond        drained;
+  /// Flag indicating that there is no more work for processing.
+  gboolean     is_idle;
 
   /// ML tensors info from caps.
   GstMLInfo    *mlinfo;

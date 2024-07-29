@@ -85,7 +85,36 @@ G_BEGIN_DECLS
 #define GST_METAMUX_SRC_UNLOCK(obj) \
     g_mutex_unlock(GST_METAMUX_SRC_GET_LOCK(obj))
 
-typedef struct _GstMetaEntry GstMetaEntry;
+#define GST_METAMUX_PAD_SIGNAL_IDLE(pad, idle) \
+{\
+  g_mutex_lock (&(pad->lock));                                     \
+                                                                   \
+  if (pad->is_idle != idle) {                                      \
+    pad->is_idle = idle;                                           \
+    GST_TRACE_OBJECT (pad, "State %s", idle ? "Idle" : "Running"); \
+    g_cond_signal (&(pad->drained));                               \
+  }                                                                \
+                                                                   \
+  g_mutex_unlock (&(pad->lock));                                   \
+}
+
+#define GST_METAMUX_PAD_WAIT_IDLE(pad) \
+{\
+  g_mutex_lock (&(pad->lock));                                         \
+  GST_TRACE_OBJECT (pad, "Waiting until idle");                        \
+                                                                       \
+  while (!pad->is_idle) {                                              \
+    gint64 endtime = g_get_monotonic_time () + 1 * G_TIME_SPAN_SECOND; \
+                                                                       \
+    if (!g_cond_wait_until (&(pad->drained), &(pad->lock), endtime))   \
+      GST_WARNING_OBJECT (pad, "Timeout while waiting for idle!");     \
+  }                                                                    \
+                                                                       \
+  GST_TRACE_OBJECT (pad, "Received idle");                             \
+  g_mutex_unlock (&(pad->lock));                                       \
+}
+
+typedef struct _GstMetaItem GstMetaItem;
 
 typedef struct _GstMetaMuxDataPad GstMetaMuxDataPad;
 typedef struct _GstMetaMuxDataPadClass GstMetaMuxDataPadClass;
@@ -102,26 +131,29 @@ typedef enum {
   GST_DATA_TYPE_OPTICAL_FLOW,
 } GstDataType;
 
-struct _GstMetaEntry {
-  /// Parsed metadata in GST_TYPE_LIST format containing GST_TYPE_STRUCTURE.
-  GValue       value;
+struct _GstMetaItem {
+  /// Parsed metadata in list format containing GstStructure.
+  GList        *values;
   /// The timestamp corresponding to the metadata entry.
   GstClockTime timestamp;
 };
 
 struct _GstMetaMuxDataPad {
   /// Inherited parent structure.
-  GstPad      parent;
+  GstPad       parent;
 
   // Format of negotiated metadata.
-  GstDataType type;
+  GstDataType  type;
   /// Segment.
-  GstSegment  segment;
+  GstSegment   segment;
 
-  /// Variable for temporarily storing partial data(meta).
-  gchar       *stash;
-  /// Queue for managing parsed #GstMetaEntry data.
-  GQueue      *queue;
+  /// Variable for temporarily storing partial meta entry.
+  GstMetaItem  *prtlmeta;
+  /// Variable for temporarily storing incomplete string data(meta).
+  gchar        *strcache;
+
+  /// Queue for managing parsed #GstMetaItem data.
+  GQueue       *queue;
 };
 
 struct _GstMetaMuxDataPadClass {
@@ -132,6 +164,14 @@ struct _GstMetaMuxDataPadClass {
 struct _GstMetaMuxSinkPad {
   /// Inherited parent structure.
   GstPad       parent;
+
+  /// Global mutex lock.
+  GMutex       lock;
+
+  /// Condition for signalling that last buffer was submitted downstream.
+  GCond        drained;
+  /// Flag indicating that there is no more work for processing.
+  gboolean     is_idle;
 
   /// Queue for managing incoming video/audio buffers.
   GstDataQueue *buffers;
@@ -148,6 +188,11 @@ struct _GstMetaMuxSrcPad {
 
   /// Global mutex lock.
   GMutex       lock;
+
+  /// Condition for signalling that last buffer was submitted downstream.
+  GCond        drained;
+  /// Flag indicating that there is no more work for processing.
+  gboolean     is_idle;
 
   /// Segment.
   GstSegment   segment;

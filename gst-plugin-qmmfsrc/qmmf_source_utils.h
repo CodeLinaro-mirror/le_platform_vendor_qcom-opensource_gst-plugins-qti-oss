@@ -30,7 +30,7 @@
 /*
  *  Changes from Qualcomm Innovation Center are provided under the following license:
  *
- *  Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ *  Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted (subject to the limitations in the
@@ -69,6 +69,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <glib/gtypes.h>
+#include <gst/utils/common-utils.h>
 
 G_BEGIN_DECLS
 
@@ -113,12 +114,6 @@ G_BEGIN_DECLS
   } \
 }
 
-#define QMMFSRC_IS_PROPERTY_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-    ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-        : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-            : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-                : (state <= GST_STATE_NULL))))
-
 #define GST_TYPE_QMMFSRC_CONTROL_MODE (gst_qmmfsrc_control_mode_get_type())
 #define GST_TYPE_QMMFSRC_EFFECT_MODE (gst_qmmfsrc_effect_mode_get_type())
 #define GST_TYPE_QMMFSRC_SCENE_MODE (gst_qmmfsrc_scene_mode_get_type())
@@ -137,6 +132,12 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
 #define GST_TYPE_QMMFSRC_CAM_OPMODE (gst_qmmfsrc_cam_opmode_get_type())
+#ifdef EIS_MODES_ENABLE
+#define GST_TYPE_QMMFSRC_EIS_MODE (gst_qmmfsrc_eis_mode_get_type())
+#endif // EIS_MODES_ENABLE
+#ifdef VHDR_MODES_ENABLE
+#define GST_TYPE_QMMFSRC_VHDR_MODE (gst_qmmfsrc_vhdr_mode_get_type())
+#endif // VHDR_MODES_ENABLE
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -292,6 +293,27 @@ enum
   CAPTURE_REQUEST,
 };
 
+#ifdef EIS_MODES_ENABLE
+enum
+{
+  EIS_OFF,
+  EIS_ON_SINGLE_STREAM,
+  EIS_ON_DUAL_STREAM,
+};
+#endif // EIS_MODES_ENABLE
+
+#ifdef VHDR_MODES_ENABLE
+enum
+{
+  VHDR_OFF,
+  SHDR_MODE_RAW,
+  SHDR_MODE_YUV,
+  SHDR_SWITCH_ENABLE,
+  QBC_HDR_MODE_VIDEO,
+  QBC_HDR_MODE_SNAPSHOT,
+};
+#endif // VHDR_MODES_ENABLE
+
 enum
 {
   ROTATE_NONE,
@@ -301,9 +323,9 @@ enum
 };
 
 typedef enum {
-  CAM_OPMODE_NONE,
-  CAM_OPMODE_FRAMESELECTION,
-  CAM_OPMODE_FASTSWITCH,
+  CAM_OPMODE_NONE               = (1 << 0),
+  CAM_OPMODE_FRAMESELECTION     = (1 << 1),
+  CAM_OPMODE_FASTSWITCH         = (1 << 2),
 } GstCamOpMode;
 
 GType gst_qmmfsrc_control_mode_get_type (void);
@@ -332,7 +354,15 @@ GType gst_qmmfsrc_capture_mode_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
 
-GType gst_qmmfsrc_rotate_get_type(void);
+#ifdef EIS_MODES_ENABLE
+GType gst_qmmfsrc_eis_mode_get_type (void);
+#endif // EIS_MODES_ENABLE
+
+#ifdef VHDR_MODES_ENABLE
+GType gst_qmmfsrc_vhdr_mode_get_type (void);
+#endif // VHDR_MODES_ENABLE
+
+GType gst_qmmfsrc_rotate_get_type (void);
 
 GType gst_qmmfsrc_cam_opmode_get_type (void);
 

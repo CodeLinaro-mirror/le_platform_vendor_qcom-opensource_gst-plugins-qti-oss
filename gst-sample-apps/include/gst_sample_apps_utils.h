@@ -85,18 +85,18 @@ typedef enum {
 } GstYoloModelType;
 
 /**
- * GstSegmentationModelType:
- * @GST_SEGMENTATION_TYPE_NONE       : Invalid Model Type.
- * @GST_SEGMENTATION_TYPE_DEEPLABV3  : DEEPLABV3 Segmentation Model.
- * @GST_SEGMENTATION_TYPE_FFNET40S   : FFNET40S Segmentation Model.
+ * GstStreamSourceType:
+ * @GST_STREAM_TYPE_NONE    : Invalid Stream Type.
+ * @GST_STREAM_TYPE_CAMERA  : Camera Stream.
+ * @GST_STREAM_TYPE_FILE    : Video File Stream.
  *
- * Type of Segmentation Model.
+ * Type of Stream.
  */
 typedef enum {
-  GST_SEGMENTATION_TYPE_NONE,
-  GST_SEGMENTATION_TYPE_DEEPLABV3,
-  GST_SEGMENTATION_TYPE_FFNET40S
-} GstSegmentationModelType;
+  GST_STREAM_TYPE_NONE,
+  GST_STREAM_TYPE_CAMERA,
+  GST_STREAM_TYPE_FILE
+} GstStreamSourceType;
 
 /**
  * GstInferenceType:
@@ -131,6 +131,18 @@ typedef enum {
   GST_ML_SNPE_DELEGATE_GPU,
   GST_ML_SNPE_DELEGATE_AIP,
 } GstMLSnpeDelegate;
+
+/**
+ * GstQmmfSrcStreamType:
+ * @GST_SOURCE_STREAM_TYPE_VIDEO   : Stream fitted for encoding the buffer.
+ * @GST_SOURCE_STREAM_TYPE_PREVIEW : Stream fitted for visualizing the buffers.
+ *
+ * Type of qmmfsrc stream.
+ */
+typedef enum {
+  GST_SOURCE_STREAM_TYPE_VIDEO,
+  GST_SOURCE_STREAM_TYPE_PREVIEW
+} GstQmmfSrcStreamType;
 
 /**
  * GstMLTFLiteDelegate:
