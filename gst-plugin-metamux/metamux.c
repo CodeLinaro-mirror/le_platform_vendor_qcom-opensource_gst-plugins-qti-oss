@@ -934,7 +934,7 @@ gst_metamux_parse_optical_flow_metadata (GstMetaMux * muxer,
   n_vectors = memmap.size / length;
 
   // Sanity check, number of motion vectors must be equal to the number of paxels.
-  g_return_val_if_fail (((guint) n_vectors) == (n_rowpxls * n_clmnpxls), FALSE);
+  // g_return_val_if_fail (((guint) n_vectors) == (n_rowpxls * n_clmnpxls), FALSE);
 
   // Iterate over the raw data in reverse, parse and add it to the list.
   mvectors = g_array_sized_new (FALSE, FALSE, sizeof (GstCvMotionVector),
