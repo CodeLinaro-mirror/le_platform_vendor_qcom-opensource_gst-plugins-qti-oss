@@ -129,10 +129,20 @@ struct _GstQmmfContext {
   gboolean          ldc;
   /// Camera property to Enable or Disable Lateral Chromatic Aberration Correction.
   gboolean          lcac;
+#ifndef EIS_MODES_ENABLE
   /// Camera property to Enable or Disable Electronic Image Stabilization.
   gboolean          eis;
+#else
+  /// Camera property to select Electronic Image Stabilization mode.
+  gint              eis;
+#endif // EIS_MODES_ENABLE
+#ifndef VHDR_MODES_ENABLE
   /// Camera property to Enable or Disable Super High Dynamic Range.
   gboolean          shdr;
+#else
+  /// Camera property for Video High Dynamic Range modes.
+  gint              vhdr;
+#endif // VHDR_MODES_ENABLE
   /// Camera property to Enable or Disable Auto Dynamic Range Compression.
   gboolean          adrc;
   /// Overall mode of 3A
@@ -198,7 +208,7 @@ struct _GstQmmfContext {
   /// Multi Camera (1) Exposure value
   gint64            slave_exp_time;
   /// Camera operation mode
-  gint              cam_operation_mode;
+  guint32           op_mode;
   /// Input ROI reprocess usecase enable
   gboolean          input_roi_enable;
   /// Number of Input ROI's
@@ -1176,6 +1186,7 @@ gst_qmmf_context_open (GstQmmfContext * context)
 {
   ::qmmf::recorder::Recorder *recorder = context->recorder;
   gint status = 0;
+  uint32_t op_mode = context->op_mode;
 
   GST_TRACE ("Open QMMF context");
 
@@ -1200,13 +1211,48 @@ gst_qmmf_context_open (GstQmmfContext * context)
   xtraparam.Update (::qmmf::recorder::QMMF_LCAC, lcac);
 
   // EIS
+#ifndef EIS_MODES_ENABLE
   ::qmmf::recorder::EISSetup eis;
   eis.enable = context->eis;
   xtraparam.Update (::qmmf::recorder::QMMF_EIS, eis);
+#else
+  ::qmmf::recorder::EISModeSetup eis;
+  if (context->eis == EIS_OFF) {
+    eis.mode = ::qmmf::recorder::EisMode::kEisOff;
+  } else if (context->eis == EIS_ON_SINGLE_STREAM) {
+    eis.mode = ::qmmf::recorder::EisMode::kEisSingleStream;
+  } else {
+    eis.mode = ::qmmf::recorder::EisMode::kEisDualStream;
+  }
+  xtraparam.Update (::qmmf::recorder::QMMF_EIS_MODE, eis);
+#endif // EIS_MODES_ENABLE
 
   // SHDR
   ::qmmf::recorder::VideoHDRMode hdr;
+#ifndef VHDR_MODES_ENABLE
   hdr.enable = context->shdr;
+#else
+  switch (context->vhdr) {
+    case VHDR_OFF:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kVHDROff;
+      break;
+    case SHDR_MODE_RAW:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRRaw;
+      break;
+    case SHDR_MODE_YUV:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRYuv;
+      break;
+    case SHDR_SWITCH_ENABLE:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRSwitchEnable;
+      break;
+    case QBC_HDR_MODE_VIDEO:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRVideo;
+      break;
+    case QBC_HDR_MODE_SNAPSHOT:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRSnapshot;
+      break;
+  }
+#endif // VHDR_MODES_ENABLE
   xtraparam.Update (::qmmf::recorder::QMMF_VIDEO_HDR_MODE, hdr);
 
   // ForceSensorMode
@@ -1235,23 +1281,33 @@ gst_qmmf_context_open (GstQmmfContext * context)
 
   // Camera Operation Mode
   ::qmmf::recorder::CamOpModeControl cam_opmode;
-  switch(context->cam_operation_mode) {
-    case CAM_OPMODE_NONE:
+  gint extra_param_entry = 0;
+
+  while (op_mode) {
+    if (op_mode & CAM_OPMODE_NONE) {
       cam_opmode.mode =
         ::qmmf::recorder::CamOpMode::kNone;
-      break;
-    case CAM_OPMODE_FRAMESELECTION:
+      op_mode &= (~CAM_OPMODE_NONE);
+    } else if (op_mode & CAM_OPMODE_FRAMESELECTION) {
       cam_opmode.mode =
         ::qmmf::recorder::CamOpMode::kFrameSelection;
-      break;
-    case CAM_OPMODE_FASTSWITCH:
+      op_mode &= (~CAM_OPMODE_FRAMESELECTION);
+    } else if (op_mode & CAM_OPMODE_FASTSWITCH) {
       cam_opmode.mode =
         ::qmmf::recorder::CamOpMode::kFastSwitch;
-      break;
-    default:
-      break;
+      op_mode &= (~CAM_OPMODE_FASTSWITCH);
+    }
+
+    if (xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL,
+          cam_opmode, extra_param_entry) < 0)
+      GST_ERROR ("operation mode (%d) idx (%d) update failed",
+        (int32_t)cam_opmode.mode, extra_param_entry);
+    else
+      GST_DEBUG ("operation mode (%d) idx (%d) update OK",
+        (int32_t)cam_opmode.mode, extra_param_entry);
+
+    extra_param_entry++;
   }
-  xtraparam.Update(::qmmf::recorder::QMMF_CAM_OP_MODE_CONTROL, cam_opmode);
 
   qmmf::recorder::CameraResultCb result_cb = [&, context](uint32_t camera_id,
       const ::camera::CameraMetadata& result) {
@@ -1945,8 +2001,13 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->lcac = g_value_get_boolean (value);
       return;
     case PARAM_CAMERA_EIS:
+#ifndef EIS_MODES_ENABLE
       context->eis = g_value_get_boolean (value);
+#else
+      context->eis = g_value_get_enum (value);
+#endif // EIS_MODES_ENABLE
       return;
+#ifndef VHDR_MODES_ENABLE
     case PARAM_CAMERA_SHDR: {
       gboolean new_shdr = g_value_get_boolean (value);
       if (context->shdr != new_shdr) {
@@ -1955,6 +2016,17 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
           recorder->SetSHDR (context->camera_id, context->shdr);
       }
     }
+#else
+    case PARAM_CAMERA_VHDR: {
+      gint new_vhdr = g_value_get_enum (value);
+      if (context->vhdr != new_vhdr) {
+        context->vhdr = new_vhdr;
+       if (context->state != GST_STATE_NULL)
+          recorder->SetVHDR (context->camera_id, context->vhdr);
+      }
+    }
+#endif // VHDR_MODES_ENABLE
+
       return;
     case PARAM_CAMERA_SENSOR_MODE:
       context->sensormode = g_value_get_int (value);
@@ -1966,7 +2038,7 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->ife_direct_stream = g_value_get_boolean (value);
       return;
     case PARAM_CAMERA_OPERATION_MODE:
-      context->cam_operation_mode = g_value_get_enum (value);
+      context->op_mode = g_value_get_flags (value);
       return;
     case PARAM_CAMERA_INPUT_ROI:
       context->input_roi_enable = g_value_get_boolean (value);
@@ -1984,10 +2056,11 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       guint8 disable;
       context->adrc = g_value_get_boolean (value);
       disable = !context->adrc;
-
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.adrc", "disable");
-      meta.update(tag_id, &disable, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.adrc", "disable");
+        meta.update(tag_id, &disable, 1);
+      }
       break;
     }
     case PARAM_CAMERA_CONTROL_MODE:
@@ -2028,69 +2101,76 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_SHARPNESS:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.sharpness", "strength");
-
       context->sharpness = g_value_get_int (value);
-      meta.update(tag_id, &(context)->sharpness, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.sharpness", "strength");
+        meta.update(tag_id, &(context)->sharpness, 1);
+      }
       break;
     }
     case PARAM_CAMERA_CONTRAST:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.contrast", "level");
-
       context->contrast = g_value_get_int (value);
-      meta.update(tag_id, &(context)->contrast, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.contrast", "level");
+        meta.update(tag_id, &(context)->contrast, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SATURATION:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.saturation", "use_saturation");
-
       context->saturation = g_value_get_int (value);
-      meta.update(tag_id, &(context)->saturation, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.saturation", "use_saturation");
+        meta.update(tag_id, &(context)->saturation, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ISO_MODE:
     {
       gint32 priority = 0;
 
-      // Here priority is CamX ISOPriority whose index is 0.
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
-      meta.update(tag_id, &priority, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
-      meta.update(tag_id, &(context)->isovalue, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
-
       context->isomode = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->isomode, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        // Here priority is CamX ISOPriority whose index is 0.
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
+        meta.update(tag_id, &priority, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
+        meta.update(tag_id, &(context)->isovalue, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
+        meta.update(tag_id, &(context)->isomode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ISO_VALUE:
     {
       gint32 priority = 0;
 
-      // Here priority is CamX ISOPriority whose index is 0.
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
-      meta.update(tag_id, &priority, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
-      meta.update(tag_id, &(context)->isomode, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
-
       context->isovalue = g_value_get_int (value);
-      meta.update(tag_id, &(context)->isovalue, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        // Here priority is CamX ISOPriority whose index is 0.
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
+        meta.update(tag_id, &priority, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
+        meta.update(tag_id, &(context)->isomode, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
+        meta.update(tag_id, &(context)->isovalue, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_MODE:
@@ -2113,11 +2193,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_EXPOSURE_METERING:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.exposure_metering", "exposure_metering_mode");
-
       context->expmetering = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->expmetering, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.exposure_metering", "exposure_metering_mode");
+        meta.update(tag_id, &(context)->expmetering, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_COMPENSATION:
@@ -2151,13 +2232,15 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       if (mode != UCHAR_MAX)
         meta.update(ANDROID_CONTROL_AWB_MODE, (guchar*)&mode, 1);
 
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.manualWB", "partial_mwb_mode");
-
       // If the returned value is UCHAR_MAX, we have manual WB mode so set
       // that value for the vendor tag, otherwise disable manual WB mode.
       mode = (mode == UCHAR_MAX) ? context->wbmode : 0;
-      meta.update(tag_id, &mode, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.manualWB", "partial_mwb_mode");
+        meta.update(tag_id, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_WHITE_BALANCE_LOCK:
@@ -2383,11 +2466,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_IR_MODE:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.ir_led", "mode");
-
       context->irmode = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->irmode, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.ir_led", "mode");
+        meta.update(tag_id, &(context)->irmode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME:
@@ -2399,45 +2483,51 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->slave_exp_time =
           g_value_get_int (gst_value_array_get_value (value, 1));
 
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
-      meta.update(tag_id,
-          (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
+        meta.update(tag_id,
+            (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
 
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
-      meta.update(tag_id,
-          (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
+        meta.update(tag_id,
+            (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+      }
       break;
     }
     case PARAM_CAMERA_STANDBY:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
       guint8 standby = g_value_get_uint (value);
-      meta.update(tag_id, &standby, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
+        meta.update(tag_id, &standby, 1);
+      }
       break;
     }
     case PARAM_CAMERA_INPUT_ROI_INFO:
     {
       g_return_if_fail (context->input_roi_count != 0);
 
-      guint32 tag_id = get_vendor_tag_by_name (
-          "com.qti.camera.multiROIinfo","streamROICount");
-      meta.update (tag_id, &(context)->input_roi_count, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "com.qti.camera.multiROIinfo","streamROIInfo");
       gint32 roi_count = context->input_roi_count *4;
       gint32 crop[roi_count];
       g_return_if_fail (gst_value_array_get_size (value) ==
-                        static_cast<guint32>(roi_count));
+          static_cast<guint32>(roi_count));
 
       for (gint i = 0; i < roi_count; i++) {
         crop[i] = g_value_get_int (gst_value_array_get_value (value, i));
       }
 
-      meta.update (tag_id, crop, roi_count);
+      if (context->state >= GST_STATE_READY) {
+        guint32 tag_id = get_vendor_tag_by_name (
+            "com.qti.camera.multiROIinfo","streamROICount");
+        meta.update (tag_id, &(context)->input_roi_count, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "com.qti.camera.multiROIinfo","streamROIInfo");
+        meta.update (tag_id, crop, roi_count);
+      }
       break;
     }
   }
@@ -2480,10 +2570,19 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       g_value_set_boolean (value, context->lcac);
       break;
     case PARAM_CAMERA_EIS:
+#ifndef EIS_MODES_ENABLE
       g_value_set_boolean (value, context->eis);
+#else
+      g_value_set_enum (value, context->eis);
+#endif // EIS_MODES_ENABLE
       break;
+#ifndef VHDR_MODES_ENABLE
     case PARAM_CAMERA_SHDR:
       g_value_set_boolean (value, context->shdr);
+#else
+    case PARAM_CAMERA_VHDR:
+      g_value_set_enum (value, context->vhdr);
+#endif // VHDR_MODES_ENABLE
       break;
     case PARAM_CAMERA_ADRC:
       g_value_set_boolean (value, context->adrc);
@@ -2723,7 +2822,7 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       break;
     }
     case PARAM_CAMERA_OPERATION_MODE:
-      g_value_set_enum (value, context->cam_operation_mode);
+      g_value_set_flags (value, context->op_mode);
       break;
     case PARAM_CAMERA_INPUT_ROI_INFO:
     {

@@ -95,6 +95,12 @@ typedef struct _GstOverlayUsrBBox GstOverlayUsrBBox;
 typedef struct _GstOverlayUsrMask GstOverlayUsrMask;
 typedef struct _GstOverlayString GstOverlayString;
 
+typedef enum {
+  GST_OVERLAY_ENGINE_C2D,
+  GST_OVERLAY_ENGINE_OPENCL,
+  GST_OVERLAY_ENGINE_GLES,
+} GstOverlayEngine;
+
 struct _GstOverlay {
   GstVideoFilter      parent;
   Overlay             *overlay;
@@ -121,12 +127,19 @@ struct _GstOverlay {
   guint               date_font_size;
   guint               text_font_size;
 
+  guint               bbox_stroke_width;
+
+  GstOverlayEngine    engine;
+
   guint               arrows_filter_mv;
   guint               arrows_filter_sad;
   guint               arrows_filter_var;
 
   GstVideoRectangle   text_dest_rect;
   guint               last_ov_y;
+
+  // Track the number of inherited metas between ROIs.
+  guint               n_landmark_metas;
 
   /* User overlay */
   GSequence           *usr_text;
@@ -246,12 +259,6 @@ struct _GstOverlayString {
 };
 
 G_GNUC_INTERNAL GType gst_overlay_get_type (void);
-
-#define OVERLAY_IS_PROPERTY_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-    ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-        : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-            : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-                : (state <= GST_STATE_NULL))))
 
 G_END_DECLS
 

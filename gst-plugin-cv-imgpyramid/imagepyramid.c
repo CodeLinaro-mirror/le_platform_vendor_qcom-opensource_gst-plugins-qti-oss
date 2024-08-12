@@ -1,11 +1,14 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <gst/memory/gstmempool.h>
+#include <gst/utils/common-utils.h>
 
 #ifdef HAVE_LINUX_DMA_BUF_H
 #include <sys/ioctl.h>
@@ -14,7 +17,6 @@
 
 #include <gbm.h>
 #include <gbm_priv.h>
-#include <gst/memory/gstmempool.h>
 
 #include "imagepyramid.h"
 #include "imagepyramidpads.h"
@@ -36,17 +38,11 @@ G_DEFINE_TYPE (GstCvImgPyramid, gst_cv_imgpyramid, GST_TYPE_ELEMENT);
 #undef GST_VIDEO_SIZE_RANGE
 #define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
 
-#define GST_VIDEO_FORMATS "{ GRAY8, NV12 }"
+#define GST_VIDEO_FORMATS "{ NV12 }"
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
-
-#define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-  ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-      : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-          : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-              : (state <= GST_STATE_NULL))))
 
 static GType gst_cv_request_get_type (void);
 #define GST_TYPE_CV_REQUEST  (gst_cv_request_get_type())
@@ -146,43 +142,11 @@ static void
 gst_data_queue_free_item (gpointer userdata)
 {
   GstDataQueueItem *item = userdata;
-  gst_mini_object_unref (item->object);
+
+  if (item->object != NULL)
+    gst_mini_object_unref (item->object);
+
   g_slice_free (GstDataQueueItem, item);
-}
-
-static gboolean
-gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
-{
-  guint idx = 0;
-
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    if (feature == NULL && ((gst_caps_features_get_size (features) == 0) ||
-            gst_caps_features_is_any (features)))
-      return TRUE;
-
-    // Skip ANY caps and return immediately if feature is present.
-    if ((feature != NULL) && !gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
-  }
-  return FALSE;
-}
-
-static gboolean
-gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
-{
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
-
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
 }
 
 static gboolean
@@ -196,9 +160,8 @@ gst_cv_imgpyramid_prepare_output_buffer (GstCvImgPyramid * imgpyramid,
   inbuffer = request->inframe->buffer;
 
   for (idx = 1; idx < request->n_outputs; idx++) {
-    pool =
-        GST_BUFFER_POOL_CAST (g_hash_table_lookup (imgpyramid->bufferpools,
-            GUINT_TO_POINTER (idx)));
+    pool = GST_BUFFER_POOL_CAST (g_hash_table_lookup (imgpyramid->bufferpools,
+        GUINT_TO_POINTER (idx)));
 
     if (!gst_buffer_pool_is_active (pool) &&
         !gst_buffer_pool_set_active (pool, TRUE)) {
@@ -207,8 +170,7 @@ gst_cv_imgpyramid_prepare_output_buffer (GstCvImgPyramid * imgpyramid,
     }
 
     // Retrieve new output buffer from the pool.
-    if (gst_buffer_pool_acquire_buffer (pool, &outbuffer, NULL)
-        != GST_FLOW_OK) {
+    if (gst_buffer_pool_acquire_buffer (pool, &outbuffer, NULL) != GST_FLOW_OK) {
       GST_ERROR_OBJECT (imgpyramid, "Failed to acquire buffer!");
       return FALSE;
     }
@@ -229,28 +191,29 @@ gst_cv_imgpyramid_prepare_output_buffer (GstCvImgPyramid * imgpyramid,
     }
 #endif // HAVE_LINUX_DMA_BUF_H
 
-    gst_buffer_list_insert (request->outbuffers, -1, outbuffer);
+    gst_buffer_list_add (request->outbuffers, outbuffer);
   }
 
   return TRUE;
 }
 
 static void
-gst_cv_imgpyramid_push_output_buffer (gpointer key,
-    gpointer value, gpointer userdata)
+gst_cv_imgpyramid_push_output_buffer (gpointer key, gpointer value,
+    gpointer userdata)
 {
-  GstDataQueueItem *item = NULL;
   GstCvRequest *request = GST_CV_REQUEST (userdata);
-  guint idx = GPOINTER_TO_UINT (key);
   GstCvImgPyramidSrcPad *srcpad = GST_CV_IMGPYRAMID_SRCPAD (value);
-  GstBuffer *outbuffer = gst_buffer_list_get (request->outbuffers, idx - 1);
+  GstBuffer *buffer = NULL;
+  GstDataQueueItem *item = NULL;
+  guint idx = GPOINTER_TO_UINT (key);
 
-  gst_buffer_ref (outbuffer);
+  buffer = gst_buffer_list_get (request->outbuffers, idx - 1);
+  gst_buffer_ref (buffer);
 
 #ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
+  if (gst_is_fd_memory (gst_buffer_peek_memory (buffer, 0))) {
     struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
+    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
 
     bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
 
@@ -260,17 +223,16 @@ gst_cv_imgpyramid_push_output_buffer (gpointer key,
 #endif // HAVE_LINUX_DMA_BUF_H
 
   item = g_slice_new0 (GstDataQueueItem);
-  item->object = GST_MINI_OBJECT (outbuffer);
-  item->size = gst_buffer_get_size (outbuffer);
-  item->duration = GST_BUFFER_DURATION (outbuffer);
+  item->object = GST_MINI_OBJECT (buffer);
+  item->size = gst_buffer_get_size (buffer);
+  item->duration = GST_BUFFER_DURATION (buffer);
   item->visible = TRUE;
   item->destroy = gst_data_queue_free_item;
 
   // Push the buffer into the queue or free it on failure.
   if (!gst_data_queue_push (srcpad->buffers, item)) {
+    GST_WARNING_OBJECT (srcpad, "Failed to push buffer %" GST_PTR_FORMAT, buffer);
     item->destroy (item);
-    GST_WARNING_OBJECT (srcpad,
-        "Failed to push buffer %" GST_PTR_FORMAT, outbuffer);
   }
 }
 
@@ -282,27 +244,27 @@ gst_cv_imgpyramid_worker_task (gpointer userdata)
   GstDataQueueItem *item = NULL;
   gboolean success;
 
-  if (gst_data_queue_pop (sinkpad->requests, &item)) {
-    GstCvRequest *request = NULL;
+  if (gst_data_queue_peek (sinkpad->requests, &item)) {
+    GstCvRequest *request = GST_CV_REQUEST (item->object);
 
-    request = GST_CV_REQUEST (gst_mini_object_ref (item->object));
-
-    success = gst_imgpyramid_engine_execute (imgpyramid->engine, request->inframe,
-        request->outbuffers);
+    success = gst_imgpyramid_engine_execute (imgpyramid->engine,
+        request->inframe, request->outbuffers);
 
     if (!success) {
       GST_ERROR_OBJECT (sinkpad, "Failed to execute request!");
-      item->destroy (item);
-      gst_cv_request_unref (request);
+
+      if (gst_data_queue_pop (sinkpad->requests, &item))
+        item->destroy (item);
+
       return;
     }
 
     g_hash_table_foreach (imgpyramid->srcpads,
         (GHFunc) gst_cv_imgpyramid_push_output_buffer, request);
 
-    item->destroy (item);
-    // Free the memory allocated by the internal request structure.
-    gst_cv_request_unref (request);
+    // Buffer was sent downstream, remove and free the item from the queue.
+    if (gst_data_queue_pop (sinkpad->requests, &item))
+      item->destroy (item);
   } else {
     GST_INFO_OBJECT (imgpyramid, "Pause worker task!");
     gst_task_pause (imgpyramid->worktask);
@@ -327,8 +289,9 @@ gst_cv_imgpyramid_start_worker_task (GstCvImgPyramid * imgpyramid)
   }
 
   // Disable requests queue in flushing state to enable normal work.
-  gst_data_queue_set_flushing (GST_CV_IMGPYRAMID_SINKPAD (imgpyramid->
-          sinkpad)->requests, FALSE);
+  gst_data_queue_set_flushing (
+      GST_CV_IMGPYRAMID_SINKPAD (imgpyramid->sinkpad)->requests, FALSE);
+
   return TRUE;
 }
 
@@ -339,8 +302,8 @@ gst_cv_imgpyramid_stop_worker_task (GstCvImgPyramid * imgpyramid)
     return TRUE;
 
   // Set the requests queue in flushing state.
-  gst_data_queue_set_flushing (GST_CV_IMGPYRAMID_SINKPAD (imgpyramid->
-          sinkpad)->requests, TRUE);
+  gst_data_queue_set_flushing (
+      GST_CV_IMGPYRAMID_SINKPAD (imgpyramid->sinkpad)->requests, TRUE);
 
   if (!gst_task_stop (imgpyramid->worktask))
     GST_WARNING_OBJECT (imgpyramid, "Failed to stop worker task!");
@@ -502,37 +465,29 @@ static gboolean
 gst_cv_imgpyramid_sinkpad_setcaps (GstCvImgPyramid * imgpyramid, GstPad * pad,
     GstCaps * caps)
 {
-  GstVideoInfo info = { 0, };
-  guint size = 0, stride = 0, scanline = 0;
   GArray *level_sizes = NULL;
   GstImgPyramidSettings settings;
-  GstVideoFormat format;
+  GstVideoInfo info = { 0, };
   GHashTableIter iter;
-  gpointer key, value;
+  gpointer key = NULL, value = NULL;
+  guint size = 0, stride = 0, scanline = 0;
   gboolean is_ubwc = FALSE;
-
 
   GST_DEBUG_OBJECT (imgpyramid, "Setting caps %" GST_PTR_FORMAT, caps);
 
   if (!gst_video_info_from_caps (&info, caps)) {
-    GST_ERROR_OBJECT (imgpyramid,
-        "Failed to extract input video info from caps!");
+    GST_ERROR_OBJECT (imgpyramid, "Failed to extract video info from caps!");
     return FALSE;
   }
-
-  format = GST_VIDEO_INFO_FORMAT (&info);
-  if (format != GST_VIDEO_FORMAT_NV12) {
-    GST_ERROR_OBJECT (imgpyramid, "Invalid video format");
-    return FALSE;
-  }
-
-  is_ubwc = gst_caps_has_compression (caps, "ubwc");
 
   GST_CV_IMGPYRAMID_LOCK (imgpyramid);
 
   g_hash_table_iter_init (&iter, imgpyramid->srcpads);
+  is_ubwc = gst_caps_has_compression (caps, "ubwc");
+
   while (g_hash_table_iter_next (&iter, &key, &value)) {
     GstCvImgPyramidSrcPad *srcpad = GST_CV_IMGPYRAMID_SRCPAD (value);
+
     if (srcpad && !gst_cv_imgpyramid_srcpad_setcaps (srcpad, is_ubwc)) {
       GST_ELEMENT_ERROR (GST_ELEMENT (imgpyramid), CORE, NEGOTIATION, (NULL),
           ("Failed to set caps to %s!", GST_PAD_NAME (srcpad)));
@@ -543,25 +498,26 @@ gst_cv_imgpyramid_sinkpad_setcaps (GstCvImgPyramid * imgpyramid, GstPad * pad,
   }
 
   if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    GST_LOG_OBJECT (imgpyramid, "Using stride and scanline from GBM");
-
     struct gbm_buf_info bufinfo;
+
     bufinfo.width = GST_VIDEO_INFO_WIDTH (&info);
     bufinfo.height = GST_VIDEO_INFO_HEIGHT (&info);
     bufinfo.format = GBM_FORMAT_NV12;
 
     gbm_perform (GBM_PERFORM_GET_BUFFER_STRIDE_SCANLINE_SIZE,
         &bufinfo, 0, &stride, &scanline, &size);
-  } else {
-    GST_LOG_OBJECT (imgpyramid, "Using stride and scanline from GstVideoInfo");
 
+    GST_LOG_OBJECT (imgpyramid, "Using stride and scanline from GBM: %ux%u",
+        stride, scanline);
+  } else {
     stride = GST_VIDEO_INFO_PLANE_STRIDE (&info, 0);
     scanline = (GST_VIDEO_INFO_N_PLANES (&info) == 2) ?
         (GST_VIDEO_INFO_PLANE_OFFSET (&info, 1) / stride) :
         GST_VIDEO_INFO_SIZE (&info);
-  }
 
-  GST_LOG_OBJECT (imgpyramid, "stride %d, scanline %d", stride, scanline);
+    GST_LOG_OBJECT (imgpyramid, "Using default stride and scanline %ux%u",
+        stride, scanline);
+  }
 
   if (imgpyramid->engine != NULL)
     gst_imgpyramid_engine_free (imgpyramid->engine);
@@ -576,12 +532,13 @@ gst_cv_imgpyramid_sinkpad_setcaps (GstCvImgPyramid * imgpyramid, GstPad * pad,
       GST_VIDEO_INFO_FPS_N (&info) / GST_VIDEO_INFO_FPS_D (&info);
   settings.n_octaves = imgpyramid->n_octaves;
   settings.n_scales = imgpyramid->n_scales;
+  settings.is_ubwc = is_ubwc;
+
 #ifdef HAVE_CVP_IMGPYRAMID_H
   settings.div2coef = imgpyramid->octave_sharpness;
 #endif // HAVE_CVP_IMGPYRAMID_H
-  settings.is_ubwc = is_ubwc;
-  level_sizes = g_array_new (FALSE, FALSE, sizeof (guint));
 
+  level_sizes = g_array_new (FALSE, FALSE, sizeof (guint));
   imgpyramid->engine = gst_imgpyramid_engine_new (&settings, level_sizes);
 
   if (GST_CV_IMGPYRAMID_SINKPAD (pad)->info != NULL)
@@ -645,6 +602,7 @@ gst_cv_imgpyramid_sinkpad_event (GstPad * pad, GstObject * parent,
     GstEvent * event)
 {
   GstCvImgPyramid *imgpyramid = GST_CV_IMGPYRAMID (parent);
+  GstCvImgPyramidSinkPad *sinkpad = GST_CV_IMGPYRAMID_SINKPAD (pad);
   gboolean success = FALSE;
 
   GST_TRACE_OBJECT (pad, "Received %s event: %" GST_PTR_FORMAT,
@@ -663,9 +621,8 @@ gst_cv_imgpyramid_sinkpad_event (GstPad * pad, GstObject * parent,
     }
     case GST_EVENT_SEGMENT:
     {
-      GstCvImgPyramidSinkPad *sinkpad = GST_CV_IMGPYRAMID_SINKPAD (pad);
       GHashTableIter iter;
-      gpointer key, value;
+      gpointer key = NULL, value = NULL;
       GstSegment segment;
 
       gst_event_copy_segment (event, &segment);
@@ -717,13 +674,13 @@ gst_cv_imgpyramid_sinkpad_event (GstPad * pad, GstObject * parent,
       return success;
     case GST_EVENT_FLUSH_STOP:
     {
-      GstCvImgPyramidSinkPad *sinkpad = GST_CV_IMGPYRAMID_SINKPAD (pad);
       GHashTableIter iter;
-      gpointer key, value;
+      gpointer key = NULL, value = NULL;
 
       GST_OBJECT_LOCK (imgpyramid);
 
       g_hash_table_iter_init (&iter, imgpyramid->srcpads);
+
       while (g_hash_table_iter_next (&iter, &key, &value)) {
         GstCvImgPyramidSrcPad *srcpad = GST_CV_IMGPYRAMID_SRCPAD (value);
         gst_segment_init (&(srcpad)->segment, GST_FORMAT_TIME);
@@ -738,6 +695,9 @@ gst_cv_imgpyramid_sinkpad_event (GstPad * pad, GstObject * parent,
       return success;
     }
     case GST_EVENT_EOS:
+      // Wait until all queued input requests have been processed.
+      GST_CV_IMGPYRAMID_PAD_WAIT_IDLE (sinkpad);
+
       success = gst_element_foreach_src_pad (GST_ELEMENT (imgpyramid),
           gst_cv_imgpyramid_srcpad_push_event, event);
       return success;
@@ -762,9 +722,8 @@ gst_cv_request_pad (GstElement * element, GstPadTemplate * templ,
 
   if (reqname && sscanf (reqname, "src_%u", &index) == 1) {
     if (index == 0 || index > nlevels) {
-      GST_ERROR_OBJECT (imgpyramid,
-          "Source pad index (%u) is invalid, expected (0 < index <=%u)",
-          index, nlevels);
+      GST_ERROR_OBJECT (imgpyramid, "Source pad index (%u) is invalid, "
+          "expected (0 < index <=%u)", index, nlevels);
       GST_CV_IMGPYRAMID_UNLOCK (imgpyramid);
       return NULL;
     }
@@ -772,7 +731,6 @@ gst_cv_request_pad (GstElement * element, GstPadTemplate * templ,
       GST_ERROR_OBJECT (imgpyramid, "Source pad name %s is not unique", reqname);
       GST_CV_IMGPYRAMID_UNLOCK (imgpyramid);
       return NULL;
-
     }
   } else {
     GST_ERROR_OBJECT (imgpyramid, "Source pad name must include the index: %s",
@@ -869,7 +827,6 @@ gst_cv_imgpyramid_set_property (GObject * object, guint prop_id,
   GstCvImgPyramid *imgpyramid = GST_CV_IMGPYRAMID (object);
   const gchar *propname = g_param_spec_get_name (pspec);
   GstState state = GST_STATE (imgpyramid);
-  guint val;
 
   if (!GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE (pspec, state)) {
     GST_WARNING_OBJECT (imgpyramid, "Property '%s' change not supported in %s "
@@ -881,24 +838,23 @@ gst_cv_imgpyramid_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_N_OCTAVES:
-      val = g_value_get_uint (value);
-      imgpyramid->n_octaves = val;
+      imgpyramid->n_octaves =  g_value_get_uint (value);
       imgpyramid->n_levels = imgpyramid->n_octaves * imgpyramid->n_scales;
       break;
     case PROP_N_SCALES:
-      val = g_value_get_uint (value);
-      imgpyramid->n_scales = val;
+      imgpyramid->n_scales = g_value_get_uint (value);
       imgpyramid->n_levels = imgpyramid->n_octaves * imgpyramid->n_scales;
       break;
     case PROP_OCTAVE_SHARPNESS_COEF:
     {
-      guint len, idx, *data;
-      len = gst_value_array_get_size (value);
-      g_return_if_fail (len <= imgpyramid->n_octaves);
-      for (idx = 0; idx < len; idx++) {
+      guint length = 0, idx = 0, val = 0;
+
+      length = gst_value_array_get_size (value);
+      g_return_if_fail (length <= imgpyramid->n_octaves);
+
+      for (idx = 0; idx < length; idx++) {
         val = g_value_get_uint (gst_value_array_get_value (value, idx));
-        data = &g_array_index (imgpyramid->octave_sharpness, guint, idx);
-        *data = val;
+        g_array_index (imgpyramid->octave_sharpness, guint, idx) = val;
       }
       break;
     }
@@ -928,13 +884,17 @@ gst_cv_imgpyramid_get_property (GObject * object, guint prop_id,
     case PROP_OCTAVE_SHARPNESS_COEF:
     {
       GValue val = G_VALUE_INIT;
+      guint idx = 0;
+
       g_value_init (&val, G_TYPE_UINT);
-      guint idx;
+
       for (idx = 0; idx < imgpyramid->n_octaves; idx++) {
         g_value_set_uint (&val,
             g_array_index (imgpyramid->octave_sharpness, guint, idx));
         gst_value_array_append_value (value, &val);
       }
+
+      g_value_unset (&val);
       break;
     }
     default:
@@ -985,11 +945,14 @@ gst_cv_imgpyramid_init (GstCvImgPyramid * imgpyramid)
   imgpyramid->n_levels = imgpyramid->n_octaves * imgpyramid->n_scales;
 
 #ifdef HAVE_CVP_IMGPYRAMID_H
-  imgpyramid->octave_sharpness =
-      g_array_sized_new (FALSE, FALSE, sizeof (guint), imgpyramid->n_octaves);
-  guint default_sharpness = DEFAULT_OCTAVE_SHARPNESS, idx;
-  for (idx = 0; idx < imgpyramid->n_octaves; idx++) {
-    g_array_append_val (imgpyramid->octave_sharpness, default_sharpness);
+  {
+    guint idx = 0, value = DEFAULT_OCTAVE_SHARPNESS;
+
+    imgpyramid->octave_sharpness =
+        g_array_sized_new (FALSE, FALSE, sizeof (guint), imgpyramid->n_octaves);
+
+    for (idx = 0; idx < imgpyramid->n_octaves; idx++)
+      g_array_append_val (imgpyramid->octave_sharpness, value);
   }
 #endif // HAVE_CVP_IMGPYRAMID_H
 
@@ -1002,9 +965,10 @@ gst_cv_imgpyramid_init (GstCvImgPyramid * imgpyramid)
   imgpyramid->worktask = NULL;
 
   template = gst_static_pad_template_get (&gst_cv_imgpyramid_sink_template);
-  imgpyramid->sinkpad =
-      g_object_new (GST_TYPE_CV_IMGPYRAMID_SINKPAD, "name", "sink", "direction",
-      template->direction, "template", template, NULL);
+  imgpyramid->sinkpad = g_object_new (GST_TYPE_CV_IMGPYRAMID_SINKPAD,
+      "name", "sink", "direction", template->direction, "template", template,
+      NULL);
+
   gst_object_unref (template);
 
   gst_pad_set_chain_function (imgpyramid->sinkpad,
@@ -1032,7 +996,6 @@ gst_cv_imgpyramid_class_init (GstCvImgPyramidClass * klass)
   gst_element_class_add_static_pad_template_with_gtype (element,
       &gst_cv_imgpyramid_src_template, GST_TYPE_CV_IMGPYRAMID_SRCPAD);
 
-
   g_object_class_install_property (gobject, PROP_N_OCTAVES,
       g_param_spec_uint ("num-octaves", "Number of octaves",
           "Number of layers in the pyramid where the resolution is halved",
@@ -1045,20 +1008,19 @@ gst_cv_imgpyramid_class_init (GstCvImgPyramidClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #ifdef HAVE_CVP_IMGPYRAMID_H
   g_object_class_install_property (gobject, PROP_OCTAVE_SHARPNESS_COEF,
-      gst_param_spec_array ("octave-sharpness",
-          "Adjust sharpness of octaves.",
-          "Array of coefficients, the size of this array is equal to the number of"
-          "octaves (n_octaves). Format is <c1, c2, c3, cn>."
-          "The value range per octave [0-4], with default 3",
+      gst_param_spec_array ("octave-sharpness", "Adjust sharpness of octaves.",
+          "Array of coefficients, the size of this array is equal to the "
+          "number of octaves (n_octaves). Format is <c1, c2, c3, cn>. The "
+          "value range per octave [0-4], with default 3",
           g_param_spec_uint ("value", "Coefficient Value",
               "One of the filter coefficient value",
               0, 4, DEFAULT_OCTAVE_SHARPNESS,
-              G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS),
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #endif // HAVE_CVP_IMGPYRAMID_H
 
-  gst_element_class_set_static_metadata (element,
-      "CV Image Pyramid Scaler", "Runs image pyramid downscaler from CV",
+  gst_element_class_set_static_metadata (element, "CV Image Pyramid Scaler",
+      "Runs image pyramid downscaler from CV",
       "Generates image pyramid with downsampled images per input video frame",
       "QTI");
 

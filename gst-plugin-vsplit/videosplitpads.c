@@ -35,7 +35,7 @@
 #include "videosplitpads.h"
 
 #include <gst/video/gstimagepool.h>
-
+#include <gst/utils/common-utils.h>
 
 G_DEFINE_TYPE(GstVideoSplitSinkPad, gst_video_split_sinkpad, GST_TYPE_PAD);
 G_DEFINE_TYPE(GstVideoSplitSrcPad, gst_video_split_srcpad, GST_TYPE_PAD);
@@ -54,12 +54,6 @@ GST_DEBUG_CATEGORY_EXTERN (gst_video_split_debug);
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
-#define GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE(pspec, state) \
-    ((pspec->flags & GST_PARAM_MUTABLE_PLAYING) ? (state <= GST_STATE_PLAYING) \
-        : ((pspec->flags & GST_PARAM_MUTABLE_PAUSED) ? (state <= GST_STATE_PAUSED) \
-            : ((pspec->flags & GST_PARAM_MUTABLE_READY) ? (state <= GST_STATE_READY) \
-                : (state <= GST_STATE_NULL))))
-
 enum
 {
   PROP_0,
@@ -70,42 +64,31 @@ static gboolean
 queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
     guint64 time, gpointer checkdata)
 {
+  GstPad *pad = GST_PAD (checkdata);
+
+  if (GST_IS_VIDEO_SPLIT_SRCPAD (pad)) {
+    GstVideoSplitSrcPad *srcpad = GST_VIDEO_SPLIT_SRCPAD_CAST (pad);
+    GST_VIDEO_SPLIT_PAD_SIGNAL_IDLE (srcpad, FALSE);
+  } else if (GST_IS_VIDEO_SPLIT_SINKPAD (pad)) {
+    GstVideoSplitSinkPad *sinkpad = GST_VIDEO_SPLIT_SINKPAD_CAST (pad);
+    GST_VIDEO_SPLIT_PAD_SIGNAL_IDLE (sinkpad, FALSE);
+  }
+
   return (visible >= GST_VSPLIT_MAX_QUEUE_LEN) ? TRUE : FALSE;
 }
 
-static gboolean
-gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
+static void
+queue_empty_cb (GstDataQueue * queue, gpointer checkdata)
 {
-  guint idx = 0;
+  GstPad *pad = GST_PAD (checkdata);
 
-  while (idx != gst_caps_get_size (caps)) {
-    GstCapsFeatures *const features = gst_caps_get_features (caps, idx);
-
-    if (feature == NULL && ((gst_caps_features_get_size (features) == 0) ||
-            gst_caps_features_is_any (features)))
-      return TRUE;
-
-    // Skip ANY caps and return immediately if feature is present.
-    if ((feature != NULL) && !gst_caps_features_is_any (features) &&
-        gst_caps_features_contains (features, feature))
-      return TRUE;
-
-    idx++;
+  if (GST_IS_VIDEO_SPLIT_SRCPAD (pad)) {
+    GstVideoSplitSrcPad *srcpad = GST_VIDEO_SPLIT_SRCPAD_CAST (pad);
+    GST_VIDEO_SPLIT_PAD_SIGNAL_IDLE (srcpad, TRUE);
+  } else if (GST_IS_VIDEO_SPLIT_SINKPAD (pad)) {
+    GstVideoSplitSinkPad *sinkpad = GST_VIDEO_SPLIT_SINKPAD_CAST (pad);
+    GST_VIDEO_SPLIT_PAD_SIGNAL_IDLE (sinkpad, TRUE);
   }
-  return FALSE;
-}
-
-static gboolean
-gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
-{
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
-
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
 }
 
 static GType
@@ -805,6 +788,9 @@ gst_video_split_sinkpad_finalize (GObject * object)
   if (pad->info != NULL)
     gst_video_info_free (pad->info);
 
+  g_cond_clear (&pad->drained);
+  g_mutex_clear (&pad->lock);
+
   G_OBJECT_CLASS (gst_video_split_sinkpad_parent_class)->finalize(object);
 }
 
@@ -821,11 +807,16 @@ gst_video_split_sinkpad_init (GstVideoSplitSinkPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
 
+  g_mutex_init (&pad->lock);
+  g_cond_init (&pad->drained);
+
+  pad->is_idle = TRUE;
+
   pad->info = NULL;
   pad->isubwc = FALSE;
 
-  pad->requests = gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
-  gst_data_queue_set_flushing (pad->requests, FALSE);
+  pad->requests =
+      gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
 }
 
 static GstCaps *
@@ -853,12 +844,12 @@ gst_video_split_srcpad_fixate_caps (GstVideoSplitSrcPad * srcpad,
   outcaps = gst_caps_truncate (outcaps);
   gst_caps_set_features (outcaps, 0, features);
 
+  // Get underlying structure to the only remaining caps.
+  output = gst_caps_get_structure (outcaps, 0);
+
   // Remove compression field if caps do not contain memory:GBM feature.
   if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
     gst_structure_remove_field (output, "compression");
-
-  // Get underlying structure to the only remaining caps.
-  output = gst_caps_get_structure (outcaps, 0);
 
   // Take a copy of the input caps structure so we can freely modify it.
   input = gst_caps_get_structure (incaps, 0);
@@ -1102,6 +1093,9 @@ gst_video_split_srcpad_finalize (GObject * object)
   if (pad->info != NULL)
     gst_video_info_free (pad->info);
 
+  g_cond_clear (&pad->drained);
+  g_mutex_clear (&pad->lock);
+
   G_OBJECT_CLASS (gst_video_split_srcpad_parent_class)->finalize(object);
 }
 
@@ -1126,10 +1120,16 @@ gst_video_split_srcpad_init (GstVideoSplitSrcPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
 
+  g_mutex_init (&pad->lock);
+  g_cond_init (&pad->drained);
+
+  pad->is_idle = TRUE;
+
   pad->info = NULL;
   pad->isubwc = FALSE;
   pad->passthrough = FALSE;
 
   pad->pool = NULL;
-  pad->buffers = gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
+  pad->buffers =
+      gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
 }
