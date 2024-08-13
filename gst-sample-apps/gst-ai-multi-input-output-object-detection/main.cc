@@ -69,6 +69,12 @@
 #define QUEUE_COUNT 7
 
 /**
+ * rstp sink configuration
+ */
+#define DEFAULT_IP "127.0.0.1"
+#define DEFAULT_PORT 8554
+
+/**
  * Structure for various application specific options
  */
 typedef struct {
@@ -77,11 +83,13 @@ typedef struct {
   const gchar *model_path;
   const gchar *labels_path;
   const gchar *out_file;
+  gchar *ip_address;
   gint num_camera;
   gint num_file;
   gint num_rtsp;
   gint camera_id;
   gint input_count;
+  gint port_num;
   gboolean out_display;
   gboolean out_rtsp;
 } GstAppOptions;
@@ -312,6 +320,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   GstElement *mp4mux, *filesink;
   GstElement *rtph264pay, *udpsink;
   GstCaps *filtercaps;
+  GstStructure *fcontrols;
   gint width = DEFAULT_CAMERA_OUTPUT_WIDTH;
   gint height = DEFAULT_CAMERA_OUTPUT_HEIGHT;
   gint framerate = DEFAULT_CAMERA_FRAME_RATE;
@@ -795,6 +804,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   if (options->out_file || options->out_rtsp) {
     g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5,
         "output-io-mode", 5, NULL);
+    // Set bitrate for streaming usecase
+    fcontrols = gst_structure_from_string (
+        "fcontrols,video_bitrate=6000000,video_bitrate_mode=0", NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", fcontrols, NULL);
 
     if (options->out_file) {
       g_object_set (G_OBJECT (filesink), "location", options->out_file, NULL);
@@ -803,8 +816,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     if (options->out_rtsp) {
       g_object_set (G_OBJECT (enc_h264parse), "config-interval", -1, NULL);
       g_object_set (G_OBJECT (rtph264pay), "pt", 96, NULL);
-      g_object_set (G_OBJECT (udpsink), "host", "127.0.0.1",
-          "port", 8554, NULL);
+      g_object_set (G_OBJECT (udpsink), "host", options->ip_address,
+          "port", options->port_num, NULL);
     }
   }
 
@@ -1126,8 +1139,12 @@ main (gint argc, gchar * argv[])
   }
 
   // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
+
+  //Set default IP and Port
+  options.ip_address = DEFAULT_IP;
+  options.port_num = DEFAULT_PORT;
 
   // Structure to define the user options selection
   GOptionEntry entries[] = {
@@ -1191,12 +1208,20 @@ main (gint argc, gchar * argv[])
       &options.out_rtsp,
       "Encode and stream on rtsp\n"
       "      Run below command on a separate shell to start the rtsp server:\n"
-      "          gst-rtsp-server -p 8900 -m /live \"( udpsrc name=pay0 port=8554"
+      "          gst-rtsp-server -p 8900 -a <device_ip> -m /live \"( udpsrc name=pay0 port=<port>"
       " caps=\\\"application/x-rtp,media=video,clock-rate=90000,"
       "encoding-name=H264,payload=96\\\" )\"\n"
-      "      Live URL on port 8900: rtsp://127.0.0.1:8900/live\n"
+      "      Live URL on port 8900: rtsp://<device_ip>/live\n"
       "          Change IP address to match your network settings",
       NULL
+    },
+    { "ip", 'i', 0, G_OPTION_ARG_STRING,
+      &options.ip_address,
+      "Valid IP address in case of RSTP streaming output"
+    },
+    { "port", 'p', 0, G_OPTION_ARG_INT,
+      &options.port_num,
+      "Valid port number in case of RSTP streaming output"
     },
     { NULL }
   };
@@ -1213,7 +1238,7 @@ main (gint argc, gchar * argv[])
       "  %s --num-file=6\n"
       "  %s --num-camera=2 --display\n"
       "  %s --model=%s --labels=%s\n"
-      "  %s --num-file=4 -d -f /opt/app.mp4 --out-rtsp\n"
+      "  %s --num-file=4 -d -f /opt/app.mp4 --out-rtsp -i <ip> -p <port>\n"
       "\nThis Sample App demonstrates Object Detection with various input/output"
       " stream combinations",
       app_name, app_name, app_name, DEFAULT_TFLITE_YOLOV5_MODEL,

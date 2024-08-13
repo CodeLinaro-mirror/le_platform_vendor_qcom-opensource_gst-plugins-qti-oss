@@ -10,10 +10,6 @@ find_package(PkgConfig)
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 
-# Check whether Camx libs are present
-include(CheckIncludeFileCXX)
-check_include_file_cxx("camx-api/camx/service/system/camera_metadata.h" HAVE_CAMX_API)
-
 if (ENABLE_AUDIO)
   add_subdirectory(gst-audio-decode-example)
   add_subdirectory(gst-audio-encode-example)
@@ -36,11 +32,15 @@ if (ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-activate-deactivate-streams-runtime)
   add_subdirectory(gst-multi-camera-example)
   add_subdirectory(gst-multi-stream-example)
+  add_subdirectory(gst-add-streams-as-bundle-example)
+  add_subdirectory(gst-add-remove-streams-runtime)
+  add_subdirectory(gst-camera-burst-capture-example)
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA)
   add_subdirectory(gst-appsink-example)
   add_subdirectory(gst-camera-metadata-example)
+  add_subdirectory(gst-camera-switch-example)
 endif () # ENABLE_CAMERA
 
 if (ENABLE_ML AND ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
@@ -50,6 +50,8 @@ if (ENABLE_ML AND ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-ai-segmentation)
   add_subdirectory(gst-ai-parallel-inference)
   add_subdirectory(gst-ai-multi-input-output-object-detection)
+  add_subdirectory(gst-ai-monodepth)
+  add_subdirectory(gst-ai-daisychain-detection-classification)
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_VIDEO_DECODE)
@@ -63,3 +65,7 @@ endif () # ENABLE_VIDEO_DECODE AND ENABLE_VIDEO_ENCODE
 if (ENABLE_AUDIO AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-audio-video-encode)
 endif () # ENABLE_AUDIO AND ENABLE_VIDEO_ENCODE
+
+if (ENABLE_WEBRTC)
+  add_subdirectory(gst-webrtc-sendrecv-example)
+endif () # ENABLE_WEBRTC

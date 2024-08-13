@@ -33,7 +33,10 @@
  * Default models and labels path, if not provided by user
  */
 #define DEFAULT_SNPE_SEGMENTATION_MODEL "/opt/deeplabv3_resnet50.dlc"
-#define DEFAULT_TFLITE_SEGMENTATION_MODEL "/opt/deeplabv3_resnet50.tflite"
+#define DEFAULT_TFLITE_UINT8_SEGMENTATION_MODEL \
+    "/opt/deeplabv3_resnet50_uint8.tflite"
+#define DEFAULT_TFLITE_INT8_SEGMENTATION_MODEL \
+    "/opt/ffnet_40s_quantized_int8.tflite"
 #define DEFAULT_SEGMENTATION_LABELS "/opt/deeplabv3_resnet50.labels"
 
 /**
@@ -45,9 +48,36 @@
 #define DEFAULT_CAMERA_FRAME_RATE 30
 
 /**
+ * Default constants to dequantize values
+ */
+#define DEFAULT_CONSTANTS \
+    "FFNet-40S,q-offsets=<50.0>,q-scales=<0.31378185749053955>;"
+
+/**
  * Number of Queues used for buffer caching between elements
  */
 #define QUEUE_COUNT 7
+
+/**
+ * Build Property for pad.
+ *
+ * @param property Property Name.
+ * @param values Value of Property.
+ * @param num count of Property Values.
+ */
+static void
+build_pad_property (GValue * property, gdouble values[], gint num)
+{
+  GValue val = G_VALUE_INIT;
+  g_value_init (&val, G_TYPE_DOUBLE);
+
+  for (gint idx = 0; idx < num; idx++) {
+    g_value_set_double (&val, values[idx]);
+    gst_value_array_append_value (property, &val);
+  }
+
+  g_value_unset (&val);
+}
 
 /**
  * Create GST pipeline: has 3 main steps
@@ -62,7 +92,8 @@
  */
 static gboolean
 create_pipe (GstAppContext * appctx, GstModelType model_type,
-    const gchar * model_path, const gchar * labels_path)
+    GstModelFormatType model_format, const gchar * model_path,
+    const gchar * labels_path, const gchar * constants)
 {
   GstElement *qtiqmmfsrc, *qmmfsrc_caps, *qtivtransform, *queue[QUEUE_COUNT];
   GstElement *tee, *qtimlvconverter, *qtimlelement;
@@ -228,6 +259,11 @@ create_pipe (GstAppContext * appctx, GstModelType model_type,
   if (module_id != -1) {
     g_object_set (G_OBJECT (qtimlvsegmentation),
         "module", module_id, "labels", labels_path, NULL);
+    if (model_format == GST_MODEL_FORMAT_INT8) {
+      g_object_set (G_OBJECT (qtimlvsegmentation),
+          "constants", constants,
+          NULL);
+    }
   } else {
     g_printerr ("Module deeplab-argmax is not available in qtimlvsegmentation\n");
     goto error;
@@ -358,15 +394,17 @@ main (gint argc, gchar * argv[])
   GOptionContext *ctx = NULL;
   const gchar *model_path = NULL;
   const gchar *labels_path = DEFAULT_SEGMENTATION_LABELS;
+  const gchar *constants = DEFAULT_CONSTANTS;
   const gchar *app_name = NULL;
   GstAppContext appctx = {};
   GstModelType model_type = GST_MODEL_TYPE_SNPE;
+  GstModelFormatType model_format = GST_MODEL_FORMAT_UINT8;
   gboolean ret = FALSE;
   gchar help_description[1024];
   guint intrpt_watch_id = 0;
 
   // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/run/user/root", 0);
+  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Structure to define the user options selection
@@ -376,13 +414,18 @@ main (gint argc, gchar * argv[])
       "Execute Model in SNPE DLC (1) or TFlite (2) format",
       "1 or 2"
     },
+    { "model-format", 't', 0, G_OPTION_ARG_INT,
+      &model_format,
+      "UINT8 (1) or INT8 (2) format",
+      "1 or 2"
+    },
     { "model", 'm', 0, G_OPTION_ARG_STRING,
       &model_path,
       "This is an optional parameter and overrides default path\n"
       "      Default model path for SNPE DLC: "
       DEFAULT_SNPE_SEGMENTATION_MODEL "\n"
-      "      Default model path for TFLITE Model: "
-      DEFAULT_TFLITE_SEGMENTATION_MODEL,
+      "      Default model path for TFlite Model: "
+      DEFAULT_TFLITE_UINT8_SEGMENTATION_MODEL,
       "/PATH"
     },
     { "labels", 'l', 0, G_OPTION_ARG_STRING,
@@ -391,6 +434,14 @@ main (gint argc, gchar * argv[])
       "      Default labels path: " DEFAULT_SEGMENTATION_LABELS,
       "/PATH"
     },
+    { "constants", 'c', 0, G_OPTION_ARG_STRING,
+      &constants,
+      "Constants, offsets and coefficients used by the chosen module \n"
+      "for post-processing of incoming tensors."
+      " Applicable only for some modules\n"
+      "      Default constants: " DEFAULT_CONSTANTS,
+      "/CONSTANTS"
+    },
     { NULL }
   };
 
@@ -398,11 +449,11 @@ main (gint argc, gchar * argv[])
 
   snprintf (help_description, 1023, "\nExample:\n"
       "  %s --ml-framework=1\n"
-      "  %s -f 2\n"
+      "  %s -f 2 -t 2 -c  \"%s\" \n"
       "  %s -f 1 --model=%s --labels=%s\n"
       "\nThis Sample App demonstrates Segmentation on Live Stream",
-      app_name, app_name, app_name, DEFAULT_SNPE_SEGMENTATION_MODEL,
-      DEFAULT_SEGMENTATION_LABELS);
+      app_name, app_name, DEFAULT_CONSTANTS, app_name,
+	  DEFAULT_SNPE_SEGMENTATION_MODEL, DEFAULT_SEGMENTATION_LABELS);
   help_description[1023] = '\0';
 
   // Parse command line entries.
@@ -440,9 +491,22 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
+  if (model_format < GST_MODEL_FORMAT_UINT8 ||
+      model_format > GST_MODEL_FORMAT_INT8) {
+    g_printerr ("Invalid model-format option selected\n"
+        "Available options:\n"
+        "    UINT8: %d\n"
+        "    INT8: %d\n",
+        GST_MODEL_FORMAT_UINT8, GST_MODEL_FORMAT_INT8);
+    return -EINVAL;
+  }
+
   // Set model path for execution
   model_path = model_path ? model_path : (model_type == GST_MODEL_TYPE_SNPE ?
-      DEFAULT_SNPE_SEGMENTATION_MODEL : DEFAULT_TFLITE_SEGMENTATION_MODEL);
+      DEFAULT_SNPE_SEGMENTATION_MODEL :
+      (model_format == GST_MODEL_FORMAT_INT8) ?
+      DEFAULT_TFLITE_INT8_SEGMENTATION_MODEL :
+      DEFAULT_TFLITE_UINT8_SEGMENTATION_MODEL);
 
   if (!file_exists (model_path)) {
     g_print ("Invalid model file path: %s\n", model_path);
@@ -470,7 +534,8 @@ main (gint argc, gchar * argv[])
   appctx.pipeline = pipeline;
 
   // Build the pipeline, link all elements in the pipeline
-  ret = create_pipe (&appctx, model_type, model_path, labels_path);
+  ret = create_pipe (&appctx, model_type, model_format, model_path,
+            labels_path, constants);
   if (!ret) {
     g_printerr ("ERROR: failed to create GST pipe.\n");
     destroy_pipe (&appctx);

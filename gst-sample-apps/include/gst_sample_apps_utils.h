@@ -55,6 +55,20 @@ typedef enum {
 } GstModelType;
 
 /**
+ * GstModelFormatType:
+ * @GST_MODEL_FORMAT_NONE   : Invalid Model Format.
+ * @GST_MODEL_FORMAT_UINT8  : INT8 Model.
+ * @GST_MODEL_FORMAT_INT8   : UINT8 Model.
+ *
+ * Type of Model format.
+ */
+typedef enum {
+  GST_MODEL_FORMAT_NONE,
+  GST_MODEL_FORMAT_UINT8,
+  GST_MODEL_FORMAT_INT8
+} GstModelFormatType;
+
+/**
  * GstYoloModelType:
  * @GST_YOLO_TYPE_NONE: Invalid Model Type.
  * @GST_YOLO_TYPE_V5  : Yolov5 Object Detection Model.
@@ -69,6 +83,20 @@ typedef enum {
   GST_YOLO_TYPE_V8,
   GST_YOLO_TYPE_NAS
 } GstYoloModelType;
+
+/**
+ * GstStreamSourceType:
+ * @GST_STREAM_TYPE_NONE    : Invalid Stream Type.
+ * @GST_STREAM_TYPE_CAMERA  : Camera Stream.
+ * @GST_STREAM_TYPE_FILE    : Video File Stream.
+ *
+ * Type of Stream.
+ */
+typedef enum {
+  GST_STREAM_TYPE_NONE,
+  GST_STREAM_TYPE_CAMERA,
+  GST_STREAM_TYPE_FILE
+} GstStreamSourceType;
 
 /**
  * GstInferenceType:
@@ -103,6 +131,18 @@ typedef enum {
   GST_ML_SNPE_DELEGATE_GPU,
   GST_ML_SNPE_DELEGATE_AIP,
 } GstMLSnpeDelegate;
+
+/**
+ * GstQmmfSrcStreamType:
+ * @GST_SOURCE_STREAM_TYPE_VIDEO   : Stream fitted for encoding the buffer.
+ * @GST_SOURCE_STREAM_TYPE_PREVIEW : Stream fitted for visualizing the buffers.
+ *
+ * Type of qmmfsrc stream.
+ */
+typedef enum {
+  GST_SOURCE_STREAM_TYPE_VIDEO,
+  GST_SOURCE_STREAM_TYPE_PREVIEW
+} GstQmmfSrcStreamType;
 
 /**
  * GstMLTFLiteDelegate:
