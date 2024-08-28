@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -631,6 +631,87 @@ gst_qmmfsrc_frc_mode_get_type (void)
   return gtype;
 }
 
+#ifdef EIS_MODES_ENABLE
+GType
+gst_qmmfsrc_eis_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { EIS_OFF,
+        "EIS is not applied.", "eis-off"
+    },
+    { EIS_ON_SINGLE_STREAM,
+        "EIS is applied on first (non-snapshot) stream. Maximum number of "
+        "each of preview, video and snapshot streams can be one.",
+        "eis-on-single-stream"
+    },
+    { EIS_ON_DUAL_STREAM,
+        "EIS is applied on both preview and video streams. Maximum number of "
+        "each of preview, video and snapshot streams can be one.",
+        "eis-on-dual-stream"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstEisMode", variants);
+
+  return gtype;
+}
+#endif // EIS_MODES_ENABLE
+
+#ifdef VHDR_MODES_ENABLE
+GType
+gst_qmmfsrc_vhdr_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { VHDR_OFF,
+        "VHDR is disabled.", "off"
+    },
+    { SHDR_MODE_RAW,
+        "Raw SHDR line interleaved mode with 2 frame. "
+        "Use this mode for better performance on supporting sensor.",
+        "shdr-raw"
+    },
+    { SHDR_MODE_YUV,
+        "YUV SHDR virtual channel mode with 2 frames. "
+        "Use this mode for better quality on supporting sensor. "
+        "This mode may result in reduced framerate.", "shdr-yuv"
+    },
+    { SHDR_RAW_SWITCH_ENABLE,
+        "Enable Raw SHDR switch. "
+        "Use this mode for enabling shdr switch in camera backend based on lux value. "
+        "The switch is between linear and Raw SHDR based on support in camera.",
+        "raw-shdr-switch"
+    },
+    { SHDR_YUV_SWITCH_ENABLE,
+        "Enable YUV SHDR switch. "
+        "Use this mode for enabling shdr switch in camera backend based on lux value. "
+        "The switch is between linear and YUV SHDR based on support in camera.",
+        "yuv-shdr-switch"
+    },
+    { QBC_HDR_MODE_VIDEO,
+        "Enable in-sensor HDR for video stream. "
+        "This mode is applicable for sensor that support this feature only. ",
+        "qbc-hdr-video"
+    },
+    { QBC_HDR_MODE_SNAPSHOT,
+        "Enable in-sensor HDR for snapshot. "
+        "When enabled camera backend decides to enable in-sensor hdr for snapshot"
+        " based on the scene. This mode is applicable for sensor that support this"
+        " feature only.", "qbc-hdr-snapshot"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstSHDRMode", variants);
+
+  return gtype;
+}
+#endif // VHDR_MODES_ENABLE
+
 GType
 gst_qmmfsrc_rotate_get_type (void)
 {
@@ -661,7 +742,7 @@ GType
 gst_qmmfsrc_cam_opmode_get_type (void)
 {
   static GType gtype = 0;
-  static const GEnumValue variants[] = {
+  static const GFlagsValue variants[] = {
     { CAM_OPMODE_NONE,
         "Normal Camera Operation Mode", "none"
     },
@@ -675,7 +756,7 @@ gst_qmmfsrc_cam_opmode_get_type (void)
   };
 
   if (!gtype)
-    gtype = g_enum_register_static ("GstFrameSelection", variants);
+    gtype = g_flags_register_static ("GstFrameSelection", variants);
 
   return gtype;
 }

@@ -85,32 +85,34 @@ typedef enum {
 } GstYoloModelType;
 
 /**
- * GstSegmentationModelType:
- * @GST_SEGMENTATION_TYPE_NONE       : Invalid Model Type.
- * @GST_SEGMENTATION_TYPE_DEEPLABV3  : DEEPLABV3 Segmentation Model.
- * @GST_SEGMENTATION_TYPE_FFNET40S   : FFNET40S Segmentation Model.
- *
- * Type of Segmentation Model.
- */
-typedef enum {
-  GST_SEGMENTATION_TYPE_NONE,
-  GST_SEGMENTATION_TYPE_DEEPLABV3,
-  GST_SEGMENTATION_TYPE_FFNET40S
-} GstSegmentationModelType;
-
-/**
  * GstStreamSourceType:
  * @GST_STREAM_TYPE_NONE    : Invalid Stream Type.
  * @GST_STREAM_TYPE_CAMERA  : Camera Stream.
  * @GST_STREAM_TYPE_FILE    : Video File Stream.
+ * @GST_STREAM_TYPE_RTSP    : RTSP Stream.
  *
  * Type of Stream.
  */
 typedef enum {
   GST_STREAM_TYPE_NONE,
   GST_STREAM_TYPE_CAMERA,
-  GST_STREAM_TYPE_FILE
+  GST_STREAM_TYPE_FILE,
+  GST_STREAM_TYPE_RTSP
 } GstStreamSourceType;
+
+/**
+ * GstStreamSourceType:
+ * @GST_CAMERA_TYPE_NONE       : Invalid Stream Type.
+ * @GST_CAMERA_TYPE_PRIMARY    : Camera Stream.
+ * @GST_CAMERA_TYPE_SECONDARY  : Video File Stream.
+ *
+ * Type of CameraSource.
+ */
+typedef enum {
+  GST_CAMERA_TYPE_NONE = -1,
+  GST_CAMERA_TYPE_PRIMARY,
+  GST_CAMERA_TYPE_SECONDARY
+} GstCameraSourceType;
 
 /**
  * GstInferenceType:
@@ -597,6 +599,23 @@ unref_elements(void *first_elem, ...) {
   }
 
   va_end(args);
+}
+
+// Recieves a list of pointers to variable containing pointer to gst element
+// and unrefs the gst element if needed
+static void
+cleanup_gst (void * first_elem, ...)
+{
+  va_list args;
+  void **p_gst_obj = (void **)first_elem;
+
+  va_start (args, first_elem);
+  while (p_gst_obj) {
+    if (*p_gst_obj)
+      gst_object_unref (*p_gst_obj);
+    p_gst_obj = va_arg (args, void **);
+  }
+  va_end (args);
 }
 
 #endif //GST_SAMPLE_APPS_UTILS_H

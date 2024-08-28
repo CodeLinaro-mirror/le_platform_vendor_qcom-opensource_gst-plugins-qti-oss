@@ -1,25 +1,18 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
-
-/**
- * SECTION:element-qtimlqnn
- * @title: qtimlqnn
- *
- * qtimlqnn provides an interface to run ML models using QNN SDK. It provides
- * properties to take model path as well as the backend path.
- */
-
-#include <gst/ml/gstmlmeta.h>
-#include <gst/ml/gstmlpool.h>
-#include <gst/ml/ml-frame.h>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif // HAVE_CONFIG_H
 
 #include "mlqnn.h"
+
+#include <gst/ml/gstmlmeta.h>
+#include <gst/ml/gstmlpool.h>
+#include <gst/ml/ml-frame.h>
+#include <gst/utils/common-utils.h>
 
 #define GST_CAT_DEFAULT gst_ml_qnn_debug
 GST_DEBUG_CATEGORY (gst_ml_qnn_debug);
@@ -348,7 +341,6 @@ gst_ml_qnn_prepare_output_buffer (GstBaseTransform * base,
 {
   GstMLQnn *mlqnn = GST_ML_QNN (base);
   GstBufferPool *pool = mlqnn->outpool;
-  GstProtectionMeta *pmeta = NULL;
 
   GST_DEBUG_OBJECT (mlqnn, "prepare_output_buffer");
 
@@ -382,9 +374,8 @@ gst_ml_qnn_prepare_output_buffer (GstBaseTransform * base,
   // Copy the offset field as it may contain channels data for batched buffers.
   GST_BUFFER_OFFSET (*outbuffer) = GST_BUFFER_OFFSET (inbuffer);
 
-  if ((pmeta = gst_buffer_get_protection_meta (inbuffer)) != NULL)
-    gst_buffer_add_protection_meta (*outbuffer,
-        gst_structure_copy (pmeta->info));
+  // Transfer GstProtectionMeta entries from input to the output buffer.
+  gst_buffer_copy_protection_meta (*outbuffer, inbuffer);
 
   return GST_FLOW_OK;
 }

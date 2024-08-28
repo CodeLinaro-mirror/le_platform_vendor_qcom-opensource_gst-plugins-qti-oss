@@ -66,10 +66,9 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
-#include <gst/ml/ml-info.h>
 #include <gst/video/video.h>
-
-#include "modules/ml-video-classification-module.h"
+#include <gst/ml/ml-info.h>
+#include <gst/ml/ml-module-video-classification.h>
 
 G_BEGIN_DECLS
 
@@ -100,8 +99,13 @@ struct _GstMLVideoClassification {
   /// Buffer pools.
   GstBufferPool     *outpool;
 
+  /// The ID of this stage of ML inference.
+  guint             stage_id;
+
   /// Tensor processing module.
   GstMLModule       *module;
+  /// Array with predictions from the module post-processing.
+  GArray            *predictions;
 
   /// Cairo surfaces and contexts mapped for each buffer.
   GHashTable        *surfaces;
