@@ -761,32 +761,19 @@ gst_metamux_parse_string_metadata (GstMetaMux * muxer,
 {
   GstMapInfo memmap = {};
   GValue vlist = G_VALUE_INIT;
-  gchar *data = NULL, *token = NULL, *ctx = NULL;
-  guint idx = 0, size = 0, offset = 0;
+  gchar *data = NULL, *token = NULL, *ctx = NULL, *string = NULL;
+  guint idx = 0, size = 0;
+  gboolean success = FALSE;
 
   if (!gst_buffer_map (buffer, &memmap, GST_MAP_READ)) {
     GST_ERROR_OBJECT (dpad, "Failed to map buffer %p!", buffer);
     return FALSE;
   }
 
-  // Calculate the size the local '\0' terminated string data.
-  size = memmap.size + 1;
-  size += (dpad->strcache != NULL) ? strlen (dpad->strcache) : 0;
-
-  // Allocate local '\0' terminated string and transfer stashed and buffer data.
-  data = g_new0 (gchar, size);
-
-  // Transfer stashed partial string from previous operations.
-  if (dpad->strcache != NULL) {
-    offset = g_strlcpy (data, dpad->strcache, size);
-    g_clear_pointer (&(dpad->strcache), g_free);
-  }
-
-  // Transfer the data in from the buffer and unmap it.
-  memcpy ((gpointer) (data + offset), memmap.data, memmap.size);
+  // Make sure that the last character is '\0'
+  data = g_strndup ((const gchar *) memmap.data, memmap.size);
   gst_buffer_unmap (buffer, &memmap);
 
-  // Initialize the GValue list in which the deserialized string will be stored.
   g_value_init (&vlist, GST_TYPE_LIST);
 
   // Split the data into separate serialized string token for parsing.
@@ -798,14 +785,25 @@ gst_metamux_parse_string_metadata (GstMetaMux * muxer,
     GstClockTime timestamp = GST_CLOCK_TIME_NONE;
     guint seqnum = 0, n_entries = 0;
 
+    string = (dpad->strcache != NULL) ?
+      g_strconcat (dpad->strcache, token, NULL) : g_strdup (token);
+
     // If deserialize fails it could be a partial string (e.g. reading from a file).
     // In that case, stash and combine it with the data in subsequent call.
-    if (!gst_value_deserialize (&vlist, token)) {
+    success = gst_value_deserialize (&vlist, string);
+    g_free (string);
+    if (!success) {
       GST_TRACE_OBJECT (dpad, "Failed to deserialize data, probably incomplete "
           "string token. Caching it for usage in subsequent calls.");
-      dpad->strcache = g_strdup (token);
-      break;
+      string = (dpad->strcache != NULL) ?
+        g_strconcat (dpad->strcache, token, NULL) : g_strdup (token);
+      g_free (dpad->strcache);
+      dpad->strcache = string;
+      token = strtok_r (NULL, "\n", &ctx);
+      continue;
     }
+
+    g_clear_pointer (&(dpad)->strcache, g_free);
 
     // Use the partial meta from previous iteration, otherwise allocate a new.
     item = (dpad->prtlmeta != NULL) ?
