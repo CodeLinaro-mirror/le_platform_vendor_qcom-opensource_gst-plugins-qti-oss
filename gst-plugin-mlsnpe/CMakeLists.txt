@@ -26,11 +26,6 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
 
-include(CheckIncludeFileCXX)
-
-# Check whether the C API header for the SNPE library is present.
-check_include_file_cxx("SNPE/SNPE.h" HAVE_SNPE_H)
-
 # Common compiler flags.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
@@ -40,8 +35,7 @@ set(GST_QTI_ML_SNPE gstqtimlsnpe)
 
 add_library(${GST_QTI_ML_SNPE} SHARED
   mlsnpe.c
-  $<$<NOT:$<BOOL:${HAVE_SNPE_H}>>:ml-snpe-engine.cc>
-  $<$<BOOL:${HAVE_SNPE_H}>:ml-snpe-engine.c>
+  ml-snpe-engine.cc
 )
 
 target_include_directories(${GST_QTI_ML_SNPE} PUBLIC
@@ -54,7 +48,7 @@ target_link_libraries(${GST_QTI_ML_SNPE} PRIVATE
   ${GST_ALLOC_LIBRARIES}
   gstqtimlbase
   gstqtiutilsbase
-  $<$<NOT:$<BOOL:${HAVE_SNPE_H}>>:SNPE>
+  SNPE
 )
 
 install(
