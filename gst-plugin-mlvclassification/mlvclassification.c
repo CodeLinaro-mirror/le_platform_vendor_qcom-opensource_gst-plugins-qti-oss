@@ -71,9 +71,11 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <math.h>
 
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/gstmlmeta.h>
+#include <gst/ml/ml-module-utils.h>
 #include <gst/video/gstimagepool.h>
 #include <gst/memory/gstmempool.h>
 #include <gst/utils/common-utils.h>
@@ -128,7 +130,7 @@ G_DEFINE_TYPE (GstMLVideoClassification, gst_ml_video_classification,
 #define DEFAULT_MIN_BUFFERS        2
 #define DEFAULT_MAX_BUFFERS        10
 #define DEFAULT_TEXT_BUFFER_SIZE   8192
-#define DEFAULT_FONT_SIZE          20
+#define DEFAULT_FONT_SIZE          24
 
 #define MAX_TEXT_LENGTH            25
 
@@ -301,8 +303,8 @@ gst_ml_video_classification_fill_video_output (
 {
   GstVideoMeta *vmeta = NULL;
   GstMapInfo memmap;
-  guint idx = 0, num = 0, n_entries = 0;
-  gdouble fontsize = 0.0;
+  guint idx = 0, num = 0, n_entries = 0, color = 0;
+  gdouble width = 0.0, height = 0.0;
 
   cairo_format_t format;
   cairo_surface_t* surface = NULL;
@@ -367,19 +369,13 @@ gst_ml_video_classification_fill_video_output (
   // Mark the surface dirty so Cairo clears its caches.
   cairo_surface_mark_dirty (surface);
 
-  // Fill a semi-transperant black background.
-  cairo_set_source_rgba (context, 0.0, 0.0, 0.0, 0.5);
-  cairo_paint (context);
-
   // Select font.
   cairo_select_font_face (context, "@cairo:Georgia",
       CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_antialias (context, CAIRO_ANTIALIAS_BEST);
 
   // Set the most appropriate font size based on number of results.
-  fontsize = ((gdouble) vmeta->width / MAX_TEXT_LENGTH) * 9.0 / 5.0;
-  fontsize = MIN (fontsize, vmeta->height / classification->n_results);
-  cairo_set_font_size (context, fontsize);
+  cairo_set_font_size (context, DEFAULT_FONT_SIZE);
 
   {
     // Set font options.
@@ -389,10 +385,11 @@ gst_ml_video_classification_fill_video_output (
     cairo_font_options_destroy (options);
   }
 
+  height = DEFAULT_FONT_SIZE;
+
   for (idx = 0; idx < classification->predictions->len; idx++) {
     GstMLClassPrediction *prediction = NULL;
     GstMLClassEntry *entry = NULL;
-    gchar *string = NULL;
 
     prediction =
         &(g_array_index (classification->predictions, GstMLClassPrediction, idx));
@@ -403,30 +400,46 @@ gst_ml_video_classification_fill_video_output (
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLClassEntry, num));
 
-      // Concat the prediction data to the output string.
-      string = g_strdup_printf ("%s: %.1f%%",
-          g_quark_to_string (entry->name), entry->confidence);
+      // Check whether there is enough pixel space for this label entry.
+      if (((num + 1) * height) > vmeta->height)
+        break;
 
       GST_TRACE_OBJECT (classification, "Batch: %u, label: %s, confidence: "
           "%.1f%%", prediction->batch_idx, g_quark_to_string (entry->name),
           entry->confidence);
 
-      // Set text color.
-      cairo_set_source_rgba (context,
-          EXTRACT_RED_COLOR (entry->color), EXTRACT_GREEN_COLOR (entry->color),
-          EXTRACT_BLUE_COLOR (entry->color), EXTRACT_ALPHA_COLOR (entry->color));
+      color = entry->color;
+
+      // Set text background color.
+      cairo_set_source_rgba (context, EXTRACT_FLOAT_BLUE_COLOR (color),
+          EXTRACT_FLOAT_GREEN_COLOR (color), EXTRACT_FLOAT_RED_COLOR (color),
+          EXTRACT_FLOAT_ALPHA_COLOR (color));
+
+      width = ceil (strlen (g_quark_to_string (entry->name)) *
+          DEFAULT_FONT_SIZE * 3.0F / 5.0F);
+
+      cairo_rectangle (context, 0, (num * height), width, height);
+      cairo_fill (context);
+
+      // Choose the best contrasting color to the background.
+      color = EXTRACT_ALPHA_COLOR (color);
+      color += ((EXTRACT_RED_COLOR (entry->color) > 0x7F) ? 0x00 : 0xFF) << 8;
+      color += ((EXTRACT_GREEN_COLOR (entry->color) > 0x7F) ? 0x00 : 0xFF) << 16;
+      color += ((EXTRACT_BLUE_COLOR (entry->color) > 0x7F) ? 0x00 : 0xFF) << 24;
+
+      cairo_set_source_rgba (context, EXTRACT_FLOAT_BLUE_COLOR (color),
+          EXTRACT_FLOAT_GREEN_COLOR (color), EXTRACT_FLOAT_RED_COLOR (color),
+          EXTRACT_FLOAT_ALPHA_COLOR (color));
 
       // (0,0) is at top left corner of the buffer.
-      cairo_move_to (context, 0.0, (fontsize * (num + 1)) - 6);
+      cairo_move_to (context, 0.0, (DEFAULT_FONT_SIZE * (num + 1) * 4.0F / 5.0F));
 
       // Draw text string.
-      cairo_show_text (context, string);
+      cairo_show_text (context, g_quark_to_string (entry->name));
       g_return_val_if_fail (CAIRO_STATUS_SUCCESS == cairo_status (context), FALSE);
 
       // Flush to ensure all writing to the surface has been done.
       cairo_surface_flush (surface);
-
-      g_free (string);
     }
   }
 
@@ -459,7 +472,7 @@ gst_ml_video_classification_fill_text_output (
   gchar *string = NULL, *name = NULL;
   GstMapInfo memmap = {};
   GValue list = G_VALUE_INIT, labels = G_VALUE_INIT, value = G_VALUE_INIT;
-  guint idx = 0, num = 0, n_entries = 0;
+  guint idx = 0, num = 0, n_entries = 0, sequence_idx = 0, id = 0;
   gsize length = 0;
 
   g_value_init (&list, GST_TYPE_LIST);
@@ -477,20 +490,24 @@ gst_ml_video_classification_fill_text_output (
     n_entries = (prediction->entries->len < classification->n_results) ?
         prediction->entries->len : classification->n_results;
 
+    gst_structure_get_uint (prediction->info, "sequence-index", &sequence_idx);
+
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLClassEntry, num));
 
-      GST_TRACE_OBJECT (classification, "Batch: %u, label: %s, confidence: "
-          "%.1f%%", prediction->batch_idx, g_quark_to_string (entry->name),
-          entry->confidence);
+      id = GST_META_ID (classification->stage_id, sequence_idx, num);
+
+      GST_TRACE_OBJECT (classification, "Batch: %u, ID: %X, Label: %s, "
+          "Confidence: %.1f%%", prediction->batch_idx, id,
+          g_quark_to_string (entry->name), entry->confidence);
 
       // Replace empty spaces otherwise subsequent stream parse call will fail.
       name = g_strdup (g_quark_to_string (entry->name));
       name = g_strdelimit (name, " ", '.');
 
-      structure = gst_structure_new (name, "id", G_TYPE_UINT, num,
-          "confidence", G_TYPE_DOUBLE,  entry->confidence, "color", G_TYPE_UINT,
-          entry->color, NULL);
+      structure = gst_structure_new (name, "id", G_TYPE_UINT, id, "confidence",
+          G_TYPE_DOUBLE,  entry->confidence, "color", G_TYPE_UINT, entry->color,
+          NULL);
       g_free (name);
 
       g_value_take_boxed (&value, structure);
@@ -507,8 +524,11 @@ gst_ml_video_classification_fill_text_output (
     val = gst_structure_get_value (prediction->info, "timestamp");
     gst_structure_set_value (structure, "timestamp", val);
 
-    val = gst_structure_get_value (prediction->info, "sequence-id");
-    gst_structure_set_value (structure, "sequence-id", val);
+    val = gst_structure_get_value (prediction->info, "sequence-index");
+    gst_structure_set_value (structure, "sequence-index", val);
+
+    val = gst_structure_get_value (prediction->info, "sequence-num-entries");
+    gst_structure_set_value (structure, "sequence-num-entries", val);
 
     if ((val = gst_structure_get_value (prediction->info, "stream-id")))
       gst_structure_set_value (structure, "stream-id", val);
@@ -892,6 +912,7 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
 {
   GstMLVideoClassification *classification = GST_ML_VIDEO_CLASSIFICATION (base);
   GstCaps *modulecaps = NULL;
+  GstQuery *query = NULL;
   GstStructure *structure = NULL;
   GEnumClass *eclass = NULL;
   GEnumValue *evalue = NULL;
@@ -935,6 +956,20 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
     return FALSE;
   }
 
+  // Query upstream pre-process plugin about the inference parameters.
+  query = gst_query_new_custom (GST_QUERY_CUSTOM,
+      gst_structure_new_empty ("ml-preprocess-information"));
+
+  if (gst_pad_peer_query (base->sinkpad, query)) {
+    const GstStructure *s = gst_query_get_structure (query);
+
+    gst_structure_get_uint (s, "stage-id", &(classification->stage_id));
+    GST_DEBUG_OBJECT (classification, "Stage ID: %u", classification->stage_id);
+  }
+
+  // Free the query instance as it is no longer needed and we are the owners.
+  gst_query_unref (query);
+
   structure = gst_structure_new ("options",
       GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
       GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, classification->labels,
@@ -954,8 +989,8 @@ gst_ml_video_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   if (!gst_ml_info_from_caps (&ininfo, incaps)) {
-    GST_ERROR_OBJECT (classification, "Failed to get input ML info from caps %"
-        GST_PTR_FORMAT "!", incaps);
+    GST_ELEMENT_ERROR (classification, CORE, CAPS, (NULL),
+        ("Failed to get input ML info from caps %" GST_PTR_FORMAT "!", incaps));
     return FALSE;
   }
 
@@ -1218,6 +1253,8 @@ gst_ml_video_classification_init (GstMLVideoClassification * classification)
 {
   classification->outpool = NULL;
   classification->module = NULL;
+
+  classification->stage_id = 0;
 
   classification->predictions =
       g_array_new (FALSE, FALSE, sizeof (GstMLClassPrediction));
