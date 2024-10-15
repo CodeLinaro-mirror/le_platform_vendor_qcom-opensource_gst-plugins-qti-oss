@@ -43,7 +43,7 @@ G_DEFINE_TYPE(GstVideoSplitSrcPad, gst_video_split_srcpad, GST_TYPE_PAD);
 GST_DEBUG_CATEGORY_EXTERN (gst_video_split_debug);
 #define GST_CAT_DEFAULT gst_video_split_debug
 
-#define GST_TYPE_VIDEO_SPLIT_MODE (gst_video_split_mode_get_type())
+#define GST_TYPE_VIDEO_SPLIT_MODE   (gst_video_split_mode_get_type())
 
 #define DEFAULT_PROP_MODE           GST_VSPLIT_MODE_NONE
 #define DEFAULT_PROP_MIN_BUFFERS    2
@@ -844,12 +844,12 @@ gst_video_split_srcpad_fixate_caps (GstVideoSplitSrcPad * srcpad,
   outcaps = gst_caps_truncate (outcaps);
   gst_caps_set_features (outcaps, 0, features);
 
+  // Get underlying structure to the only remaining caps.
+  output = gst_caps_get_structure (outcaps, 0);
+
   // Remove compression field if caps do not contain memory:GBM feature.
   if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
     gst_structure_remove_field (output, "compression");
-
-  // Get underlying structure to the only remaining caps.
-  output = gst_caps_get_structure (outcaps, 0);
 
   // Take a copy of the input caps structure so we can freely modify it.
   input = gst_caps_get_structure (incaps, 0);
@@ -1132,4 +1132,6 @@ gst_video_split_srcpad_init (GstVideoSplitSrcPad * pad)
   pad->pool = NULL;
   pad->buffers =
       gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
+
+  pad->mode = DEFAULT_PROP_MODE;
 }

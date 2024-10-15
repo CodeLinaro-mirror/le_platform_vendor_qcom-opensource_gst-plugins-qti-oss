@@ -1,6 +1,5 @@
 /*
 * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
-* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -90,17 +89,18 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_VIDEO_BAYER_FORMAT    "bggr"
 #define DEFAULT_VIDEO_BAYER_BPP       "10"
 
-#define DEFAULT_PROP_SOURCE_INDEX    (-1)
-#define DEFAULT_PROP_REPROCESS_PAD   FALSE
-#define DEFAULT_PROP_FRAMERATE       30.0
-#define DEFAULT_PROP_CROP_X          0
-#define DEFAULT_PROP_CROP_Y          0
-#define DEFAULT_PROP_CROP_WIDTH      0
-#define DEFAULT_PROP_CROP_HEIGHT     0
-#define DEFAULT_PROP_EXTRA_BUFFERS   0
-#define DEFAULT_PROP_VIDEO_TYPE      VIDEO_TYPE_VIDEO
-#define DEFAULT_PROP_ROTATE          ROTATE_NONE
-#define DEFAULT_PROP_STREAM_MODE      (-1)
+#define DEFAULT_PROP_SOURCE_INDEX        (-1)
+#define DEFAULT_PROP_REPROCESS_PAD       FALSE
+#define DEFAULT_PROP_FRAMERATE           30.0
+#define DEFAULT_PROP_CROP_X              0
+#define DEFAULT_PROP_CROP_Y              0
+#define DEFAULT_PROP_CROP_WIDTH          0
+#define DEFAULT_PROP_CROP_HEIGHT         0
+#define DEFAULT_PROP_EXTRA_BUFFERS       0
+#define DEFAULT_PROP_VIDEO_TYPE          VIDEO_TYPE_VIDEO
+#define DEFAULT_PROP_ROTATE              ROTATE_NONE
+#define DEFAULT_PROP_LOGICAL_STREAM_TYPE GST_PAD_LOGICAL_STREAM_TYPE_NONE
+
 
 enum
 {
@@ -119,7 +119,7 @@ enum
   PROP_VIDEO_EXTRA_BUFFERS,
   PROP_VIDEO_TYPE,
   PROP_VIDEO_ROTATE,
-  PROP_STREAM_MODE,
+  PROP_VIDEO_LOGICAL_STREAM_TYPE,
 };
 
 static guint signals[LAST_SIGNAL];
@@ -645,9 +645,6 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_REPROCESS_PAD:
       pad->reprocess_enable = g_value_get_boolean (value);
       break;
-    case PROP_STREAM_MODE:
-      pad->stream_mode = g_value_get_int (value);
-      break;
     case PROP_VIDEO_FRAMERATE:
       pad->framerate = g_value_get_double (value);
       break;
@@ -669,6 +666,9 @@ video_pad_set_property (GObject * object, guint property_id,
       break;
     case PROP_VIDEO_ROTATE:
       pad->rotate = g_value_get_enum (value);
+      break;
+    case PROP_VIDEO_LOGICAL_STREAM_TYPE:
+      pad->log_stream_type = (glong) g_value_get_enum (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
@@ -695,9 +695,6 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
       break;
     case PROP_VIDEO_REPROCESS_PAD:
       g_value_set_boolean (value, pad->reprocess_enable);
-      break;
-    case PROP_STREAM_MODE:
-      g_value_set_int (value, pad->stream_mode);
       break;
     case PROP_VIDEO_FRAMERATE:
       g_value_set_double (value, pad->framerate);
@@ -728,6 +725,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
       break;
     case PROP_VIDEO_ROTATE:
       g_value_set_enum (value, pad->rotate);
+      break;
+    case PROP_VIDEO_LOGICAL_STREAM_TYPE:
+      g_value_set_enum (value, (GstPadLogicalStreamType) pad->log_stream_type);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
@@ -805,25 +805,27 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_VIDEO_ROTATE,
-    g_param_spec_enum ("rotate", "Rotate",
-        "Set Orientation Angle for Video Stream",
-        GST_TYPE_QMMFSRC_ROTATE, DEFAULT_PROP_ROTATE,
-        G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+      g_param_spec_enum ("rotate", "Rotate",
+          "Set Orientation Angle for Video Stream",
+          GST_TYPE_QMMFSRC_ROTATE, DEFAULT_PROP_ROTATE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #ifdef GST_VIDEO_TYPE_SUPPORT
   g_object_class_install_property (gobject, PROP_VIDEO_TYPE,
       g_param_spec_enum ("type", "Type",
           "The type of the stream.",
-           GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-           GST_PARAM_MUTABLE_PLAYING));
-#endif // GST_VIDEO_TYPE_SUPPORT
-
-  g_object_class_install_property (gobject, PROP_STREAM_MODE,
-      g_param_spec_int ("stream-mode", "Stream Mode",
-          "Stream Mode : video/preview",
-          -1, 1, DEFAULT_PROP_STREAM_MODE,
+          GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_READY));
+          GST_PARAM_MUTABLE_PLAYING));
+#endif // GST_VIDEO_TYPE_SUPPORT
+#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
+  g_object_class_install_property (gobject, PROP_VIDEO_LOGICAL_STREAM_TYPE,
+      g_param_spec_enum ("logical-stream-type", "Stream type for logical camera",
+          "Type of the stream for logical camera.",
+          GST_TYPE_QMMFSRC_PAD_LOGICAL_STREAM_TYPE,
+          DEFAULT_PROP_LOGICAL_STREAM_TYPE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PAUSED));
+#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
@@ -842,31 +844,30 @@ static void
 qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
 {
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
-  pad->stream_start = FALSE;
+  pad->stream_start    = FALSE;
 
-  pad->session_id   = 0;
-  pad->index        = -1;
-  pad->stream_mode   = -1;
+  pad->session_id      = 0;
+  pad->index           = -1;
+  pad->srcidx          = -1;
 
-  pad->srcidx       = -1;
+  pad->width           = -1;
+  pad->height          = -1;
+  pad->framerate       = 0.0;
+  pad->format          = GST_VIDEO_FORMAT_UNKNOWN;
+  pad->compression     = GST_VIDEO_COMPRESSION_NONE;
+  pad->codec           = GST_VIDEO_CODEC_UNKNOWN;
+  pad->colorimetry     = NULL;
 
-  pad->width        = -1;
-  pad->height       = -1;
-  pad->framerate    = 0.0;
-  pad->format       = GST_VIDEO_FORMAT_UNKNOWN;
-  pad->compression  = GST_VIDEO_COMPRESSION_NONE;
-  pad->codec        = GST_VIDEO_CODEC_UNKNOWN;
-  pad->colorimetry  = NULL;
+  pad->crop.x          = DEFAULT_PROP_CROP_X;
+  pad->crop.y          = DEFAULT_PROP_CROP_Y;
+  pad->crop.w          = DEFAULT_PROP_CROP_WIDTH;
+  pad->crop.h          = DEFAULT_PROP_CROP_HEIGHT;
+  pad->xtrabufs        = DEFAULT_PROP_EXTRA_BUFFERS;
+  pad->type            = DEFAULT_PROP_VIDEO_TYPE;
+  pad->rotate          = DEFAULT_PROP_ROTATE;
+  pad->log_stream_type = DEFAULT_PROP_LOGICAL_STREAM_TYPE;
 
-  pad->crop.x       = DEFAULT_PROP_CROP_X;
-  pad->crop.y       = DEFAULT_PROP_CROP_Y;
-  pad->crop.w       = DEFAULT_PROP_CROP_WIDTH;
-  pad->crop.h       = DEFAULT_PROP_CROP_HEIGHT;
-  pad->xtrabufs     = DEFAULT_PROP_EXTRA_BUFFERS;
-  pad->type         = DEFAULT_PROP_VIDEO_TYPE;
-  pad->rotate       = DEFAULT_PROP_ROTATE;
+  pad->duration        = GST_CLOCK_TIME_NONE;
 
-  pad->duration  = GST_CLOCK_TIME_NONE;
-
-  pad->buffers   = gst_data_queue_new (queue_is_full_cb, NULL, NULL, pad);
+  pad->buffers         = gst_data_queue_new (queue_is_full_cb, NULL, NULL, pad);
 }

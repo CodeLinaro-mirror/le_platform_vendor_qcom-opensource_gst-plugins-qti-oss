@@ -173,6 +173,12 @@ struct _GstQmmfSrcImagePad {
 
   ///rotate property for stream orientation
   gint              rotate;
+
+  /// Buffer pool
+  GstBufferPool     *pool;
+
+  /// Select physical camera or layout to stitch images
+  glong             log_stream_type;
 };
 
 struct _GstQmmfSrcImagePadClass {

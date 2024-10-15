@@ -679,11 +679,17 @@ gst_qmmfsrc_vhdr_mode_get_type (void)
         "Use this mode for better quality on supporting sensor. "
         "This mode may result in reduced framerate.", "shdr-yuv"
     },
-    { SHDR_SWITCH_ENABLE,
-        "Enable SHDR switch. "
+    { SHDR_RAW_SWITCH_ENABLE,
+        "Enable Raw SHDR switch. "
         "Use this mode for enabling shdr switch in camera backend based on lux value. "
-        "The switch is between linear and other SHDR type based on support in camera.",
-        "shdr-switch-enable"
+        "The switch is between linear and Raw SHDR based on support in camera.",
+        "raw-shdr-switch"
+    },
+    { SHDR_YUV_SWITCH_ENABLE,
+        "Enable YUV SHDR switch. "
+        "Use this mode for enabling shdr switch in camera backend based on lux value. "
+        "The switch is between linear and YUV SHDR based on support in camera.",
+        "yuv-shdr-switch"
     },
     { QBC_HDR_MODE_VIDEO,
         "Enable in-sensor HDR for video stream. "
@@ -751,6 +757,39 @@ gst_qmmfsrc_cam_opmode_get_type (void)
 
   if (!gtype)
     gtype = g_flags_register_static ("GstFrameSelection", variants);
+
+  return gtype;
+}
+
+GType
+gst_qmmfsrc_pad_logical_stream_type_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { GST_PAD_LOGICAL_STREAM_TYPE_NONE,
+        "None", "none"
+    },
+    { GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_0,
+        "The stream uses specific physical camera with the index 0.",
+        "camera-index-0"
+    },
+    { GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_1,
+        "The stream uses specific physical camera with the index 1.",
+        "camera-index-1"
+    },
+    { GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE,
+        "The stream uses all physical cameras and stitch images side by side.",
+        "sidebyside"
+    },
+    { GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA,
+        "The stream uses all physical cameras and stitch images to panorama.",
+        "panorama"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstQmmfSrcPadLogicalStreamType", variants);
 
   return gtype;
 }

@@ -192,8 +192,8 @@ gst_ml_module_extract_rootpoints (GstMLSubModule * submodule,
   GArray *rootpoints = NULL;
   gpointer heatmap = NULL, offsets = NULL;;
   GstMLType mltype = GST_ML_TYPE_UNKNOWN;
-  guint idx = 0, num = 0, row = 0, column = 0;
-  guint n_rows = 0, n_columns = 0, n_parts = 0, paxelsize[2] = {0, 0};
+  gint row = 0, column = 0, n_rows = 0, n_columns = 0;
+  guint idx = 0, num = 0, n_parts = 0, paxelsize[2] = {0, 0};
   gfloat threshold = 0.0, confidence = 0.0;
 
   mltype = GST_ML_FRAME_TYPE (mlframe);
@@ -245,7 +245,7 @@ gst_ml_module_extract_rootpoints (GstMLSubModule * submodule,
         xmin = MAX (column - LOCAL_MAXIMUM_RADIUS, 0);
         xmax = MIN (column + LOCAL_MAXIMUM_RADIUS + 1, n_columns);
 
-        // Check if this root point is the mexaimum in the local window.
+        // Check if this root point is the maximum in the local window.
         for (y = ymin; (confidence >= score) && (y < ymax); y++) {
           for (x = xmin; (confidence >= score) && (x < xmax); x++) {
             idx = (((y * n_columns) + x) * n_parts) + num;
@@ -639,12 +639,12 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
   // Extract the dimensions of the input tensor that produced the output tensors.
   if (submodule->inwidth == 0 || submodule->inheight == 0) {
-    gst_ml_protecton_meta_get_source_dimensions (pmeta, &(submodule->inwidth),
+    gst_ml_structure_get_source_dimensions (pmeta->info, &(submodule->inwidth),
         &(submodule->inheight));
   }
 
   // Extract the source tensor region with actual data.
-  gst_ml_protecton_meta_get_source_region (pmeta, &region);
+  gst_ml_structure_get_source_region (pmeta->info, &region);
 
   // The 4th dimension of 1st tensor represents the number of parts in the pose.
   n_parts = GST_ML_FRAME_DIM (mlframe, 0, 3);

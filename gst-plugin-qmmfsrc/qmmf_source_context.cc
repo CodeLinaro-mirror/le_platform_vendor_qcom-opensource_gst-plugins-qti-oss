@@ -1,6 +1,5 @@
 /*
 * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
-* Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -99,6 +98,17 @@ qmmf_context_debug_category (void)
   }
   return (GstDebugCategory *) catgonce;
 }
+
+struct _GstQmmfLogicalCamInfo {
+  gboolean        is_logical_cam;
+  gint            phy_cam_num;
+  gchar*          phy_cam_name_list[16];
+};
+
+struct _GstQmmfCameraSwitchInfo {
+  gint            phy_cam_id_for_switch;
+  gint            input_req_id;
+};
 
 struct _GstQmmfContext {
   /// Global mutex lock.
@@ -214,6 +224,11 @@ struct _GstQmmfContext {
   gboolean          input_roi_enable;
   /// Number of Input ROI's
   gint32            input_roi_count;
+
+  /// Logical Camera Information
+  GstQmmfLogicalCamInfo logical_cam_info;
+  /// Sensor Switch Information
+  GstQmmfCameraSwitchInfo camera_switch_info;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -1158,6 +1173,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->mwbsettings =
       gst_structure_new_empty ("org.codeaurora.qcamera3.manualWB");
 
+  // logical camera and sensor switch info init
+  context->logical_cam_info.is_logical_cam = FALSE;
+  context->logical_cam_info.phy_cam_num = 0;
+  context->camera_switch_info.input_req_id = -1;
+
   GST_INFO ("Created QMMF context: %p", context);
   return context;
 }
@@ -1174,8 +1194,65 @@ gst_qmmf_context_free (GstQmmfContext * context)
   gst_structure_free (context->nrtuning);
   gst_structure_free (context->mwbsettings);
 
+  if (context->logical_cam_info.is_logical_cam == TRUE) {
+    for (int i = 0; i < context->logical_cam_info.phy_cam_num; i++)
+      g_free (context->logical_cam_info.phy_cam_name_list[i]);
+  }
+
   GST_INFO ("Destroyed QMMF context: %p", context);
   g_slice_free (GstQmmfContext, context);
+}
+
+void
+gst_qmmf_context_parse_logical_cam_info (GstQmmfContext *context,
+    ::camera::CameraMetadata meta)
+{
+  camera_metadata_entry entry;
+  GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+
+  entry = meta.find (ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
+
+  if (entry.count != 0) {
+    guint8 *cap_req_keys = entry.data.u8;
+    size_t i = 0;
+
+    GST_INFO ("Found request available caps tag");
+
+    for (i = 0; i < entry.count; i++) {
+      if (ANDROID_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA ==
+          cap_req_keys[i]) {
+        pinfo->is_logical_cam = TRUE;
+        break;
+      }
+    }
+  }
+
+  if (pinfo->is_logical_cam == TRUE) {
+    entry = meta.find (ANDROID_LOGICAL_MULTI_CAMERA_PHYSICAL_IDS);
+
+    if (entry.count != 0) {
+      size_t i = 0;
+      guchar *pids = entry.data.u8;
+      gchar  *pname = (gchar *)pids;
+
+      for (i = 0; i < entry.count; i++) {
+        // data format example:
+        // '0''\0''1''\0''2''\0'
+        if (pids[i] == '\0') {
+          pinfo->phy_cam_name_list[pinfo->phy_cam_num] = g_strdup (pname);
+          pinfo->phy_cam_num++;
+          pname = (gchar *)&pids[i+1];
+
+          GST_INFO ("Get physical camera %s in logical camera (%d)",
+              pinfo->phy_cam_name_list[pinfo->phy_cam_num - 1],
+              context->camera_id);
+        }
+      }
+
+      GST_INFO ("Found %d physical camera in logical camera %d",
+          pinfo->phy_cam_num, context->camera_id);
+    }
+  }
 }
 
 gboolean
@@ -1239,8 +1316,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
     case SHDR_MODE_YUV:
       hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRYuv;
       break;
-    case SHDR_SWITCH_ENABLE:
-      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRSwitchEnable;
+    case SHDR_RAW_SWITCH_ENABLE:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRRawSwitchEnable;
+      break;
+    case SHDR_YUV_SWITCH_ENABLE:
+      hdr.mode = ::qmmf::recorder::VHDRMode::kSHDRYUVSwitchEnable;
       break;
     case QBC_HDR_MODE_VIDEO:
       hdr.mode = ::qmmf::recorder::VHDRMode::kQBCHDRVideo;
@@ -1339,6 +1419,8 @@ gst_qmmf_context_open (GstQmmfContext * context)
     context->zoom.w = context->sensorsize.w;
     context->zoom.h = context->sensorsize.h;
   }
+
+  gst_qmmf_context_parse_logical_cam_info(context, meta);
 
   context->state = GST_STATE_READY;
 
@@ -1481,15 +1563,11 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
-  if(vpad->stream_mode == 1) {
-      GST_TRACE ("stream_mode: %d is preview mode", vpad->stream_mode);
-  }
-
   rotate = qmmfsrc_gst_get_stream_rotaion (vpad->rotate);
   colorimetry = qmmfsrc_gst_get_stream_colorimetry (vpad->colorimetry);
   ::qmmf::recorder::VideoTrackParam params (
       context->camera_id, vpad->width, vpad->height, vpad->framerate, format,
-      colorimetry, rotate, vpad->xtrabufs, ::qmmf::recorder::VideoFlags::kNone, vpad->stream_mode
+      colorimetry, rotate, vpad->xtrabufs, ::qmmf::recorder::VideoFlags::kNone
   );
 
 #ifdef GST_VIDEO_TYPE_SUPPORT
@@ -1499,6 +1577,58 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 
   if (vpad->reprocess_enable)
     params.flags |= ::qmmf::recorder::VideoFlags::kReproc;
+
+#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
+  if (!context->logical_cam_info.is_logical_cam) {
+    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+        "sense.", context->camera_id);
+  } else {
+    ::qmmf::recorder::StreamCameraId cam_id;
+    ::qmmf::recorder::StitchLayoutSelect layout;
+    gchar *info_name = NULL;
+
+    switch (vpad->log_stream_type) {
+      case GST_PAD_LOGICAL_STREAM_TYPE_NONE:
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_0:
+        info_name = context->logical_cam_info.phy_cam_name_list[0];
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+          break;
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_1:
+        info_name = context->logical_cam_info.phy_cam_name_list[1];
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+          break;
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+        layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+        extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+        layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+        extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+        break;
+      default:
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            vpad->log_stream_type);
+        break;
+    }
+  }
+#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   if (context->input_roi_enable && !vpad->reprocess_enable)
     context->input_roi_count++;
@@ -1688,6 +1818,58 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
         return FALSE;
     }
   }
+
+#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
+  if (!context->logical_cam_info.is_logical_cam) {
+    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+        "sense.", context->camera_id);
+  } else {
+    ::qmmf::recorder::StreamCameraId cam_id;
+    ::qmmf::recorder::StitchLayoutSelect layout;
+    gchar *info_name = NULL;
+
+    switch (ipad->log_stream_type) {
+      case GST_PAD_LOGICAL_STREAM_TYPE_NONE:
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_0:
+        info_name = context->logical_cam_info.phy_cam_name_list[0];
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+          break;
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_1:
+        info_name = context->logical_cam_info.phy_cam_name_list[1];
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+          break;
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+        layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+        xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+        break;
+      case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+        layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+        xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+        break;
+      default:
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            ipad->log_stream_type);
+        break;
+    }
+  }
+#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   status = recorder->ConfigImageCapture (context->camera_id, ipad->index,
       imgparam, xtraparam);
@@ -2057,10 +2239,11 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       guint8 disable;
       context->adrc = g_value_get_boolean (value);
       disable = !context->adrc;
-
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.adrc", "disable");
-      meta.update(tag_id, &disable, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.adrc", "disable");
+        meta.update(tag_id, &disable, 1);
+      }
       break;
     }
     case PARAM_CAMERA_CONTROL_MODE:
@@ -2101,69 +2284,76 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_SHARPNESS:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.sharpness", "strength");
-
       context->sharpness = g_value_get_int (value);
-      meta.update(tag_id, &(context)->sharpness, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.sharpness", "strength");
+        meta.update(tag_id, &(context)->sharpness, 1);
+      }
       break;
     }
     case PARAM_CAMERA_CONTRAST:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.contrast", "level");
-
       context->contrast = g_value_get_int (value);
-      meta.update(tag_id, &(context)->contrast, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.contrast", "level");
+        meta.update(tag_id, &(context)->contrast, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SATURATION:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.saturation", "use_saturation");
-
       context->saturation = g_value_get_int (value);
-      meta.update(tag_id, &(context)->saturation, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.saturation", "use_saturation");
+        meta.update(tag_id, &(context)->saturation, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ISO_MODE:
     {
       gint32 priority = 0;
 
-      // Here priority is CamX ISOPriority whose index is 0.
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
-      meta.update(tag_id, &priority, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
-      meta.update(tag_id, &(context)->isovalue, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
-
       context->isomode = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->isomode, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        // Here priority is CamX ISOPriority whose index is 0.
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
+        meta.update(tag_id, &priority, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
+        meta.update(tag_id, &(context)->isovalue, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
+        meta.update(tag_id, &(context)->isomode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ISO_VALUE:
     {
       gint32 priority = 0;
 
-      // Here priority is CamX ISOPriority whose index is 0.
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
-      meta.update(tag_id, &priority, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
-      meta.update(tag_id, &(context)->isomode, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
-
       context->isovalue = g_value_get_int (value);
-      meta.update(tag_id, &(context)->isovalue, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        // Here priority is CamX ISOPriority whose index is 0.
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "select_priority");
+        meta.update(tag_id, &priority, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_exp_priority");
+        meta.update(tag_id, &(context)->isomode, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.iso_exp_priority", "use_iso_value");
+        meta.update(tag_id, &(context)->isovalue, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_MODE:
@@ -2186,11 +2376,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_EXPOSURE_METERING:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.exposure_metering", "exposure_metering_mode");
-
       context->expmetering = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->expmetering, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.exposure_metering", "exposure_metering_mode");
+        meta.update(tag_id, &(context)->expmetering, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_COMPENSATION:
@@ -2224,13 +2415,15 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       if (mode != UCHAR_MAX)
         meta.update(ANDROID_CONTROL_AWB_MODE, (guchar*)&mode, 1);
 
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.manualWB", "partial_mwb_mode");
-
       // If the returned value is UCHAR_MAX, we have manual WB mode so set
       // that value for the vendor tag, otherwise disable manual WB mode.
       mode = (mode == UCHAR_MAX) ? context->wbmode : 0;
-      meta.update(tag_id, &mode, 1);
+
+      if (context->state >= GST_STATE_READY) {
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.manualWB", "partial_mwb_mode");
+        meta.update(tag_id, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_WHITE_BALANCE_LOCK:
@@ -2456,11 +2649,12 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_IR_MODE:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.ir_led", "mode");
-
       context->irmode = g_value_get_enum (value);
-      meta.update(tag_id, &(context)->irmode, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.ir_led", "mode");
+        meta.update(tag_id, &(context)->irmode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_MULTI_CAM_EXPOSURE_TIME:
@@ -2472,45 +2666,107 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->slave_exp_time =
           g_value_get_int (gst_value_array_get_value (value, 1));
 
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
-      meta.update(tag_id,
-          (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.multicam_exptime", "masterExpTime");
+        meta.update(tag_id,
+            (context->master_exp_time) > 0 ? &(context)->master_exp_time : &(context)->exptime, 1);
 
-      tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
-      meta.update(tag_id,
-          (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+        tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
+        meta.update(tag_id,
+            (context->slave_exp_time) > 0 ? &(context)->slave_exp_time : &(context)->exptime, 1);
+      }
       break;
     }
     case PARAM_CAMERA_STANDBY:
     {
-      guint tag_id = get_vendor_tag_by_name (
-          "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
       guint8 standby = g_value_get_uint (value);
-      meta.update(tag_id, &standby, 1);
+      if (context->state >= GST_STATE_READY) {
+        guint tag_id = get_vendor_tag_by_name (
+            "org.codeaurora.qcamera3.sensorwriteinput","SensorStandByFlag");
+        meta.update(tag_id, &standby, 1);
+      }
       break;
     }
     case PARAM_CAMERA_INPUT_ROI_INFO:
     {
       g_return_if_fail (context->input_roi_count != 0);
 
-      guint32 tag_id = get_vendor_tag_by_name (
-          "com.qti.camera.multiROIinfo","streamROICount");
-      meta.update (tag_id, &(context)->input_roi_count, 1);
-
-      tag_id = get_vendor_tag_by_name (
-          "com.qti.camera.multiROIinfo","streamROIInfo");
       gint32 roi_count = context->input_roi_count *4;
       gint32 crop[roi_count];
       g_return_if_fail (gst_value_array_get_size (value) ==
-                        static_cast<guint32>(roi_count));
+          static_cast<guint32>(roi_count));
 
       for (gint i = 0; i < roi_count; i++) {
         crop[i] = g_value_get_int (gst_value_array_get_value (value, i));
       }
 
-      meta.update (tag_id, crop, roi_count);
+      if (context->state >= GST_STATE_READY) {
+        guint32 tag_id = get_vendor_tag_by_name (
+            "com.qti.camera.multiROIinfo","streamROICount");
+        meta.update (tag_id, &(context)->input_roi_count, 1);
+
+        tag_id = get_vendor_tag_by_name (
+            "com.qti.camera.multiROIinfo","streamROIInfo");
+        meta.update (tag_id, crop, roi_count);
+      }
+      break;
+    }
+    case PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH:
+    {
+      if (context->logical_cam_info.is_logical_cam == TRUE) {
+        gint input, output;
+
+        input = g_value_get_int (value);
+        output = -1;
+
+        // input is -1, select next valid phy camera id automatically
+        // or input is in the range of [0, physical camera number], select
+        // itself as output.
+        if (input < -1) {
+            GST_ERROR ("Invalid id (%d) for phy camera switch", input);
+        } else if (input == -1) {
+          context->camera_switch_info.phy_cam_id_for_switch++;
+          if (context->camera_switch_info.phy_cam_id_for_switch >=
+              context->logical_cam_info.phy_cam_num)
+            context->camera_switch_info.phy_cam_id_for_switch = 0;
+
+          output = context->camera_switch_info.phy_cam_id_for_switch;
+          context->camera_switch_info.input_req_id = input;
+        } else {
+          if (input < context->logical_cam_info.phy_cam_num) {
+            context->camera_switch_info.input_req_id = input;
+            context->camera_switch_info.phy_cam_id_for_switch = input;
+            output = input;
+          } else {
+            GST_ERROR ("id (%d) out of range for phy camera switch", input);
+          }
+        }
+
+        if (output != -1) {
+          GST_INFO ("phy camera switch target (%d)", output);
+
+          guint tag_id = get_vendor_tag_by_name (
+              "com.qti.chi.multicameraswitchControl", "activeCameraIndex");
+
+          if (tag_id != 0) {
+            guint8 val = (guint8) output;
+            gint32 ret;
+
+            ret = meta.update (tag_id, &val, 1);
+            if (ret != 0) {
+              GST_ERROR ("physical camera switch tag update error");
+            } else {
+              GST_INFO ("physical camera switch tag update success");
+            }
+          } else {
+            GST_ERROR ("physical camera switch tag not found ");
+          }
+        }
+      } else {
+        GST_ERROR ("not logical camera, phy camera id switch not supported");
+      }
       break;
     }
   }
@@ -2812,11 +3068,22 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       GValue val = G_VALUE_INIT;
       g_value_init (&val, G_TYPE_INT);
 
+      g_message("Sensor active array size <X,Y,Width,Height> is <%d,%d,%d,%d>", \
+          context->sensorsize.x,context->sensorsize.y, \
+          context->sensorsize.w,context->sensorsize.h);
+      g_message("Please align the ROI values and aspect ratio according to " \
+          "Sensor active array size");
+
       for (int i = 0; i < context->input_roi_count * 4; i++) {
         g_value_set_int (&val, 0);
         gst_value_array_append_value (value, &val);
       }
 
+      break;
+    }
+    case PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH:
+    {
+      g_value_set_int (value, context->camera_switch_info.input_req_id);
       break;
     }
   }
