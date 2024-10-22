@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __GST_QTI_SOCKET_SINK_H__
@@ -32,11 +37,13 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstbasesink.h>
+#include <gst/ml/ml-info.h>
+
+#include "qtifdsocket.h"
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_SOCKET_SINK \
-  (gst_socket_sink_get_type())
+#define GST_TYPE_SOCKET_SINK (gst_socket_sink_get_type())
 #define GST_SOCKET_SINK(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_SOCKET_SINK,GstFdSocketSink))
 #define GST_SOCKET_SINK_CLASS(klass) \
@@ -45,32 +52,37 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_SOCKET_SINK))
 #define GST_IS_SOCKET_SINK_CLASS(klass) \
   (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_SOCKET_SINK))
-#define GST_SOCKET_SINK_CAST(obj)       ((GstFdSocketSink *)(obj))
+#define GST_SOCKET_SINK_CAST(obj) ((GstFdSocketSink *)(obj))
 
 typedef struct _GstFdSocketSink GstFdSocketSink;
 typedef struct _GstFdSocketSinkClass GstFdSocketSinkClass;
 
-struct _GstFdSocketSink
-{
+struct _GstFdSocketSink {
   GstBaseSink parent;
 
   gchar *sockfile;
 
-  GstTask *task;
+  GstTask  *task;
   GRecMutex tasklock;
 
-  gint socket;
+  GstTask  *connect_task;
+  GRecMutex connect_tasklock;
+
+  gint   socket;
   GMutex socklock;
 
   GHashTable *bufmap;
-  GMutex bufmaplock;
-  gint bufcount;
+  GMutex      bufmaplock;
+  gint        bufcount;
 
   gint should_stop;
+
+  GstMLInfo *mlinfo;
+
+  GstFdSocketDataType mode;
 };
 
-struct _GstFdSocketSinkClass
-{
+struct _GstFdSocketSinkClass {
   GstBaseSinkClass parent_class;
 };
 
