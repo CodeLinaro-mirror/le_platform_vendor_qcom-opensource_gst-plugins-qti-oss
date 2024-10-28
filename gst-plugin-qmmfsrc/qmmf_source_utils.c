@@ -686,11 +686,17 @@ gst_qmmfsrc_vhdr_mode_get_type (void)
         "Use this mode for better quality on supporting sensor. "
         "This mode may result in reduced framerate.", "shdr-yuv"
     },
-    { SHDR_SWITCH_ENABLE,
-        "Enable SHDR switch. "
+    { SHDR_RAW_SWITCH_ENABLE,
+        "Enable Raw SHDR switch. "
         "Use this mode for enabling shdr switch in camera backend based on lux value. "
-        "The switch is between linear and other SHDR type based on support in camera.",
-        "shdr-switch-enable"
+        "The switch is between linear and Raw SHDR based on support in camera.",
+        "raw-shdr-switch"
+    },
+    { SHDR_YUV_SWITCH_ENABLE,
+        "Enable YUV SHDR switch. "
+        "Use this mode for enabling shdr switch in camera backend based on lux value. "
+        "The switch is between linear and YUV SHDR based on support in camera.",
+        "yuv-shdr-switch"
     },
     { QBC_HDR_MODE_VIDEO,
         "Enable in-sensor HDR for video stream. "
@@ -758,6 +764,49 @@ gst_qmmfsrc_cam_opmode_get_type (void)
 
   if (!gtype)
     gtype = g_flags_register_static ("GstFrameSelection", variants);
+
+  return gtype;
+}
+
+GType
+gst_qmmfsrc_pad_logical_stream_type_get_type (void)
+{
+  static GType gtype = 0;
+  static GEnumValue variants[GST_PAD_LOGICAL_STREAM_TYPE_MAX];
+  gint i;
+  gint index_num = (GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX -
+      GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN + 1);
+
+  // Physical camera index enum
+  for (i = 0; i < index_num; ++i) {
+    variants[i].value = i;
+    variants[i].value_name = g_strdup_printf (
+        "The stream uses specific physical camera with the index %d.", i);
+    variants[i].value_nick = g_strdup_printf (
+        "camera-index-%d", i);
+  }
+
+  // Stitch layout enum
+  variants[i].value = GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE;
+  variants[i].value_name =
+      "The stream uses all physical cameras and stitch images side by side.";
+  variants[i++].value_nick = "sidebyside";
+
+  variants[i].value = GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA;
+  variants[i].value_name =
+      "The stream uses all physical cameras and stitch images to panorama.";
+  variants[i++].value_nick = "panorama";
+
+  variants[i].value = GST_PAD_LOGICAL_STREAM_TYPE_NONE;
+  variants[i].value_name = "None";
+  variants[i++].value_nick = "none";
+
+  variants[i].value = 0;
+  variants[i].value_name = NULL;
+  variants[i].value_nick = NULL;
+
+  if (!gtype)
+    gtype = g_enum_register_static ("GstQmmfSrcPadLogicalStreamType", variants);
 
   return gtype;
 }

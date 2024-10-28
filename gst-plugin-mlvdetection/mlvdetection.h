@@ -99,6 +99,9 @@ struct _GstMLVideoDetection {
   /// Buffer pools.
   GstBufferPool     *outpool;
 
+  /// The ID of this stage of ML inference.
+  guint             stage_id;
+
   /// Tensor deciphering module.
   GstMLModule       *module;
   /// Array with predictions from the module post-processing.
@@ -108,12 +111,16 @@ struct _GstMLVideoDetection {
   GHashTable        *surfaces;
   GHashTable        *contexts;
 
+  // Stashed ML boxes used fot stabilization
+  GList             *stashedmlboxes;
+
   /// Properties.
   gint              mdlenum;
   gchar             *labels;
   guint             n_results;
   gdouble           threshold;
   GstStructure      *mlconstants;
+  gboolean          stabilization;
 };
 
 struct _GstMLVideoDetectionClass {

@@ -102,7 +102,13 @@ static GstStaticPadTemplate gst_video_split_src_template =
             GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
     );
 
+typedef struct _GstVideoCoords GstVideoCoords;
 typedef struct _GstVSplitRequest GstVSplitRequest;
+
+struct _GstVideoCoords {
+  gint x;
+  gint y;
+};
 
 struct _GstVSplitRequest {
   GstMiniObject parent;
@@ -225,13 +231,269 @@ gst_data_queue_push_object (GstDataQueue * queue, GstMiniObject * object)
     item->destroy (item);
 }
 
-static inline void
-gst_video_composition_update_regions (GstVideoComposition * composition,
-    GstVideoRegionOfInterestMeta * roimeta)
+static inline GstVideoRegionOfInterestMeta*
+gst_buffer_find_region_of_interest_meta (GstBuffer * buffer, const guint index)
 {
+  GstVideoRegionOfInterestMeta *roimeta = NULL;
+  gpointer state = NULL;
+  guint num = 0;
+
+  while ((roimeta = GST_BUFFER_ITERATE_ROI_METAS (buffer, state)) != NULL) {
+    if (roimeta->parent_id != -1)
+      continue;
+
+    if (++num == index)
+      return roimeta;
+  }
+
+  return NULL;
+}
+
+static inline void
+gst_buffer_transfer_video_region_of_interest_metas (GstBuffer * outbuffer,
+    GstBuffer * inbuffer, const gint parent_meta_id, GstVideoCoords * s_offset,
+    GstVideoCoords * d_offset, const gdouble w_scale, const gdouble h_scale)
+{
+  GstVideoRegionOfInterestMeta *roimeta = NULL;
+  gpointer state = NULL;
+  GList *params = NULL, *param = NULL;
+  gint id = -1, parent_id = -1;
+
+  // Find and transfer all necessary ROI metas depending on the configuration.
+  while ((roimeta = GST_BUFFER_ITERATE_ROI_METAS (inbuffer, state)) != NULL) {
+    // Skip if ROI is a ImageRegion with actual data (set by another vsplit).
+    if (roimeta->roi_type == g_quark_from_static_string ("ImageRegion"))
+      continue;
+
+    // If this output is from root ROI meta then transfer only derived ROIs,
+    // otherwise transfer all ROIs. Also transfer the list of attached metas.
+    if ((parent_meta_id != -1) && (roimeta->parent_id != parent_meta_id))
+      continue;
+
+    // Save the pointer to the params list and ID for transfering them later.
+    params = roimeta->params;
+    id = roimeta->id;
+    parent_id = roimeta->parent_id;
+
+    roimeta = gst_buffer_add_video_region_of_interest_meta_id (outbuffer,
+        roimeta->roi_type, roimeta->x, roimeta->y, roimeta->w, roimeta->h);
+
+    roimeta->id = id;
+    roimeta->parent_id = parent_id;
+
+    roimeta->w = roimeta->w * w_scale;
+    roimeta->h = roimeta->h * h_scale;
+
+    roimeta->x = d_offset->x + ((roimeta->x - s_offset->x) * w_scale);
+    roimeta->y = d_offset->y + ((roimeta->y - s_offset->y) * h_scale);
+
+    for (param = params; param != NULL; param = g_list_next (param)) {
+      GstStructure *structure = GST_STRUCTURE_CAST (param->data);
+      GQuark id = gst_structure_get_name_id (structure);
+      const GValue *value = NULL;
+
+      if (id == g_quark_from_static_string ("VideoLandmarks")) {
+        GArray *keypoints = NULL, *links = NULL;
+        gdouble confidence = 0.0;
+        guint num = 0;
+
+        gst_structure_get_double (structure, "confidence", &confidence);
+
+        value = gst_structure_get_value (structure, "keypoints");
+        keypoints = g_array_copy (g_value_get_boxed (value));
+
+        value = gst_structure_get_value (structure, "links");
+        links = g_array_copy (g_value_get_boxed (value));
+
+        // Correct the X and Y of each keypoint based on the regions.
+        for (num = 0; num < keypoints->len; num++) {
+          GstVideoKeypoint *kp = &(g_array_index (keypoints, GstVideoKeypoint, num));
+
+          kp->x = kp->x * w_scale;
+          kp->y = kp->y * h_scale;
+        }
+
+        structure = gst_structure_new ("VideoLandmarks",
+            "keypoints", G_TYPE_ARRAY, keypoints, "links", G_TYPE_ARRAY, links,
+            "confidence", G_TYPE_DOUBLE, confidence, NULL);
+        gst_video_region_of_interest_meta_add_param (roimeta, structure);
+      } else if (id == g_quark_from_static_string ("ImageClassification")) {
+        structure = gst_structure_copy (structure);
+        gst_video_region_of_interest_meta_add_param (roimeta, structure);
+      } else if (id == g_quark_from_static_string ("ObjectDetection")) {
+        structure = gst_structure_copy (structure);
+        gst_video_region_of_interest_meta_add_param (roimeta, structure);
+      }
+    }
+
+    // If no root parent meta was passed then don't look for sub-derived metas.
+    if (parent_meta_id == -1)
+      continue;
+
+    // Call recursively in order to add metas sub-derived by current meta.
+    gst_buffer_transfer_video_region_of_interest_metas (outbuffer, inbuffer,
+        roimeta->id, s_offset, d_offset, w_scale, h_scale);
+  }
+}
+
+static inline GstVideoLandmarksMeta *
+gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
+    GstVideoLandmarksMeta * lmkmeta, GstVideoCoords * offset,
+    const gdouble w_scale, const gdouble h_scale)
+{
+  GstVideoLandmarksMeta *newmeta = NULL;
+  GArray *keypoints = NULL, *links = NULL;
+  guint num = 0;
+
+  keypoints = g_array_copy (lmkmeta->keypoints);
+  links = g_array_copy (lmkmeta->links);
+
+  // Correct the X and Y of each keypoint bases on the regions.
+  for (num = 0; num < keypoints->len; num++) {
+    GstVideoKeypoint *kp = &(g_array_index (keypoints, GstVideoKeypoint, num));
+
+    kp->x = (kp->x * w_scale) + offset->x;
+    kp->y = (kp->y * h_scale) + offset->y;
+  }
+
+  newmeta = gst_buffer_add_video_landmarks_meta (buffer, lmkmeta->confidence,
+      keypoints, links);
+  newmeta->id = lmkmeta->id;
+
+  return newmeta;
+}
+
+static inline GstVideoClassificationMeta *
+gst_buffer_transfer_video_classification_meta (GstBuffer * buffer,
+    GstVideoClassificationMeta * classmeta)
+{
+  GstVideoClassificationMeta *newmeta = NULL;
+
+  newmeta = gst_buffer_add_video_classification_meta (buffer,
+      g_array_copy (classmeta->labels));
+  newmeta->id = classmeta->id;
+
+  return newmeta;
+}
+
+static inline void
+gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
+    GstVideoComposition * composition, GstVideoRegionOfInterestMeta * roimeta)
+{
+  GstBuffer *outbuffer = NULL, *inbuffer = NULL;
   GstVideoRectangle *source = NULL, *destination = NULL;
+  GList *params = NULL, *param = NULL;
+  GstMeta *meta = NULL;
+  gpointer state = NULL;
+  GstVideoCoords s_offset = {0, 0}, d_offset = {0, 0};
+  gdouble w_scale = 0.0, h_scale = 0.0;
+  gint parent_meta_id = -1;
+
+  inbuffer = composition->blits[0].frame->buffer;
+  outbuffer = composition->frame->buffer;
+
+  source = &(composition->blits[0].sources[0]);
+  destination = &(composition->blits[0].destinations[0]);
+
+  s_offset.x = source->x;
+  s_offset.y = source->y;
+  d_offset.x = destination->x;
+  d_offset.y = destination->y;
+
+  gst_util_fraction_to_double (destination->w, source->w, &w_scale);
+  gst_util_fraction_to_double (destination->h, source->h, &h_scale);
+
+  parent_meta_id = (roimeta != NULL) ? roimeta->id : (-1);
+
+  gst_buffer_transfer_video_region_of_interest_metas (outbuffer, inbuffer,
+      parent_meta_id, &s_offset, &d_offset, w_scale, h_scale);
+
+  // Transfer all other metas derived from this ROI and nested in the params list.
+  params = (roimeta != NULL) ? roimeta->params : NULL;
+
+  for (param = params; param != NULL; param = g_list_next (param)) {
+    GstStructure *structure = GST_STRUCTURE_CAST (param->data);
+    GQuark id = gst_structure_get_name_id (structure);
+    const GValue *value = NULL;
+
+    if (id == g_quark_from_static_string ("VideoLandmarks")) {
+      GstVideoLandmarksMeta *lmkmeta = NULL;
+      GArray *keypoints = NULL, *links = NULL;
+      gdouble confidence = 0.0;
+      guint idx = 0;
+
+      gst_structure_get_double (structure, "confidence", &confidence);
+
+      value = gst_structure_get_value (structure, "keypoints");
+      keypoints = g_array_copy (g_value_get_boxed (value));
+
+      value = gst_structure_get_value (structure, "links");
+      links = g_array_copy (g_value_get_boxed (value));
+
+      // Correct the X and Y of each keypoint bases on the regions.
+      for (idx = 0; idx < keypoints->len; idx++) {
+        GstVideoKeypoint *kp = &(g_array_index (keypoints, GstVideoKeypoint, idx));
+
+        kp->x = (kp->x * w_scale) + destination->x;
+        kp->y = (kp->y * h_scale) + destination->y;
+      }
+
+      lmkmeta = gst_buffer_add_video_landmarks_meta (outbuffer, confidence,
+          keypoints, links);
+
+      GST_TRACE_OBJECT (srcpad, "Attached derived 'VideoLandmarks' meta "
+          "with ID[0x%X] to buffer %p", lmkmeta->id, outbuffer);
+    } else if (id == g_quark_from_static_string ("ImageClassification")) {
+      GstVideoClassificationMeta *classmeta = NULL;
+      GArray *labels = NULL;
+      const GValue *value = NULL;
+
+      value = gst_structure_get_value (structure, "labels");
+      labels = g_array_copy (g_value_get_boxed (value));
+
+      classmeta = gst_buffer_add_video_classification_meta (outbuffer, labels);
+      GST_TRACE_OBJECT (srcpad, "Attached derived 'ImageClassification' meta "
+          "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
+    }
+  }
+
+  // If output buffer is produced from ROI do not transfer any other meta.
+  if (roimeta != NULL)
+    return;
+
+  // Output buffer is produced directly from input buffer, transfer non-ROI metas.
+  while ((meta = gst_buffer_iterate_meta (inbuffer, &state))) {
+    if (meta->info->api == GST_VIDEO_CLASSIFICATION_META_API_TYPE) {
+      GstVideoClassificationMeta *classmeta =
+          GST_VIDEO_CLASSIFICATION_META_CAST (meta);
+
+      classmeta = gst_buffer_transfer_video_classification_meta (outbuffer,
+          classmeta);
+
+      GST_TRACE_OBJECT (srcpad, "Transferred 'ImageClassification' meta "
+          "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
+    } else if (meta->info->api == GST_VIDEO_LANDMARKS_META_API_TYPE) {
+      GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (meta);
+
+      lmkmeta = gst_buffer_transfer_video_landmarks_meta (outbuffer, lmkmeta,
+          &d_offset, w_scale, h_scale);
+
+      GST_TRACE_OBJECT (srcpad, "Transferred 'VideoLandmarks' meta "
+          "with ID[0x%X] to buffer %p", lmkmeta->id, outbuffer);
+    }
+  }
+}
+
+static inline void
+gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
+    GstVideoComposition * composition, GstVideoRegionOfInterestMeta * roimeta)
+{
+  GstBuffer *outbuffer = NULL;
+  GstVideoRectangle *source = NULL, *destination = NULL;
+  GstVideoRegionOfInterestMeta *rmeta = NULL;
   gint maxwidth = 0, maxheight = 0;
 
+  outbuffer = composition->frame->buffer;
   source = &(composition->blits[0].sources[0]);
   destination = &(composition->blits[0].destinations[0]);
 
@@ -259,171 +521,19 @@ gst_video_composition_update_regions (GstVideoComposition * composition,
   // Additional correction of X and Y axis for centred image disposition.
   destination->x += (maxwidth - destination->w) / 2;
   destination->y += (maxheight - destination->h) / 2;
-}
-
-static inline void
-gst_video_composition_populate_output_metas (GstVideoComposition * composition,
-    GstVideoRegionOfInterestMeta * roimeta)
-{
-  GstBuffer *outbuffer = NULL, *inbuffer = NULL;
-  GstVideoRectangle *source = NULL, *destination = NULL;
-  GstMeta *meta = NULL;
-  gpointer state = NULL;
-  GList *params = NULL, *param = NULL;
-  gdouble w_scale = 0.0, h_scale = 0.0;
-
-  inbuffer = composition->blits[0].frame->buffer;
-  outbuffer = composition->frame->buffer;
-
-  source = &(composition->blits[0].sources[0]);
-  destination = &(composition->blits[0].destinations[0]);
-
-  gst_util_fraction_to_double (destination->w, source->w, &w_scale);
-  gst_util_fraction_to_double (destination->h, source->h, &h_scale);
-
-  // Find and transfer all necessary ROI metas depending on the configuration.
-  while ((meta = gst_buffer_iterate_meta_filtered (inbuffer, &state,
-              GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE)) != NULL) {
-    GstVideoRegionOfInterestMeta *rmeta = (GstVideoRegionOfInterestMeta*) meta;
-
-    // If this output is from ROI meta then transfer only derived ROIs.
-    if ((roimeta != NULL) &&
-        ((rmeta->parent_id == -1) || (rmeta->parent_id != roimeta->id)))
-      continue;
-
-    // Save the pointer to the params list for tranfering them later.
-    params = rmeta->params;
-
-    rmeta = gst_buffer_add_video_region_of_interest_meta_id (outbuffer,
-        rmeta->roi_type, rmeta->x, rmeta->y, rmeta->w, rmeta->h);
-
-    rmeta->w = rmeta->w * w_scale;
-    rmeta->h = rmeta->h * h_scale;
-
-    rmeta->x = (rmeta->x - ((roimeta != NULL) ? roimeta->x : 0)) * w_scale;
-    rmeta->y = (rmeta->y - ((roimeta != NULL) ? roimeta->y : 0)) * h_scale;
-    rmeta->x += destination->x;
-    rmeta->y += destination->y;
-
-    for (param = params; param != NULL; param = g_list_next (param)) {
-      GstStructure *structure = GST_STRUCTURE_CAST (param->data);
-      GQuark id = gst_structure_get_name_id (structure);
-
-      if (id == g_quark_from_static_string ("VideoLandmarks")) {
-        GArray *keypoints = NULL, *links = NULL;
-        GArray *newkeypoints = NULL, *newlinks = NULL;
-        gdouble confidence = 0.0;
-        guint num = 0, n_bytes = 0;
-
-        gst_structure_get_double (structure, "confidence", &confidence);
-
-        keypoints = (GArray *) g_value_get_boxed (
-            gst_structure_get_value (structure, "keypoints"));
-        links = (GArray *) g_value_get_boxed (
-            gst_structure_get_value (structure, "links"));
-
-        // TODO: replace with g_array_copy() in glib version > 2.62
-        newkeypoints = g_array_sized_new (FALSE, FALSE, sizeof (GstVideoKeypoint),
-            keypoints->len);
-        newkeypoints = g_array_set_size (newkeypoints, keypoints->len);
-
-        n_bytes = keypoints->len * sizeof (GstVideoKeypoint);
-        memcpy (newkeypoints->data, keypoints->data, n_bytes);
-
-        newlinks = g_array_sized_new (FALSE, FALSE, sizeof (GstVideoKeypointLink),
-            links->len);
-        newlinks = g_array_set_size (newlinks, links->len);
-
-        n_bytes = links->len * sizeof (GstVideoKeypointLink);
-        memcpy (newlinks->data, links->data, n_bytes);
-
-        // Correct the X and Y of each keypoint based on the regions.
-        for (num = 0; num < newkeypoints->len; num++) {
-          GstVideoKeypoint *kp =
-              &(g_array_index (newkeypoints, GstVideoKeypoint, num));
-
-          kp->x = kp->x * w_scale;
-          kp->y = kp->y * h_scale;
-        }
-
-        structure = gst_structure_new ("VideoLandmarks", "keypoints",
-            G_TYPE_ARRAY, newkeypoints, "links", G_TYPE_ARRAY, newlinks,
-            "confidence", G_TYPE_DOUBLE, confidence, NULL);
-        gst_video_region_of_interest_meta_add_param (rmeta, structure);
-      } else if (id == g_quark_from_static_string ("ImageClassification")) {
-        structure = gst_structure_copy (structure);
-        gst_video_region_of_interest_meta_add_param (rmeta, structure);
-      } else if (id == g_quark_from_static_string ("ObjectDetection")) {
-        structure = gst_structure_copy (structure);
-        gst_video_region_of_interest_meta_add_param (rmeta, structure);
-      }
-    }
-  }
-
-  // Transfer all other metas derived from this ROI and nested in the params list.
-  params = (roimeta != NULL) ? roimeta->params : NULL;
-
-  for (param = params; param != NULL; param = g_list_next (param)) {
-    GstStructure *structure = GST_STRUCTURE_CAST (param->data);
-    GQuark id = gst_structure_get_name_id (structure);
-
-    if (id == g_quark_from_static_string ("VideoLandmarks")) {
-      GArray *keypoints = NULL, *links = NULL;
-      GArray *newkeypoints = NULL, *newlinks = NULL;
-      gdouble confidence = 0.0;
-      guint idx = 0, n_bytes = 0;
-
-      gst_structure_get_double (structure, "confidence", &confidence);
-
-      keypoints = (GArray *) g_value_get_boxed (
-          gst_structure_get_value (structure, "keypoints"));
-      links = (GArray *) g_value_get_boxed (
-          gst_structure_get_value (structure, "links"));
-
-      newkeypoints = g_array_sized_new (FALSE, FALSE, sizeof (GstVideoKeypoint),
-          keypoints->len);
-      newkeypoints = g_array_set_size (newkeypoints, keypoints->len);
-
-      n_bytes = keypoints->len * sizeof (GstVideoKeypoint);
-      memcpy (newkeypoints->data, keypoints->data, n_bytes);
-
-      newlinks = g_array_sized_new (FALSE, FALSE, sizeof (GstVideoKeypointLink),
-          links->len);
-      newlinks = g_array_set_size (newlinks, links->len);
-
-      n_bytes = links->len * sizeof (GstVideoKeypointLink);
-      memcpy (newlinks->data, links->data, n_bytes);
-
-      // Correct the X and Y of each keypoint bases on the regions.
-      for (idx = 0; idx < newkeypoints->len; idx++) {
-        GstVideoKeypoint *kp =
-            &(g_array_index (newkeypoints, GstVideoKeypoint, idx));
-
-        kp->x = (kp->x * w_scale) + destination->x;
-        kp->y = (kp->y * h_scale) + destination->y;
-      }
-
-      gst_buffer_add_video_landmarks_meta (outbuffer, confidence, newkeypoints,
-          newlinks);
-    } else if (id == g_quark_from_static_string ("ImageClassification")) {
-      GArray *labels = NULL, *newlabels = NULL;
-
-      labels = (GArray *) g_value_get_boxed (
-          gst_structure_get_value (structure, "labels"));
-
-      newlabels = g_array_sized_new (FALSE, FALSE, sizeof (GstClassLabel),
-          labels->len);
-      newlabels = g_array_set_size (newlabels, labels->len);
-
-      memcpy (newlabels->data, labels->data, labels->len * sizeof (GstClassLabel));
-
-      gst_buffer_add_video_classification_meta (outbuffer, newlabels);
-    }
-  }
 
   // Add ROI meta with the actual part of the buffer filled with image data.
-  gst_buffer_add_video_region_of_interest_meta (outbuffer, "ImageRegion",
+  rmeta = gst_buffer_add_video_region_of_interest_meta (outbuffer, "ImageRegion",
       destination->x, destination->y, destination->w, destination->h);
+
+  // Propagate the original IDs of the ROI meta via the image region.
+  if (roimeta != NULL) {
+    rmeta->id = roimeta->id;
+    rmeta->parent_id = roimeta->parent_id;
+  }
+
+  GST_TRACE_OBJECT (srcpad, "Attached 'ImageRegion' meta with ID[0x%X] parent "
+      "ID[0x%X] to buffer %p", rmeta->id, rmeta->parent_id, outbuffer);
 }
 
 static gboolean
@@ -698,17 +808,15 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
   GList *list = NULL;
   GArray *outframes = NULL;
   GstVideoFrame *outframe = NULL;
-  GstVideoRegionOfInterestMeta *roimeta = NULL;
   GstVideoComposition *composition = NULL;
-  GstMeta *meta = NULL;
+  GstVideoRegionOfInterestMeta *roimeta = NULL;
   gpointer state = NULL;
   guint idx = 0, num = 0, id = 0, n_metas = 0, n_entries = 0, i = 0;
   gboolean success = TRUE;
 
   // Calculate the number of non-derived ROI meta entries from the input buffer.
-  while ((meta = gst_buffer_iterate_meta_filtered (inframe->buffer, &state,
-              GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE)) != NULL)
-    n_metas += (((GstVideoRegionOfInterestMeta*) meta)->parent_id == -1) ? 1 : 0;
+  while ((roimeta = GST_BUFFER_ITERATE_ROI_METAS (inframe->buffer, state)) != NULL)
+    n_metas += (roimeta->parent_id == -1) ? 1 : 0;
 
   GST_VIDEO_SPLIT_LOCK (vsplit);
 
@@ -781,20 +889,18 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
 
       // Depending on the mode a different ROI meta is used or none at all.
       if (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE)
-        roimeta = gst_buffer_get_video_region_of_interest_meta_id (
-            inframe->buffer, (num -1));
+        roimeta = gst_buffer_find_region_of_interest_meta (inframe->buffer, num);
       else if (srcpad->mode == GST_VSPLIT_MODE_ROI_BATCH)
-        roimeta = gst_buffer_get_video_region_of_interest_meta_id (
-            inframe->buffer, idx);
+        roimeta = gst_buffer_find_region_of_interest_meta (inframe->buffer, idx);
 
       // Update source/destination regions and output buffer meta.
-      gst_video_composition_update_regions (composition, roimeta);
-      gst_video_composition_populate_output_metas (composition, roimeta);
+      gst_video_split_composition_update_regions (srcpad, composition, roimeta);
+      gst_video_split_composition_populate_metas (srcpad, composition, roimeta);
 
       source = &(composition->blits[0].sources[0]);
       destination = &(composition->blits[0].destinations[0]);
 
-      GST_TRACE_OBJECT (vsplit, "Composition [%u] Regions: [%d %d %d %d] ->"
+      GST_TRACE_OBJECT (srcpad, "Composition [%u] Regions: [%d %d %d %d] ->"
           " [%d %d %d %d]", id, source->x, source->y, source->w, source->h,
           destination->x, destination->y, destination->w, destination->h);
 

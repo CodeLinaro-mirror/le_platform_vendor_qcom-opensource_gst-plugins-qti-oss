@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -7,31 +7,99 @@
 #include <map>
 #include <numeric>
 #include <vector>
+#include <filesystem>
 
 #include <dlfcn.h>
 
 #include <QnnInterface.h>
 #include <System/QnnSystemInterface.h>
+#include <System/QnnSystemContext.h>
 
 #include "ml-qnn-engine.h"
 
 #define GST_CAT_DEFAULT gst_ml_qnn_engine_debug_category()
 #define GST_CAT_QNN_SDK gst_ml_qnn_sdk_debug_category()
 
-#define QNN_TENSOR_DATA_TYPE(tensor)      \
-    ((tensor.version == QNN_TENSOR_VERSION_1) ?      \
-        tensor.v1.dataType : QNN_DATATYPE_UNDEFINED)
+#if defined(QNN_TENSOR_V2_INIT)
+
+#define QNN_GET_TENSOR(tensor) ((tensor)->v2)
+#define QNN_TENSOR_VERSION_SUPPORTED(tensor) \
+    (((tensor)->version == QNN_TENSOR_VERSION_1) || \
+        ((tensor)->version == QNN_TENSOR_VERSION_2))
+
+#elif defined(QNN_TENSOR_V1_INIT)
+
+#define QNN_GET_TENSOR(tensor) ((tensor)->v1)
+#define QNN_TENSOR_VERSION_SUPPORTED(tensor) \
+    ((tensor)->version == QNN_TENSOR_VERSION_1)
+
+#else
+
+#error "Not supprted QNN tensor version !!!"
+
+#endif
+
+#if defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V2_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO(graphInfo) \
+    ((graphInfo)->graphInfoV2)
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED(graphInfo) \
+    (((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) || \
+        ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2))
+
+#elif defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V1_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO(graphInfo) \
+    ((graphInfo)->graphInfoV1)
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED(graphInfo) \
+    ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1)
+
+#else
+
+#error "Not supprted QNN system context graph info version !!!"
+
+#endif
+
+#if defined(QNN_SYSTEM_CONTEXT_BINARY_INFO_V2_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_BINARY_INFO(binary_info) \
+    ((binary_info)->contextBinaryInfoV2)
+#define QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED(binary_info) \
+    (((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_1) || \
+        ((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_2))
+
+#elif defined(QNN_SYSTEM_CONTEXT_BINARY_INFO_V1_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_BINARY_INFO(binary_info) \
+    ((binary_info)->contextBinaryInfoV1)
+#define QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED(binary_info) \
+    ((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_1)
+
+#else
+
+#error "Not supprted QNN system context binary info version !!!"
+
+#endif
+
+#define QNN_TENSOR_DATA_TYPE(tensor) \
+    (QNN_GET_TENSOR (tensor).dataType)
 
 #define QNN_TENSOR_DIMENSION(tensor, idx) \
-    ((tensor.version == QNN_TENSOR_VERSION_1) ? tensor.v1.dimensions[idx] : 0)
+    (QNN_GET_TENSOR (tensor).dimensions[(idx)])
 
 #define QNN_TENSOR_RANK(tensor) \
-    ((tensor.version == QNN_TENSOR_VERSION_1) ? tensor.v1.rank : 0u)
+    (QNN_GET_TENSOR (tensor).rank)
+
+#define QNN_TENSOR_CLIENTBUF(tensor) \
+    (QNN_GET_TENSOR (tensor).clientBuf)
+
+#define QNN_TENSOR_QUANTIZE_PARAMS(tensor) \
+    (QNN_GET_TENSOR (tensor).quantizeParams)
 
 // TODO: Workaround! Need to be exported by the QNN SDK.
 typedef struct {
   Qnn_GraphHandle_t graph;
-  char              *graphName;
+  const char        *graphName;
   Qnn_Tensor_t      *inputTensors;
   uint32_t          numInputTensors;
   Qnn_Tensor_t      *outputTensors;
@@ -44,8 +112,8 @@ typedef struct {
   const QnnGraph_Config_t **graphConfigs;
 } GraphConfigInfo_t;
 
-typedef Qnn_ErrorHandle_t (*QnnInterfaceGetProvidersFn)(
-    const QnnInterface_t ***providerList, uint32_t *numProviders);
+using QnnInterfaceGetProvidersFn = decltype(QnnInterface_getProviders);
+using QnnSystemInterfaceGetProvidersFn = decltype(QnnSystemInterface_getProviders);
 
 typedef Qnn_ErrorHandle_t (*ComposeGraphsFn)(Qnn_BackendHandle_t,
     QNN_INTERFACE_VER_TYPE, Qnn_ContextHandle_t, const GraphConfigInfo_t **,
@@ -57,34 +125,43 @@ typedef Qnn_ErrorHandle_t (*FreeGraphFn) (GraphInfo_t ***,
 
 struct _GstMLQnnEngine
 {
-  GstMLInfo               *ininfo;
-  GstMLInfo               *outinfo;
+  GstMLInfo                      *ininfo;
+  GstMLInfo                      *outinfo;
 
-  GstStructure            *settings;
+  GstStructure                   *settings;
 
   // QNN backend library handle.
-  gpointer                libhandle;
+  gpointer                       libhandle;
   // QNN model library handle.
-  gpointer                model;
+  gpointer                       model;
+  // QNN system library handle.
+  gpointer                       syslibhandle;
 
   // QNN versioned interface.
-  QNN_INTERFACE_VER_TYPE  interface;
+  QNN_INTERFACE_VER_TYPE         interface;
+  // QNN versioned system interface.
+  QNN_SYSTEM_INTERFACE_VER_TYPE  sysinterface;
   // QNN log handle.
-  Qnn_LogHandle_t         logger;
+  Qnn_LogHandle_t                logger;
   // QNN profiling handle.
-  Qnn_ProfileHandle_t     profiler;
+  Qnn_ProfileHandle_t            profiler;
   // QNN device handle.
-  Qnn_DeviceHandle_t      device;
+  Qnn_DeviceHandle_t             device;
   // QNN graph context handle.
-  Qnn_ContextHandle_t     context;
-  Qnn_BackendHandle_t     backend;
+  Qnn_ContextHandle_t            context;
+  // QNN graph systemcontext handle.
+  QnnSystemContext_Handle_t      sysctx_handle;
+  Qnn_BackendHandle_t            backend;
 
   // QNN model graphs.
-  GraphInfo_t             **graph_infos;
-  uint32_t                n_graph_infos;
-
+  GraphInfo_t                    **graph_infos;
+  uint32_t                       n_graphs;
+  gboolean                       iscached;
   // QNNF library APIs
-  FreeGraphFn           FreeGraph;
+  FreeGraphFn                    FreeGraph;
+
+  // Device Platform Information.
+  const QnnDevice_PlatformInfo_t *device_platform;
 };
 
 static const std::map<Qnn_DataType_t, size_t> kDataTypeToSize = {
@@ -187,12 +264,12 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
   n_elements = gst_ml_info_tensor_size (&(mlframe->info), idx);
   n_elements /= gst_ml_type_get_size (mlframe->info.type);
 
-  switch (tensor->v1.dataType) {
+  switch (QNN_TENSOR_DATA_TYPE (tensor)) {
     case QNN_DATATYPE_UFIXED_POINT_8:
     {
-      uint8_t *data = reinterpret_cast<uint8_t *>(tensor->v1.clientBuf.data);
-      int32_t offset = tensor->v1.quantizeParams.scaleOffsetEncoding.offset;
-      float scale = tensor->v1.quantizeParams.scaleOffsetEncoding.scale;
+      uint8_t *data = reinterpret_cast<uint8_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
+      int32_t offset = QNN_TENSOR_QUANTIZE_PARAMS (tensor).scaleOffsetEncoding.offset;
+      float scale = QNN_TENSOR_QUANTIZE_PARAMS (tensor).scaleOffsetEncoding.scale;
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = (float)(data[idx] + offset) * scale;
@@ -201,9 +278,9 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_UFIXED_POINT_16:
     {
-      uint16_t *data = reinterpret_cast<uint16_t *>(tensor->v1.clientBuf.data);
-      int32_t offset = tensor->v1.quantizeParams.scaleOffsetEncoding.offset;
-      float scale = tensor->v1.quantizeParams.scaleOffsetEncoding.scale;
+      uint16_t *data = reinterpret_cast<uint16_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
+      int32_t offset = QNN_TENSOR_QUANTIZE_PARAMS (tensor).scaleOffsetEncoding.offset;
+      float scale = QNN_TENSOR_QUANTIZE_PARAMS (tensor).scaleOffsetEncoding.scale;
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = (float)(data[idx] + offset) * scale;
@@ -212,7 +289,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_UINT_8:
     {
-      uint8_t *data = reinterpret_cast<uint8_t *>(tensor->v1.clientBuf.data);
+      uint8_t *data = reinterpret_cast<uint8_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -221,7 +298,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_UINT_16:
     {
-      uint16_t *data = reinterpret_cast<uint16_t *>(tensor->v1.clientBuf.data);
+      uint16_t *data = reinterpret_cast<uint16_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -230,7 +307,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_UINT_32:
     {
-      uint32_t *data = reinterpret_cast<uint32_t *>(tensor->v1.clientBuf.data);
+      uint32_t *data = reinterpret_cast<uint32_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -239,7 +316,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_INT_8:
     {
-      int8_t *data = reinterpret_cast<int8_t *>(tensor->v1.clientBuf.data);
+      int8_t *data = reinterpret_cast<int8_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -248,7 +325,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_INT_16:
     {
-      int16_t *data = reinterpret_cast<int16_t *>(tensor->v1.clientBuf.data);
+      int16_t *data = reinterpret_cast<int16_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -257,7 +334,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_INT_32:
     {
-      int32_t *data = reinterpret_cast<int32_t *>(tensor->v1.clientBuf.data);
+      int32_t *data = reinterpret_cast<int32_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -266,7 +343,7 @@ gst_ml_qnn_convert_to_float (GstMLFrame *mlframe, guint idx,
     }
     case QNN_DATATYPE_BOOL_8:
     {
-      uint8_t *data = reinterpret_cast<uint8_t *>(tensor->v1.clientBuf.data);
+      uint8_t *data = reinterpret_cast<uint8_t *>(QNN_TENSOR_CLIENTBUF (tensor).data);
 
       for (auto idx = 0; idx < n_elements; idx++)
         output[idx] = static_cast<float>(data[idx]);
@@ -311,10 +388,121 @@ gst_ml_qnn_log_callback (const char* format, QnnLog_Level_t loglvl,
 }
 
 static gboolean
+gst_ml_qnn_graph_info_from_binary_info (
+    const QnnSystemContext_BinaryInfo_t* binary_info,
+    GraphInfo_t**& graph_infos, uint32_t& n_graphs)
+{
+  if (nullptr == binary_info) {
+    GST_ERROR ("binary_info is nullptr.");
+    return FALSE;
+  }
+
+  if (!QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED (binary_info)) {
+    GST_ERROR ("Not supprted QNN system context binary info version !");
+    return FALSE;
+  }
+
+  n_graphs = QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).numGraphs;
+  QnnSystemContext_GraphInfo_t *graphs =
+      QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).graphs;
+
+  graph_infos = g_new0 (GraphInfo_t*, n_graphs);
+  GraphInfo_t* graph_info_arr = g_new0 (GraphInfo_t, n_graphs);
+
+  for (size_t idx = 0; idx < n_graphs; idx++) {
+    GST_INFO ("Extracting graph_infos for graph Idx: %lu", idx);
+
+    GST_INFO ("Info is V%d Idx: %lu", graphs[idx].version, idx);
+
+    if (!QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED (&graphs[idx])) {
+      GST_ERROR ("Not supprted QNN system context graph info version !");
+      return FALSE;
+    }
+
+    graph_info_arr[idx].graphName =
+        QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).graphName;
+    graph_info_arr[idx].numInputTensors =
+        QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).numGraphInputs;
+    graph_info_arr[idx].inputTensors =
+        QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).graphInputs;
+    graph_info_arr[idx].numOutputTensors =
+        QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).numGraphOutputs;
+    graph_info_arr[idx].outputTensors =
+        QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).graphOutputs;
+
+    graph_infos[idx] = graph_info_arr + idx;
+  }
+  return TRUE;
+}
+
+static gboolean
+gst_ml_qnn_create_device_config (GstMLQnnEngine *engine,
+    QnnDevice_Config_t**& dev_configs)
+{
+  QnnDevice_PlatformInfo_t* device_platform_info = nullptr;
+  QnnDevice_HardwareDeviceInfo_t* p_hw_device_info = nullptr;
+
+  Qnn_ErrorHandle_t error = engine->interface.deviceGetPlatformInfo(nullptr,
+      &(engine->device_platform));
+
+  if (QNN_DEVICE_ERROR_UNSUPPORTED_FEATURE == error) {
+    GST_WARNING ("Device feature is not supported!");
+    return TRUE;
+  }
+
+  if (QNN_SUCCESS != error) {
+    GST_ERROR ("Failed to get platform info. Error %ld",
+        QNN_GET_ERROR_CODE (error));
+    return FALSE;
+  }
+
+  guint backend_device_id = 0;
+  QnnDevice_HardwareDeviceInfo_t* hw_device_info =
+      engine->device_platform->v1.hwDevices;
+  QnnDevice_HardwareDeviceInfo_t* hw_device_info_chosen = nullptr;
+
+  gst_structure_get_uint (engine->settings,
+      GST_ML_QNN_ENGINE_OPT_BACKEND_DEVICE_ID, &(backend_device_id));
+
+  for (uint32_t idx = 0; idx < engine->device_platform->v1.numHwDevices; ++idx) {
+    if (hw_device_info[idx].v1.deviceId == backend_device_id) {
+      hw_device_info_chosen = &hw_device_info[idx];
+      GST_INFO ("HW device found!, id = %u", backend_device_id);
+      break;
+    }
+  }
+
+  if (nullptr == hw_device_info_chosen) {
+    GST_ERROR ("Failed to get device with id = %u.", backend_device_id);
+    return FALSE;
+  }
+
+  device_platform_info = g_new0 (QnnDevice_PlatformInfo_t, 1);
+  device_platform_info->version = QNN_DEVICE_PLATFORM_INFO_VERSION_1;
+  // We only choose 1 device here.
+  device_platform_info->v1.numHwDevices = 1;
+  device_platform_info->v1.hwDevices = hw_device_info_chosen;
+
+  dev_configs = g_new0 (QnnDevice_Config_t*, 2);
+  QnnDevice_Config_t* dev_config_arr = g_new0 (QnnDevice_Config_t, 1);
+
+  dev_config_arr[0].option = QNN_DEVICE_CONFIG_OPTION_PLATFORM_INFO;
+  dev_config_arr[0].hardwareInfo = device_platform_info;
+
+  dev_configs[0] = dev_config_arr;
+
+  // Null-terminate the array.
+  dev_configs[1] = NULL;
+
+  return TRUE;
+}
+
+static gboolean
 gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
 {
-  gboolean success = TRUE, found = FALSE;
+  gboolean success = TRUE;
   const gchar *filename = NULL;
+  guint idx = 0;
 
   filename = GET_OPT_BACKEND (engine->settings);
 
@@ -327,7 +515,7 @@ gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
   GST_DEBUG ("Loaded backend '%s'!", filename);
 
   // Load interface symbol of the backend library.
-  QnnInterfaceGetProvidersFn GetProviders;
+  QnnInterfaceGetProvidersFn* GetProviders;
   success &= load_symbol ((gpointer*)&GetProviders, engine->libhandle,
       "QnnInterface_getProviders");
 
@@ -350,22 +538,7 @@ gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
     return FALSE;
   }
 
-  // Find a interface provider that suits the current API version.
-  for (uint32_t idx = 0; (idx < n_providers) && !found; idx++) {
-    auto& major = providers[idx]->apiVersion.coreApiVersion.major;
-    auto& minor = providers[idx]->apiVersion.coreApiVersion.minor;
-
-    if ((QNN_API_VERSION_MAJOR != major) || (QNN_API_VERSION_MINOR != minor))
-      continue;
-
-    engine->interface = providers[idx]->QNN_INTERFACE_VER_NAME;
-    found = TRUE;
-  }
-
-  if (!found) {
-    GST_ERROR ("Unable to find a suitable interface provider!");
-    return FALSE;
-  }
+  engine->interface = providers[0]->QNN_INTERFACE_VER_NAME;
 
   // Register callback for various log messages.
   auto status = engine->interface.logCreate(gst_ml_qnn_log_callback,
@@ -395,11 +568,193 @@ gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
     return FALSE;
   }
 
+  QnnDevice_Config_t **dev_configs = nullptr;
+
+  success = gst_ml_qnn_create_device_config (engine, dev_configs);
+
+  if (!success)
+    return FALSE;
+
+  status = engine->interface.deviceCreate(engine->logger,
+      const_cast<const QnnDevice_Config_t **>(dev_configs), &(engine->device));
+
+  while ((dev_configs != NULL) && (dev_configs[idx] != NULL)) {
+    if (QNN_DEVICE_CONFIG_OPTION_PLATFORM_INFO == dev_configs[idx]->option)
+      g_free (dev_configs[idx]->hardwareInfo);
+
+    g_free (dev_configs[idx]);
+    idx++;
+  }
+
+  g_free (dev_configs);
+
+  if (QNN_SUCCESS == status) {
+    GST_DEBUG ("Device created");
+  } else if (QNN_DEVICE_ERROR_UNSUPPORTED_FEATURE != status) {
+    GST_ERROR ("Could not create device!");
+    return FALSE;
+  }
+
+  if (engine->iscached) {
+    if ((filename = GET_OPT_SYSLIB (engine->settings)) == NULL) {
+      GST_ERROR ("No system library file name!");
+      return FALSE;
+    }
+
+    engine->syslibhandle = dlopen (filename, RTLD_NOW | RTLD_LOCAL);
+    if (engine->syslibhandle == NULL) {
+      GST_ERROR ("Failed to open %s sys library, error: %s!", filename,
+          dlerror());
+      return FALSE;
+    }
+
+    // Load sys interface symbol of the sys library.
+    QnnSystemInterfaceGetProvidersFn* GetSysIntfProviders;
+    success &= load_symbol ((gpointer*)&GetSysIntfProviders,
+        engine->syslibhandle, "QnnSystemInterface_getProviders");
+
+    // Check whether symbol loading was successful.
+    if (!success) {
+      GST_ERROR ("Failed to load symbol.");
+      return FALSE;
+    }
+
+    const QnnSystemInterface_t** sysintf_providers = nullptr;
+    n_providers = 0;
+
+    // Query for all available sys interfaces.
+    status = GetSysIntfProviders (
+      (const QnnSystemInterface_t***)(&sysintf_providers), &n_providers);
+
+    if (QNN_SUCCESS != status) {
+      GST_ERROR ("Failed to get system interface providers!");
+      return FALSE;
+    }
+
+    // Check for validity of returned interfaces,
+    if ((nullptr == sysintf_providers) || (0 == n_providers)) {
+      GST_ERROR ("Received Null system interface providers!");
+      return FALSE;
+    }
+
+    engine->sysinterface =
+        sysintf_providers[0]->QNN_SYSTEM_INTERFACE_VER_NAME;
+  }
+
   return TRUE;
 }
 
 static gboolean
-gst_ml_qnn_engine_setup_graphs (GstMLQnnEngine *engine)
+gst_ml_qnn_engine_setup_cached_graphs (GstMLQnnEngine *engine)
+{
+  gboolean res = TRUE;
+  const gchar *filename = NULL;
+
+  if ((filename = GET_OPT_MODEL (engine->settings)) == NULL) {
+    GST_ERROR ("No context bin file name!");
+    return FALSE;
+  }
+
+  if ((nullptr == engine->sysinterface.systemContextCreate) ||
+      (nullptr == engine->sysinterface.systemContextGetBinaryInfo) ||
+          (nullptr == engine->sysinterface.systemContextFree)) {
+    GST_ERROR ("QNN System function pointers are not populated.");
+    return FALSE;
+  }
+
+  if (!g_file_test (filename, G_FILE_TEST_IS_REGULAR)) {
+    GST_ERROR ("File %s does not exist", filename);
+    return FALSE;
+  }
+
+  GError *error = NULL;
+  uint64_t buffer_size = 0;
+  char *buffer = nullptr;
+
+  // read serialized binary into a byte buffer
+  res = g_file_get_contents (filename, &buffer, &buffer_size, &error);
+  if (!res) {
+    GST_ERROR ("Failed to get serialized binary content, error: %s!",
+        GST_STR_NULL (error->message));
+    g_clear_error (&error);
+    return FALSE;
+  }
+
+  // inspect binary info
+  auto status =
+      engine->sysinterface.systemContextCreate(&(engine->sysctx_handle));
+  if (QNN_SUCCESS != status) {
+    GST_ERROR ("Could not create system context.");
+    return FALSE;
+  }
+  GST_DEBUG ("System context created");
+
+  const QnnSystemContext_BinaryInfo_t* binary_info = nullptr;
+  Qnn_ContextBinarySize_t binary_info_size = 0;
+
+  status = engine->sysinterface.systemContextGetBinaryInfo(
+      (engine->sysctx_handle), static_cast<void*>(buffer), buffer_size,
+          &(binary_info), &binary_info_size);
+  if (QNN_SUCCESS != status) {
+    GST_ERROR ("Failed to get context binary info");
+    return FALSE;
+  }
+  GST_DEBUG ("Read binary info from bin file");
+
+  // populate GraphInfo_t based on binary info
+  res = gst_ml_qnn_graph_info_from_binary_info (binary_info,
+      engine->graph_infos, engine->n_graphs);
+  if (!res) {
+    GST_ERROR("Failed to populate Graph Info.");
+    return FALSE;
+  }
+  GST_DEBUG ("Populated Graph Info from Binary Info");
+
+  // Set up any context configs that are necessary.
+  const QnnContext_Config_t **ctx_configs = nullptr;
+
+  if (nullptr == engine->interface.contextCreateFromBinary) {
+    GST_ERROR ("contextCreateFromBinaryFnHandle is nullptr.");
+    return FALSE;
+  }
+  if (engine->interface.contextCreateFromBinary(engine->backend,
+      engine->device, (const QnnContext_Config_t**)&ctx_configs,
+          static_cast<void*>(buffer), buffer_size, &(engine->context),
+              engine->profiler)) {
+    GST_ERROR ("Could not create context from binary.");
+    res = FALSE;
+  } else {
+    GST_DEBUG ("Context created from cached binary");
+    res = TRUE;
+  }
+
+  if (res) {
+    for (size_t idx = 0; idx < engine->n_graphs; idx++) {
+      if (nullptr == engine->interface.graphRetrieve) {
+        GST_ERROR ("graphRetrieveFnHandle is nullptr.");
+        res = FALSE;
+        break;
+      }
+      status = engine->interface.graphRetrieve(engine->context,
+          (*engine->graph_infos)[idx].graphName,
+              &((*engine->graph_infos)[idx].graph));
+      if (QNN_SUCCESS != status) {
+        GST_ERROR ("Unable to retrieve graph handle for graph Idx: %ld",
+            idx);
+        res = FALSE;
+        break;
+      }
+    }
+  }
+  if (!res) {
+    GST_ERROR ("ERROR: Need to clean up the graph info structures");
+  }
+  GST_INFO ("Setup graph using context binary exit.");
+  return res;
+}
+
+static gboolean
+gst_ml_qnn_engine_setup_uncached_graphs (GstMLQnnEngine *engine)
 {
   gboolean success = TRUE;
   const gchar *filename = NULL;
@@ -428,23 +783,9 @@ gst_ml_qnn_engine_setup_graphs (GstMLQnnEngine *engine)
     return FALSE;
   }
 
-  const QnnDevice_Config_t **dev_configs = nullptr;
-  auto status = engine->interface.deviceCreate(engine->logger, dev_configs,
-      &(engine->device));
-
-  if (QNN_SUCCESS != status) {
-    if (QNN_DEVICE_ERROR_UNSUPPORTED_FEATURE != status){
-      GST_ERROR ("Could not create device!");
-      return FALSE;
-    }
-    GST_DEBUG ("Device is not supported");
-  } else {
-    GST_DEBUG ("Device created");
-  }
-
   // Set up any context configs that are necessary.
   const QnnContext_Config_t **ctx_configs = nullptr;
-  status = engine->interface.contextCreate(engine->backend,
+  auto status = engine->interface.contextCreate(engine->backend,
       engine->device, ctx_configs, &(engine->context));
 
   if (QNN_SUCCESS != status) {
@@ -458,7 +799,7 @@ gst_ml_qnn_engine_setup_graphs (GstMLQnnEngine *engine)
 
   status = ComposeGraphs (engine->backend, engine->interface,
       engine->context, configs, n_configs, &(engine->graph_infos),
-      &(engine->n_graph_infos), false, gst_ml_qnn_log_callback,
+      &(engine->n_graphs), false, gst_ml_qnn_log_callback,
       QNN_LOG_LEVEL_INFO);
 
   if (QNN_SUCCESS != status) {
@@ -467,13 +808,13 @@ gst_ml_qnn_engine_setup_graphs (GstMLQnnEngine *engine)
   }
   GST_DEBUG ("Graph composition success");
 
-  for (uint32_t idx = 0; idx < engine->n_graph_infos; idx++) {
+  for (uint32_t idx = 0; idx < engine->n_graphs; idx++) {
     status = engine->interface.graphFinalize(
         (*(engine->graph_infos))[idx].graph, engine->profiler, nullptr);
 
     if (QNN_SUCCESS != status) {
       GST_ERROR ("Finalize for graph %u failed!", idx);
-      engine->FreeGraph (&(engine->graph_infos), engine->n_graph_infos);
+      engine->FreeGraph (&(engine->graph_infos), engine->n_graphs);
       return FALSE;
     }
   }
@@ -487,6 +828,9 @@ gst_ml_qnn_engine_new (GstStructure *settings)
 {
   GstMLQnnEngine *engine = NULL;
   const GraphInfo_t *graph_info = NULL;
+  Qnn_Tensor_t *input_tensor = NULL;
+  Qnn_Tensor_t *output_tensor = NULL;
+  gboolean success = TRUE;
 
   GST_DEBUG ("Creating engine");
 
@@ -499,6 +843,10 @@ gst_ml_qnn_engine_new (GstStructure *settings)
   engine->settings = gst_structure_copy (settings);
   gst_structure_free (settings);
 
+  std::filesystem::path modelpath (GET_OPT_MODEL (engine->settings));
+
+  engine->iscached = (modelpath.extension() == ".bin") ? TRUE : FALSE;
+
   // Initialize backend.
   if (!gst_ml_qnn_engine_setup_backend (engine)) {
     GST_ERROR ("Failed to setup backend!");
@@ -506,17 +854,34 @@ gst_ml_qnn_engine_new (GstStructure *settings)
   }
 
   // Initialize model graphs.
-  if (!gst_ml_qnn_engine_setup_graphs (engine)) {
+  if (engine->iscached) {
+    success = gst_ml_qnn_engine_setup_cached_graphs (engine);
+  } else {
+    success = gst_ml_qnn_engine_setup_uncached_graphs (engine);
+  }
+
+  if (!success) {
     GST_ERROR ("Failed to setup graph!");
     goto cleanup;
   }
 
+  if (engine->n_graphs > 1) {
+    GST_WARNING ("Multiple Graphs Detected!!\n"
+        "Support is available for single graph. The first graph will be executed.");
+  }
+
   graph_info = engine->graph_infos[0];
+  input_tensor = &(graph_info->inputTensors[0]);
+
+  if (!QNN_TENSOR_VERSION_SUPPORTED (input_tensor)) {
+    GST_ERROR ("Not supported tensor version!");
+    goto cleanup;
+  }
 
   // Translate information about input tensors to GstMLInfo.
   engine->ininfo->n_tensors = graph_info->numInputTensors;
   engine->ininfo->type = qnn_to_ml_type (
-      QNN_TENSOR_DATA_TYPE (graph_info->inputTensors[0]));
+      QNN_TENSOR_DATA_TYPE (input_tensor));
 
   GST_DEBUG ("Number of input tensors: %u",
       GST_ML_INFO_N_TENSORS (engine->ininfo));
@@ -524,12 +889,19 @@ gst_ml_qnn_engine_new (GstStructure *settings)
       gst_ml_type_to_string (GST_ML_INFO_TYPE (engine->ininfo)));
 
   for (auto idx = 0; idx < engine->ininfo->n_tensors; ++idx) {
+    input_tensor = &(graph_info->inputTensors[idx]);
+
+    if (!QNN_TENSOR_VERSION_SUPPORTED (input_tensor)) {
+      GST_ERROR ("Not supported tensor version!");
+      goto cleanup;
+    }
+
     engine->ininfo->n_dimensions[idx] =
-        QNN_TENSOR_RANK (graph_info->inputTensors[idx]);
+        QNN_TENSOR_RANK (input_tensor);
 
     for (auto num = 0; num < engine->ininfo->n_dimensions[idx]; ++num) {
       engine->ininfo->tensors[idx][num] =
-          QNN_TENSOR_DIMENSION (graph_info->inputTensors[idx], num);
+          QNN_TENSOR_DIMENSION (input_tensor, num);
 
       GST_DEBUG ("Input tensor[%u] Dimension[%u]: %u", idx, num,
           engine->ininfo->tensors[idx][num]);
@@ -549,15 +921,17 @@ gst_ml_qnn_engine_new (GstStructure *settings)
       gst_ml_type_to_string (GST_ML_INFO_TYPE (engine->outinfo)));
 
   for (auto idx = 0; idx < engine->outinfo->n_tensors; ++idx) {
-    Qnn_Tensor_t *tensor = &(graph_info->outputTensors[idx]);
+    output_tensor = &(graph_info->outputTensors[idx]);
 
-    if (tensor->version != QNN_TENSOR_VERSION_1)
-      continue;
+    if (!QNN_TENSOR_VERSION_SUPPORTED (output_tensor)) {
+      GST_ERROR ("Not supported tensor version!");
+      goto cleanup;
+    }
 
-    engine->outinfo->n_dimensions[idx] = tensor->v1.rank;
+    engine->outinfo->n_dimensions[idx] = QNN_TENSOR_RANK (output_tensor);
 
     for (auto num = 0; num < engine->outinfo->n_dimensions[idx]; ++num) {
-      engine->outinfo->tensors[idx][num] = tensor->v1.dimensions[num];
+      engine->outinfo->tensors[idx][num] = QNN_TENSOR_DIMENSION (output_tensor, num);
 
       GST_DEBUG ("Output tensor[%u] Dimension[%u]: %u", idx, num,
           engine->outinfo->tensors[idx][num]);
@@ -569,10 +943,10 @@ gst_ml_qnn_engine_new (GstStructure *settings)
 
     // Use the tensor type from the graph instead of that from MLInfo
     size /= gst_ml_type_get_size (engine->outinfo->type);
-    size *= kDataTypeToSize.find(tensor->v1.dataType)->second;
+    size *= kDataTypeToSize.find(QNN_TENSOR_DATA_TYPE (output_tensor))->second;
 
-    tensor->v1.clientBuf.data = g_malloc (size);
-    tensor->v1.clientBuf.dataSize = size;
+    QNN_TENSOR_CLIENTBUF (output_tensor).data = g_malloc (size);
+    QNN_TENSOR_CLIENTBUF (output_tensor).dataSize = size;
   }
 
   GST_INFO ("Created MLE QNN engine: %p", engine);
@@ -606,14 +980,37 @@ gst_ml_qnn_engine_free (GstMLQnnEngine * engine)
 
   if (engine->graph_infos) {
     const GraphInfo_t *graph_info = engine->graph_infos[0];
-    for (auto idx = 0; idx < graph_info->numOutputTensors; ++idx) {
-      Qnn_Tensor_t *tensor = &(graph_info->outputTensors[idx]);
-      g_free (tensor->v1.clientBuf.data);
+    Qnn_Tensor_t *tensor;
+
+    for (auto idx = 0; idx < graph_info->numInputTensors; idx++) {
+      tensor = &(graph_info->inputTensors[idx]);
+      QNN_TENSOR_CLIENTBUF (tensor).data = NULL;
+      QNN_TENSOR_CLIENTBUF (tensor).dataSize = 0;
     }
-    engine->FreeGraph (&(engine->graph_infos), engine->n_graph_infos);
+
+    for (auto idx = 0; idx < graph_info->numOutputTensors; ++idx) {
+      tensor = &(graph_info->outputTensors[idx]);
+      g_free (QNN_TENSOR_CLIENTBUF (tensor).data);
+      QNN_TENSOR_CLIENTBUF (tensor).data = NULL;
+      QNN_TENSOR_CLIENTBUF (tensor).dataSize = 0;
+    }
+
+    if (engine->iscached) {
+      if (engine->sysinterface.systemContextFree && engine->sysctx_handle) {
+        engine->sysinterface.systemContextFree (engine->sysctx_handle);
+        engine->sysctx_handle = nullptr;
+      }
+      g_free (*(engine->graph_infos));
+      g_free (engine->graph_infos);
+    } else {
+      engine->FreeGraph (&(engine->graph_infos), engine->n_graphs);
+    }
     engine->graph_infos = NULL;
-    engine->n_graph_infos = 0;
+    engine->n_graphs = 0;
   }
+
+  if (engine->interface.deviceFreePlatformInfo && engine->device_platform)
+    engine->interface.deviceFreePlatformInfo (nullptr, engine->device_platform);
 
   if (engine->interface.contextFree && engine->context)
     engine->interface.contextFree (engine->context, nullptr);
@@ -635,6 +1032,9 @@ gst_ml_qnn_engine_free (GstMLQnnEngine * engine)
 
   if (engine->libhandle != NULL)
     dlclose (engine->libhandle);
+
+  if (engine->syslibhandle != NULL)
+    dlclose (engine->syslibhandle);
 
   GST_INFO ("Destroyed MLE QNN engine: %p", engine);
   g_free (engine);
@@ -674,11 +1074,8 @@ gst_ml_qnn_engine_execute (GstMLQnnEngine *engine, GstMLFrame *inframe,
   for (size_t idx = 0; idx < graph_info->numInputTensors; idx++) {
     Qnn_Tensor_t *tensor = &(graph_info->inputTensors[idx]);
 
-    if (tensor->version != QNN_TENSOR_VERSION_1)
-      continue;
-
-    tensor->v1.clientBuf.data = GST_ML_FRAME_BLOCK_DATA (inframe, idx);
-    tensor->v1.clientBuf.dataSize = GST_ML_FRAME_BLOCK_SIZE (inframe, idx);
+    QNN_TENSOR_CLIENTBUF (tensor).data = GST_ML_FRAME_BLOCK_DATA (inframe, idx);
+    QNN_TENSOR_CLIENTBUF (tensor).dataSize = GST_ML_FRAME_BLOCK_SIZE (inframe, idx);
   }
 
   // Execute Graph
@@ -693,20 +1090,17 @@ gst_ml_qnn_engine_execute (GstMLQnnEngine *engine, GstMLFrame *inframe,
   }
 
   for (size_t idx = 0; idx < graph_info->numOutputTensors; idx++) {
-    Qnn_Tensor_t tensor = graph_info->outputTensors[idx];
-
-    if (tensor.version != QNN_TENSOR_VERSION_1)
-      continue;
+    Qnn_Tensor_t *tensor = &(graph_info->outputTensors[idx]);
 
     // TODO: Workaround! Need to handle tensors of different data type to avoid
     // buffer allocation and buffer copy
-    if (tensor.v1.dataType == QNN_DATATYPE_FLOAT_32) {
+    if (QNN_TENSOR_DATA_TYPE (tensor) == QNN_DATATYPE_FLOAT_32) {
       memcpy (reinterpret_cast<float *>(GST_ML_FRAME_BLOCK_DATA(outframe, idx)),
-          reinterpret_cast<float *> (tensor.v1.clientBuf.data),
+          reinterpret_cast<float *> (QNN_TENSOR_CLIENTBUF (tensor).data),
           GST_ML_FRAME_BLOCK_SIZE (outframe, idx));
     } else {
       GST_DEBUG ("Converting Native tensor type to Float");
-      gst_ml_qnn_convert_to_float (outframe, idx, &tensor);
+      gst_ml_qnn_convert_to_float (outframe, idx, tensor);
     }
   }
 

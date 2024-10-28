@@ -138,6 +138,8 @@ G_BEGIN_DECLS
 #ifdef VHDR_MODES_ENABLE
 #define GST_TYPE_QMMFSRC_VHDR_MODE (gst_qmmfsrc_vhdr_mode_get_type())
 #endif // VHDR_MODES_ENABLE
+#define GST_TYPE_QMMFSRC_PAD_LOGICAL_STREAM_TYPE \
+    (gst_qmmfsrc_pad_logical_stream_type_get_type())
 
 #define GST_BAYER_FORMAT_OFFSET 0x1000
 
@@ -308,7 +310,8 @@ enum
   VHDR_OFF,
   SHDR_MODE_RAW,
   SHDR_MODE_YUV,
-  SHDR_SWITCH_ENABLE,
+  SHDR_RAW_SWITCH_ENABLE,
+  SHDR_YUV_SWITCH_ENABLE,
   QBC_HDR_MODE_VIDEO,
   QBC_HDR_MODE_SNAPSHOT,
 };
@@ -327,6 +330,15 @@ typedef enum {
   CAM_OPMODE_FRAMESELECTION     = (1 << 1),
   CAM_OPMODE_FASTSWITCH         = (1 << 2),
 } GstCamOpMode;
+
+typedef enum {
+  GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN = 0,
+  GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX = 15,
+  GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE,
+  GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA,
+  GST_PAD_LOGICAL_STREAM_TYPE_NONE,
+  GST_PAD_LOGICAL_STREAM_TYPE_MAX,
+} GstPadLogicalStreamType;
 
 GType gst_qmmfsrc_control_mode_get_type (void);
 
@@ -365,6 +377,8 @@ GType gst_qmmfsrc_vhdr_mode_get_type (void);
 GType gst_qmmfsrc_rotate_get_type (void);
 
 GType gst_qmmfsrc_cam_opmode_get_type (void);
+
+GType gst_qmmfsrc_pad_logical_stream_type_get_type (void);
 
 guchar gst_qmmfsrc_control_mode_android_value (const guint value);
 

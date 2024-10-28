@@ -5,6 +5,7 @@
 
 #include "common-utils.h"
 
+
 static const gchar* mux_stream_names[] = {
     "mux-stream-00", "mux-stream-01", "mux-stream-02", "mux-stream-03",
     "mux-stream-04", "mux-stream-05", "mux-stream-06", "mux-stream-07",
@@ -15,6 +16,7 @@ static const gchar* mux_stream_names[] = {
     "mux-stream-24", "mux-stream-25", "mux-stream-26", "mux-stream-27",
     "mux-stream-28", "mux-stream-29", "mux-stream-30", "mux-stream-31",
 };
+
 
 const gchar *
 gst_mux_stream_name (guint index)
@@ -149,3 +151,20 @@ gst_buffer_copy_protection_meta (GstBuffer * destination, GstBuffer * source)
         gst_structure_copy (GST_PROTECTION_META_CAST (meta)->info));
   }
 }
+
+#if GLIB_MAJOR_VERSION < 2 || (GLIB_MAJOR_VERSION == 2 && GLIB_MINOR_VERSION < 62)
+GArray *
+g_array_copy (GArray * array)
+{
+  GArray *newarray = NULL:
+  guint size = 0;
+
+  size = g_array_get_element_size (array);
+  newarray = g_array_sized_new (FALSE, FALSE, size, array->len);
+
+  newarray = g_array_set_size (newarray, array->len);
+  memcpy (newarray->data, array->data, array->len * size);
+
+  return newarray;
+}
+#endif // GLIB_MAJOR_VERSION < 2 || (GLIB_MAJOR_VERSION == 2 && GLIB_MINOR_VERSION < 62)
