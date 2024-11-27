@@ -318,6 +318,8 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
 
     gst_buffer_pool_config_add_option (structure,
         GST_BUFFER_POOL_OPTION_VIDEO_META);
+    gst_buffer_pool_config_add_option (structure,
+        GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
   }
 
   if (!gst_buffer_pool_set_config (pool, structure)) {
@@ -1188,9 +1190,10 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
     gst_structure_get_uint (s, "stage-id", &(detection->stage_id));
     GST_DEBUG_OBJECT (detection, "Queried stage ID: %u", detection->stage_id);
   } else {
-    GST_ELEMENT_ERROR (detection, CORE, NEGOTIATION, (NULL),
-        ("Failed to receive preprocess information!"));
-    return FALSE;
+    // TODO: Temporary workaround. Need to be addressed proerly.
+    // In case of daisycahin it is possible to negotiate wrong stage-id without
+    // thrwing an error.
+    GST_WARNING_OBJECT (detection, "Failed to receive preprocess information!");
   }
 
   // Free the query instance as it is no longer needed and we are the owners.
@@ -1250,9 +1253,10 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
       gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM, structure));
 
   if (!success) {
-    GST_ELEMENT_ERROR (detection, CORE, EVENT, (NULL),
-        ("Failed to send ML info downstream!"));
-    return FALSE;
+    // TODO: Temporary workaround. Need to be addressed proerly.
+    // In case of daisycahin it is possible to negotiate wrong stage-id without
+    // thrwing an error.
+    GST_WARNING_OBJECT (detection, "Failed to send ML info downstream!");
   }
 
   // Allocate the maximum number of predictions based on the batch size.

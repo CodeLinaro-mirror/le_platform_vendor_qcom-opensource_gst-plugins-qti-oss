@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __GST_QTI_SOCKET_SRC_H__
@@ -32,6 +37,9 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
+#include <gst/ml/ml-info.h>
+
+#include "qtifdsocket.h"
 
 G_BEGIN_DECLS
 
@@ -49,10 +57,28 @@ G_BEGIN_DECLS
 
 typedef struct _GstFdSocketSrc GstFdSocketSrc;
 typedef struct _GstFdSocketSrcClass GstFdSocketSrcClass;
+typedef struct _GstBufferReleaseData GstBufferReleaseData;
 
-struct _GstFdSocketSrc
-{
+/* Bufferpool */
+#define GST_TYPE_SOCKET_SRC_BUFFER_POOL (gst_socketsrc_buffer_pool_get_type())
+#define GST_IS_SOCKET_SRC_BUFFER_POOL (obj) \
+  (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_SOCKET_SRC_BUFFER_POOL))
+#define GST_SOCKET_SRC_BUFFER_POOL (obj) \
+  (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_SOCKET_SRC_BUFFER_POOL, GstSocketSrcBufferPool))
+#define GST_SOCKET_SRC_BUFFER_POOL_CAST(obj) ((GstSocketSrcBufferPool*)(obj))
+
+typedef struct _GstSocketSrcBufferPool GstSocketSrcBufferPool;
+typedef struct _GstSocketSrcBufferPoolClass GstSocketSrcBufferPoolClass;
+
+struct _GstFdSocketSrc {
   GstPushSrc element;
+
+  GThread *thread;
+  GCond    cond;
+  GMutex   mutex;
+  gboolean thread_done;
+  gboolean stop_thread;
+  gboolean release_done;
 
   guint64 timeout;
 
@@ -62,12 +88,37 @@ struct _GstFdSocketSrc
   gint client_sock;
 
   GHashTable *fdmap;
-  GMutex fdmaplock;
+  GMutex      fdmaplock;
+
+  GstBufferPool *pool;
+
+  GstSegment segment;
+
+  GstMLInfo *mlinfo;
+
+  GstFdSocketDataType mode;
 };
 
-struct _GstFdSocketSrcClass
-{
+struct _GstFdSocketSrcClass {
   GstPushSrcClass parent_class;
+};
+
+struct _GstSocketSrcBufferPool {
+  GstBufferPool bufferpool;
+};
+
+struct _GstSocketSrcBufferPoolClass {
+  GstBufferPoolClass parent_class;
+};
+
+GType gst_socketsrc_buffer_pool_get_type (void);
+
+GstBufferPool * gst_socketsrc_buffer_pool_new (void);
+
+struct _GstBufferReleaseData {
+  gint  socket;
+  guint n_fds;
+  gint  buf_id[GST_MAX_MEM_BLOCKS];
 };
 
 G_GNUC_INTERNAL GType gst_socket_src_get_type (void);
