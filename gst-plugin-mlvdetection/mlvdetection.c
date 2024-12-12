@@ -130,8 +130,8 @@ G_DEFINE_TYPE (GstMLVideoDetection, gst_ml_video_detection,
 
 #define MAX_TEXT_LENGTH          48.0F
 
-#define DISPLACEMENT_THRESHOLD 0.7F
-#define POSITION_THRESHOLD 0.04
+#define DISPLACEMENT_THRESHOLD   0.7F
+#define POSITION_THRESHOLD       0.04F
 
 enum
 {
@@ -211,6 +211,58 @@ gst_ml_modules_get_type (void)
   return gtype;
 }
 
+static void
+gst_ml_box_displacement_correction (GstMLBoxEntry * l_box, GArray * boxes)
+{
+  GstMLBoxEntry *r_box = NULL;
+  gdouble score = 0.0;
+  guint idx = 0;
+
+  if (boxes == NULL)
+    return;
+
+  for (idx = 0; idx < boxes->len;  idx++) {
+    r_box = &(g_array_index (boxes, GstMLBoxEntry, idx));
+
+    // If labels do not match, continue with next list entry.
+    if (l_box->name != r_box->name)
+      continue;
+
+    score = gst_ml_boxes_intersection_score (l_box, r_box);
+
+    // If the score is below the threshold, continue with next list entry.
+    if (score <= DISPLACEMENT_THRESHOLD)
+      continue;
+
+    // Previously detected box overlaps at ~95 % with current one, use it.
+    l_box->top = r_box->top;
+    l_box->left = r_box->left;
+    l_box->bottom = r_box->bottom;
+    l_box->right = r_box->right;
+
+    break;
+  }
+
+  return;
+}
+
+static gint
+gst_ml_box_compare_entries_by_position (const GstMLBoxEntry * l_entry,
+    const GstMLBoxEntry * r_entry)
+{
+  gfloat delta = l_entry->left - r_entry->left;
+
+  if (fabs (delta) > POSITION_THRESHOLD)
+    return (delta > 0) ? 1 : (-1);
+
+  delta = l_entry->top - r_entry->top;
+
+  if (fabs (delta) > POSITION_THRESHOLD)
+    return (delta > 0) ? 1 : (-1);
+
+  return 0;
+}
+
 static GstBufferPool *
 gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
     GstCaps * caps)
@@ -266,6 +318,8 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
 
     gst_buffer_pool_config_add_option (structure,
         GST_BUFFER_POOL_OPTION_VIDEO_META);
+    gst_buffer_pool_config_add_option (structure,
+        GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
   }
 
   if (!gst_buffer_pool_set_config (pool, structure)) {
@@ -275,58 +329,6 @@ gst_ml_video_detection_create_pool (GstMLVideoDetection * detection,
   }
 
   return pool;
-}
-
-
-void
-gst_ml_box_displacement_correction (GstMLBoxEntry * l_box, GArray * boxes)
-{
-  GstMLBoxEntry *r_box = NULL;
-  gdouble score = 0.0;
-  guint idx = 0;
-
-  if (boxes == NULL)
-    return;
-
-  for (idx = 0; idx < boxes->len;  idx++) {
-    r_box = &(g_array_index (boxes, GstMLBoxEntry, idx));
-
-    // If labels do not match, continue with next list entry.
-    if (l_box->name != r_box->name)
-      continue;
-
-    score = gst_ml_boxes_intersection_score (l_box, r_box);
-
-    // If the score is below the threshold, continue with next list entry.
-    if (score <= DISPLACEMENT_THRESHOLD)
-      continue;
-
-    // Previously detected box overlaps at ~95 % with current one, use it.
-    l_box->top = r_box->top;
-    l_box->left = r_box->left;
-    l_box->bottom = r_box->bottom;
-    l_box->right = r_box->right;
-
-    break;
-  }
-
-  return;
-}
-
-gint
-gst_ml_box_compare_entries_by_pos (const GstMLBoxEntry * l_entry,
-    const GstMLBoxEntry * r_entry)
-{
-  gfloat delta = l_entry->left - r_entry->left;
-
-  if (fabs (delta) > POSITION_THRESHOLD)
-    return (delta > 0) ? 1 : (-1);
-
-  delta = l_entry->top - r_entry->top;
-  if (fabs (delta) > POSITION_THRESHOLD)
-    return (delta > 0) ? 1 : (-1);
-
-  return 0;
 }
 
 static void
@@ -350,24 +352,26 @@ gst_ml_video_detection_stabilization (GstMLVideoDetection * detection)
     }
 
     // Stash the previous prediction results.
-    if (mlboxes) {
+    if (mlboxes != NULL) {
       detection->stashedmlboxes =
           g_list_remove (detection->stashedmlboxes, mlboxes);
       g_array_free (mlboxes, TRUE);
     }
+
     detection->stashedmlboxes = g_list_append (detection->stashedmlboxes,
         g_array_copy (prediction->entries));
 
-    // Clear lower confidence results before position sort
+    // Clear lower confidence results before position sort.
     if (prediction->entries->len > detection->n_results) {
       guint index = detection->n_results;
       guint length = prediction->entries->len - detection->n_results;
+
       g_array_remove_range (prediction->entries, index, length);
     }
 
-    // Sort bboxes by possition
+    // Sort bboxes by possition.
     g_array_sort (prediction->entries,
-        (GCompareFunc) gst_ml_box_compare_entries_by_pos);
+        (GCompareFunc) gst_ml_box_compare_entries_by_position);
   }
 }
 
@@ -378,8 +382,8 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
   GstVideoMeta *vmeta = NULL;
   GstMapInfo memmap;
   gdouble x = 0.0, y = 0.0, width = 0.0, height = 0.0;
-  gdouble fontsize = 12.0, borderwidth = 2.0;
-  guint idx = 0, num = 0, n_entries = 0, color = 0;
+  gdouble fontsize = 12.0, borderwidth = 2.0, radius = 2.0;
+  guint idx = 0, num = 0, mrk = 0, n_entries = 0, color = 0, length = 0;
 
   cairo_format_t format;
   cairo_surface_t* surface = NULL;
@@ -519,6 +523,26 @@ gst_ml_video_detection_fill_video_output (GstMLVideoDetection * detection,
       cairo_stroke (context);
       g_return_val_if_fail (CAIRO_STATUS_SUCCESS == cairo_status (context), FALSE);
 
+      length = (entry->landmarks != NULL) ? entry->landmarks->len : 0;
+
+      // Draw landmarks if present.
+      for (mrk = 0; mrk < length; mrk++) {
+        GstMLBoxLandmark *kp =
+            &(g_array_index (entry->landmarks, GstMLBoxLandmark, mrk));
+
+        GST_TRACE_OBJECT (detection, "Landmark [%.2f x %.2f]", kp->x, kp->y);
+
+        // Adjust coordinates based on the output buffer dimensions.
+        kp->x = kp->x * vmeta->width;
+        kp->y = kp->y * vmeta->height;
+
+        cairo_arc (context, kp->x, kp->y, radius, 0, 2 * G_PI);
+        cairo_close_path (context);
+
+        cairo_fill (context);
+        g_return_val_if_fail (CAIRO_STATUS_SUCCESS == cairo_status (context), FALSE);
+      }
+
       // Set the width and height of the label background rectangle.
       width = ceil (strlen (g_quark_to_string (entry->name)) *
           fontsize * 3.0F / 5.0F);
@@ -590,13 +614,14 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
   gchar *string = NULL, *name = NULL;
   GstMapInfo memmap = {};
   GValue list = G_VALUE_INIT, bboxes = G_VALUE_INIT;
-  GValue rectangle = G_VALUE_INIT, value = G_VALUE_INIT;
-  guint idx = 0, num = 0, n_entries = 0, sequence_idx = 0, id = 0;
+  GValue array = G_VALUE_INIT, value = G_VALUE_INIT;
+  guint idx = 0, num = 0, mrk = 0, n_entries = 0, sequence_idx = 0, id = 0;
+  gfloat x = 0.0, y = 0.0, width = 0.0, height = 0.0;
   gsize length = 0;
 
   g_value_init (&list, GST_TYPE_LIST);
   g_value_init (&bboxes, GST_TYPE_ARRAY);
-  g_value_init (&rectangle, GST_TYPE_ARRAY);
+  g_value_init (&array, GST_TYPE_ARRAY);
 
   for (idx = 0; idx < detection->predictions->len; idx++) {
     GstMLBoxPrediction *prediction = NULL;
@@ -615,10 +640,14 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
 
       id = GST_META_ID (detection->stage_id, sequence_idx, num);
 
+      x = entry->left;
+      y = entry->top;
+      width = entry->right - entry->left;
+      height = entry->bottom - entry->top;
+
       GST_TRACE_OBJECT (detection, "Batch: %u, ID: %X, Label: %s, Confidence: "
           "%.1f%%, Box [%.2f %.2f %.2f %.2f]", prediction->batch_idx, id,
-          g_quark_to_string (entry->name), entry->confidence, entry->top,
-          entry->left, entry->bottom, entry->right);
+          g_quark_to_string (entry->name), entry->confidence, x, y, width, height);
 
       // Replace empty spaces otherwise subsequent stream parse call will fail.
       name = g_strdup (g_quark_to_string (entry->name));
@@ -631,23 +660,50 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
 
       g_value_init (&value, G_TYPE_FLOAT);
 
-      g_value_set_float (&value, entry->top);
-      gst_value_array_append_value (&rectangle, &value);
+      g_value_set_float (&value, x);
+      gst_value_array_append_value (&array, &value);
 
-      g_value_set_float (&value, entry->left);
-      gst_value_array_append_value (&rectangle, &value);
+      g_value_set_float (&value, y);
+      gst_value_array_append_value (&array, &value);
 
-      g_value_set_float (&value, entry->bottom);
-      gst_value_array_append_value (&rectangle, &value);
+      g_value_set_float (&value, width);
+      gst_value_array_append_value (&array, &value);
 
-      g_value_set_float (&value, entry->right);
-      gst_value_array_append_value (&rectangle, &value);
+      g_value_set_float (&value, height);
+      gst_value_array_append_value (&array, &value);
 
-      gst_structure_set_value (structure, "rectangle", &rectangle);
-      g_value_reset (&rectangle);
+      gst_structure_set_value (structure, "rectangle", &array);
+      g_value_reset (&array);
 
       g_value_unset (&value);
       g_value_init (&value, GST_TYPE_STRUCTURE);
+
+      if ((entry->landmarks != NULL) && (entry->landmarks->len != 0)) {
+        GstMLBoxLandmark *lndmark = NULL;
+        GstStructure *substructure = NULL;
+
+        for (mrk = 0; mrk < entry->landmarks->len; mrk++) {
+          lndmark = &(g_array_index (entry->landmarks, GstMLBoxLandmark, mrk));
+
+          GST_TRACE_OBJECT (detection, "Landmark %s [%.2f x %.2f]",
+              g_quark_to_string (lndmark->name), lndmark->x, lndmark->y);
+
+          // Replace empty spaces otherwise subsequent structure call will fail.
+          name = g_strdup (g_quark_to_string (lndmark->name));
+          name = g_strdelimit (name, " ", '.');
+
+          substructure = gst_structure_new (name, "x", G_TYPE_DOUBLE,
+              lndmark->x, "y", G_TYPE_DOUBLE, lndmark->y, NULL);
+          g_free (name);
+
+          g_value_take_boxed (&value, substructure);
+          gst_value_array_append_value (&array, &value);
+          g_value_reset (&value);
+        }
+
+        gst_structure_set_value (structure, "landmarks", &array);
+        g_value_reset (&array);
+      }
 
       g_value_take_boxed (&value, structure);
       gst_value_array_append_value (&bboxes, &value);
@@ -685,7 +741,7 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
     g_value_unset (&value);
   }
 
-  g_value_unset (&rectangle);
+  g_value_unset (&array);
   g_value_unset (&bboxes);
 
   // Map buffer memory blocks.
@@ -907,22 +963,19 @@ gst_ml_video_detection_prepare_output_buffer (GstBaseTransform * base,
 static gboolean
 gst_ml_video_detection_sink_event (GstBaseTransform * base, GstEvent * event)
 {
-  GstMLVideoDetection *detection = GST_ML_VIDEO_DETECTION (base);
-
   switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_CUSTOM_DOWNSTREAM_OOB:
+    case GST_EVENT_CUSTOM_DOWNSTREAM:
     {
       const GstStructure *structure = gst_event_get_structure (event);
 
       // Not a supported custom event, pass it to the default handling function.
-      if (structure == NULL ||
-          !gst_structure_has_name (structure, "ml-inference-information"))
+      if ((structure == NULL) ||
+          !gst_structure_has_name (structure, "ml-detection-information"))
         break;
 
-      gst_structure_get_uint (structure, "stage-id", &(detection->stage_id));
-      GST_INFO_OBJECT (detection, "Stage ID: %u", detection->stage_id);
-
-      return gst_pad_push_event (GST_BASE_TRANSFORM_SRC_PAD (base), event);
+      // Consume downstream information from previous detection stage.
+      gst_event_unref (event);
+      return TRUE;
     }
     default:
       break;
@@ -1082,10 +1135,12 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
 {
   GstMLVideoDetection *detection = GST_ML_VIDEO_DETECTION (base);
   GstCaps *modulecaps = NULL;
+  GstQuery *query = NULL;
   GstStructure *structure = NULL;
   GEnumClass *eclass = NULL;
   GEnumValue *evalue = NULL;
   GstMLInfo ininfo;
+  gboolean success = FALSE;
   guint idx = 0;
 
   if (NULL == detection->labels) {
@@ -1125,6 +1180,25 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
     return FALSE;
   }
 
+  // Query upstream pre-process plugin about the inference parameters.
+  query = gst_query_new_custom (GST_QUERY_CUSTOM,
+      gst_structure_new_empty ("ml-preprocess-information"));
+
+  if (gst_pad_peer_query (base->sinkpad, query)) {
+    const GstStructure *s = gst_query_get_structure (query);
+
+    gst_structure_get_uint (s, "stage-id", &(detection->stage_id));
+    GST_DEBUG_OBJECT (detection, "Queried stage ID: %u", detection->stage_id);
+  } else {
+    // TODO: Temporary workaround. Need to be addressed proerly.
+    // In case of daisycahin it is possible to negotiate wrong stage-id without
+    // thrwing an error.
+    GST_WARNING_OBJECT (detection, "Failed to receive preprocess information!");
+  }
+
+  // Free the query instance as it is no longer needed and we are the owners.
+  gst_query_unref (query);
+
   structure = gst_structure_new ("options",
       GST_ML_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
       GST_ML_MODULE_OPT_LABELS, G_TYPE_STRING, detection->labels,
@@ -1144,8 +1218,8 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   if (!gst_ml_info_from_caps (&ininfo, incaps)) {
-    GST_ERROR_OBJECT (detection, "Failed to get input ML info from caps %"
-        GST_PTR_FORMAT "!", incaps);
+    GST_ELEMENT_ERROR (detection, CORE, CAPS, (NULL),
+        ("Failed to get input ML info from caps %" GST_PTR_FORMAT "!", incaps));
     return FALSE;
   }
 
@@ -1169,6 +1243,22 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
     return FALSE;
   }
 
+  // Inform any ML pre-process downstream about it's ROI stage ID.
+  structure = gst_structure_new ("ml-detection-information", "stage-id",
+      G_TYPE_UINT, detection->stage_id, NULL);
+
+  GST_DEBUG_OBJECT (detection, "Send stage ID %u", detection->stage_id);
+
+  success = gst_pad_push_event (GST_BASE_TRANSFORM_SRC_PAD (detection),
+      gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM, structure));
+
+  if (!success) {
+    // TODO: Temporary workaround. Need to be addressed proerly.
+    // In case of daisycahin it is possible to negotiate wrong stage-id without
+    // thrwing an error.
+    GST_WARNING_OBJECT (detection, "Failed to send ML info downstream!");
+  }
+
   // Allocate the maximum number of predictions based on the batch size.
   g_array_set_size (detection->predictions,
       GST_ML_INFO_TENSOR_DIM (detection->mlinfo, 0, 0));
@@ -1177,8 +1267,11 @@ gst_ml_video_detection_set_caps (GstBaseTransform * base, GstCaps * incaps,
     GstMLBoxPrediction *prediction =
         &(g_array_index (detection->predictions, GstMLBoxPrediction, idx));
 
-    prediction->entries = g_array_new (FALSE, FALSE, sizeof (GstMLBoxEntry));
+    prediction->entries = g_array_new (FALSE, TRUE, sizeof (GstMLBoxEntry));
     prediction->batch_idx = idx;
+
+    g_array_set_clear_func (prediction->entries,
+        (GDestroyNotify) gst_ml_box_entry_cleanup);
   }
 
   GST_DEBUG_OBJECT (detection, "Input caps: %" GST_PTR_FORMAT, incaps);

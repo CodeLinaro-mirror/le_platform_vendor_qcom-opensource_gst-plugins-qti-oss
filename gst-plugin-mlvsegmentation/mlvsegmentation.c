@@ -240,6 +240,8 @@ gst_ml_video_segmentation_create_pool (GstMLVideoSegmentation * segmentation,
   allocator = gst_fd_allocator_new ();
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
+  gst_buffer_pool_config_add_option (config,
+      GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (segmentation, "Failed to set pool configuration!");
@@ -569,8 +571,8 @@ gst_ml_video_segmentation_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   if (!gst_ml_info_from_caps (&ininfo, incaps)) {
-    GST_ERROR_OBJECT (segmentation, "Failed to get input ML info from caps %"
-        GST_PTR_FORMAT "!", incaps);
+    GST_ELEMENT_ERROR (segmentation, CORE, CAPS, (NULL),
+        ("Failed to get input ML info from caps %" GST_PTR_FORMAT "!", incaps));
     return FALSE;
   }
 

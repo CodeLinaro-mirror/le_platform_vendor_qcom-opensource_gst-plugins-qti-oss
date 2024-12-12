@@ -67,6 +67,9 @@
 
 #include "qmmf_source_context.h"
 
+#ifdef ENABLE_RUNTIME_PARSER
+#include <gst/utils/runtime-flags-parser-c-api.h>
+#endif // ENABLE_RUNTIME_PARSER
 #include <gst/allocators/allocators.h>
 #include <qmmf-sdk/qmmf_recorder.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param_tags.h>
@@ -98,6 +101,17 @@ qmmf_context_debug_category (void)
   }
   return (GstDebugCategory *) catgonce;
 }
+
+struct _GstQmmfLogicalCamInfo {
+  gboolean        is_logical_cam;
+  gint            phy_cam_num;
+  gchar*          phy_cam_name_list[16];
+};
+
+struct _GstQmmfCameraSwitchInfo {
+  gint            phy_cam_id_for_switch;
+  gint            input_req_id;
+};
 
 struct _GstQmmfContext {
   /// Global mutex lock.
@@ -213,6 +227,11 @@ struct _GstQmmfContext {
   gboolean          input_roi_enable;
   /// Number of Input ROI's
   gint32            input_roi_count;
+
+  /// Logical Camera Information
+  GstQmmfLogicalCamInfo logical_cam_info;
+  /// Sensor Switch Information
+  GstQmmfCameraSwitchInfo camera_switch_info;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -1157,6 +1176,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->mwbsettings =
       gst_structure_new_empty ("org.codeaurora.qcamera3.manualWB");
 
+  // logical camera and sensor switch info init
+  context->logical_cam_info.is_logical_cam = FALSE;
+  context->logical_cam_info.phy_cam_num = 0;
+  context->camera_switch_info.input_req_id = -1;
+
   GST_INFO ("Created QMMF context: %p", context);
   return context;
 }
@@ -1173,8 +1197,65 @@ gst_qmmf_context_free (GstQmmfContext * context)
   gst_structure_free (context->nrtuning);
   gst_structure_free (context->mwbsettings);
 
+  if (context->logical_cam_info.is_logical_cam == TRUE) {
+    for (int i = 0; i < context->logical_cam_info.phy_cam_num; i++)
+      g_free (context->logical_cam_info.phy_cam_name_list[i]);
+  }
+
   GST_INFO ("Destroyed QMMF context: %p", context);
   g_slice_free (GstQmmfContext, context);
+}
+
+void
+gst_qmmf_context_parse_logical_cam_info (GstQmmfContext *context,
+    ::camera::CameraMetadata meta)
+{
+  camera_metadata_entry entry;
+  GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+
+  entry = meta.find (ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
+
+  if (entry.count != 0) {
+    guint8 *cap_req_keys = entry.data.u8;
+    size_t i = 0;
+
+    GST_INFO ("Found request available caps tag");
+
+    for (i = 0; i < entry.count; i++) {
+      if (ANDROID_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA ==
+          cap_req_keys[i]) {
+        pinfo->is_logical_cam = TRUE;
+        break;
+      }
+    }
+  }
+
+  if (pinfo->is_logical_cam == TRUE) {
+    entry = meta.find (ANDROID_LOGICAL_MULTI_CAMERA_PHYSICAL_IDS);
+
+    if (entry.count != 0) {
+      size_t i = 0;
+      guchar *pids = entry.data.u8;
+      gchar  *pname = (gchar *)pids;
+
+      for (i = 0; i < entry.count; i++) {
+        // data format example:
+        // '0''\0''1''\0''2''\0'
+        if (pids[i] == '\0') {
+          pinfo->phy_cam_name_list[pinfo->phy_cam_num] = g_strdup (pname);
+          pinfo->phy_cam_num++;
+          pname = (gchar *)&pids[i+1];
+
+          GST_INFO ("Get physical camera %s in logical camera (%d)",
+              pinfo->phy_cam_name_list[pinfo->phy_cam_num - 1],
+              context->camera_id);
+        }
+      }
+
+      GST_INFO ("Found %d physical camera in logical camera %d",
+          pinfo->phy_cam_num, context->camera_id);
+    }
+  }
 }
 
 gboolean
@@ -1335,12 +1416,9 @@ gst_qmmf_context_open (GstQmmfContext * context)
         meta.find (ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[2];
     context->sensorsize.h =
         meta.find (ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
-    // Set default zoom values to active array size.
-    context->zoom.x = context->sensorsize.x;
-    context->zoom.y = context->sensorsize.y;
-    context->zoom.w = context->sensorsize.w;
-    context->zoom.h = context->sensorsize.h;
   }
+
+  gst_qmmf_context_parse_logical_cam_info(context, meta);
 
   context->state = GST_STATE_READY;
 
@@ -1490,13 +1568,70 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       colorimetry, rotate, vpad->xtrabufs
   );
 
+#ifdef ENABLE_RUNTIME_PARSER
+  void* qmmfsrc_parser = get_qmmfsrc_parser ();
+
+  gboolean gst_video_type_support = get_flag_as_bool (qmmfsrc_parser,
+      "GST_VIDEO_TYPE_SUPPORT");
+
+  if (gst_video_type_support && (vpad->type == VIDEO_TYPE_PREVIEW))
+    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
+
+#else
 #ifdef GST_VIDEO_TYPE_SUPPORT
   if (vpad->type == VIDEO_TYPE_PREVIEW)
     params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
 #endif // GST_VIDEO_TYPE_SUPPORT
+#endif // ENABLE_RUNTIME_PARSER
 
   if (vpad->reprocess_enable)
     params.flags |= ::qmmf::recorder::VideoFlags::kReproc;
+
+#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
+  if (!context->logical_cam_info.is_logical_cam) {
+    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+        "sense.", context->camera_id);
+  } else {
+    ::qmmf::recorder::StreamCameraId cam_id;
+    ::qmmf::recorder::StitchLayoutSelect layout;
+    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+    gchar *info_name = NULL;
+
+    if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+      GST_ERROR ("Invalid logical stream type.");
+    } else if (vpad->log_stream_type <=
+        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+      info_name = pinfo->phy_cam_name_list[vpad->log_stream_type -
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+
+      if (!info_name) {
+        GST_ERROR ("Physical camera name is null.");
+      } else {
+        GST_DEBUG ("Physical camera name: %s", info_name);
+      }
+
+      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+      extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+    } else if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+      switch (vpad->log_stream_type) {
+        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+          GST_DEBUG ("Stitch layout is selected: SideBySide.");
+          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+          break;
+        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+          GST_DEBUG ("Stitch layout is selected: Panorama.");
+          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+          break;
+        default:
+          break;
+      }
+      extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+    } else {
+      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+          vpad->log_stream_type);
+    }
+  }
+#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   if (context->input_roi_enable && !vpad->reprocess_enable)
     context->input_roi_count++;
@@ -1686,6 +1821,52 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
         return FALSE;
     }
   }
+
+#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
+  if (!context->logical_cam_info.is_logical_cam) {
+    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+        "sense.", context->camera_id);
+  } else {
+    ::qmmf::recorder::StreamCameraId cam_id;
+    ::qmmf::recorder::StitchLayoutSelect layout;
+    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+    gchar *info_name = NULL;
+
+    if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+      GST_ERROR ("Invalid logical stream type.");
+    } else if (ipad->log_stream_type <=
+        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+      info_name = pinfo->phy_cam_name_list[ipad->log_stream_type -
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+
+      if (!info_name) {
+        GST_ERROR ("Physical camera name is null.");
+      } else {
+        GST_DEBUG ("Physical camera name: %s", info_name);
+      }
+
+      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+      xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+    } else if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+      switch (ipad->log_stream_type) {
+        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+          GST_DEBUG ("Stitch layout is selected: SideBySide.");
+          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+          break;
+        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+          GST_DEBUG ("Stitch layout is selected: Panorama.");
+          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+          break;
+        default:
+          break;
+      }
+      xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+    } else {
+      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+          ipad->log_stream_type);
+    }
+  }
+#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   status = recorder->ConfigImageCapture (context->camera_id, ipad->index,
       imgparam, xtraparam);
@@ -2529,6 +2710,62 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       }
       break;
     }
+    case PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH:
+    {
+      if (context->logical_cam_info.is_logical_cam == TRUE) {
+        gint input, output;
+
+        input = g_value_get_int (value);
+        output = -1;
+
+        // input is -1, select next valid phy camera id automatically
+        // or input is in the range of [0, physical camera number], select
+        // itself as output.
+        if (input < -1) {
+            GST_ERROR ("Invalid id (%d) for phy camera switch", input);
+        } else if (input == -1) {
+          context->camera_switch_info.phy_cam_id_for_switch++;
+          if (context->camera_switch_info.phy_cam_id_for_switch >=
+              context->logical_cam_info.phy_cam_num)
+            context->camera_switch_info.phy_cam_id_for_switch = 0;
+
+          output = context->camera_switch_info.phy_cam_id_for_switch;
+          context->camera_switch_info.input_req_id = input;
+        } else {
+          if (input < context->logical_cam_info.phy_cam_num) {
+            context->camera_switch_info.input_req_id = input;
+            context->camera_switch_info.phy_cam_id_for_switch = input;
+            output = input;
+          } else {
+            GST_ERROR ("id (%d) out of range for phy camera switch", input);
+          }
+        }
+
+        if (output != -1) {
+          GST_INFO ("phy camera switch target (%d)", output);
+
+          guint tag_id = get_vendor_tag_by_name (
+              "com.qti.chi.multicameraswitchControl", "activeCameraIndex");
+
+          if (tag_id != 0) {
+            guint8 val = (guint8) output;
+            gint32 ret;
+
+            ret = meta.update (tag_id, &val, 1);
+            if (ret != 0) {
+              GST_ERROR ("physical camera switch tag update error");
+            } else {
+              GST_INFO ("physical camera switch tag update success");
+            }
+          } else {
+            GST_ERROR ("physical camera switch tag not found ");
+          }
+        }
+      } else {
+        GST_ERROR ("not logical camera, phy camera id switch not supported");
+      }
+      break;
+    }
   }
 
   if (!context->slave && (context->state >= GST_STATE_READY)) {
@@ -2828,11 +3065,22 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       GValue val = G_VALUE_INIT;
       g_value_init (&val, G_TYPE_INT);
 
+      g_message("Sensor active array size <X,Y,Width,Height> is <%d,%d,%d,%d>", \
+          context->sensorsize.x,context->sensorsize.y, \
+          context->sensorsize.w,context->sensorsize.h);
+      g_message("Please align the ROI values and aspect ratio according to " \
+          "Sensor active array size");
+
       for (int i = 0; i < context->input_roi_count * 4; i++) {
         g_value_set_int (&val, 0);
         gst_value_array_append_value (value, &val);
       }
 
+      break;
+    }
+    case PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH:
+    {
+      g_value_set_int (value, context->camera_switch_info.input_req_id);
       break;
     }
   }
