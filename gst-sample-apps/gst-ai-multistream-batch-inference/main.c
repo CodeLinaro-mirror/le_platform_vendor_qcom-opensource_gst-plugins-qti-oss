@@ -100,7 +100,7 @@
 /**
  * Number of Queues used for buffer caching between elements
  */
-#define QUEUE_COUNT 5
+#define QUEUE_COUNT 6
 
 /**
  * Default threshold values
@@ -159,14 +159,28 @@ update_window_grid (GstVideoRectangle *positions, guint x, guint y)
   win_w = width / x;
   win_h = height / y;
 
-  for (gint i = 0; i < x; i++) {
-    for (gint j = 0; j < y; j++) {
+  for (guint i = 0; i < x; i++) {
+    for (guint j = 0; j < y; j++) {
       positions[i*x+j].x = win_w*j;
       positions[i*x+j].y = win_h*i;
       positions[i*x+j].w = win_w;
       positions[i*x+j].h = win_h;
     }
   }
+}
+
+/*
+ * Read HTP core count
+ */
+static gint
+get_num_cdsp_backends ()
+{
+  gint num_cdsp_backends = 1;
+
+  if (access ("/dev/fastrpc-cdsp1", F_OK) == 0)
+    num_cdsp_backends = 2;
+
+  return num_cdsp_backends;
 }
 
 /**
@@ -460,11 +474,12 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions options[],
  */
 static gboolean
 create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
-    GstSourceCount *source_count, gint batch_elements)
+    GstSourceCount *source_count, gint batch_elements, guint htp_count)
 {
   // Elements for file source
   GstElement *filesrc[source_count->num_file], *qtdemux[source_count->num_file];
   GstElement *file_queue[source_count->num_file][QUEUE_COUNT];
+  GstElement *file_queue2[source_count->num_file][3];
   GstElement *file_dec_h264parse[source_count->num_file];
   GstElement *file_v4l2h264dec[source_count->num_file];
   GstElement *file_dec_tee[source_count->num_file];
@@ -511,6 +526,15 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
       file_queue[i][j] = gst_element_factory_make ("queue", element_name);
       if (!file_queue[i][j]) {
         g_printerr ("Failed to create file_queue-%d-%d\n", i, j);
+        goto error_clean_elements;
+      }
+    }
+
+    for (gint j=0; j < 3; j++) {
+      snprintf (element_name, 127, "file_queue2-%d-%d", i, j);
+      file_queue2[i][j] = gst_element_factory_make ("queue", element_name);
+      if (!file_queue2[i][j]) {
+        g_printerr ("Failed to create file_queue2-%d-%d\n", i, j);
         goto error_clean_elements;
       }
     }
@@ -699,7 +723,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
           "capture-io-mode", 5,"output-io-mode", 5, NULL);
       if (!set_ml_params (file_qtimlpostprocess[i*DEFAULT_BATCH_SIZE + j],
           file_filter[i*DEFAULT_BATCH_SIZE + j],
-          file_qtimlelement[i], options[i], i%2)) {
+          file_qtimlelement[i], options[i], i%htp_count)) {
         g_printerr ("Failed to set_ml_params\n");
         goto error_clean_elements;
       }
@@ -753,6 +777,11 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
         file_dec_h264parse[i], file_v4l2h264dec[i], file_dec_tee[i],
         file_qtimlpostprocess[i], file_filter[i],
         NULL);
+
+    for (gint j = 0; j < 3; j++) {
+      gst_bin_add_many (GST_BIN (appctx->pipeline), file_queue2[i][j], NULL);
+    }
+
     for (gint j = 0; j < QUEUE_COUNT; j++) {
       gst_bin_add_many (GST_BIN (appctx->pipeline), file_queue[i][j], NULL);
     }
@@ -827,6 +856,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
       }
 
       ret = gst_element_link_many (qtimldemux[i],
+          file_queue[i*DEFAULT_BATCH_SIZE + j][4],
           file_qtimlpostprocess[i*DEFAULT_BATCH_SIZE + j], NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked for %d"
@@ -837,7 +867,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
       ret = gst_element_link_many (
           file_qtimlpostprocess[i*DEFAULT_BATCH_SIZE + j],
           file_filter[i*DEFAULT_BATCH_SIZE + j],
-          file_queue[i*DEFAULT_BATCH_SIZE + j][4], qtivcomposer, NULL);
+          file_queue[i*DEFAULT_BATCH_SIZE + j][5], qtivcomposer, NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked for %d"
             " file: post proc -> composer.\n", i);
@@ -845,11 +875,12 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
       }
     }
 
-    gst_element_link_many (qtibatch[i], file_qtimlvconverter[i],
-        file_qtimlelement[i], qtimldemux[i], NULL);
+    ret = gst_element_link_many (qtibatch[i], file_queue2[i][0],
+        file_qtimlvconverter[i], file_queue2[i][1], file_qtimlelement[i],
+        file_queue2[i][2], qtimldemux[i], NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for %d"
-          " file: qtibatch-> file_qtimlelement.\n", i);
+          " file: qtibatch-> file_qtimlvconverter.\n", i);
       goto error_clean_pipeline;
     }
   }
@@ -924,6 +955,9 @@ error_clean_elements:
     for (gint j = 0; j < QUEUE_COUNT; j++) {
       cleanup_gst (&file_queue[i][j], NULL);
     }
+    for (gint j = 0; j < 3; j++) {
+      cleanup_gst (&file_queue2[i][j], NULL);
+    }
   }
 
   for (gint i = 0; i < batch_elements; i++) {
@@ -967,12 +1001,13 @@ main (gint argc, gchar * argv[])
   GError *error = NULL;
   GstAppContext appctx = {};
   GstAppOptions options[MAX_SRCS_COUNT] = {{ 0 }};
-  GstSourceCount source_count = {{ 0 }};
+  GstSourceCount source_count = { 0 };
   struct rlimit rl;
   guint intrpt_watch_id = 0;
   gboolean ret = FALSE;
   gchar help_description[1024];
   gint streams = 0;
+  gint htp_count = 1;
 
   // Define the new limit
   rl.rlim_cur = 4096; // Soft limit
@@ -991,6 +1026,9 @@ main (gint argc, gchar * argv[])
   // Set Display environment variables
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
+
+  // Read HTP Core Count
+  htp_count = get_num_cdsp_backends();
 
   // Structure to define the user options selection
   GOptionEntry entries[] = {
@@ -1070,8 +1108,8 @@ main (gint argc, gchar * argv[])
   // Extract pipeline-info array
   pipeline_info = json_object_get_array_member (root_obj, "pipeline-info");
   streams = json_array_get_length (pipeline_info);
-  for (guint i = 0; i < streams; i++) {
-    gchar file_name[1024] = {NULL};
+  for (gint i = 0; i < streams; i++) {
+    gchar file_name[1024] = {};
     JsonObject *info = NULL, *input_file_info = NULL;
     gint id;
     const gchar *input_type = NULL;
@@ -1165,7 +1203,7 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
-  for (guint id = 0; id < streams; id++) {
+  for (gint id = 0; id < streams; id++) {
     if (!file_exists (options[id].model_path)) {
       g_printerr ("Invalid model file path: %s\n", options[id].model_path);
       gst_app_context_free (&appctx, options, source_count, streams);
@@ -1212,7 +1250,7 @@ main (gint argc, gchar * argv[])
   appctx.pipeline = pipeline;
 
   // Build the pipeline, link all elements in the pipeline
-  ret = create_pipe (&appctx, options, &source_count, streams);
+  ret = create_pipe (&appctx, options, &source_count, streams, htp_count);
   if (!ret) {
     g_printerr ("ERROR: failed to create GST pipe.\n");
     gst_app_context_free (&appctx, options, source_count, streams);

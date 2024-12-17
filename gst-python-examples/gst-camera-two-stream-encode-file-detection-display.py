@@ -27,7 +27,7 @@ DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
 DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
 DEFAULT_OUTPUT_FILE = "/opt/data/test.mp4"
 
-
+eos_received = False
 def create_element(factory_name, name):
     """Create a GStreamer element."""
     element = Gst.ElementFactory.make(factory_name, name)
@@ -145,7 +145,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["mltflite"],
         "external-delegate-options",
-        "QNNExternalDelegate,backend_type=htp;",
+        "QNNExternalDelegate,backend_type=htp,htp_precision=(string)1;",
     )
     Gst.util_set_object_arg(
         elements["mltflite"],
@@ -216,9 +216,12 @@ def quit_mainloop(loop):
 
 def bus_call(_, message, loop):
     """Handle bus messages."""
+    global eos_received
+
     message_type = message.type
     if message_type == Gst.MessageType.EOS:
         print("EoS received!")
+        eos_received = True
         quit_mainloop(loop)
     elif message_type == Gst.MessageType.ERROR:
         error, debug_info = message.parse_error()
@@ -284,6 +287,8 @@ def main():
     pipe = None
 
     Gst.deinit()
+    if eos_received:
+        print("App execution successful")
 
     return 0
 

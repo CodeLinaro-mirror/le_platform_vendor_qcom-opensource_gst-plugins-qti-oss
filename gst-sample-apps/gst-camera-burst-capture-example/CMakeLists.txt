@@ -18,19 +18,21 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 # GStreamer gst-camera-burst-capture-example
 set(GST_EXAMPLE_BIN gst-camera-burst-capture-example)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter")
+
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
 )
 
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
-  $<$<STREQUAL:${CAMERA_SERVICE},LECAM>:${SYSROOT_INCDIR}/camx-api/camx/service>
+  ${SYSROOT_INCDIR}/camx-api/camx/service
 )
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_LIBRARIES}
   qmmf_camera_metadata
-  camera_metadata
 )
 
 install(
