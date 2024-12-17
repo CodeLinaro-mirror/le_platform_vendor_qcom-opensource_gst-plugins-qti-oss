@@ -106,7 +106,7 @@
  * rstp sink configuration
  */
 #define DEFAULT_IP "127.0.0.1"
-#define DEFAULT_PORT 8554
+#define DEFAULT_PORT "8554"
 #define DEFAULT_RTSP_IP_PORT "127.0.0.1:8554"
 
 /**
@@ -120,12 +120,12 @@ typedef struct {
   gchar *out_file;
   gchar *constants;
   gchar *ip_address;
+  gchar *port_num;
   gint num_camera;
   gint num_file;
   gint num_rtsp;
   gint camera_id;
   gint input_count;
-  gint port_num;
   gboolean out_display;
   gboolean out_rtsp;
   gint use_case;
@@ -151,8 +151,8 @@ update_window_grid (GstVideoRectangle *positions, guint x, guint y)
   win_w = width / x;
   win_h = height / y;
 
-  for (gint i = 0; i < x; i++) {
-    for (gint j = 0; j < y; j++) {
+  for (guint i = 0; i < x; i++) {
+    for (guint j = 0; j < y; j++) {
       GstVideoRectangle window = {win_w*j, win_h*i, win_w, win_h};
       positions[i*x+j] = window;
     }
@@ -364,40 +364,46 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
   }
 
   if (options->rtsp_ip_port != NULL &&
-      options->rtsp_ip_port != DEFAULT_RTSP_IP_PORT) {
-    g_free (options->rtsp_ip_port);
+      options->rtsp_ip_port != (gchar *)(&DEFAULT_RTSP_IP_PORT)) {
+    g_free ((gpointer)options->rtsp_ip_port);
     options->rtsp_ip_port = NULL;
   }
 
   if (options->model_path != NULL &&
-    options->model_path != DEFAULT_TFLITE_YOLOV8_MODEL &&
-    options->model_path != DEFAULT_TFLITE_INCEPTIONV3_MODEL) {
-    g_free (options->model_path);
+    options->model_path != (gchar *)(&DEFAULT_TFLITE_YOLOV8_MODEL) &&
+    options->model_path != (gchar *)(&DEFAULT_TFLITE_INCEPTIONV3_MODEL)) {
+    g_free ((gpointer)options->model_path);
     options->model_path = NULL;
   }
 
   if (options->labels_path != NULL &&
-    options->labels_path != DEFAULT_YOLOV8_LABELS &&
-    options->labels_path != DEFAULT_CLASSIFICATION_LABELS) {
-    g_free (options->labels_path);
+    options->labels_path != (gchar *)(&DEFAULT_YOLOV8_LABELS) &&
+    options->labels_path != (gchar *)(&DEFAULT_CLASSIFICATION_LABELS)) {
+    g_free ((gpointer)options->labels_path);
     options->labels_path = NULL;
   }
 
   if (options->out_file != NULL) {
-    g_free (options->out_file);
+    g_free ((gpointer)options->out_file);
     options->out_file = NULL;
   }
 
   if (options->constants != NULL &&
-    options->constants != DEFAULT_DETECTION_CONSTANTS &&
-    options->constants != DEFAULT_CLASSIFICATION_CONSTANTS) {
-    g_free (options->constants);
+    options->constants != (gchar *)(&DEFAULT_DETECTION_CONSTANTS) &&
+    options->constants != (gchar *)(&DEFAULT_CLASSIFICATION_CONSTANTS)) {
+    g_free ((gpointer)options->constants);
     options->constants = NULL;
   }
 
-  if (options->ip_address != NULL && options->ip_address != DEFAULT_IP) {
-    g_free (options->ip_address);
+  if (options->ip_address != NULL &&
+    options->ip_address != (gchar *)(&DEFAULT_IP)) {
+    g_free ((gpointer)options->ip_address);
     options->ip_address = NULL;
+  }
+
+  if (options->port_num != (gchar *)(&DEFAULT_PORT) &&
+      options->port_num != 0) {
+    g_free ((gpointer)options->port_num);
   }
 
   if (appctx->pipeline != NULL) {
@@ -454,7 +460,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   GstElement *waylandsink = NULL, *composer_caps = NULL, *composer_tee = NULL;
   GstElement *v4l2h264enc = NULL, *enc_h264parse = NULL, *enc_tee = NULL;
   GstElement *mp4mux = NULL, *filesink = NULL;
-  GstElement *rtph264pay = NULL, *udpsink = NULL;
+  GstElement *qtirtspbin = NULL;
   GstCaps *filtercaps = NULL;
   GstStructure *fcontrols = NULL;
   gint width = DEFAULT_CAMERA_OUTPUT_WIDTH;
@@ -810,17 +816,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     }
 
     if (options->out_rtsp) {
-      // Plugin to create rtsp payload to stream over network
-      rtph264pay = gst_element_factory_make ("rtph264pay", "rtph264pay");
-      if (!rtph264pay) {
-        g_printerr ("Failed to create rtph264pay\n");
-        goto error_clean_elements;
-      }
-
-      // Generic udpsink plugin for streaming
-      udpsink = gst_element_factory_make ("udpsink", "udpsink");
-      if (!udpsink) {
-        g_printerr ("Failed to create udpsink\n");
+      // Generic qtirtspbin plugin for streaming
+      qtirtspbin = gst_element_factory_make ("qtirtspbin", "qtirtspbin");
+      if (!qtirtspbin) {
+        g_printerr ("Failed to create qtirtspbin\n");
         goto error_clean_elements;
       }
     }
@@ -902,10 +901,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     }
 
     if (options->out_rtsp) {
-      g_print (" ip = %s, port = %d\n", options->ip_address,options->port_num);
-      g_object_set (G_OBJECT (enc_h264parse), "config-interval", -1, NULL);
-      g_object_set (G_OBJECT (rtph264pay), "pt", 96, NULL);
-      g_object_set (G_OBJECT (udpsink), "host", options->ip_address,
+      g_print (" ip = %s, port = %s\n", options->ip_address, options->port_num);
+      g_object_set (G_OBJECT (enc_h264parse), "config-interval", 1, NULL);
+      g_object_set (G_OBJECT (qtirtspbin), "address", options->ip_address,
           "port", options->port_num, NULL);
     }
   }
@@ -960,7 +958,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
       gst_bin_add_many (GST_BIN (appctx->pipeline), mp4mux, filesink, NULL);
     }
     if (options->out_rtsp) {
-      gst_bin_add_many (GST_BIN (appctx->pipeline), rtph264pay, udpsink, NULL);
+      gst_bin_add_many (GST_BIN (appctx->pipeline), qtirtspbin, NULL);
     }
   }
 
@@ -1092,10 +1090,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
 
     if (options->out_rtsp) {
       ret = gst_element_link_many (
-          enc_tee, queue[5], rtph264pay, udpsink, NULL);
+          enc_tee, queue[5], qtirtspbin, NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked for"
-            " enc_tee -> udpsink.\n");
+            " enc_tee -> qtirtspbin.\n");
         goto error_clean_pipeline;
       }
     }
@@ -1170,7 +1168,7 @@ error_clean_elements:
       cleanup_gst (&mp4mux, &filesink, NULL);
     }
     if (options->out_rtsp) {
-      cleanup_gst (&rtph264pay, &udpsink, NULL);
+      cleanup_gst (&qtirtspbin, NULL);
     }
   }
 
@@ -1218,22 +1216,38 @@ main (gint argc, gchar * argv[])
   options.camera_id = -1;
   options.rtsp_ip_port = DEFAULT_RTSP_IP_PORT;
 
+  GOptionEntry camera_entries[2] = {};
+
+  gboolean camera_is_available = is_camera_available ();
+
+  if (camera_is_available) {
+    GOptionEntry temp_camera_entries[] = {
+      { "num-camera", 0, 0, G_OPTION_ARG_INT,
+        &options.num_camera,
+        "Number of cameras to be used (range: 1-" TO_STR (MAX_CAMSRCS) ")",
+        NULL
+      },
+      { "camera-id", 'c', 0, G_OPTION_ARG_INT,
+        &options.camera_id,
+        "Use provided camera id as source\n"
+        "      Default input camera 0 if no other input selected\n"
+        "      This parameter is ignored if num-camera=" TO_STR (MAX_CAMSRCS),
+        "0 or 1"
+      }
+    };
+
+    memcpy (camera_entries, temp_camera_entries, 2 * sizeof (GOptionEntry));
+  } else {
+    GOptionEntry temp_camera_entries[] = {
+      { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL },
+      { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
+    };
+
+    memcpy (camera_entries, temp_camera_entries, 2 * sizeof (GOptionEntry));
+  }
+
   // Structure to define the user options selection
   GOptionEntry entries[] = {
-#ifdef ENABLE_CAMERA
-    { "num-camera", 0, 0, G_OPTION_ARG_INT,
-      &options.num_camera,
-      "Number of cameras to be used (range: 1-" TO_STR (MAX_CAMSRCS) ")",
-      NULL
-    },
-    { "camera-id", 'c', 0, G_OPTION_ARG_INT,
-      &options.camera_id,
-      "Use provided camera id as source\n"
-      "      Default input camera 0 if no other input selected\n"
-      "      This parameter is ignored if num-camera=" TO_STR (MAX_CAMSRCS),
-      "0 or 1"
-    },
-#endif // ENABLE_CAMERA
     { "num-file", 0, 0, G_OPTION_ARG_INT,
       &options.num_file,
       "Number of input files to be used (range: 1-" TO_STR (MAX_FILESRCS) ")\n"
@@ -1284,7 +1298,7 @@ main (gint argc, gchar * argv[])
       "Constants, offsets and coefficients used by the chosen module \n"
       "      for post-processing of incoming tensors."
       " Applicable only for some modules\n"
-      "      Default constants: " DEFAULT_DETECTION_CONSTANTS,
+      "      Default constants: \"" DEFAULT_DETECTION_CONSTANTS "\"",
       "/CONSTANTS"
     },
     { "display", 'd', 0, G_OPTION_ARG_NONE,
@@ -1299,41 +1313,45 @@ main (gint argc, gchar * argv[])
     },
     { "out-rtsp", 'r', 0, G_OPTION_ARG_NONE,
       &options.out_rtsp,
-      "Encode and stream on rtsp\n"
-      "      Run below command on a separate shell to start the rtsp server:\n"
-      "          gst-rtsp-server -p 8900 -a <device_ip> -m /live "
-      "\" ( udpsrc name=pay0 port=<port> caps=\\\"application/x-rtp,"
-      "media=video,clock-rate=90000,encoding-name=H264,payload=96\\\" )\"\n"
-      "      Live URL on port 8900: rtsp://<device_ip>:8900/live\n"
-      "          Change IP address to match your network settings",
+      "Encode and stream on rtsp. Connect device and host on same network, and\n"
+      "      change ip address and port to override the defualt ip address and\n"
+      "      Port number.",
       NULL
     },
     { "ip", 'i', 0, G_OPTION_ARG_STRING,
       &options.ip_address,
-      "Valid IP address in case of RSTP streaming output"
+      "RSTP server listening address.",
+      "Valid IP Address"
     },
-    { "port", 'p', 0, G_OPTION_ARG_INT,
+    { "port", 'p', 0, G_OPTION_ARG_STRING,
       &options.port_num,
-      "Valid port number in case of RSTP streaming output"
+      "RSTP server listening port",
+      "Port number."
     },
-    { NULL }
+    camera_entries[0],
+    camera_entries[1],
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
 
+  gchar camera_description[256] = {};
+
+  if (camera_is_available) {
+    snprintf (camera_description, sizeof (camera_description),
+      "  %s --use-case 1 --num-camera=2 --display\n",
+      app_name);
+  }
+
   snprintf (help_description, 1023, "\nExample:\n"
       "  %s --num-file=6 --use-case 0\n"
-#ifdef ENABLE_CAMERA
-      "  %s --use-case 1 --num-camera=2 --display\n"
-#endif // ENABLE_CAMERA
+      "  %s\n"
       "  %s --use-case 0 --model=%s --labels=%s\n"
       "  %s --num-file=4 -u 0 -d -f /opt/app.mp4 --out-rtsp -i <ip> -p <port>\n"
       "\nThis Sample App demonstrates Object Detection on 16 stream with various "
       " input/output stream combinations",
       app_name,
-#ifdef ENABLE_CAMERA
-      app_name,
-#endif // ENABLE_CAMERA
+      camera_description,
       app_name, DEFAULT_TFLITE_YOLOV8_MODEL,
       DEFAULT_YOLOV8_LABELS, app_name);
   help_description[1023] = '\0';
@@ -1433,15 +1451,15 @@ main (gint argc, gchar * argv[])
 
   if (options.input_count == 0 ||
       (options.camera_id != -1 && options.num_camera == 0)) {
-#ifdef ENABLE_CAMERA
-    g_print ("No stream provided in options, defaulting to 1 camera stream.\n");
-    options.num_camera = 1;
-    options.input_count++;
-#else
-    g_printerr ("Select either File or RTSP source\n");
-    gst_app_context_free (&appctx, &options);
-    return -EINVAL;
-#endif // ENABLE_CAMERA
+    if (camera_is_available) {
+      g_print ("No stream provided in options, defaulting to 1 camera stream.\n");
+      options.num_camera = 1;
+      options.input_count++;
+    } else {
+      g_printerr ("Select either File or RTSP source\n");
+      gst_app_context_free (&appctx, &options);
+      return -EINVAL;
+    }
   }
 
   if (options.camera_id == -1 || options.num_camera == 2) {

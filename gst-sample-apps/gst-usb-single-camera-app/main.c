@@ -162,16 +162,10 @@ static gboolean
 find_usb_camera_node (GstCameraAppContext * appctx)
 {
   struct v4l2_capability v2cap;
-  gint idx = 2, ret = 0, mFd = -1;
+  gint idx = 0, ret = 0, mFd = -1;
 
   while (idx < MAX_VID_DEV_CNT) {
     memset (appctx->dev_video, 0, sizeof (appctx->dev_video));
-
-    // Skip for known nodes 32 and 33 are video driver nodes
-    if (idx == 32 || idx == 33) {
-      idx++;
-      continue;
-    }
 
     // start idx with 2 as 0 and 1 are already allocated nodes for camx
     ret = snprintf (appctx->dev_video, sizeof (appctx->dev_video), "/dev/video%d",
@@ -191,21 +185,9 @@ find_usb_camera_node (GstCameraAppContext * appctx)
     }
 
     if (ioctl (mFd, VIDIOC_QUERYCAP, &v2cap) == 0) {
-      int capabilities;
-      g_print ("ID_V4L_CAPABILITIES=:");
-
-      if (v2cap.capabilities & V4L2_CAP_DEVICE_CAPS)
-        capabilities = v2cap.device_caps;
-      else
-        capabilities = v2cap.capabilities;
-
-      if ((capabilities & V4L2_CAP_VIDEO_CAPTURE) > 0 ||
-          (capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE) > 0) {
-        g_print ("capture:");
-      } else {
-        g_printerr ("\n Failed to find USB camera try next Node\n");
+      g_print ("ID_V4L_CAPABILITIES=: %s", v2cap.driver);
+      if (strcmp ((const char *)v2cap.driver, "uvcvideo") != 0)
         continue;
-      }
     }
     break;
   }
@@ -428,18 +410,18 @@ main (gint argc, gchar *argv[])
     { "framerate", 'f', 0, G_OPTION_ARG_INT, &appctx->framerate, "framerate",
       "camera framerate" },
     { "output", 'o', 0, G_OPTION_ARG_INT, &appctx->sinktype,
-      "Sinktype"
+      "Sinktype",
       "\n\t0-PREVIEW"
       "\n\t1-VIDEOENCODING"
       "\n\t2-YUVDUMP"
       "\n\t3-RTSPSTREAMING" },
     { "ip", 'i', 0, G_OPTION_ARG_STRING,
       &ip_address,
-      "Valid IP address in case of RSTP streaming output" },
+      "RSTP server listening address.", "Valid IP Address" },
     { "port", 'p', 0, G_OPTION_ARG_STRING,
       &port_num,
-      "Valid port number in case of RSTP streaming output" },
-    { NULL }
+      "RSTP server listening port", "Port number." },
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 
   // Parse command line entries.
