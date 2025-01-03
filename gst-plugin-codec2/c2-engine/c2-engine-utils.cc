@@ -117,8 +117,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
   { GST_C2_PARAM_QP_RANGES,
       qc2::C2VideoQPRangeSetting::output::PARAM_TYPE },
 #endif // CODEC2_CONFIG_VERSION_2_0
-  { GST_C2_PARAM_ROI_ENCODE,
-      qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
+  /*{ GST_C2_PARAM_ROI_ENCODE,
+      qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },*/
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_PRIORITY,
@@ -641,17 +641,17 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_ROI_ENCODE: {
 #if defined(CODEC2_CONFIG_VERSION_2_0)
-      qc2::QC2VideoROIRegionInfo::input region;
+      //qc2::QC2VideoROIRegionInfo::input region;
 #else
-      qc2::QC2VideoROIRegionInfo::output region;
+      //qc2::QC2VideoROIRegionInfo::output region;
 #endif // CODEC2_CONFIG_VERSION_2_0
 
       auto rects = reinterpret_cast<GstC2QuantRegions*>(payload)->rects;
       uint32_t n_rects = reinterpret_cast<GstC2QuantRegions*>(payload)->n_rects;
       std::stringstream ss;
 
-      size_t size = sizeof (region.rectPayload);
-      size_t extsize = sizeof (region.rectPayloadExt);
+      /*size_t size = sizeof (region.rectPayload);
+      size_t extsize = sizeof (region.rectPayloadExt);*/
 
       for (uint32_t idx = 0; idx < n_rects; idx++) {
         ss << rects[idx].y << "," // Top
@@ -660,7 +660,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
            << (rects[idx].x + rects[idx].w - 1) << "=" // Right
            << rects[idx].qp << ";"; // QP Delta
 
-        size_t len = strlen (region.rectPayload);
+        /*size_t len = strlen (region.rectPayload);
         size_t extlen = strlen (region.rectPayloadExt);
         size_t writelen = static_cast<size_t>(ss.tellp()) - len - extlen;
 
@@ -668,11 +668,11 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
           ss.get((region.rectPayload + len), ss.tellp());
         else if ((extlen + writelen) < extsize)
           ss.get((region.rectPayloadExt + extlen), ss.tellp());
-
+        */
         ss.clear();
       }
 
-      region.type_[0] = 'r';
+      /*region.type_[0] = 'r';
       region.type_[1] = 'e';
       region.type_[2] = 'c';
       region.type_[3] = 't';
@@ -680,6 +680,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
       region.timestampUs = reinterpret_cast<GstC2QuantRegions*>(payload)->timestamp;
       c2param = C2Param::Copy(region);
+      */
       break;
     }
     case GST_C2_PARAM_TRIGGER_SYNC_FRAME: {
@@ -1056,28 +1057,28 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
   switch (format) {
     case C2PixelFormat::kNV12:
       handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.slice_height =
+      handle->mInts.sliceHeight =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
       break;
     case C2PixelFormat::kNV12UBWC:
       handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
-      handle->mInts.slice_height =
+      handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.sliceHeight =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
       break;
     case C2PixelFormat::kP010:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
       // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
       stride = stride / 2;
-      handle->mInts.slice_height =
+      handle->mInts.sliceHeight =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
     case C2PixelFormat::kTP10UBWC:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
-      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
       stride = stride * 3 / 4;
-      handle->mInts.slice_height =
+      handle->mInts.sliceHeight =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
     default:
@@ -1111,7 +1112,7 @@ bool GstC2Utils::ExtractHandleInfo(GstBuffer* buffer,
   gsize offsets[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
 
   uint32_t stride = handle->mInts.stride;
-  uint32_t scanline = handle->mInts.slice_height;
+  uint32_t scanline = handle->mInts.sliceHeight;
   uint32_t gbm_format = handle->mInts.format;
 
   width = handle->mInts.width;
@@ -1208,11 +1209,10 @@ std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
     // Set the source and destination pointers for the next plane.
     uint8_t *source = static_cast<uint8_t*>(map.data) + vmeta->offset[idx];
     uint8_t *destination = static_cast<uint8_t*>(data[0]) +
-        (idx * handle->mInts.stride * handle->mInts.slice_height);
+        (idx * handle->mInts.stride * handle->mInts.sliceHeight);
 
     for (uint32_t num = 0; num < n_rows; num++) {
       memcpy (destination, source, vmeta->stride[idx]);
-
       destination += handle->mInts.stride;
       source += vmeta->stride[idx];
     }
