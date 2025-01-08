@@ -1056,37 +1056,37 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
 
   switch (format) {
     case C2PixelFormat::kNV12:
-      handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.sliceHeight =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      //handle->mInts.format = GBM_FORMAT_NV12;
+      //handle->mInts.sliceHeight =
+      //    MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
       break;
     case C2PixelFormat::kNV12UBWC:
-      handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
-      handle->mInts.sliceHeight =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
+      //handle->mInts.format = GBM_FORMAT_NV12;
+      //handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      //handle->mInts.sliceHeight =
+      //    MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
       break;
     case C2PixelFormat::kP010:
-      handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
+      //handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
       // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
       stride = stride / 2;
-      handle->mInts.sliceHeight =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
+      //handle->mInts.sliceHeight =
+      //    MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
     case C2PixelFormat::kTP10UBWC:
-      handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
-      handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      //handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
+      //handle->mInts.usageLo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       // TODO Workaround due to issues in codec2 implementation, REMOVE IT.
       stride = stride * 3 / 4;
-      handle->mInts.sliceHeight =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
+      //handle->mInts.sliceHeight =
+      //    MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
     default:
       GST_ERROR ("Unsupported format: %d !", format);
       return false;
   }
 
-  handle->version = ::android::C2HandleGBM::VERSION;
+  /*handle->version = ::android::C2HandleGBM::VERSION;
   handle->numFds = ::android::C2HandleGBM::NUM_FDS;
   handle->numInts = ::android::C2HandleGBM::NUM_INTS;
 
@@ -1099,6 +1099,7 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
 
   handle->mInts.size = size;
   handle->mInts.id = fd;
+  */
 
   return true;
 }
@@ -1111,12 +1112,12 @@ bool GstC2Utils::ExtractHandleInfo(GstBuffer* buffer,
   gint strides[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
   gsize offsets[GST_VIDEO_MAX_PLANES] = { 0, 0, 0, 0 };
 
-  uint32_t stride = handle->mInts.stride;
-  uint32_t scanline = handle->mInts.sliceHeight;
-  uint32_t gbm_format = handle->mInts.format;
+  uint32_t stride = 0; //handle->mInts.stride;
+  uint32_t scanline = 0; //handle->mInts.sliceHeight;
+  uint32_t gbm_format =0; // handle->mInts.format;
 
-  width = handle->mInts.width;
-  height = handle->mInts.height;
+  width = 0;//handle->mInts.width;
+  height = 0;//handle->mInts.height;
 
   switch (gbm_format) {
     case GBM_FORMAT_NV12:
@@ -1208,12 +1209,12 @@ std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
 
     // Set the source and destination pointers for the next plane.
     uint8_t *source = static_cast<uint8_t*>(map.data) + vmeta->offset[idx];
-    uint8_t *destination = static_cast<uint8_t*>(data[0]) +
-        (idx * handle->mInts.stride * handle->mInts.sliceHeight);
+    uint8_t *destination = static_cast<uint8_t*>(data[0]);
+        //(idx * handle->mInts.stride * handle->mInts.sliceHeight);
 
     for (uint32_t num = 0; num < n_rows; num++) {
       memcpy (destination, source, vmeta->stride[idx]);
-      destination += handle->mInts.stride;
+      //destination += handle->mInts.stride;
       source += vmeta->stride[idx];
     }
   }

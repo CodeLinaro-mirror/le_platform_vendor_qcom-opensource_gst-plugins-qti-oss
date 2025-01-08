@@ -202,8 +202,8 @@ class GstC2Notifier : public IC2Notifier {
         return;
       }
 
-      size = handle->mInts.size;
-      fd = handle->mFds.buffer_fd;
+      size = 0;//handle->mInts.size;
+      fd = 0;//handle->mFds.buffer_fd;
 
       if (!GstC2Utils::ExtractHandleInfo (buffer, handle)) {
         GST_ERROR ("Failed to extract GBM handle info!");
