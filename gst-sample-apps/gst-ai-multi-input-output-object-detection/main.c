@@ -1262,7 +1262,7 @@ main (gint argc, gchar * argv[])
   options.model_path = DEFAULT_TFLITE_YOLOV5_MODEL;
   options.labels_path = DEFAULT_YOLOV5_LABELS;
 
-  gchar camera_description[256] = {};
+  gchar camera_description[255] = {};
 
   if (camera_is_available) {
     snprintf (camera_description, sizeof (camera_description),
