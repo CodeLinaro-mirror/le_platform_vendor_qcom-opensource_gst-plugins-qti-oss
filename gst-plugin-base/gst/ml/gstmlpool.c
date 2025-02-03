@@ -76,7 +76,6 @@
 #endif // HAVE_LINUX_DMA_HEAP_H
 
 #include "gstmlmeta.h"
-#include <gst/video/video-utils.h>
 
 
 GST_DEBUG_CATEGORY_STATIC (gst_ml_pool_debug);
@@ -119,14 +118,8 @@ open_ion_device (GstMLBufferPool * mlpool)
 {
   GstMLBufferPoolPrivate *priv = mlpool->priv;
 
-  // TODO: Revert back the dma_heap to qcom,system once its enabled on scarthgap
-  if (gst_is_gbm_supported ()) {
-    GST_INFO_OBJECT (mlpool, "Open /dev/dma_heap/qcom,system");
-    priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
-  } else {
-    GST_INFO_OBJECT (mlpool, "Open /dev/dma_heap/system");
-    priv->devfd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
-  }
+  GST_INFO_OBJECT (mlpool, "Open /dev/dma_heap/qcom,system");
+  priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
 
   if (priv->devfd < 0) {
     GST_WARNING_OBJECT (mlpool, "Falling back to /dev/ion");
