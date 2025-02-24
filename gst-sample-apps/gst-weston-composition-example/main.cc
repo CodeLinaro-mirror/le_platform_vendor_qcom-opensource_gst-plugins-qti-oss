@@ -232,7 +232,7 @@ static gboolean
 create_pipe_waylandsink (GstComposeAppContext * appctx)
 {
   // Declare the elements of the pipeline
-  GstElement *qtiqmmfsrc, *capsfilter, *waylandsink_cam,
+  GstElement *qtiqmmfsrc, *capsfilter, *waylandsink_cam, *dis_capsfilter,
       *filesrc, *qtdemux, *h264parse, *v4l2h264dec, *waylandsink_filesrc;
   GstCaps *filtercaps;
 
@@ -246,10 +246,8 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
   // Set the source elements capability
   filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
       "NV12", "width", G_TYPE_INT, 1280, "height", G_TYPE_INT, 720, "framerate",
-      GST_TYPE_FRACTION, 30, 1, "compression", G_TYPE_STRING, "ubwc", NULL);
+      GST_TYPE_FRACTION, 30, 1, NULL);
 
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -283,8 +281,15 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
 
   // create the video decoder element
   v4l2h264dec = gst_element_factory_make ("v4l2h264dec", "v4l2h264dec");
-  g_object_set(G_OBJECT(v4l2h264dec), "capture-io-mode", 5, NULL);
-  g_object_set(G_OBJECT(v4l2h264dec), "output-io-mode", 5, NULL);
+  g_object_set(G_OBJECT(v4l2h264dec), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set(G_OBJECT(v4l2h264dec), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
+
+  // Create display capsfilter
+  dis_capsfilter = gst_element_factory_make ("capsfilter", "dis_capsfilter");
+  filtercaps = gst_caps_new_simple ("video/x-raw", "format",
+     G_TYPE_STRING, "NV12", NULL);
+  g_object_set (G_OBJECT (dis_capsfilter), "caps", filtercaps, NULL);
+  gst_caps_unref (filtercaps);
 
   // create the sink element for file source and set the position and dimensions
   waylandsink_filesrc = gst_element_factory_make ("waylandsink", "waylandsink_filesrc");
@@ -305,7 +310,7 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
   // Add elements to the pipeline and link them
   gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, capsfilter,
       waylandsink_cam, filesrc, qtdemux, h264parse, v4l2h264dec,
-      waylandsink_filesrc, NULL);
+      dis_capsfilter, waylandsink_filesrc, NULL);
 
   g_print ("\n Linking waylandsink composer elements ..\n");
 
@@ -314,7 +319,7 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
     g_printerr ("\n Pipeline elements cannot be linked. Exiting.\n");
     gst_bin_remove_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, capsfilter,
         waylandsink_cam, filesrc, qtdemux, h264parse, v4l2h264dec,
-        waylandsink_filesrc, NULL);
+        dis_capsfilter, waylandsink_filesrc, NULL);
     return FALSE;
   }
 
@@ -327,7 +332,8 @@ create_pipe_waylandsink (GstComposeAppContext * appctx)
         waylandsink_filesrc, NULL);
     return FALSE;
   }
-  ret = gst_element_link_many (h264parse, v4l2h264dec, waylandsink_filesrc, NULL);
+  ret = gst_element_link_many (h264parse, v4l2h264dec, dis_capsfilter,
+      waylandsink_filesrc, NULL);
   if (!ret) {
     g_printerr ("\n Pipeline elements cannot be linked. Exiting.\n");
     gst_bin_remove_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, capsfilter,
@@ -368,7 +374,7 @@ static gboolean
 create_pipe_qtivcomposer (GstComposeAppContext * appctx)
 {
   // Declare the elements of the pipeline
-  GstElement *qtiqmmfsrc, *waylandsink, *capsfilter;
+  GstElement *qtiqmmfsrc, *waylandsink, *capsfilter, *dis_capsfilter;
   GstElement *filesrc, *qtdemux, *h264parse, *v4l2h264dec, *qtivcomposer;
   GstCaps *filtercaps;
   guint ret = FALSE;
@@ -384,8 +390,15 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
   // create the video decoder and parse element
   h264parse = gst_element_factory_make ("h264parse", "h264parse");
   v4l2h264dec = gst_element_factory_make ("v4l2h264dec", "v4l2h264dec");
-  g_object_set(G_OBJECT(v4l2h264dec), "capture-io-mode", 5, NULL);
-  g_object_set(G_OBJECT(v4l2h264dec), "output-io-mode", 5, NULL);
+  g_object_set(G_OBJECT(v4l2h264dec), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set(G_OBJECT(v4l2h264dec), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
+
+  // Create display capsfilter
+  dis_capsfilter = gst_element_factory_make ("capsfilter", "dis_capsfilter");
+  filtercaps = gst_caps_new_simple ("video/x-raw", "format",
+     G_TYPE_STRING, "NV12", NULL);
+  g_object_set (G_OBJECT (dis_capsfilter), "caps", filtercaps, NULL);
+  gst_caps_unref (filtercaps);
 
   // create camera source element and add capsfilter
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
@@ -396,11 +409,15 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
 >>>>>>> 35f72b4763d1db34730f71b2dac50b2b4c024024
   capsfilter = gst_element_factory_make ("capsfilter", "capsfilter");
 
-  filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, 1280, "height", G_TYPE_INT, 720, "framerate",
-      GST_TYPE_FRACTION, 30, 1,"compression", G_TYPE_STRING, "ubwc", NULL);
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12",
+      "width", G_TYPE_INT, 1280,
+      "height", G_TYPE_INT, 720,
+      "framerate", GST_TYPE_FRACTION, 30, 1,
+      "interlace-mode", G_TYPE_STRING, "progressive",
+      "colorimetry", G_TYPE_STRING, "bt601",
+      NULL);
+
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -412,7 +429,8 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
   g_object_set (G_OBJECT (waylandsink), "fullscreen", true, NULL);
 
   gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, capsfilter,
-      qtivcomposer, filesrc, qtdemux, h264parse, v4l2h264dec, waylandsink, NULL);
+      qtivcomposer, filesrc, qtdemux, h264parse, v4l2h264dec,
+      dis_capsfilter, waylandsink, NULL);
 
   g_print ("\n Linking qtivcomposer elements ..\n");
 
@@ -436,11 +454,12 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
         "\n Pipeline elements filesrc and qtdemux cannot be linked. Exiting.\n");
     gst_bin_remove_many (GST_BIN (appctx->pipeline), filesrc, qtdemux, NULL);
   }
-  ret = gst_element_link_many (h264parse, v4l2h264dec, qtivcomposer, NULL);
+  ret = gst_element_link_many (h264parse, v4l2h264dec, dis_capsfilter,
+      qtivcomposer, NULL);
   if (!ret) {
     g_printerr ("\n Pipeline elements cannot be linked. Exiting.\n");
     gst_bin_remove_many (GST_BIN (appctx->pipeline), h264parse, v4l2h264dec,
-        qtivcomposer, NULL);
+        dis_capsfilter, qtivcomposer, NULL);
   }
 
   // link demux video track pad to video parse
@@ -449,6 +468,7 @@ create_pipe_qtivcomposer (GstComposeAppContext * appctx)
   // Append all elements in a list
   appctx->plugins = g_list_append (appctx->plugins, qtiqmmfsrc);
   appctx->plugins = g_list_append (appctx->plugins, capsfilter);
+  appctx->plugins = g_list_append (appctx->plugins, dis_capsfilter);
   appctx->plugins = g_list_append (appctx->plugins, qtivcomposer);
   appctx->plugins = g_list_append (appctx->plugins, filesrc);
   appctx->plugins = g_list_append (appctx->plugins, qtdemux);
