@@ -1099,6 +1099,7 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
 
   handle->mInts.size = size;
   handle->mInts.id = fd;
+  handle->mInts.magic = '\xc2gb\x00';
 
   return true;
 }
