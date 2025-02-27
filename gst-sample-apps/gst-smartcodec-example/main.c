@@ -157,9 +157,17 @@ on_pad_added (GstElement * element[0], GstPad * pad, gpointer data)
 static gboolean
 create_pipe (GstSmartCodecContext * appctx)
 {
-  GstElement *qtiqmmfsrc, *capsfilter_ctrl, *capsfilter_enc, *qtismartvencbin,
-      *filesrc, *qtdemux, *vparse, *vdecoder, *pqueue, *queue, *tee, *h264parse,
-      *mp4mux, *filesink, *queue_ctrl, *queue_sc;
+  GstElement *qtismartvencbin, *h264parse, *mp4mux, *filesink, *queue_ctrl, *queue_sc;
+  GstElement *qtiqmmfsrc = NULL;
+  GstElement *capsfilter_ctrl = NULL;
+  GstElement *capsfilter_enc = NULL;
+  GstElement *filesrc = NULL;
+  GstElement *qtdemux = NULL;
+  GstElement *vparse = NULL;
+  GstElement *vdecoder = NULL;
+  GstElement *pqueue = NULL;
+  GstElement *queue = NULL;
+  GstElement *tee = NULL;
   GstCaps *filtercaps;
   GstPad *qmmf_pad, *sc_src, *ctrl_src, *sc_sink, *ctrl_sink;
   gboolean ret = FALSE;
@@ -182,8 +190,7 @@ create_pipe (GstSmartCodecContext * appctx)
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, 1280, "height", G_TYPE_INT, 720,
         "framerate", GST_TYPE_FRACTION, 15, 1, NULL);
-    gst_caps_set_features (filtercaps, 0, gst_caps_features_new ("memory:GBM",
-            NULL));
+
     g_object_set (G_OBJECT (capsfilter_ctrl), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -191,9 +198,8 @@ create_pipe (GstSmartCodecContext * appctx)
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, appctx->width, "height", G_TYPE_INT,
         appctx->height, "framerate", GST_TYPE_FRACTION, 30, 1, "compression",
-        G_TYPE_STRING, "ubwc", NULL);
-    gst_caps_set_features (filtercaps, 0,
-        gst_caps_features_new ("memory:GBM", NULL));
+        NULL);
+
     g_object_set (G_OBJECT (capsfilter_enc), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -241,8 +247,8 @@ create_pipe (GstSmartCodecContext * appctx)
     vdecoder = gst_element_factory_make ("v4l2h264dec", "vdecoder");
 
     // Set capture I/O mode for decoder
-    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (vdecoder), "output-io-mode", 5, NULL);
+    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+    g_object_set (G_OBJECT (vdecoder), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
 
     if (!filesrc || !tee || !qtdemux || !vparse || !pqueue || !queue ||
         !vdecoder) {

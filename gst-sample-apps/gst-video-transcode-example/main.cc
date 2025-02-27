@@ -176,8 +176,11 @@ static gboolean
 create_pipe (GstTranscodeAppContext * appctx)
 {
   // Declare the elements of the pipeline
-  GstElement *filesrc, *qtdemux, *queue, *encoder, *enc_parse, *dec_parse,
-      *decoder, *mp4mux, *filesink;
+  GstElement *filesrc, *qtdemux, *queue, *mp4mux, *filesink;
+  GstElement *encoder = NULL;
+  GstElement *enc_parse = NULL;
+  GstElement *dec_parse = NULL;
+  GstElement *decoder = NULL;
   GstStructure *fcontrols;
   gboolean ret = FALSE;
 
@@ -212,10 +215,10 @@ create_pipe (GstTranscodeAppContext * appctx)
   }
 
   // Set encoder and decoder element properties
-  g_object_set (G_OBJECT (decoder), "capture-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (decoder), "output-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (encoder), "capture-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (encoder), "output-io-mode", 5, NULL);
+  g_object_set (G_OBJECT (decoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set (G_OBJECT (decoder), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set (G_OBJECT (encoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set (G_OBJECT (encoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
   fcontrols = gst_structure_from_string (
       "fcontrols,video_bitrate_mode=0", NULL);
   g_object_set (G_OBJECT (encoder), "extra-controls", fcontrols, NULL);

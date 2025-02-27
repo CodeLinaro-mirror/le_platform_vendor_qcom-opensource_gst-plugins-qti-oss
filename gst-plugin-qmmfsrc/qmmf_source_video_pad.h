@@ -120,11 +120,6 @@ typedef enum {
   GST_VIDEO_CODEC_JPEG,
 } GstVideoCodec;
 
-typedef enum {
-  GST_VIDEO_COMPRESSION_NONE,
-  GST_VIDEO_COMPRESSION_UBWC,
-} GstVideoCompression;
-
 enum
 {
   VIDEO_TYPE_VIDEO,
@@ -158,8 +153,6 @@ struct _GstQmmfSrcVideoPad {
 
   /// ID of the QMMF Recorder track which belongs to this pad.
   guint               id;
-  /// Session ID of the QMMF Recorder track which belongs to this pad.
-  guint               session_id;
   /// QMMF Recorder track width, set by the pad capabilities.
   gint                width;
   /// QMMF Recorder track height, set by the pad capabilities.
@@ -170,8 +163,10 @@ struct _GstQmmfSrcVideoPad {
   gint                format;
   /// GStreamer video pad output bayer format bits per pixel.
   guint               bpp;
-  /// Video format compression (none or ubwc).
-  GstVideoCompression compression;
+  /// superframerate is used to calculate super_frames (framerate/superframerate).
+  gint                superframerate;
+  /// super buffer mode enable flag for each pad.
+  gboolean            super_buffer_mode;
   /// Whether the GStreamer stream is uncompressed or compressed and its type.
   GstVideoCodec       codec;
 
