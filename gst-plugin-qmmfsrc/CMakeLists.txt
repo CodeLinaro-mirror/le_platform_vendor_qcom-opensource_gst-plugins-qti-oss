@@ -26,10 +26,6 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
 
-# Check whether C2D header is present.
-include(CheckIncludeFile)
-check_include_file("adreno/c2d2.h" HAVE_C2D2_H)
-
 # Common compiler flags.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
@@ -64,11 +60,11 @@ target_compile_definitions(${GST_QMMFSRC_PLUGIN} PRIVATE
   $<$<BOOL:${GST_IMAGE_NV12_FORMAT_ENABLE}>:GST_IMAGE_NV12_FORMAT_ENABLE>
   $<$<BOOL:${GST_VIDEO_TYPE_SUPPORT}>:GST_VIDEO_TYPE_SUPPORT>
   $<$<BOOL:${MULTI_CAMERA_ENABLE}>:MULTI_CAMERA_ENABLE>
-  $<$<BOOL:${HAVE_C2D2_H}>:C2D_ENABLE>
   $<$<BOOL:${EIS_MODES_ENABLE}>:EIS_MODES_ENABLE>
   $<$<BOOL:${VHDR_MODES_ENABLE}>:VHDR_MODES_ENABLE>
   $<$<BOOL:${FEATURE_LOGICAL_CAMERA_SUPPORT}>:FEATURE_LOGICAL_CAMERA_SUPPORT>
   $<$<BOOL:${FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH}>:FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH>
+  $<$<BOOL:${FEATURE_OFFLINE_IFE_SUPPORT}>:FEATURE_OFFLINE_IFE_SUPPORT>
 )
 
 target_include_directories(${GST_QMMFSRC_PLUGIN} PRIVATE
@@ -87,6 +83,7 @@ target_link_libraries(${GST_QMMFSRC_PLUGIN} PRIVATE
   ${GST_VIDEO_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   gstqtiutilsbase
+  gstqtivideobase
 )
 
 install(
