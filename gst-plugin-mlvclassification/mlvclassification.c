@@ -77,7 +77,7 @@
 #include <gst/ml/gstmlmeta.h>
 #include <gst/ml/ml-module-utils.h>
 #include <gst/video/gstqtibufferpool.h>
-#include <gst/video/gstqtiallocator.h>
+#include <gst/allocators/gstqtiallocator.h>
 #include <gst/video/video-utils.h>
 #include <gst/video/gstimagepool.h>
 #include <gst/memory/gstmempool.h>
@@ -305,7 +305,7 @@ gst_ml_video_classification_create_pool (
           GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
       gst_buffer_pool_config_set_video_alignment (structure, &align);
 
-      allocator = gst_qti_allocator_new (NULL);
+      allocator = gst_qti_allocator_new ();
       if (allocator == NULL) {
         GST_ERROR_OBJECT (classification, "Failed to create QTI allocator");
         gst_clear_object (&pool);
@@ -538,10 +538,10 @@ gst_ml_video_classification_fill_text_output (
 
     gst_structure_get_uint (prediction->info, "sequence-index", &sequence_idx);
 
+    id = GST_META_ID (classification->stage_id, sequence_idx, 0);
+
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLClassEntry, num));
-
-      id = GST_META_ID (classification->stage_id, sequence_idx, num);
 
       GST_TRACE_OBJECT (classification, "Batch: %u, ID: %X, Label: %s, "
           "Confidence: %.1f%%", prediction->batch_idx, id,
