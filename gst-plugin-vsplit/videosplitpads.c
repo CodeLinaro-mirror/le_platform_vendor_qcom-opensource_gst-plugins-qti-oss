@@ -202,6 +202,11 @@ gst_video_split_create_pool (GstPad * pad, GstCaps * caps)
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
+  if (gst_caps_has_compression (caps, "ubwc")) {
+    gst_buffer_pool_config_add_option (config,
+        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
+  }
+
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (pad, "Failed to set pool configuration!");
     g_object_unref (pool);
@@ -849,6 +854,7 @@ gst_video_split_sinkpad_init (GstVideoSplitSinkPad * pad)
   pad->is_idle = TRUE;
 
   pad->info = NULL;
+  pad->isubwc = FALSE;
 
   pad->requests =
       gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
@@ -1052,6 +1058,7 @@ gst_video_split_srcpad_setcaps (GstVideoSplitSrcPad * srcpad, GstCaps * incaps)
     gst_video_info_free (srcpad->info);
 
   srcpad->info = gst_video_info_copy (&info);
+  srcpad->isubwc = gst_caps_has_compression (outcaps, "ubwc");
 
   // Enable passthrough if mode is 'none' and the sink and source caps intersect.
   srcpad->passthrough = (srcpad->mode == GST_VSPLIT_MODE_NONE) &&
@@ -1160,6 +1167,7 @@ gst_video_split_srcpad_init (GstVideoSplitSrcPad * pad)
   pad->is_idle = TRUE;
 
   pad->info = NULL;
+  pad->isubwc = FALSE;
   pad->passthrough = FALSE;
 
   pad->pool = NULL;

@@ -318,10 +318,9 @@ gst_c2d_blits_compatible (const GstVideoComposition * l_composition,
     l_blit = &(l_composition->blits[idx]);
     r_blit = &(r_composition->blits[idx]);
 
-    // Both entries need to have the same flip, rotate and global alpha.
-    if ((l_blit->rotate != r_blit->rotate) ||
-        (l_blit->alpha != r_blit->alpha) ||
-        (l_blit->flip != r_blit->flip))
+    // Both entries need to have the same ubwc, flip, rotate and global alpha.
+    if ((l_blit->rotate != r_blit->rotate) || (l_blit->alpha != r_blit->alpha) ||
+        (l_blit->flip != r_blit->flip) || (l_blit->isubwc != r_blit->isubwc))
       return FALSE;
 
     l_fd = gst_fd_memory_get_fd (
@@ -431,6 +430,8 @@ gst_c2d_optimize_composition (GstVideoBlit * blit,
     // Increase the score if both target blit surfaces have the same format.
     l_score += (GST_VIDEO_FRAME_FORMAT (l_composition->frame) ==
         GST_VIDEO_FRAME_FORMAT (composition->frame)) ? 1 : 0;
+    // Increase the score if both target blit surfaces have the same UBWC flag.
+    l_score += (l_composition->isubwc == composition->isubwc) ? 1 : 0;
 
     if (l_score <= score)
       continue;
@@ -439,6 +440,7 @@ gst_c2d_optimize_composition (GstVideoBlit * blit,
     score = l_score;
 
     blit->frame = l_composition->frame;
+    blit->isubwc = l_composition->isubwc;
 
     optimized = TRUE;
   }
@@ -486,7 +488,7 @@ gst_c2d_unmap_gpu_address (gpointer key, gpointer data, gpointer userdata)
 
 static guint
 gst_c2d_create_surface (GstC2dVideoConverter * convert,
-    const GstVideoFrame * frame, guint bits)
+    const GstVideoFrame * frame, guint bits, gboolean isubwc)
 {
   const gchar *format = NULL, *compression = NULL;
   guint surface_id = 0;
@@ -506,10 +508,13 @@ gst_c2d_create_surface (GstC2dVideoConverter * convert,
         gst_video_format_to_c2d_format (GST_VIDEO_FRAME_FORMAT (frame));
     g_return_val_if_fail (surface.format != 0, 0);
 
-    if (surface.format & C2D_FORMAT_UBWC_COMPRESSED)
+    // In case the format has UBWC enabled append additional format flags.
+    if (isubwc) {
+      surface.format |= C2D_FORMAT_UBWC_COMPRESSED;
       compression = " UBWC";
-    else
+    } else {
       compression = "";
+    }
 
     // Set surface dimensions.
     surface.width = GST_VIDEO_FRAME_WIDTH (frame);
@@ -543,10 +548,13 @@ gst_c2d_create_surface (GstC2dVideoConverter * convert,
         gst_video_format_to_c2d_format (GST_VIDEO_FRAME_FORMAT (frame));
     g_return_val_if_fail (surface.format != 0, 0);
 
-    if (surface.format & C2D_FORMAT_UBWC_COMPRESSED)
+    // In case the format has UBWC enabled append additional format flags.
+    if (isubwc) {
+      surface.format |= C2D_FORMAT_UBWC_COMPRESSED;
       compression = " UBWC";
-    else
+    } else {
       compression = "";
+    }
 
     // Set surface dimensions.
     surface.width = GST_VIDEO_FRAME_WIDTH (frame);
@@ -623,7 +631,7 @@ gst_c2d_create_surface (GstC2dVideoConverter * convert,
 
 static gboolean
 gst_c2d_update_surface (GstC2dVideoConverter * convert,
-    const GstVideoFrame * frame, guint surface_id, guint bits)
+    const GstVideoFrame * frame, guint surface_id, guint bits, gboolean isubwc)
 {
   const gchar *format = NULL, *compression = NULL;
   C2D_STATUS status = C2D_STATUS_NOT_SUPPORTED;
@@ -653,10 +661,13 @@ gst_c2d_update_surface (GstC2dVideoConverter * convert,
         gst_video_format_to_c2d_format (GST_VIDEO_FRAME_FORMAT (frame));
     g_return_val_if_fail (surface.format != 0, FALSE);
 
-    if (surface.format & C2D_FORMAT_UBWC_COMPRESSED)
+    // In case the format has UBWC enabled append additional format flags.
+    if (isubwc) {
+      surface.format |= C2D_FORMAT_UBWC_COMPRESSED;
       compression = " UBWC";
-    else
+    } else {
       compression = "";
+    }
 
     // Set surface dimensions.
     surface.width = GST_VIDEO_FRAME_WIDTH (frame);
@@ -690,10 +701,13 @@ gst_c2d_update_surface (GstC2dVideoConverter * convert,
         gst_video_format_to_c2d_format (GST_VIDEO_FRAME_FORMAT (frame));
     g_return_val_if_fail (surface.format != 0, FALSE);
 
-    if (surface.format & C2D_FORMAT_UBWC_COMPRESSED)
+    // In case the format has UBWC enabled append additional format flags.
+    if (isubwc) {
+      surface.format |= C2D_FORMAT_UBWC_COMPRESSED;
       compression = " UBWC";
-    else
+    } else {
       compression = "";
+    }
 
     // Set surface dimensions.
     surface.width = GST_VIDEO_FRAME_WIDTH (frame);
@@ -975,7 +989,8 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
 
 static guint
 gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
-    GHashTable * surfaces, guint bits, const GstVideoFrame * vframe)
+    GHashTable * surfaces, guint bits, const GstVideoFrame * vframe,
+    const gboolean isubwc)
 {
   GstMemory *memory = NULL;
   guint fd = 0, surface_id = 0;
@@ -993,7 +1008,7 @@ gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
 
   if (!g_hash_table_contains (surfaces, GUINT_TO_POINTER (fd))) {
     // Create an output surface and add its ID to the output hash table.
-    surface_id = gst_c2d_create_surface (convert, vframe, bits);
+    surface_id = gst_c2d_create_surface (convert, vframe, bits, isubwc);
 
     if (surface_id == 0) {
       GST_ERROR ("Failed to create surface!");
@@ -1012,7 +1027,7 @@ gst_c2d_retrieve_surface_id (GstC2dVideoConverter * convert,
         GUINT_TO_POINTER (surface_id));
 
     if (vaddress != GST_VIDEO_FRAME_PLANE_DATA (vframe, 0) &&
-        !gst_c2d_update_surface (convert, vframe, surface_id, bits)) {
+        !gst_c2d_update_surface (convert, vframe, surface_id, bits, isubwc)) {
       GST_ERROR ("Update failed for surface %x", surface_id);
       return 0;
     }
@@ -1070,7 +1085,7 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
       GST_C2D_LOCK (convert);
 
       surface_id = gst_c2d_retrieve_surface_id (convert, convert->insurfaces,
-          C2D_SOURCE, blit->frame);
+          C2D_SOURCE, blit->frame, blit->isubwc);
 
       GST_C2D_UNLOCK (convert);
 
@@ -1110,7 +1125,7 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
     GST_C2D_LOCK (convert);
 
     surface_id = gst_c2d_retrieve_surface_id (convert, convert->outsurfaces,
-        C2D_SOURCE | C2D_TARGET, outframe);
+        C2D_SOURCE | C2D_TARGET, outframe, composition->isubwc);
 
     GST_C2D_UNLOCK (convert);
 

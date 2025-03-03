@@ -76,6 +76,8 @@ struct _GstVideoComposerSinkPad {
   guint                   index;
   /// Negotiated caps on the pad input parsed to video info.
   GstVideoInfo            *info;
+  /// Whether input buffers have Universal Bandwidth Compression.
+  gboolean                isubwc;
 
   /// Properties.
   GstVideoRectangle       crop;
