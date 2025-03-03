@@ -960,6 +960,7 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition = &(g_array_index (compositions, GstVideoComposition, id));
 
       composition->frame = outframe;
+      composition->isubwc = srcpad->isubwc;
       composition->flags = 0;
 
       composition->bgcolor = 0x00000000;
@@ -974,6 +975,8 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->n_blits = 1;
 
       composition->blits[0].frame = inframe;
+      composition->blits[0].isubwc =
+          GST_VIDEO_SPLIT_SINKPAD (vsplit->sinkpad)->isubwc;
 
       composition->blits[0].alpha = G_MAXUINT8;
       composition->blits[0].rotate = GST_VCE_ROTATE_0;
@@ -1151,6 +1154,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
     gst_video_info_free (GST_VIDEO_SPLIT_SINKPAD (pad)->info);
 
   GST_VIDEO_SPLIT_SINKPAD (pad)->info = gst_video_info_copy (&info);
+  GST_VIDEO_SPLIT_SINKPAD (pad)->isubwc = gst_caps_has_compression (caps, "ubwc");
 
   GST_VIDEO_SPLIT_LOCK (vsplit);
 

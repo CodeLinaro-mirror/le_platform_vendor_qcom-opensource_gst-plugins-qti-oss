@@ -536,6 +536,11 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps,
     }
   }
 
+  if (gst_caps_has_compression (caps, "ubwc")) {
+    gst_buffer_pool_config_add_option (config,
+        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
+  }
+
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
@@ -692,6 +697,7 @@ gst_video_composer_populate_frames_and_composition (
     GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
     blit->alpha = sinkpad->alpha * G_MAXUINT8;
+    blit->isubwc = sinkpad->isubwc;
 
     blit->flip = gst_video_composer_translate_flip (sinkpad->flip_h, sinkpad->flip_v);
     blit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
@@ -730,6 +736,7 @@ gst_video_composer_populate_frames_and_composition (
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
 
   composition->bgcolor = vcomposer->background;
+  composition->isubwc = vcomposer->isubwc;
 
   GST_VIDEO_COMPOSER_UNLOCK (vcomposer);
 
@@ -1284,6 +1291,7 @@ gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
     gst_video_info_free (vcomposer->outinfo);
 
   vcomposer->outinfo = gst_video_info_copy (&info);
+  vcomposer->isubwc = gst_caps_has_compression (caps, "ubwc");
 
   if (vcomposer->converter != NULL)
     gst_video_converter_engine_free (vcomposer->converter);
@@ -1727,6 +1735,7 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
 
   vcomposer->outinfo = NULL;
   vcomposer->outpool = NULL;
+  vcomposer->isubwc = FALSE;
 
   vcomposer->duration = GST_CLOCK_TIME_NONE;
 

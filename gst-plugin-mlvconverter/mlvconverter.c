@@ -1704,6 +1704,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
     GstVideoBlit *blit = &(mlconverter->composition.blits[idx]);
 
     blit->frame = g_slice_new0 (GstVideoFrame);
+    blit->isubwc = gst_caps_has_compression (incaps, "ubwc") ? TRUE : FALSE;
 
     blit->alpha = G_MAXUINT8;
 
@@ -1712,6 +1713,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   }
 
   mlconverter->composition.frame = g_slice_new0 (GstVideoFrame);
+  mlconverter->composition.isubwc = FALSE;
   mlconverter->composition.flags = 0;
 
   mlconverter->composition.bgcolor = 0x00000000;

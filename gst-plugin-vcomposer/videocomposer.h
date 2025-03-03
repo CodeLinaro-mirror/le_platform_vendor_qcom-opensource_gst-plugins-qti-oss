@@ -106,6 +106,8 @@ struct _GstVideoComposer {
   GstVideoInfo         *outinfo;
   /// Output buffer pool.
   GstBufferPool        *outpool;
+  // Whether output caps have UBWC compression.
+  gboolean             isubwc;
 
   /// Output buffer duration.
   GstClockTime         duration;
