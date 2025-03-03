@@ -276,21 +276,22 @@ gst_caps_get_num_super_frames (const GstCaps * caps)
 
   multiview_mode = gst_structure_get_string (structure, "multiview-mode");
   if (multiview_mode == NULL)
-    return 0;
+    goto exit;
 
   switch (gst_video_multiview_mode_from_caps_string (multiview_mode)) {
     case GST_VIDEO_MULTIVIEW_MODE_MONO:
       if (!gst_structure_get_int (structure, "views", &n_super_frames)) {
         GST_ERROR ("Failed to get views in multiview(mode: mono).");
-        return 0;
+        goto exit;
       }
-      GST_DEBUG ("Number of super frames: %d.", n_super_frames);
       break;
     default:
       GST_WARNING ("Unsupported multiview mode(%s).", multiview_mode);
       break;
   }
 
+exit:
+  GST_DEBUG ("Number of super frames: %d.", n_super_frames);
   return (guint)n_super_frames;
 }
 
@@ -1285,10 +1286,18 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
     gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
 
-    if ((fps_n == 0) && (fps_d == 1))
+    if ((fps_n == 0) && (fps_d == 1)) {
       outstate->info.flags |= GST_VIDEO_FLAG_VARIABLE_FPS;
-    else if ((fps_n != 0) && (fps_d != 0))
+    } else if ((fps_n != 0) && (fps_d != 0)) {
       outstate->info.flags &= ~(GST_VIDEO_FLAG_VARIABLE_FPS);
+
+      // Check if fps_n and fps_d need to be updated.
+      if ((fps_n != info->fps_n) || (fps_d != info->fps_d)) {
+        outstate->info.fps_n = fps_n;
+        outstate->info.fps_d = fps_d;
+        GST_DEBUG_OBJECT (c2venc, "Set output frame rate %d/%d", fps_n, fps_d);
+      }
+    }
   }
 
   // Check if output width need to be updated.
@@ -1328,14 +1337,21 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
   GST_DEBUG_OBJECT (c2venc, "Output state caps: %" GST_PTR_FORMAT, outstate->caps);
 
-  // Variable input fps and fixed output fps, get the duration for timestamp adjustment.
-  if ((state->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS) &&
-      !(outstate->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS)) {
-    c2venc->duration = gst_util_uint64_scale_int (GST_SECOND,
-        GST_VIDEO_INFO_FPS_D (info), GST_VIDEO_INFO_FPS_N (info));
-  }
-
   c2venc->n_super_frames = gst_caps_get_num_super_frames (state->caps);
+
+  // Variable input fps and fixed output fps, get the duration for timestamp adjustment.
+  if (((state->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS) &&
+      !(outstate->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS)) ||
+      ((outstate->info.fps_n != state->info.fps_n) ||
+      (outstate->info.fps_d != state->info.fps_d))) {
+    c2venc->duration = (c2venc->n_super_frames ? c2venc->n_super_frames : 1) *
+        gst_util_uint64_scale_int (GST_SECOND,
+        GST_VIDEO_INFO_FPS_D (&outstate->info),
+        GST_VIDEO_INFO_FPS_N (&outstate->info));
+
+    GST_DEBUG_OBJECT (c2venc, "Different framerate. Set duration to %"
+        GST_TIME_FORMAT, GST_TIME_ARGS (c2venc->duration));
+  }
 
   if (!gst_c2_venc_setup_parameters (c2venc, state, outstate)) {
     GST_ERROR_OBJECT (c2venc, "Failed to setup parameters!");
@@ -1378,7 +1394,6 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   }
 
   if (c2venc->duration != GST_CLOCK_TIME_NONE) {
-
     GST_LOG_OBJECT (c2venc, "Adjust timestamp! Expected %" GST_TIME_FORMAT
         " but received frame %u with %" GST_TIME_FORMAT " !",
         GST_TIME_ARGS (c2venc->prevts + c2venc->duration),
