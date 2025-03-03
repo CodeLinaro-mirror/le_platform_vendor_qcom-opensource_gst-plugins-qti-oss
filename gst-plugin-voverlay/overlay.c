@@ -556,6 +556,11 @@ gst_overlay_create_pool (GstVOverlay * overlay, GstCaps * caps)
     }
   }
 
+  if (gst_caps_has_compression (caps, "ubwc")) {
+    gst_buffer_pool_config_add_option (config,
+        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
+  }
+
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);

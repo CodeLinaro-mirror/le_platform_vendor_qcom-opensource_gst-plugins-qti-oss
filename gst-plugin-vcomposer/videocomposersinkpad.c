@@ -351,6 +351,8 @@ gst_video_composer_sinkpad_setcaps (GstAggregatorPad * pad,
     gst_video_info_free (GST_VIDEO_COMPOSER_SINKPAD (pad)->info);
 
   GST_VIDEO_COMPOSER_SINKPAD (pad)->info = gst_video_info_copy (&info);
+  GST_VIDEO_COMPOSER_SINKPAD (pad)->isubwc =
+      gst_caps_has_compression (caps, "ubwc");
 
   return TRUE;
 }
@@ -641,6 +643,7 @@ gst_video_composer_sinkpad_init (GstVideoComposerSinkPad * sinkpad)
 
   sinkpad->index  = 0;
   sinkpad->info   = NULL;
+  sinkpad->isubwc = FALSE;
 
   sinkpad->zorder        = DEFAULT_PROP_Z_ORDER;
   sinkpad->crop.x        = DEFAULT_PROP_CROP_X;
