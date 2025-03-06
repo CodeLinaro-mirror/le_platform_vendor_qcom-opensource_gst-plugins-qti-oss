@@ -37,17 +37,17 @@
 #include <gst/gst.h>
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_FILENAME      "/opt/video.mp4"
+#define DEFAULT_OUTPUT_FILENAME      "/etc/media/video.mp4"
 #define DEFAULT_WIDTH                1280
 #define DEFAULT_HEIGHT               720
 #define NOISE_REDUCTION_HIGH_QUALITY 2
 #define STREAM_TYPE_PREVIEW          1   // camera preview stream
-#define DEFAULT_MODEL                "/opt/object_detection.tflite"
+#define DEFAULT_MODEL                "/etc/models/object_detection.tflite"
 #define DEFAULT_THRESHOLD            50.0
 #define DEFAULT_RESULTS              5
-#define DEFAULT_LABELS               "/opt/coco_labels.txt"
+#define DEFAULT_LABELS               "/etc/labels/coco_labels.txt"
 #define DEFAULT_CONSTANTS_YOLOV8 \
-  "YOLOv8,q-offsets=<-107.0, -128.0, 0.0>,q-scales=<3.093529462814331, 0.00390625, 1.0>;"
+  "YOLOv8,q-offsets=<21.0, 0.0, 0.0>,q-scales=<3.0546178817749023, 0.003793874057009816, 1.0>;"
 #define QUEUE_COUNT 6
 
 #define GST_APP_SUMMARY                                                   \
@@ -56,10 +56,12 @@
   " using Qualcomm SmartCodec plugins"                                    \
   "\nCommand For camera source :\n"                                       \
   "gst-ai-smartcodec-example -w 1920 -h 1080 -o video.mp4 "               \
-  "-m /opt/YOLOv8-Detection-Quantized.tflite  -l /opt/coco_labels.txt \n" \
+  "-m /etc/models/YOLOv8-Detection-Quantized.tflite "                     \
+  "-l /etc/labels/coco_labels.txt \n"                                     \
   "\nCommand For file source :\n"                                         \
   " gst-ai-smartcodec-example -i <video>.mp4 -o video.mp4 "               \
-  "-m /opt/YOLOv8-Detection-Quantized.tflite  -l /opt/coco_labels.txt \n" \
+  "-m /etc/models/YOLOv8-Detection-Quantized.tflite"                      \
+  "-l /etc/labels/coco_labels.txt \n"                                     \
   "\nOutput :\n"                                                          \
   " Upon execution,application will generates output as encoded mp4 file"
 
@@ -301,18 +303,15 @@ create_pipe (GstSmartCodecContext * appctx)
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, 1280, "height", G_TYPE_INT, 720, "framerate",
         GST_TYPE_FRACTION, 15, 1, NULL);
-    gst_caps_set_features (filtercaps, 0,
-        gst_caps_features_new ("memory:GBM", NULL));
+
     g_object_set (G_OBJECT (capsfilter_ctrl), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
     // Configure the encode stream caps
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, appctx->width, "height", G_TYPE_INT,
-        appctx->height, "framerate", GST_TYPE_FRACTION, 30, 1, "compression",
-        G_TYPE_STRING, "ubwc", NULL);
-    gst_caps_set_features (filtercaps, 0,
-        gst_caps_features_new ("memory:GBM", NULL));
+        appctx->height, "framerate", GST_TYPE_FRACTION, 30, 1, NULL);
+
     g_object_set (G_OBJECT (capsfilter_enc), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -436,8 +435,8 @@ create_pipe (GstSmartCodecContext * appctx)
     qtivtransform = gst_element_factory_make ("qtivtransform", "qtivtransform");
 
     // Set capture I/O mode for decoder
-    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (vdecoder), "output-io-mode", 5, NULL);
+    gst_element_set_enum_property (vdecoder, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (vdecoder, "output-io-mode", "dmabuf");
 
     if (!filesrc || !qtdemux || !vparse || !pqueue || !vdecoder) {
       g_printerr ("\n One element could not be created. Exiting experiment.\n");
@@ -557,10 +556,10 @@ main (gint argc, gchar * argv[])
       "image height"},
   {"output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
       "Output Filename" ,
-      "-o /opt/video.mp4"},
+      "-o /etc/media/video.mp4"},
   {"input_file", 'i', 0, G_OPTION_ARG_FILENAME, &appctx->input_file,
       "Input Filename - i/p mp4 file path and name",
-        "e.g. -i /opt/<file_name>.mp4"},
+        "e.g. -i /etc/media/<file_name>.mp4"},
   { "model", 'm', 0, G_OPTION_ARG_STRING,
     &appctx->model_path,
     "This is an optional parameter and overrides default path\n",

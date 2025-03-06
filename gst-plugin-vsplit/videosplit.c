@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -41,6 +41,7 @@
 #include <stdio.h>
 
 #include <gst/utils/common-utils.h>
+#include <gst/video/video-utils.h>
 #include <gst/video/gstvideoclassificationmeta.h>
 #include <gst/video/gstvideolandmarksmeta.h>
 
@@ -74,7 +75,7 @@ G_DEFINE_TYPE_WITH_CODE (GstVideoSplit, gst_video_split, GST_TYPE_ELEMENT,
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_VIDEO_FORMATS \
-  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
+  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
 
 static GType gst_vsplit_request_get_type(void);
 #define GST_TYPE_VSPLIT_REQUEST  (gst_vsplit_request_get_type())
@@ -85,22 +86,6 @@ enum
   PROP_0,
   PROP_ENGINE_BACKEND,
 };
-
-static GstStaticPadTemplate gst_video_split_sink_template =
-    GST_STATIC_PAD_TEMPLATE("sink",
-        GST_PAD_SINK,
-        GST_PAD_ALWAYS,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
-    );
-
-static GstStaticPadTemplate gst_video_split_src_template =
-    GST_STATIC_PAD_TEMPLATE("src_%u",
-        GST_PAD_SRC,
-        GST_PAD_REQUEST,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
-    );
 
 typedef struct _GstVideoCoords GstVideoCoords;
 typedef struct _GstVSplitRequest GstVSplitRequest;
@@ -126,6 +111,66 @@ struct _GstVSplitRequest {
 };
 
 GST_DEFINE_MINI_OBJECT_TYPE (GstVSplitRequest, gst_vsplit_request);
+
+static GstCaps *
+gst_video_split_sink_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
+
+    if (gst_is_gbm_supported ()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+              GST_VIDEO_FORMATS));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstCaps *
+gst_video_split_src_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
+
+    if (gst_is_gbm_supported ()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+              GST_VIDEO_FORMATS));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstPadTemplate *
+gst_video_split_sink_template (void)
+{
+  return gst_pad_template_new_with_gtype ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
+      gst_video_split_sink_caps (), GST_TYPE_VIDEO_SPLIT_SINKPAD);
+}
+
+static GstPadTemplate *
+gst_video_split_src_template (void)
+{
+  return gst_pad_template_new_with_gtype ("src_%u", GST_PAD_SRC, GST_PAD_REQUEST,
+      gst_video_split_src_caps (), GST_TYPE_VIDEO_SPLIT_SRCPAD);
+}
 
 static void
 gst_vsplit_request_free (GstVSplitRequest * request)
@@ -313,9 +358,11 @@ gst_buffer_transfer_video_region_of_interest_metas (GstBuffer * outbuffer,
           kp->y = kp->y * h_scale;
         }
 
-        structure = gst_structure_new ("VideoLandmarks",
-            "keypoints", G_TYPE_ARRAY, keypoints, "links", G_TYPE_ARRAY, links,
-            "confidence", G_TYPE_DOUBLE, confidence, NULL);
+        structure = gst_structure_copy (structure);
+        gst_structure_set (structure, "keypoints", G_TYPE_ARRAY, keypoints,
+            "links", G_TYPE_ARRAY, links, "confidence", G_TYPE_DOUBLE,
+            confidence, NULL);
+
         gst_video_region_of_interest_meta_add_param (roimeta, structure);
       } else if (id == g_quark_from_static_string ("ImageClassification")) {
         structure = gst_structure_copy (structure);
@@ -360,6 +407,9 @@ gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
       keypoints, links);
   newmeta->id = lmkmeta->id;
 
+  if (lmkmeta->xtraparams != NULL)
+    newmeta->xtraparams = gst_structure_copy (lmkmeta->xtraparams);
+
   return newmeta;
 }
 
@@ -368,9 +418,24 @@ gst_buffer_transfer_video_classification_meta (GstBuffer * buffer,
     GstVideoClassificationMeta * classmeta)
 {
   GstVideoClassificationMeta *newmeta = NULL;
+  GArray *labels = g_array_copy (classmeta->labels);
+  guint idx = 0;
 
-  newmeta = gst_buffer_add_video_classification_meta (buffer,
-      g_array_copy (classmeta->labels));
+  // The GArray copy above naturally doesn't copy the data in pointers.
+  // Iterate over the labels and deep copy any extra params.
+  for (idx = 0; idx < labels->len; idx++) {
+    GstClassLabel *label = &(g_array_index (labels, GstClassLabel, idx));
+
+    if (label->xtraparams == NULL)
+      continue;
+
+    label->xtraparams = gst_structure_copy (label->xtraparams);
+  }
+
+  g_array_set_clear_func (labels,
+      (GDestroyNotify) gst_video_classification_label_cleanup);
+
+  newmeta = gst_buffer_add_video_classification_meta (buffer, labels);
   newmeta->id = classmeta->id;
 
   return newmeta;
@@ -440,6 +505,12 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
 
       lmkmeta = gst_buffer_add_video_landmarks_meta (outbuffer, confidence,
           keypoints, links);
+      gst_structure_get_uint (structure, "id", &(lmkmeta->id));
+
+      if ((value = gst_structure_get_value (structure, "xtraparams")) != NULL) {
+        GstStructure *xtraparams = GST_STRUCTURE (g_value_get_boxed (value));
+        lmkmeta->xtraparams = gst_structure_copy (xtraparams);
+      }
 
       GST_TRACE_OBJECT (srcpad, "Attached derived 'VideoLandmarks' meta "
           "with ID[0x%X] to buffer %p", lmkmeta->id, outbuffer);
@@ -447,11 +518,28 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
       GstVideoClassificationMeta *classmeta = NULL;
       GArray *labels = NULL;
       const GValue *value = NULL;
+      guint idx = 0;
 
       value = gst_structure_get_value (structure, "labels");
       labels = g_array_copy (g_value_get_boxed (value));
 
+      // The GArray copy above naturally doesn't copy the data in pointers.
+      // Iterate over the labels and deep copy any extra params.
+      for (idx = 0; idx < labels->len; idx++) {
+        GstClassLabel *label = &(g_array_index (labels, GstClassLabel, idx));
+
+        if (label->xtraparams == NULL)
+          continue;
+
+        label->xtraparams = gst_structure_copy (label->xtraparams);
+      }
+
+      g_array_set_clear_func (labels,
+          (GDestroyNotify) gst_video_classification_label_cleanup);
+
       classmeta = gst_buffer_add_video_classification_meta (outbuffer, labels);
+      gst_structure_get_uint (structure, "id", &(classmeta->id));
+
       GST_TRACE_OBJECT (srcpad, "Attached derived 'ImageClassification' meta "
           "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
     }
@@ -467,8 +555,8 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
       GstVideoClassificationMeta *classmeta =
           GST_VIDEO_CLASSIFICATION_META_CAST (meta);
 
-      classmeta = gst_buffer_transfer_video_classification_meta (outbuffer,
-          classmeta);
+      classmeta =
+          gst_buffer_transfer_video_classification_meta (outbuffer, classmeta);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'ImageClassification' meta "
           "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
@@ -528,8 +616,19 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
 
   // Propagate the original IDs of the ROI meta via the image region.
   if (roimeta != NULL) {
+    GstStructure *structure = NULL;
+
     rmeta->id = roimeta->id;
     rmeta->parent_id = roimeta->parent_id;
+
+    // Transfer the additional ObjectDetection parameters if present.
+    structure = gst_video_region_of_interest_meta_get_param (roimeta,
+        "ObjectDetection");
+
+    if (structure != NULL) {
+      structure = gst_structure_copy (structure);
+      gst_video_region_of_interest_meta_add_param (rmeta, structure);
+    }
   }
 
   GST_TRACE_OBJECT (srcpad, "Attached 'ImageRegion' meta with ID[0x%X] parent "
@@ -861,7 +960,6 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition = &(g_array_index (compositions, GstVideoComposition, id));
 
       composition->frame = outframe;
-      composition->isubwc = srcpad->isubwc;
       composition->flags = 0;
 
       composition->bgcolor = 0x00000000;
@@ -876,8 +974,6 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->n_blits = 1;
 
       composition->blits[0].frame = inframe;
-      composition->blits[0].isubwc =
-          GST_VIDEO_SPLIT_SINKPAD (vsplit->sinkpad)->isubwc;
 
       composition->blits[0].alpha = G_MAXUINT8;
       composition->blits[0].rotate = GST_VCE_ROTATE_0;
@@ -1055,7 +1151,6 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
     gst_video_info_free (GST_VIDEO_SPLIT_SINKPAD (pad)->info);
 
   GST_VIDEO_SPLIT_SINKPAD (pad)->info = gst_video_info_copy (&info);
-  GST_VIDEO_SPLIT_SINKPAD (pad)->isubwc = gst_caps_has_compression (caps, "ubwc");
 
   GST_VIDEO_SPLIT_LOCK (vsplit);
 
@@ -1557,10 +1652,10 @@ gst_video_split_class_init (GstVideoSplitClass * klass)
       "Split single video stream into multiple streams", "QTI"
   );
 
-  gst_element_class_add_static_pad_template_with_gtype (element,
-      &gst_video_split_sink_template, GST_TYPE_VIDEO_SPLIT_SINKPAD);
-  gst_element_class_add_static_pad_template_with_gtype (element,
-      &gst_video_split_src_template, GST_TYPE_VIDEO_SPLIT_SRCPAD);
+  gst_element_class_add_pad_template (element,
+      gst_video_split_sink_template ());
+  gst_element_class_add_pad_template (element,
+      gst_video_split_src_template ());
 
   element->request_new_pad = GST_DEBUG_FUNCPTR (gst_video_split_request_pad);
   element->release_pad = GST_DEBUG_FUNCPTR (gst_video_split_release_pad);
@@ -1582,7 +1677,7 @@ gst_video_split_init (GstVideoSplit * vsplit)
 
   vsplit->backend = DEFAULT_PROP_ENGINE_BACKEND;
 
-  template = gst_static_pad_template_get (&gst_video_split_sink_template);
+  template = gst_video_split_sink_template ();
   vsplit->sinkpad = g_object_new (GST_TYPE_VIDEO_SPLIT_SINKPAD, "name", "sink",
       "direction", template->direction, "template", template, NULL);
   gst_object_unref (template);

@@ -1,30 +1,30 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
- */
+* Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
 
 /*
- * Gstreamer Application:
- * Gstreamer Application for single camera multistream usecases
- *
- * Description:
- * This Application Demonstrates in viewing camera Live on the
- * waylandsink and Dump Video Encoder output
- *
- * Usage:
- * gst-multi-stream-example --num_of_streams=2 --width=1280 --height=720
- *
- * Help:
- * gst-multi-stream-example --help
- *
- * *******************************************************************
- * Pipeline for two stream:
- *                         |->waylandsink
- * qtiqmmfsrc->capsfilter->|
- *                         |->v4l2h264enc->h264parse->mp4mux->filesink
- *
- * *******************************************************************
- */
+* Gstreamer Application:
+* Gstreamer Application for single camera multistream usecases
+*
+* Description:
+* This Application Demonstrates in viewing camera Live on the
+* waylandsink and Dump Video Encoder output
+*
+* Usage:
+* gst-multi-stream-example --num_of_streams=2 --width=1280 --height=720
+*
+* Help:
+* gst-multi-stream-example --help
+*
+* *******************************************************************
+* Pipeline for two stream:
+*                         |->waylandsink
+* qtiqmmfsrc->capsfilter->|
+*                         |->v4l2h264enc->h264parse->mp4mux->filesink
+*
+* *******************************************************************
+*/
 
 #include <glib-unix.h>
 
@@ -149,7 +149,7 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
       *h264parse, *mp4mux, *filesink, *waylandsink;
   GstCaps *filtercaps;
   GstStructure *controls;
-  GstPad *pad = NULL;
+  GstPad *vpad, *ppad = NULL;
   gboolean ret = FALSE;
 
   // Create first source element set the first camera
@@ -158,21 +158,36 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
   // Get qmmfsrc Element class
   GstElementClass *qtiqmmfsrc_klass = GST_ELEMENT_GET_CLASS (qtiqmmfsrc);
 
-  // Get qmmfsrc pad template
+  // Get qmmfsrc video pad template
   GstPadTemplate *qtiqmmfsrc_template =
       gst_element_class_get_pad_template (qtiqmmfsrc_klass, "video_%u");
 
   // Request a pad from qmmfsrc
-  pad = gst_element_request_pad (qtiqmmfsrc, qtiqmmfsrc_template,
+  vpad = gst_element_request_pad (qtiqmmfsrc, qtiqmmfsrc_template,
       "video_%u", NULL);
-  if (!pad) {
-    g_printerr ("Error: pad cannot be retrieved from qmmfsrc!\n");
+  if (!vpad) {
+    g_printerr ("Error: video pad cannot be retrieved from qmmfsrc!\n");
   }
-  g_print ("Pad received - %s\n",  gst_pad_get_name (pad));
 
-  //g_object_set_property (G_OBJECT (pad), "type", &value);
-  g_object_set (G_OBJECT (pad), "type", 1, NULL);
-  gst_object_unref (pad);
+  // Get qmmfsrc preview pad template
+  GstPadTemplate *pqtiqmmfsrc_template =
+      gst_element_class_get_pad_template (qtiqmmfsrc_klass, "video_%u");
+
+  // Request a preview pad from qmmfsrc
+  ppad = gst_element_request_pad (qtiqmmfsrc, pqtiqmmfsrc_template,
+      "video_%u", NULL);
+  if (!vpad || !ppad) {
+    g_printerr ("Error: video pad or preview pad cannot be retrieved from qmmfsrc!\n");
+  }
+
+  g_print ("video Pad received - %s\n",  gst_pad_get_name (vpad));
+
+  g_print ("Preview Pad received - %s\n",  gst_pad_get_name (ppad));
+
+  g_object_set (G_OBJECT (vpad), "type", "video", NULL);
+  g_object_set (G_OBJECT (ppad), "type", "preview", NULL);
+  gst_object_unref (vpad);
+  gst_object_unref (ppad);
 
   // Create capsfilter element for waylandsink to properties
   capsfilter_dis = gst_element_factory_make ("capsfilter", "capsfilter_dis");
@@ -185,8 +200,8 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
 
   // Create v4l2h264enc element and set the properties
   v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
-  g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", 5, NULL);
+  g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", "dmabuf", NULL);
+  g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", "dmabuf-import", NULL);
   controls = gst_structure_from_string (
       "controls,video_bitrate_mode=0", NULL);
   g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", controls, NULL);
@@ -232,26 +247,19 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
       "width", G_TYPE_INT, appctx->width,
       "height", G_TYPE_INT, appctx->height,
       "framerate", GST_TYPE_FRACTION, 30, 1,
-      "compression", G_TYPE_STRING, "ubwc",
       NULL);
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
+
   g_object_set (G_OBJECT (capsfilter_dis), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
   // Configure the stream caps
   filtercaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
+      "format", G_TYPE_STRING, "NV12_Q08C",
       "width", G_TYPE_INT, appctx->width,
       "height", G_TYPE_INT, appctx->height,
       "framerate", GST_TYPE_FRACTION, 30, 1,
-      "compression", G_TYPE_STRING, "ubwc",
-      "interlace-mode", G_TYPE_STRING, "progressive",
-      "colorimetry", G_TYPE_STRING, "bt601",
       NULL);
 
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter_enc), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 

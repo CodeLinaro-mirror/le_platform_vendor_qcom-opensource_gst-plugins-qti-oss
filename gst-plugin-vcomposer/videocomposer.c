@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -67,6 +67,9 @@
 
 #include "videocomposer.h"
 
+#include <gst/video/gstqtibufferpool.h>
+#include <gst/allocators/gstqtiallocator.h>
+#include <gst/video/video-utils.h>
 #include <gst/utils/common-utils.h>
 #include <gst/video/gstimagepool.h>
 #include <gst/video/gstvideoclassificationmeta.h>
@@ -108,7 +111,7 @@ G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_VIDEO_FORMATS \
-  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8 }"
+  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
 
 static GType gst_converter_request_get_type(void);
 #define GST_TYPE_CONVERTER_REQUEST  (gst_converter_request_get_type())
@@ -120,22 +123,6 @@ enum
   PROP_ENGINE_BACKEND,
   PROP_BACKGROUND,
 };
-
-static GstStaticPadTemplate gst_video_composer_sink_template =
-    GST_STATIC_PAD_TEMPLATE("sink_%u",
-        GST_PAD_SINK,
-        GST_PAD_REQUEST,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
-    );
-
-static GstStaticPadTemplate gst_video_composer_src_template =
-    GST_STATIC_PAD_TEMPLATE("src",
-        GST_PAD_SRC,
-        GST_PAD_ALWAYS,
-        GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-            GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM, GST_VIDEO_FORMATS))
-    );
 
 typedef struct _GstConverterRequest GstConverterRequest;
 
@@ -155,6 +142,66 @@ struct _GstConverterRequest {
 };
 
 GST_DEFINE_MINI_OBJECT_TYPE (GstConverterRequest, gst_converter_request);
+
+static GstCaps *
+gst_video_composer_sink_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
+
+    if (gst_is_gbm_supported ()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+              GST_VIDEO_FORMATS));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstCaps *
+gst_video_composer_src_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
+
+    if (gst_is_gbm_supported ()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+              GST_VIDEO_FORMATS));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstPadTemplate *
+gst_video_composer_sink_template (void)
+{
+  return gst_pad_template_new_with_gtype ("sink_%u", GST_PAD_SINK, GST_PAD_REQUEST,
+      gst_video_composer_sink_caps (), GST_TYPE_VIDEO_COMPOSER_SINKPAD);
+}
+
+static GstPadTemplate *
+gst_video_composer_src_template (void)
+{
+  return gst_pad_template_new_with_gtype ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+      gst_video_composer_src_caps (), GST_TYPE_AGGREGATOR_PAD);
+}
 
 static void
 gst_converter_request_free (GstConverterRequest * request)
@@ -282,9 +329,11 @@ gst_buffer_transfer_video_region_of_interest_meta (GstBuffer * buffer,
         kp->y = kp->y * h_scale;
       }
 
-      structure = gst_structure_new ("VideoLandmarks",
-          "keypoints", G_TYPE_ARRAY, keypoints, "links", G_TYPE_ARRAY, links,
-          "confidence", G_TYPE_DOUBLE, confidence, NULL);
+      structure = gst_structure_copy (structure);
+      gst_structure_set (structure, "keypoints", G_TYPE_ARRAY, keypoints,
+          "links", G_TYPE_ARRAY, links, "confidence", G_TYPE_DOUBLE,
+          confidence, NULL);
+
       gst_video_region_of_interest_meta_add_param (newmeta, structure);
     } else if (id == g_quark_from_static_string ("ImageClassification")) {
       structure = gst_structure_copy (structure);
@@ -301,6 +350,7 @@ gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
     GstVideoRectangle * source, GstVideoRectangle * destination,
     GstVideoLandmarksMeta * lmkmeta)
 {
+  GstVideoLandmarksMeta *newmeta = NULL;
   GArray *keypoints = NULL, *links = NULL;
   gdouble w_scale = 0.0, h_scale = 0.0;
   guint num = 0;
@@ -319,17 +369,38 @@ gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
     kp->y = (kp->y * h_scale) + destination->y;
   }
 
-  gst_buffer_add_video_landmarks_meta (buffer, lmkmeta->confidence, keypoints,
-      links);
+  newmeta = gst_buffer_add_video_landmarks_meta (buffer, lmkmeta->confidence,
+      keypoints, links);
+  newmeta->id = lmkmeta->id;
+
+  if (lmkmeta->xtraparams != NULL)
+    newmeta->xtraparams = gst_structure_copy (lmkmeta->xtraparams);
 }
 
 static inline void
 gst_buffer_transfer_video_classification_meta (GstBuffer * buffer,
     GstVideoClassificationMeta * classmeta)
 {
+  GstVideoClassificationMeta *newmeta = NULL;
   GArray *labels = g_array_copy (classmeta->labels);
+  guint idx = 0;
 
-  gst_buffer_add_video_classification_meta (buffer, labels);
+  // The GArray copy above naturally doesn't copy the data in pointers.
+  // Iterate over the labels and deep copy any extra params.
+  for (idx = 0; idx < labels->len; idx++) {
+    GstClassLabel *label = &(g_array_index (labels, GstClassLabel, idx));
+
+    if (label->xtraparams == NULL)
+      continue;
+
+    label->xtraparams = gst_structure_copy (label->xtraparams);
+  }
+
+  g_array_set_clear_func (labels,
+      (GDestroyNotify) gst_video_classification_label_cleanup);
+
+  newmeta = gst_buffer_add_video_classification_meta (buffer, labels);
+  newmeta->id = classmeta->id;
 }
 
 static void
@@ -421,7 +492,8 @@ gst_video_composer_index_compare (const GstVideoComposerSinkPad * pad,
 }
 
 static GstBufferPool *
-gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
+gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps,
+    GstVideoAlignment * align)
 {
   GstBufferPool *pool = NULL;
   GstStructure *config = NULL;
@@ -433,29 +505,41 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
     return NULL;
   }
 
-  // If downstream allocation query supports GBM, allocate gbm memory.
-  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    GST_INFO_OBJECT (vcomposer, "Uses GBM memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
+  if (gst_is_gbm_supported ()) {
+    if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+      GST_INFO_OBJECT (vcomposer, "Uses GBM memory");
+      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
+    } else {
+      GST_INFO_OBJECT (vcomposer, "Uses ION memory");
+      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
+    }
+
+    config = gst_buffer_pool_get_config (pool);
+    allocator = gst_fd_allocator_new ();
+
+    gst_buffer_pool_config_add_option (config,
+        GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
+
   } else {
-    GST_INFO_OBJECT (vcomposer, "Uses ION memory");
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
+    pool = gst_qti_buffer_pool_new ();
+    config = gst_buffer_pool_get_config (pool);
+
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+    gst_buffer_pool_config_set_video_alignment (config, align);
+
+    allocator = gst_qti_allocator_new ();
+    if (allocator == NULL) {
+      GST_ERROR_OBJECT (vcomposer, "Failed to create QTI allocator");
+      gst_clear_object (&pool);
+      return NULL;
+    }
   }
 
-  config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
-
-  allocator = gst_fd_allocator_new ();
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
-  gst_buffer_pool_config_add_option (config,
-      GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
-
-  if (gst_caps_has_compression (caps, "ubwc")) {
-    gst_buffer_pool_config_add_option (config,
-        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
-  }
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (vcomposer, "Failed to set pool configuration!");
@@ -608,7 +692,6 @@ gst_video_composer_populate_frames_and_composition (
     GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
     blit->alpha = sinkpad->alpha * G_MAXUINT8;
-    blit->isubwc = sinkpad->isubwc;
 
     blit->flip = gst_video_composer_translate_flip (sinkpad->flip_h, sinkpad->flip_v);
     blit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
@@ -647,7 +730,6 @@ gst_video_composer_populate_frames_and_composition (
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
 
   composition->bgcolor = vcomposer->background;
-  composition->isubwc = vcomposer->isubwc;
 
   GST_VIDEO_COMPOSER_UNLOCK (vcomposer);
 
@@ -657,16 +739,34 @@ gst_video_composer_populate_frames_and_composition (
   return TRUE;
 }
 
+static void
+gst_video_composer_get_align (GstVideoInfo * info, GstVideoAlignment * align)
+{
+  GstVideoFormat format;
+  gboolean success;
+  guint width, height;
+  gint stride, scanline;
+
+  width = GST_VIDEO_INFO_WIDTH (info);
+  height = GST_VIDEO_INFO_HEIGHT (info);
+  format = GST_VIDEO_INFO_FORMAT (info);
+
+  success = gst_adreno_utils_compute_alignment (width, height, format,
+     &stride, &scanline);
+  if (success) {
+    align->padding_bottom = scanline - height;
+    align->padding_right = stride - width;
+  }
+}
+
 static gboolean
 gst_video_composer_propose_allocation (GstAggregator * aggregator,
     GstAggregatorPad * pad, GstQuery * inquery, GstQuery * outquery)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
-
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstVideoInfo info;
-  guint size = 0;
   gboolean needpool = FALSE;
 
   GST_DEBUG_OBJECT (vcomposer, "Pad %s:%s", GST_DEBUG_PAD_NAME (pad));
@@ -684,17 +784,22 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
     return FALSE;
   }
 
-  // Get the size from video info.
-  size = GST_VIDEO_INFO_SIZE (&info);
-
   if (needpool) {
     GstStructure *structure = NULL;
+    GstAllocator *allocator = NULL;
+    GstVideoAlignment align = { 0, };
 
-    pool = gst_video_composer_create_pool (vcomposer, caps);
+    gst_video_composer_get_align (&info, &align);
+    gst_video_info_align (&info, &align);
+
+    pool = gst_video_composer_create_pool (vcomposer, caps, &align);
     structure = gst_buffer_pool_get_config (pool);
 
     // Set caps and size in query.
-    gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+    gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
+
+    gst_buffer_pool_config_get_allocator (structure, &allocator, NULL);
+    gst_query_add_allocation_param (outquery, allocator, NULL);
 
     if (!gst_buffer_pool_set_config (pool, structure)) {
       GST_ERROR_OBJECT (vcomposer, "Failed to set buffer pool configuration!");
@@ -704,7 +809,7 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
   }
 
   // If upstream does't have a pool requirement, set only size in query.
-  gst_query_add_allocation_pool (outquery, needpool ? pool : NULL, size, 0, 0);
+  gst_query_add_allocation_pool (outquery, pool, info.size, 0, 0);
 
   if (pool != NULL)
     gst_object_unref (pool);
@@ -713,14 +818,36 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
   return TRUE;
 }
 
+GstVideoAlignment
+gst_video_calculate_common_alignment (GstVideoAlignment * l_align,
+    GstVideoAlignment * r_align)
+{
+  GstVideoAlignment align = { 0, };
+
+  // Take the highest number of additional lines in height.
+  align.padding_bottom = MAX (l_align->padding_bottom, r_align->padding_bottom);
+
+  // TODO: Workaround: Also assume that other fields are equal.
+  align.padding_top = l_align->padding_top;
+  align.padding_left = l_align->padding_left;
+
+  // TODO: Workaround: Considering the alignments are power of 2.
+  align.padding_right = MAX (l_align->padding_right, r_align->padding_right);
+
+  return align;
+}
+
 static gboolean
 gst_video_composer_decide_allocation (GstAggregator * aggregator,
     GstQuery * query)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
   GstCaps *caps = NULL;
+  GstVideoInfo info;
+  GstVideoAlignment align = { 0, }, ds_align = { 0, };
   GstBufferPool *pool = NULL;
-  guint size, minbuffers, maxbuffers;
+  guint size = 0, minbuffers = 0, maxbuffers = 0, idx = 0;
+  const GstStructure *params = NULL;
 
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps) {
@@ -731,17 +858,43 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
   // Invalidate the cached pool if there is an allocation_query.
   if (vcomposer->outpool) {
     gst_buffer_pool_set_active (vcomposer->outpool, FALSE);
-    gst_object_unref (vcomposer->outpool);
+    gst_clear_object (&vcomposer->outpool);
   }
 
-  // Create a new buffer pool.
-  pool = gst_video_composer_create_pool (vcomposer, caps);
-  vcomposer->outpool = pool;
+  if (!gst_video_info_from_caps (&info, caps)) {
+    GST_ERROR_OBJECT (vcomposer, "Invalid caps %" GST_PTR_FORMAT, caps);
+    return FALSE;
+  }
+
+  gst_video_composer_get_align (&info, &align);
+
+  if (gst_query_find_allocation_meta (query, GST_VIDEO_META_API_TYPE, &idx)) {
+    gst_query_parse_nth_allocation_meta (query, idx, &params);
+    GST_DEBUG_OBJECT (vcomposer, "Allocation video meta %" GST_PTR_FORMAT,
+        params);
+  }
+
+  if (params) {
+    gst_structure_get_uint (params, "padding-top", &ds_align.padding_top);
+    gst_structure_get_uint (params, "padding-bottom", &ds_align.padding_bottom);
+    gst_structure_get_uint (params, "padding-left", &ds_align.padding_left);
+    gst_structure_get_uint (params, "padding-right", &ds_align.padding_right);
+
+    GST_DEBUG_OBJECT (vcomposer, "Downstream requested padding (top: %u "
+        "bottom: %u left: %u right: %u)", ds_align.padding_top,
+        ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right);
+
+    // Find the most the appropriate alignment between us and downstream.
+    align = gst_video_calculate_common_alignment (&align, &ds_align);
+  }
 
   {
     GstStructure *config = NULL;
     GstAllocator *allocator = NULL;
     GstAllocationParams params;
+
+    GST_DEBUG_OBJECT (vcomposer, "Creating our own pool");
+    pool = gst_video_composer_create_pool (vcomposer, caps, &align);
 
     // Get the configured pool properties in order to set in query.
     config = gst_buffer_pool_get_config (pool);
@@ -763,6 +916,11 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
         maxbuffers);
 
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+
+  vcomposer->outpool = pool;
+
+  GST_DEBUG_OBJECT (vcomposer, "Output pool: %" GST_PTR_FORMAT,
+      vcomposer->outpool);
 
   return TRUE;
 }
@@ -1126,7 +1284,6 @@ gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
     gst_video_info_free (vcomposer->outinfo);
 
   vcomposer->outinfo = gst_video_info_copy (&info);
-  vcomposer->isubwc = gst_caps_has_compression (caps, "ubwc");
 
   if (vcomposer->converter != NULL)
     gst_video_converter_engine_free (vcomposer->converter);
@@ -1530,10 +1687,10 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
       "Video composer", "Filter/Editor/Video/Compositor/Scaler",
       "Mix together multiple video streams", "QTI");
 
-  gst_element_class_add_static_pad_template_with_gtype (element,
-      &gst_video_composer_sink_template, GST_TYPE_VIDEO_COMPOSER_SINKPAD);
-  gst_element_class_add_static_pad_template_with_gtype (element,
-      &gst_video_composer_src_template, GST_TYPE_AGGREGATOR_PAD);
+  gst_element_class_add_pad_template (element,
+      gst_video_composer_sink_template ());
+  gst_element_class_add_pad_template (element,
+      gst_video_composer_src_template ());
 
   element->request_new_pad = GST_DEBUG_FUNCPTR (gst_video_composer_request_pad);
   element->release_pad = GST_DEBUG_FUNCPTR (gst_video_composer_release_pad);
@@ -1570,7 +1727,6 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
 
   vcomposer->outinfo = NULL;
   vcomposer->outpool = NULL;
-  vcomposer->isubwc = FALSE;
 
   vcomposer->duration = GST_CLOCK_TIME_NONE;
 

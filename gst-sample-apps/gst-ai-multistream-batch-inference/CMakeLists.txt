@@ -9,6 +9,9 @@ link_directories(${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR})
 
 find_package(PkgConfig)
 
+# Add config files
+file(GLOB CONFIG_FILE *.json)
+
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
@@ -43,3 +46,5 @@ install(
               GROUP_EXECUTE GROUP_READ
               WORLD_EXECUTE WORLD_READ
 )
+
+install(FILES ${CONFIG_FILE} DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_CONFIG})
