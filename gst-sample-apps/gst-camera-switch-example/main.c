@@ -112,9 +112,6 @@ switch_camera (GstCameraSwitchCtx *cameraswitchctx)
   // Adding qmmfsrc
   gst_bin_add (GST_BIN (cameraswitchctx->pipeline), new_camsrc);
 
-  // Sync the elements state to the curtent pipeline state
-  gst_element_sync_state_with_parent (new_camsrc);
-
   // Unlink the current camera stream
   g_print ("Unlinking current camera stream...\n");
   gst_element_unlink (current_camsrc, cameraswitchctx->capsfilter);
@@ -127,6 +124,9 @@ switch_camera (GstCameraSwitchCtx *cameraswitchctx)
     return FALSE;
   }
   g_print ("Linked next camera stream successfully \n");
+
+  // Sync the elements state to the curtent pipeline state
+  gst_element_sync_state_with_parent (new_camsrc);
 
   // Set NULL state to the unlinked elemets
   gst_element_set_state (current_camsrc, GST_STATE_NULL);
