@@ -130,6 +130,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_OPERATION_MODE            CAM_OPMODE_NONE
 #define DEFAULT_PROP_CAMERA_MULTI_ROI                 FALSE
 #define DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH    -1
+#define DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE        GST_PAD_ACTIVATION_MODE_NORMAL
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -145,6 +146,7 @@ enum
   SIGNAL_CANCEL_CAPTURE,
   SIGNAL_RESULT_METADATA,
   SIGNAL_URGENT_METADATA,
+  SIGNAL_VIDEO_PADS_ACTIVATION,
   LAST_SIGNAL
 };
 
@@ -202,6 +204,7 @@ enum
   PROP_CAMERA_INPUT_ROI,
   PROP_CAMERA_INPUT_ROI_INFO,
   PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
+  PROP_CAMERA_PAD_ACTIVATION_MODE,
 };
 
 #ifdef ENABLE_RUNTIME_PARSER
@@ -214,11 +217,15 @@ static GstStaticPadTemplate qmmfsrc_image_src_template;
 static void
 qmmfsrc_deinit_src_templates ()
 {
-  if (NULL != qmmfsrc_video_src_template.static_caps.string)
+  if (NULL != qmmfsrc_video_src_template.static_caps.string) {
     g_free (qmmfsrc_video_src_template.static_caps.string);
+    qmmfsrc_video_src_template.static_caps.string = NULL;
+  }
 
-  if (NULL != qmmfsrc_image_src_template.static_caps.string)
+  if (NULL != qmmfsrc_image_src_template.static_caps.string) {
     g_free (qmmfsrc_image_src_template.static_caps.string);
+    qmmfsrc_image_src_template.static_caps.string = NULL;
+  }
 }
 
 static void
@@ -305,6 +312,8 @@ qmmfsrc_init_src_templates ()
       "%s",
       common_video_caps
   );
+
+  g_free (common_video_caps);
 
   const gchar* qmmfsrc_all_video_caps = (const gchar *) g_malloc (
       4 * CAPS_SIZE * sizeof (gchar));
@@ -395,6 +404,8 @@ qmmfsrc_init_src_templates ()
       "%s",
       common_image_caps
   );
+
+  g_free (common_image_caps);
 
   const gchar* qmmfsrc_all_image_caps = (const gchar *) g_malloc (
       4 * CAPS_SIZE * sizeof (gchar));
@@ -548,73 +559,94 @@ qmmfsrc_pad_reconfigure (GstPad * pad, GstElement * element)
     return;
   }
 
+  if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED)
+    return;
+
   GST_INFO_OBJECT (qmmfsrc, "Reconfiguration for pad %s in %s state",
       GST_PAD_NAME (pad), gst_element_state_get_name (state));
 
   if (GST_IS_QMMFSRC_VIDEO_PAD (pad)) {
     GST_INFO_OBJECT (qmmfsrc, "Reconfigure video pad");
     GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+    GArray *ids = NULL;
 
-    if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
-      // First delete the previous camera stream associated with this pad.
-      if (GST_QMMFSRC_VIDEO_PAD (pad)->id != 0) {
-        success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
-        success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (
-            qmmfsrc, success, "Video stream deletion failed!");
-      }
+    // First delete the previous camera stream associated with this pad.
+    if (vpad->id != 0) {
+      ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, vpad->id);
 
-      GST_INFO_OBJECT (element, "Create new video stream");
-      success = gst_qmmf_context_create_video_stream (qmmfsrc->context, pad);
+      success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
+      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
+
+      success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
       QMMFSRC_RETURN_IF_FAIL (
-          qmmfsrc, success, "Video stream creation failed!");
+          qmmfsrc, success, "Video stream deletion failed!");
+    }
 
-      if (state == GST_STATE_PLAYING) {
-        success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
-      }
+    GST_INFO_OBJECT (element, "Create new video stream");
+    success = gst_qmmf_context_create_video_stream (qmmfsrc->context, pad);
+    QMMFSRC_RETURN_IF_FAIL (
+        qmmfsrc, success, "Video stream creation failed!");
+
+    if (state == GST_STATE_PLAYING) {
+      ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, vpad->id);
+
+      success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
+      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
     }
   } else if (GST_IS_QMMFSRC_IMAGE_PAD (pad)) {
     GST_INFO_OBJECT (qmmfsrc, "Reconfigure image pad");
 
-    if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
-      // First delete the previous camera stream associated with this pad.
-      success = gst_qmmf_context_delete_image_stream (qmmfsrc->context, pad,
-          0);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Image Stream delete failed!");
+    // First delete the previous camera stream associated with this pad.
+    success = gst_qmmf_context_delete_image_stream (qmmfsrc->context, pad, 0);
+    QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Image Stream delete failed!");
 
-      GST_INFO_OBJECT (element, "Create new image stream");
-      success = gst_qmmf_context_create_image_stream (
-          qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (
-          qmmfsrc, success, "Image stream creation failed!");
-    }
+    GST_INFO_OBJECT (element, "Create new image stream");
+    success = gst_qmmf_context_create_image_stream (
+        qmmfsrc->context, pad);
+    QMMFSRC_RETURN_IF_FAIL (
+        qmmfsrc, success, "Image stream creation failed!");
   }
 }
 
 static void
-qmmfsrc_pad_activation (GstPad * pad, gboolean activ, GstElement * element)
+qmmfsrc_pad_activation (GstPad * pad, gboolean active, GstElement * element)
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (element);
   GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+  GArray *ids = NULL;
   gboolean success = FALSE;
   GstState state = GST_STATE_VOID_PENDING;
+
   if (gst_element_get_state (element, &state, NULL, 0) ==
       GST_STATE_CHANGE_FAILURE) {
     GST_ERROR_OBJECT (element, "Failed to retrieve pipeline state!");
     return;
   }
 
-  if (state == GST_STATE_PLAYING) {
-    if (activ) {
-      success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
-    } else {
-      success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
-    }
+  if (state != GST_STATE_PLAYING ||
+      qmmfsrc->pad_activation_mode != GST_PAD_ACTIVATION_MODE_NORMAL)
+    return;
+
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
+  ids = g_array_append_val (ids, vpad->id);
+
+  if (active) {
+    success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+    QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (qmmfsrc, success,
+        { g_array_free (ids, FALSE); }, "Stream start failed!");
+  } else {
+    success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+    QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (qmmfsrc, success,
+        { g_array_free (ids, FALSE); }, "Stream stop failed!");
   }
+
+  g_array_free (ids, TRUE);
 }
 
 static GstPad*
@@ -738,9 +770,15 @@ qmmfsrc_release_pad (GstElement * element, GstPad * pad)
     GST_DEBUG_OBJECT (element, "Releasing video pad %d", index);
 
     if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
+      GArray *ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
+
       GST_DEBUG_OBJECT (element, "Delete stream");
-      success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
+      success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
       QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
+
       success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
       QMMFSRC_RETURN_IF_FAIL (
           qmmfsrc, success, "Video stream deletion failed!");
@@ -869,6 +907,11 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
         "Image stream creation failed!");
   }
 
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
+
   GST_TRACE_OBJECT (qmmfsrc, "Stream created");
 
   return TRUE;
@@ -883,6 +926,11 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
 
   for (list = qmmfsrc->imgindexes; list != NULL; list = list->next) {
     key = list->data;
@@ -910,17 +958,19 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
 static gboolean
 qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
 {
-  gboolean success = FALSE;
-  gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GArray *ids = NULL;
+  gboolean success = TRUE;
+  gpointer key;
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Starting stream");
 
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
-  if (!success)
-    GST_WARNING ("There are no src pads!");
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
@@ -932,10 +982,13 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
       continue;
     }
 
-    success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream start failed!");
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
   }
+
+  success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+  g_array_free (ids, TRUE);
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream start failed!");
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream started");
 
@@ -945,54 +998,34 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
 static gboolean
 qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
 {
-  gboolean success = FALSE;
-  gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GArray *ids = NULL;
+  gboolean success = TRUE;
+  gpointer key;
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Stopping stream");
 
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
-  if (!success)
-    GST_WARNING ("There are no src pads!");
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
 
-    success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream stop failed!");
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
   }
+
+  success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+  g_array_free (ids, TRUE);
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream stop failed!");
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream stopped");
-
-  return TRUE;
-}
-
-static gboolean
-qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
-{
-  gboolean success = FALSE;
-  gpointer key;
-  GstPad *pad = NULL;
-  GList *list = NULL;
-
-  GST_TRACE_OBJECT (qmmfsrc, "Pausing stream");
-
-  // Iterate over the video pads, fixate caps and create streams.
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
-    key = list->data;
-    pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-
-    success = gst_qmmf_context_pause_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream pause failed!");
-  }
-
-  GST_TRACE_OBJECT (qmmfsrc, "Stream paused");
 
   return TRUE;
 }
@@ -1035,6 +1068,73 @@ qmmfsrc_cancel_capture (GstQmmfSrc * qmmfsrc)
   GST_TRACE_OBJECT (qmmfsrc, "Image capture canceled");
 
   return TRUE;
+}
+
+static gboolean
+qmmfsrc_match_srcpad (gpointer key, gpointer value, gpointer user_data)
+{
+  return g_str_equal (GST_PAD_NAME (GST_PAD (value)), (gchar *)user_data);
+}
+
+static gboolean
+qmmfsrc_signal_video_pads_activation (GstQmmfSrc * qmmfsrc, gboolean activate,
+    GPtrArray * padnames)
+{
+  GstElement *element = GST_ELEMENT (qmmfsrc);
+  GstState state = GST_STATE_VOID_PENDING;
+  GList *list = NULL;
+  GArray *ids = NULL;
+  guint array_index = 0;
+  gboolean success = TRUE;
+
+  GST_INFO_OBJECT (qmmfsrc, "video-pads-activation signal received (%s)",
+      activate ? "activate" : "deactivate");
+
+  if (qmmfsrc->pad_activation_mode != GST_PAD_ACTIVATION_MODE_SIGNAL) {
+    GST_INFO_OBJECT (qmmfsrc, "pad activation mode is normal, "
+        "video-pads-activation signal not enabled");
+    return FALSE;
+  }
+
+  if (gst_element_get_state (element, &state, NULL, 0) ==
+      GST_STATE_CHANGE_FAILURE) {
+    GST_ERROR_OBJECT (element, "Failed to retrieve pipeline state!");
+    return FALSE;
+  }
+
+  if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED) {
+    GST_ERROR_OBJECT (element, "Video streams activation signal can only "
+        "be triggered on PLAYING / PAUSED state");
+    return FALSE;
+  }
+
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
+
+  for (array_index = 0; array_index < padnames->len; array_index++) {
+    gchar *pad_name = g_ptr_array_index (padnames, array_index);
+    GstPad *pad = NULL;
+
+    pad = g_hash_table_find (qmmfsrc->srcpads, qmmfsrc_match_srcpad, pad_name);
+
+    if (!(success = (pad != NULL))) {
+      GST_INFO_OBJECT (qmmfsrc, "pad %s is invalid", pad_name);
+      goto cleanup;
+    }
+
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
+  }
+
+  if (activate)
+    success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+  else
+    success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+
+  if (!success)
+    GST_ERROR_OBJECT (qmmfsrc, "Streams %s failed!", activate ? "start" : "stop");
+
+cleanup:
+  g_array_free (ids, FALSE);
+  return success;
 }
 
 static GstStateChangeReturn
@@ -1089,16 +1189,6 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
       ret = GST_STATE_CHANGE_SUCCESS;
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      if (!qmmfsrc_pause_stream (qmmfsrc)) {
-        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to pause stream!"),
-          NULL);
-        return GST_STATE_CHANGE_FAILURE;
-      }
-      // Return NO_PREROLL to inform bin/pipeline we won't be able to
-      // produce data in the PAUSED state, as this is a live source.
-      ret = GST_STATE_CHANGE_NO_PREROLL;
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
       // We will call stop_stream only if the camera is plugged, which
       // is always true for BWC while for PoV it may or may not be true.
       // When PoV is plugged stop_stream will be called from here,
@@ -1108,6 +1198,11 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
           NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
+      // Return NO_PREROLL to inform bin/pipeline we won't be able to
+      // produce data in the PAUSED state, as this is a live source.
+      ret = GST_STATE_CHANGE_NO_PREROLL;
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
       if (!qmmfsrc_delete_stream (qmmfsrc)) {
         GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to delete stream!"),
           NULL);
@@ -1186,7 +1281,7 @@ qmmfsrc_send_event (GstElement * element, GstEvent * event)
         g_value_set_uint (&value, 1);
         gst_qmmf_context_set_camera_param(qmmfsrc->context,
             PARAM_CAMERA_STANDBY, &value);
-        if (!qmmfsrc_pause_stream(qmmfsrc)) {
+        if (!qmmfsrc_stop_stream(qmmfsrc)) {
           GST_ERROR_OBJECT(qmmfsrc, "Failed to stop stream!");
         }
       }
@@ -1395,6 +1490,9 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH, value);
       break;
+    case PROP_CAMERA_PAD_ACTIVATION_MODE:
+      qmmfsrc->pad_activation_mode = g_value_get_enum(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1591,6 +1689,9 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_PHYSICAL_CAMERA_SWITCH:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH, value);
+      break;
+    case PROP_CAMERA_PAD_ACTIVATION_MODE:
+      g_value_set_enum(value, qmmfsrc->pad_activation_mode);
       break;
 
     default:
@@ -1994,6 +2095,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif
+  g_object_class_install_property (gobject, PROP_CAMERA_PAD_ACTIVATION_MODE,
+      g_param_spec_enum ("video-pads-activation-mode", "Video Pad Activation Mode",
+          "set video pad activation mode, by default is normal, use \"signal\" to "
+          "control video pad activation by plugin signal \"video-pads-activation\" "
+          "together with gst_pad_set_active() ",
+          GST_TYPE_QMMFSRC_PAD_ACTIVATION_MODE,
+          DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),
@@ -2004,6 +2114,12 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_signal_new_class_handler ("cancel-capture", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (qmmfsrc_cancel_capture),
       NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
+
+  signals[SIGNAL_VIDEO_PADS_ACTIVATION] =
+      g_signal_new_class_handler ("video-pads-activation",
+      G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_CALLBACK (qmmfsrc_signal_video_pads_activation), NULL, NULL, NULL,
+      G_TYPE_BOOLEAN, 2, G_TYPE_BOOLEAN, G_TYPE_PTR_ARRAY);
 
   signals[SIGNAL_RESULT_METADATA] =
       g_signal_new ("result-metadata", G_TYPE_FROM_CLASS (klass),
