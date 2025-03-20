@@ -55,17 +55,25 @@
  * Default models path and labels path
  */
 #define DEFAULT_TFLITE_OBJECT_DETECTION_MODEL \
-    "/opt/YOLOv8-Detection-Quantized.tflite"
-#define DEFAULT_OBJECT_DETECTION_LABELS "/opt/yolov8.labels"
+    "/etc/models/YOLOv8-Detection-Quantized.tflite"
+#define DEFAULT_OBJECT_DETECTION_LABELS "/etc/labels/yolov8.labels"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
-    "/opt/inception_v3_quantized.tflite"
-#define DEFAULT_CLASSIFICATION_LABELS "/opt/classification.labels"
+    "/etc/models/inception_v3_quantized.tflite"
+#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.labels"
 #define DEFAULT_TFLITE_POSE_DETECTION_MODEL \
-    "/opt/hrnet_pose_quantized.tflite"
-#define DEFAULT_POSE_DETECTION_LABELS "/opt/hrnet_pose.labels"
+    "/etc/models/hrnet_pose_quantized.tflite"
+#define DEFAULT_POSE_DETECTION_LABELS "/etc/labels/hrnet_pose.labels"
 #define DEFAULT_TFLITE_SEGMENTATION_MODEL \
-    "/opt/deeplabv3_plus_mobilenet_quantized.tflite"
-#define DEFAULT_SEGMENTATION_LABELS "/opt/deeplabv3_resnet50.labels"
+    "/etc/models/deeplabv3_plus_mobilenet_quantized.tflite"
+#define DEFAULT_SEGMENTATION_LABELS "/etc/labels/deeplabv3_resnet50.labels"
+
+/**
+ * Length of string for when models path and labels path need to be
+ * set to custom values for GstPipelineData
+ * Length of string for inference property variables for GstPipelineData
+ */
+#define FILEPATH_STRING_LEN 128
+#define INFERENCE_PROPERTIES_LEN 32
 
 /**
  * Default settings of camera output resolution, Scaling of camera output
@@ -105,7 +113,7 @@
  * Default constants to dequantize values for segmentation stream
  */
 #define DEFAULT_CONSTANTS_SEGMENTATION \
-    "deeplab,q-offsets=<61.0>,q-scales=<0.06232302635908127>;"
+    "deeplab,q-offsets=<0.0>,q-scales=<1.0>;"
 
 /**
  * Number of Queues used for buffer caching between elements
@@ -129,12 +137,13 @@
  *
  * Pipeline Data context to use plugins and path of Model, Labels.
  */
-typedef struct {
-  const gchar * model;
-  const gchar * labels;
-  const gchar * preproc;
-  const gchar * mlframework;
-  const gchar * postproc;
+struct GstPipelineData_;
+typedef struct GstPipelineData_{
+  gchar model[FILEPATH_STRING_LEN];
+  gchar labels[FILEPATH_STRING_LEN];
+  gchar preproc[INFERENCE_PROPERTIES_LEN];
+  gchar mlframework[INFERENCE_PROPERTIES_LEN];
+  gchar postproc[INFERENCE_PROPERTIES_LEN];
   gint delegate;
 } GstPipelineData;
 
@@ -144,34 +153,24 @@ typedef struct {
 typedef struct {
   gchar *file_path;
   gchar *rtsp_ip_port;
+  gchar *object_detection_model_path;
+  gchar *object_detection_labels_path;
   gchar *object_detection_constants;
+  gchar *pose_detection_model_path;
+  gchar *pose_detection_labels_path;
   gchar *pose_detection_constants;
+  gchar *segmentation_model_path;
+  gchar *segmentation_labels_path;
   gchar *segmentation_constants;
+  gchar *classification_model_path;
+  gchar *classification_labels_path;
   gchar *classification_constants;
+  GstPipelineData *pipeline_data;
   GstCameraSourceType camera_type;
   gboolean use_file;
   gboolean use_rtsp;
   gboolean use_camera;
 } GstAppOptions;
-
-/**
- * Default properties of pipeline for Object detection,
- * Classification, Posture detection and Segmentation
- */
-static GstPipelineData pipeline_data[GST_PIPELINE_CNT] = {
-  {DEFAULT_TFLITE_OBJECT_DETECTION_MODEL, DEFAULT_OBJECT_DETECTION_LABELS,
-      "qtimlvconverter", "qtimltflite", "qtimlvdetection",
-      GST_ML_TFLITE_DELEGATE_EXTERNAL},
-  {DEFAULT_TFLITE_CLASSIFICATION_MODEL, DEFAULT_CLASSIFICATION_LABELS,
-      "qtimlvconverter", "qtimltflite", "qtimlvclassification",
-      GST_ML_TFLITE_DELEGATE_EXTERNAL},
-  {DEFAULT_TFLITE_POSE_DETECTION_MODEL, DEFAULT_POSE_DETECTION_LABELS,
-      "qtimlvconverter", "qtimltflite", "qtimlvpose",
-      GST_ML_TFLITE_DELEGATE_EXTERNAL},
-  {DEFAULT_TFLITE_SEGMENTATION_MODEL, DEFAULT_SEGMENTATION_LABELS,
-      "qtimlvconverter", "qtimltflite", "qtimlvsegmentation",
-      GST_ML_TFLITE_DELEGATE_EXTERNAL}
-};
 
 /**
  * Build Property for pad.
@@ -255,6 +254,106 @@ on_pad_added (GstElement * element, GstPad * pad, gpointer data)
 }
 
 /**
+ * Create GstPipelineData structure containing inference info:
+ *
+ * @param options_models Array with models for all inference pipes
+ * @param options_labels Array with labels for all inference pipes
+ */
+GstPipelineData *create_ml_pipeline_data (char **options_models,
+    char **options_labels)
+{
+  // Allocate ml pipeline data
+  GstPipelineData *output_pipeline_data = (GstPipelineData *)
+      g_malloc (GST_PIPELINE_CNT * sizeof (GstPipelineData));
+
+  //Set object detection pipeline data
+  snprintf (output_pipeline_data[GST_OBJECT_DETECTION].model,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_models[GST_OBJECT_DETECTION]);
+  snprintf (output_pipeline_data[GST_OBJECT_DETECTION].labels,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_labels[GST_OBJECT_DETECTION]);
+
+  snprintf (output_pipeline_data[GST_OBJECT_DETECTION].preproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvconverter");
+  snprintf (output_pipeline_data[GST_OBJECT_DETECTION].mlframework,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimltflite");
+  snprintf (output_pipeline_data[GST_OBJECT_DETECTION].postproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvdetection");
+
+  output_pipeline_data[GST_OBJECT_DETECTION].delegate =
+      GST_ML_TFLITE_DELEGATE_EXTERNAL;
+
+  //Set classification pipeline data
+  snprintf (output_pipeline_data[GST_CLASSIFICATION].model,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_models[GST_CLASSIFICATION]);
+  snprintf (output_pipeline_data[GST_CLASSIFICATION].labels,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_labels[GST_CLASSIFICATION]);
+
+  snprintf (output_pipeline_data[GST_CLASSIFICATION].preproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvconverter");
+  snprintf (output_pipeline_data[GST_CLASSIFICATION].mlframework,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimltflite");
+  snprintf (output_pipeline_data[GST_CLASSIFICATION].postproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvclassification");
+
+  output_pipeline_data[GST_CLASSIFICATION].delegate =
+      GST_ML_TFLITE_DELEGATE_EXTERNAL;
+
+  //Set pose detection pipeline data
+  snprintf (output_pipeline_data[GST_POSE_DETECTION].model,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_models[GST_POSE_DETECTION]);
+  snprintf (output_pipeline_data[GST_POSE_DETECTION].labels,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_labels[GST_POSE_DETECTION]);
+
+  snprintf (output_pipeline_data[GST_POSE_DETECTION].preproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvconverter");
+  snprintf (output_pipeline_data[GST_POSE_DETECTION].mlframework,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimltflite");
+  snprintf (output_pipeline_data[GST_POSE_DETECTION].postproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvpose");
+
+  output_pipeline_data[GST_POSE_DETECTION].delegate =
+      GST_ML_TFLITE_DELEGATE_EXTERNAL;
+
+  // Set segmentation pipeline data
+  snprintf (output_pipeline_data[GST_SEGMENTATION].model,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_models[GST_SEGMENTATION]);
+  snprintf (output_pipeline_data[GST_SEGMENTATION].labels,
+      FILEPATH_STRING_LEN * sizeof (gchar), "%s",
+      options_labels[GST_SEGMENTATION]);
+
+  snprintf (output_pipeline_data[GST_SEGMENTATION].preproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvconverter");
+  snprintf (output_pipeline_data[GST_SEGMENTATION].mlframework,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimltflite");
+  snprintf (output_pipeline_data[GST_SEGMENTATION].postproc,
+      INFERENCE_PROPERTIES_LEN * sizeof (gchar), "%s",
+      "qtimlvsegmentation");
+
+  output_pipeline_data[GST_SEGMENTATION].delegate =
+      GST_ML_TFLITE_DELEGATE_EXTERNAL;
+
+  return output_pipeline_data;
+}
+
+/**
  * Free Application context:
  *
  * @param appctx Application Context object
@@ -269,31 +368,87 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
   }
 
   if (options->file_path != NULL) {
-    g_free (options->file_path);
+    g_free ((gpointer)options->file_path);
   }
 
   if (options->rtsp_ip_port != NULL) {
-    g_free (options->rtsp_ip_port);
+    g_free ((gpointer)options->rtsp_ip_port);
   }
 
-  if (options->object_detection_constants != DEFAULT_CONSTANTS_OBJECT_DETECTION &&
+  if (options->object_detection_model_path != (gchar *)(
+      &DEFAULT_TFLITE_OBJECT_DETECTION_MODEL) &&
+      options->object_detection_model_path != NULL) {
+    g_free ((gpointer)options->object_detection_model_path);
+  }
+
+  if (options->object_detection_labels_path != (gchar *)(
+      &DEFAULT_OBJECT_DETECTION_LABELS) &&
+      options->object_detection_labels_path != NULL) {
+    g_free ((gpointer)options->object_detection_labels_path);
+  }
+
+  if (options->object_detection_constants != (gchar *)(
+      &DEFAULT_CONSTANTS_OBJECT_DETECTION) &&
       options->object_detection_constants != NULL) {
-    g_free (options->object_detection_constants);
+    g_free ((gpointer)options->object_detection_constants);
   }
 
-  if (options->pose_detection_constants != DEFAULT_CONSTANTS_POSE_DETECTION &&
+  if (options->pose_detection_model_path != (gchar *)(
+      &DEFAULT_TFLITE_POSE_DETECTION_MODEL) &&
+      options->pose_detection_model_path != NULL) {
+    g_free ((gpointer)options->pose_detection_model_path);
+  }
+
+  if (options->pose_detection_labels_path != (gchar *)(
+      &DEFAULT_POSE_DETECTION_LABELS) &&
+      options->pose_detection_labels_path != NULL) {
+    g_free ((gpointer)options->pose_detection_labels_path);
+  }
+
+  if (options->pose_detection_constants != (gchar *)(
+      &DEFAULT_CONSTANTS_POSE_DETECTION) &&
       options->pose_detection_constants != NULL) {
-    g_free (options->pose_detection_constants);
+    g_free ((gpointer)options->pose_detection_constants);
   }
 
-  if (options->segmentation_constants != DEFAULT_CONSTANTS_SEGMENTATION &&
+  if (options->segmentation_model_path != (gchar *)(
+      &DEFAULT_TFLITE_SEGMENTATION_MODEL) &&
+      options->segmentation_model_path != NULL) {
+    g_free ((gpointer)options->segmentation_model_path);
+  }
+
+  if (options->segmentation_labels_path != (gchar *)(
+      &DEFAULT_SEGMENTATION_LABELS) &&
+      options->segmentation_labels_path != NULL) {
+    g_free ((gpointer)options->segmentation_labels_path);
+  }
+
+  if (options->segmentation_constants != (gchar *)(
+      &DEFAULT_CONSTANTS_SEGMENTATION) &&
       options->segmentation_constants != NULL) {
-    g_free (options->segmentation_constants);
+    g_free ((gpointer)options->segmentation_constants);
   }
 
-  if (options->classification_constants != DEFAULT_CONSTANTS_CLASSIFICATION &&
+  if (options->classification_model_path != (gchar *)(
+      &DEFAULT_TFLITE_CLASSIFICATION_MODEL) &&
+      options->classification_model_path != NULL) {
+    g_free ((gpointer)options->classification_model_path);
+  }
+
+  if (options->classification_labels_path != (gchar *)(
+      &DEFAULT_CLASSIFICATION_LABELS) &&
+      options->classification_labels_path != NULL) {
+    g_free ((gpointer)options->classification_labels_path);
+  }
+
+  if (options->classification_constants != (gchar *)(
+      &DEFAULT_CONSTANTS_CLASSIFICATION) &&
       options->classification_constants != NULL) {
-    g_free (options->classification_constants);
+    g_free ((gpointer)options->classification_constants);
+  }
+
+  if (options->pipeline_data != NULL) {
+    g_free ((gpointer)options->pipeline_data);
   }
 
   if (appctx->pipeline != NULL) {
@@ -316,6 +471,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   GstElement *qtiqmmfsrc = NULL, *qmmfsrc_caps = NULL;
   GstElement *filesrc = NULL, *rtspsrc = NULL, *qtdemux = NULL, *h264parse = NULL;
   GstElement *v4l2h264dec = NULL, *rtph264depay = NULL, *qtivcomposer = NULL;
+  GstElement *v4l2h264dec_caps = NULL;
   GstElement *fpsdisplaysink = NULL, *waylandsink = NULL;
   GstElement *qtimlvconverter[GST_PIPELINE_CNT] = {NULL};
   GstElement *qtimlelement[GST_PIPELINE_CNT] = {NULL};
@@ -328,8 +484,6 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   gboolean ret = FALSE;
   gchar element_name[128];
   gint module_id;
-  gint width = DEFAULT_CAMERA_OUTPUT_WIDTH;
-  gint height = DEFAULT_CAMERA_OUTPUT_HEIGHT;
   gint framerate = DEFAULT_CAMERA_FRAME_RATE;
 
   update_window_grid (coordinates);
@@ -363,6 +517,11 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
       goto error_clean_elements;
     }
 
+    v4l2h264dec_caps = gst_element_factory_make ("capsfilter", "v4l2h264dec_caps");
+    if (!v4l2h264dec_caps) {
+      g_printerr ("Failed to create v4l2h264dec_caps\n");
+      goto error_clean_elements;
+    }
   } else if (options->use_rtsp) {
     // Create rtspsrc plugin for rtsp input
     rtspsrc = gst_element_factory_make ("rtspsrc", "rtspsrc");
@@ -389,6 +548,12 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     v4l2h264dec = gst_element_factory_make ("v4l2h264dec", "v4l2h264dec");
     if (!v4l2h264dec) {
       g_printerr ("Failed to create v4l2h264dec\n");
+      goto error_clean_elements;
+    }
+
+    v4l2h264dec_caps = gst_element_factory_make ("capsfilter", "v4l2h264dec_caps");
+    if (!v4l2h264dec_caps) {
+      g_printerr ("Failed to create v4l2h264dec_caps\n");
       goto error_clean_elements;
     }
   } else {
@@ -425,9 +590,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
 
   // Create 4 pipelines for AI inferencing on same camera stream
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {
-    const gchar *preproc = pipeline_data[i].preproc;
-    const gchar *mlframework = pipeline_data[i].mlframework;
-    const gchar *postproc = pipeline_data[i].postproc;
+    const gchar *preproc = options->pipeline_data[i].preproc;
+    const gchar *mlframework = options->pipeline_data[i].mlframework;
+    const gchar *postproc = options->pipeline_data[i].postproc;
 
     // Create qtimlvconverter for Input preprocessing
     snprintf (element_name, 127, "%s-%d", preproc, i);
@@ -492,13 +657,21 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   // 2. Set properties for all GST plugin elements
   // 2.1 set properties for 4 AI pipelines, like HW, Model, Post proc
   if (options->use_file) {
-    g_object_set (G_OBJECT (v4l2h264dec), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (v4l2h264dec), "output-io-mode", 5, NULL);
+    gst_element_set_enum_property (v4l2h264dec, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264dec, "output-io-mode", "dmabuf");
     g_object_set (G_OBJECT (filesrc), "location", options->file_path, NULL);
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12", NULL);
+    g_object_set (G_OBJECT (v4l2h264dec_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
   } else if (options->use_rtsp) {
-    g_object_set (G_OBJECT (v4l2h264dec), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (v4l2h264dec), "output-io-mode", 5, NULL);
+    gst_element_set_enum_property (v4l2h264dec, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264dec, "output-io-mode", "dmabuf");
     g_object_set (G_OBJECT (rtspsrc), "location", options->rtsp_ip_port, NULL);
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12", NULL);
+    g_object_set (G_OBJECT (v4l2h264dec_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
   } else {
     g_object_set (G_OBJECT (qtiqmmfsrc), "camera", options->camera_type, NULL);
 
@@ -508,19 +681,14 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
           "format", G_TYPE_STRING, "NV12",
           "width", G_TYPE_INT, DEFAULT_CAMERA_OUTPUT_WIDTH,
           "height", G_TYPE_INT, DEFAULT_CAMERA_OUTPUT_HEIGHT,
-          "framerate", GST_TYPE_FRACTION, framerate, 1,
-          "compression", G_TYPE_STRING, "ubwc", NULL);
+          "framerate", GST_TYPE_FRACTION, framerate, 1, NULL);
     } else {
       filtercaps = gst_caps_new_simple ("video/x-raw",
           "format", G_TYPE_STRING, "NV12",
           "width", G_TYPE_INT, SECONDARY_CAMERA_OUTPUT_WIDTH,
           "height", G_TYPE_INT, SECONDARY_CAMERA_OUTPUT_HEIGHT,
-          "framerate", GST_TYPE_FRACTION, framerate, 1,
-          "compression", G_TYPE_STRING, "ubwc", NULL);
+          "framerate", GST_TYPE_FRACTION, framerate, 1, NULL);
     }
-
-    gst_caps_set_features (filtercaps, 0,
-        gst_caps_features_new ("memory:GBM", NULL));
 
     g_object_set (G_OBJECT (qmmfsrc_caps), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
@@ -529,8 +697,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {
     // Set ML plugin properties: HW, Model, Labels
     g_object_set (G_OBJECT (qtimlelement[i]),
-        "delegate", pipeline_data[i].delegate, NULL);
-    if (pipeline_data[i].delegate == GST_ML_TFLITE_DELEGATE_EXTERNAL) {
+        "delegate", options->pipeline_data[i].delegate, NULL);
+    if (options->pipeline_data[i].delegate == GST_ML_TFLITE_DELEGATE_EXTERNAL) {
       delegate_options = gst_structure_from_string (
           "QNNExternalDelegate,backend_type=htp,htp_device_id=(string)0,\
           htp_performance_mode=(string)2;", NULL);
@@ -542,9 +710,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
     }
 
     g_object_set (G_OBJECT (qtimlelement[i]),
-        "model", pipeline_data[i].model, NULL);
+        "model", options->pipeline_data[i].model, NULL);
     g_object_set (G_OBJECT (qtimlvpostproc[i]),
-        "labels", pipeline_data[i].labels, NULL);
+        "labels", options->pipeline_data[i].labels, NULL);
 
     // Set properties for ML postproc plugins- module, layers, threshold
     switch (i) {
@@ -653,12 +821,12 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
 
   if (options->use_file) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), filesrc,  qtdemux,
-        h264parse, v4l2h264dec, tee, qtivcomposer, fpsdisplaysink, waylandsink,
-        NULL);
+        h264parse, v4l2h264dec, v4l2h264dec_caps, tee,
+        qtivcomposer, fpsdisplaysink, waylandsink, NULL);
   } else if (options->use_rtsp) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), rtspsrc,
-        rtph264depay, h264parse, v4l2h264dec, tee, qtivcomposer, waylandsink,
-        fpsdisplaysink, NULL);
+        rtph264depay, h264parse, v4l2h264dec, v4l2h264dec_caps,
+        tee, qtivcomposer, waylandsink, fpsdisplaysink, NULL);
   } else {
     gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc,  qmmfsrc_caps,
         tee, qtivcomposer, fpsdisplaysink, waylandsink, NULL);
@@ -684,14 +852,14 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
       goto error_clean_pipeline;
     }
     ret = gst_element_link_many (queue[0], h264parse, v4l2h264dec,
-        tee, NULL);
+        v4l2h264dec_caps, tee, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for parse->tee\n");
       goto error_clean_pipeline;
     }
   } else if (options->use_rtsp) {
     ret = gst_element_link_many (queue[0], rtph264depay, h264parse,
-        v4l2h264dec, tee, NULL);
+        v4l2h264dec, v4l2h264dec_caps, tee, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for"
       "rtspsource->rtph264depay\n");
@@ -813,8 +981,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options)
 
 error_clean_elements:
   cleanup_gst (&qtiqmmfsrc, &qmmfsrc_caps, &filesrc, &qtdemux,
-      &h264parse, &v4l2h264dec, &rtspsrc, &rtph264depay, &tee,
-      &qtivcomposer, &fpsdisplaysink, NULL);
+      &h264parse, &v4l2h264dec, &v4l2h264dec_caps, &rtspsrc,
+      &rtph264depay, &tee, &qtivcomposer, &fpsdisplaysink, NULL);
 
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {
     cleanup_gst (GST_BIN (appctx->pipeline), qtimlvconverter[i],
@@ -849,9 +1017,25 @@ main (gint argc, gchar * argv[])
   options.camera_type = GST_CAMERA_TYPE_NONE;
   options.file_path = NULL;
   options.rtsp_ip_port = NULL;
+  options.object_detection_model_path =
+      DEFAULT_TFLITE_OBJECT_DETECTION_MODEL;
+  options.object_detection_labels_path =
+      DEFAULT_OBJECT_DETECTION_LABELS;
   options.object_detection_constants = DEFAULT_CONSTANTS_OBJECT_DETECTION;
+  options.pose_detection_model_path =
+      DEFAULT_TFLITE_POSE_DETECTION_MODEL;
+  options.pose_detection_labels_path =
+      DEFAULT_POSE_DETECTION_LABELS;
   options.pose_detection_constants = DEFAULT_CONSTANTS_POSE_DETECTION;
+  options.segmentation_model_path =
+      DEFAULT_TFLITE_SEGMENTATION_MODEL;
+  options.segmentation_labels_path =
+      DEFAULT_SEGMENTATION_LABELS;
   options.segmentation_constants = DEFAULT_CONSTANTS_SEGMENTATION;
+  options.classification_model_path =
+      DEFAULT_TFLITE_CLASSIFICATION_MODEL;
+  options.classification_labels_path =
+      DEFAULT_CLASSIFICATION_LABELS;
   options.classification_constants = DEFAULT_CONSTANTS_CLASSIFICATION;
   options.use_file = FALSE;
   options.use_rtsp = FALSE;
@@ -863,16 +1047,28 @@ main (gint argc, gchar * argv[])
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
-  // Structure to define the user options selection
-  GOptionEntry entries[] = {
-#ifdef ENABLE_CAMERA
-    { "camera", 'c', 0, G_OPTION_ARG_INT,
+  GOptionEntry camera_entry = {};
+
+  gboolean camera_is_available = is_camera_available ();
+
+  if (camera_is_available) {
+    GOptionEntry temp_camera_entry = {
+      "camera", 'c', 0, G_OPTION_ARG_INT,
       &options.camera_type,
       "Select (0) for Primary Camera and (1) for secondary one.\n"
       "      invalid camera id will switch to primary camera",
       "0 or 1"
-    },
-#endif // ENABLE_CAMERA
+    };
+
+    camera_entry = temp_camera_entry;
+  } else {
+    GOptionEntry temp_camera_entry = { NULL };
+
+    camera_entry = temp_camera_entry;
+  }
+
+  // Structure to define the user options selection
+  GOptionEntry entries[] = {
     { "file-path", 's', 0, G_OPTION_ARG_STRING,
       &options.file_path,
       "File source path",
@@ -885,47 +1081,111 @@ main (gint argc, gchar * argv[])
       "      eg: rtsp://192.168.1.110:8554/live.mkv",
       "rtsp://<ip>:<port>/<stream>"
     },
+    { "object-detection-model-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.object_detection_model_path,
+      "Path to inference model used by the object detection module \n"
+      "      for processing of incoming tensors."
+      "      Default model: " DEFAULT_TFLITE_OBJECT_DETECTION_MODEL,
+      "/MODEL"
+    },
+    { "object-detection-labels-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.object_detection_labels_path,
+      "Path to labels used by the object detection module \n"
+      "      for processing of incoming tensors."
+      "      Default labels: " DEFAULT_OBJECT_DETECTION_LABELS,
+      "/LABELS"
+    },
     { "object-detection-constants", 0, 0, G_OPTION_ARG_STRING,
       &options.object_detection_constants,
       "Constants, offsets and coefficients used by the object detection module \n"
       "      for post-processing of incoming tensors."
       " Applicable only for some modules\n"
-      "      Default constants: " DEFAULT_CONSTANTS_OBJECT_DETECTION,
+      "      Default constants: \"" DEFAULT_CONSTANTS_OBJECT_DETECTION "\"",
       "/CONSTANTS"
+    },
+    { "pose-detection-model-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.pose_detection_model_path,
+      "Path to inference model used by the pose detection module \n"
+      "      for processing of incoming tensors."
+      "      Default constants: " DEFAULT_TFLITE_POSE_DETECTION_MODEL,
+      "/MODEL"
+    },
+    { "pose-detection-labels-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.pose_detection_labels_path,
+      "Path to labels used by the pose detection module \n"
+      "      for processing of incoming tensors."
+      "      Default constants: " DEFAULT_POSE_DETECTION_LABELS,
+      "/LABELS"
     },
     { "pose-detection-constants", 0, 0, G_OPTION_ARG_STRING,
       &options.pose_detection_constants,
       "Constants, offsets and coefficients used by the pose detection module \n"
       "      for post-processing of incoming tensors."
       " Applicable only for some modules\n"
-      "      Default constants: " DEFAULT_CONSTANTS_POSE_DETECTION,
+      "      Default constants: \"" DEFAULT_CONSTANTS_POSE_DETECTION "\"",
       "/CONSTANTS"
+    },
+    { "segmentation-model-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.segmentation_model_path,
+      "Path to inference model used by the segmentation module \n"
+      "      for processing of incoming tensors."
+      "      Default model: " DEFAULT_TFLITE_SEGMENTATION_MODEL,
+      "/MODEL"
+    },
+    { "segmentation-labels-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.segmentation_labels_path,
+      "Path to labels used by the segmentation module \n"
+      "      for processing of incoming tensors."
+      "      Default labels: " DEFAULT_SEGMENTATION_LABELS,
+      "/LABELS"
     },
     { "segmentation-constants", 0, 0, G_OPTION_ARG_STRING,
       &options.segmentation_constants,
       "Constants, offsets and coefficients used by the segmentation module \n"
       "      for post-processing of incoming tensors."
       " Applicable only for some modules\n"
-      "      Default constants: " DEFAULT_CONSTANTS_SEGMENTATION,
+      "      Default constants: \"" DEFAULT_CONSTANTS_SEGMENTATION "\"",
       "/CONSTANTS"
+    },
+    { "classification-model-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.classification_model_path,
+      "Path to inference model used by the classification module \n"
+      "      for processing of incoming tensors."
+      "      Default model: " DEFAULT_TFLITE_CLASSIFICATION_MODEL,
+      "/MODEL"
+    },
+    { "classification-labels-path", 0, 0, G_OPTION_ARG_STRING,
+      &options.classification_labels_path,
+      "Path to labels used by the classification module \n"
+      "      for processing of incoming tensors."
+      "      Default labels: " DEFAULT_CLASSIFICATION_LABELS,
+      "/LABELS"
     },
     { "classification-constants", 0, 0, G_OPTION_ARG_STRING,
       &options.classification_constants,
       "Constants, offsets and coefficients used by the classification module \n"
       "      for post-processing of incoming tensors."
       " Applicable only for some modules\n"
-      "      Default constants: " DEFAULT_CONSTANTS_CLASSIFICATION,
+      "      Default constants: \"" DEFAULT_CONSTANTS_CLASSIFICATION "\"",
       "/CONSTANTS"
     },
+    camera_entry,
     { NULL }
   };
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
+
+  gchar camera_description[255] = {};
+
+  if (camera_is_available) {
+    snprintf (camera_description, sizeof (camera_description),
+      "  %s --camera=0\n",
+      app_name);
+  }
+
   snprintf (help_description, 2047, "\nExample:\n"
-#ifdef ENABLE_CAMERA
-      "  %s --camera=0\n"
-#endif // ENABLE_CAMERA
-      "  %s --file-path=\"/opt/video.mp4\"\n"
+      "  %s\n"
+      "  %s --file-path=\"/etc/media/video.mp4\"\n"
       "  %s --rtsp-ip-port=\"rtsp://<ip>:<port>/<stream>\"\n"
       "\nThis Sample App demonstrates Classification, Segmemtation"
       "Object Detection, Pose Detection On Live Stream "
@@ -943,9 +1203,7 @@ main (gint argc, gchar * argv[])
       "  ------------------------------------------------------------"
       "--------------------------------------------\n"
       "\nTo use your own model and labels replace at the default paths\n",
-#ifdef ENABLE_CAMERA
-      app_name,
-#endif // ENABLE_CAMERA
+      camera_description,
       app_name, app_name, "Model", "Labels",
       DEFAULT_TFLITE_OBJECT_DETECTION_MODEL, DEFAULT_OBJECT_DETECTION_LABELS,
       DEFAULT_TFLITE_POSE_DETECTION_MODEL,DEFAULT_POSE_DETECTION_LABELS,
@@ -981,17 +1239,17 @@ main (gint argc, gchar * argv[])
     return -EFAULT;
   }
 
-// Check for input source
-#ifdef ENABLE_CAMERA
-  g_print ("TARGET Can support file source, RTSP source and camera source\n");
-#else
-  g_print ("TARGET Can only support file source and RTSP source.\n");
-  if (options.file_path == NULL && options.rtsp_ip_port == NULL) {
-    g_print ("User need to give proper input file as source\n");
-    gst_app_context_free (&appctx, &options);
-    return -EINVAL;
+  // Check for input source
+  if (camera_is_available) {
+    g_print ("TARGET Can support file source, RTSP source and camera source\n");
+  } else {
+    g_print ("TARGET Can only support file source and RTSP source.\n");
+    if (options.file_path == NULL && options.rtsp_ip_port == NULL) {
+      g_print ("User need to give proper input file as source\n");
+      gst_app_context_free (&appctx, &options);
+      return -EINVAL;
+    }
   }
-#endif // ENABLE_CAMERA
 
   if (options.file_path != NULL) {
     options.use_file = TRUE;
@@ -1043,15 +1301,31 @@ main (gint argc, gchar * argv[])
     g_print ("Camera Source is Selected\n");
   }
 
+  gchar * options_models[4] = {
+    options.object_detection_model_path,
+    options.classification_model_path,
+    options.pose_detection_model_path,
+    options.segmentation_model_path
+  };
+
+  gchar * options_labels[4] = {
+    options.object_detection_labels_path,
+    options.classification_labels_path,
+    options.pose_detection_labels_path,
+    options.segmentation_labels_path
+  };
+
+  options.pipeline_data = create_ml_pipeline_data (options_models, options_labels);
+
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {
-    if (!file_exists (pipeline_data[i].model)) {
-      g_printerr ("File does not exist: %s\n", pipeline_data[i].model);
+    if (!file_exists (options.pipeline_data[i].model)) {
+      g_printerr ("File does not exist: %s\n", options.pipeline_data[i].model);
       gst_app_context_free (&appctx, &options);
       return -EINVAL;
     }
 
-    if (!file_exists (pipeline_data[i].labels)) {
-      g_printerr ("File does not exist: %s\n", pipeline_data[i].labels);
+    if (!file_exists (options.pipeline_data[i].labels)) {
+      g_printerr ("File does not exist: %s\n", options.pipeline_data[i].labels);
       gst_app_context_free (&appctx, &options);
       return -EINVAL;
     }

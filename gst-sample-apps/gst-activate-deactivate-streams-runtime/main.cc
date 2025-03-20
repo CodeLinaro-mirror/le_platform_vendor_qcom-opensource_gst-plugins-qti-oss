@@ -194,7 +194,6 @@ static gboolean
 handle_app_interrupt_signal (gpointer userdata)
 {
   GstActivateDeactivateAppContext *appctx = (GstActivateDeactivateAppContext *) userdata;
-  guint idx = 0;
   GstState state, pending;
 
   g_print ("\n\nReceived an interrupt signal, send EOS ...\n");
@@ -276,8 +275,8 @@ create_encoder_stream (GstActivateDeactivateAppContext * appctx, GstStreamInf * 
   g_object_set (G_OBJECT (stream->capsfilter), "caps", stream->qmmf_caps, NULL);
 
   // Set encoder properties
-  g_object_set (G_OBJECT (stream->encoder), "capture-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (stream->encoder), "output-io-mode", 5, NULL);
+  g_object_set (G_OBJECT (stream->encoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set (G_OBJECT (stream->encoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
 
   // Set mp4mux in robust mode
   g_object_set (G_OBJECT (stream->mp4mux), "reserved-moov-update-period",
@@ -640,7 +639,6 @@ static GstStreamInf *
 create_stream (GstActivateDeactivateAppContext * appctx, gboolean dummy,
     gint x, gint y, gint w, gint h)
 {
-  gchar temp_str[100];
   gboolean ret = FALSE;
   GstStreamInf *stream = g_new0 (GstStreamInf, 1);
 
@@ -652,16 +650,13 @@ create_stream (GstActivateDeactivateAppContext * appctx, gboolean dummy,
   stream->width = w;
   stream->height = h;
   stream->qmmf_caps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
+      "format", G_TYPE_STRING, "NV12_Q08C",
       "width", G_TYPE_INT, w,
       "height", G_TYPE_INT, h,
       "framerate", GST_TYPE_FRACTION, 30, 1,
-      "compression", G_TYPE_STRING, "ubwc",
       "interlace-mode", G_TYPE_STRING, "progressive",
       "colorimetry", G_TYPE_STRING, "bt601",
       NULL);
-  gst_caps_set_features (stream->qmmf_caps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
 
   // Get qmmfsrc Element class
   GstElementClass *qtiqmmfsrc_klass = GST_ELEMENT_GET_CLASS (qtiqmmfsrc);
@@ -1143,7 +1138,6 @@ main (gint argc, gchar * argv[])
   GOptionContext *ctx = NULL;
   GstActivateDeactivateAppContext *appctx = NULL;
   GMainLoop *mloop = NULL;
-  GstCaps *filtercaps;
   GstElement *pipeline = NULL;
   GstElement *qtiqmmfsrc = NULL;
   GstBus *bus = NULL;
@@ -1172,7 +1166,7 @@ main (gint argc, gchar * argv[])
       "What output to use",
       "Accepted values: \"File\" or \"Display\""
     },
-    { NULL }
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
   // Parse command line entries.

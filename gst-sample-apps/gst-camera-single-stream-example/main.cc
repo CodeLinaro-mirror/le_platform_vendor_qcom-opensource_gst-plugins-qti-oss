@@ -107,7 +107,7 @@ gst_app_context_new ()
   ctx->mloop = NULL;
   ctx->plugins = NULL;
   ctx->output_file = NULL;
-  ctx->ip_address = DEFAULT_IP;
+  ctx->ip_address = const_cast<gchar *> (DEFAULT_IP);
   ctx->port_num = DEFAULT_PORT;
   ctx->sinktype = GST_WAYLANDSINK;
   ctx->width = DEFAULT_WIDTH;
@@ -170,8 +170,14 @@ static gboolean
 create_pipe (GstCameraAppContext * appctx)
 {
   // Declare the elements of the pipeline
-  GstElement *qtiqmmfsrc, *capsfilter, *waylandsink, *filesink, *v4l2h264enc;
-  GstElement *h264parse, *mp4mux, *rtph264pay, *udpsink;
+  GstElement *qtiqmmfsrc, *capsfilter;
+  GstElement *waylandsink = NULL;
+  GstElement *filesink = NULL;
+  GstElement *v4l2h264enc = NULL;
+  GstElement *h264parse = NULL;
+  GstElement *mp4mux = NULL;
+  GstElement *rtph264pay = NULL;
+  GstElement *udpsink = NULL;
   GstCaps *filtercaps;
   GstStructure *fcontrols;
   gboolean ret = FALSE;
@@ -181,30 +187,16 @@ create_pipe (GstCameraAppContext * appctx)
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
   capsfilter = gst_element_factory_make ("capsfilter", "capsfilter");
 
-  // Set the source elements capability and in case YUV dump disable UBWC
-  if (appctx->sinktype == GST_YUV_DUMP) {
-    filtercaps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, "NV12",
-        "width", G_TYPE_INT, appctx->width,
-        "height", G_TYPE_INT, appctx->height,
-        "framerate", GST_TYPE_FRACTION, 30, 1,
-        "interlace-mode", G_TYPE_STRING, "progressive",
-        "colorimetry", G_TYPE_STRING, "bt601",
-        NULL);
-  } else {
-    filtercaps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, "NV12",
-        "width", G_TYPE_INT, appctx->width,
-        "height", G_TYPE_INT, appctx->height,
-        "framerate", GST_TYPE_FRACTION, 30, 1,
-        "compression", G_TYPE_STRING, "ubwc",
-        "interlace-mode", G_TYPE_STRING, "progressive",
-        "colorimetry", G_TYPE_STRING, "bt601",
-        NULL);
-  }
+  // Set the source elements capability
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12",
+      "width", G_TYPE_INT, appctx->width,
+      "height", G_TYPE_INT, appctx->height,
+      "framerate", GST_TYPE_FRACTION, 30, 1,
+      "interlace-mode", G_TYPE_STRING, "progressive",
+      "colorimetry", G_TYPE_STRING, "bt601",
+      NULL);
 
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -233,7 +225,7 @@ create_pipe (GstCameraAppContext * appctx)
     }
   } else if (appctx->sinktype == GST_YUV_DUMP) {
     // set the output file location for filesink element
-    appctx->output_file = DEFAULT_OP_YUV_FILENAME;
+    appctx->output_file = const_cast<gchar *> (DEFAULT_OP_YUV_FILENAME);
     filesink = gst_element_factory_make ("multifilesink", "filesink");
     g_object_set (G_OBJECT (filesink), "location", appctx->output_file, NULL);
     g_object_set (G_OBJECT (filesink), "enable-last-sample", false, NULL);
@@ -260,8 +252,8 @@ create_pipe (GstCameraAppContext * appctx)
       appctx->sinktype == GST_RTSP_STREAMING) {
     // Create v4l2h264enc element and set the properties
     v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
-    g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", 5, NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
 
     // Create h264parse element for parsing the stream
     h264parse = gst_element_factory_make ("h264parse", "h264parse");
@@ -301,7 +293,7 @@ create_pipe (GstCameraAppContext * appctx)
       mp4mux = gst_element_factory_make ("mp4mux", "mp4mux");
 
       // Create filesink element for storing the encoding stream
-      appctx->output_file = DEFAULT_OP_MP4_FILENAME;
+      appctx->output_file = const_cast<gchar *> (DEFAULT_OP_MP4_FILENAME);
       filesink = gst_element_factory_make ("filesink", "filesink");
       g_object_set (G_OBJECT (filesink), "location", appctx->output_file, NULL);
 
@@ -382,18 +374,18 @@ main (gint argc, gchar *argv[])
     { "height", 'h', 0, G_OPTION_ARG_INT, &appctx->height, "height",
       "camera height" },
     { "output", 'o', 0, G_OPTION_ARG_INT, &appctx->sinktype,
-      "Sinktype"
+      "Sinktype",
       "\n\t0-WAYLANDSINK"
       "\n\t1-VIDEOENCODING"
       "\n\t2-YUVDUMP"
       "\n\t3-RTSPSTREAMING" },
     { "ip", 'i', 0, G_OPTION_ARG_STRING,
       &appctx->ip_address,
-      "Valid IP address in case of RSTP streaming output" },
+      "RSTP server listening address.", "Valid IP Address" },
     { "port", 'p', 0, G_OPTION_ARG_INT,
       &appctx->port_num,
-      "Valid port number in case of RSTP streaming output" },
-    { NULL }
+      "RSTP server listening port", "Port number." },
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 
   // Parse command line entries.

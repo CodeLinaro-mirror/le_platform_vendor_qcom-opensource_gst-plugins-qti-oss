@@ -32,6 +32,7 @@ DEFAULT_CONSTANTS_POSE_DETECTION = "hrnet,q-offsets=<8.0>,\
 QUEUE_COUNT = 6
 
 waiting_for_eos = False
+eos_received = False
 def handle_interrupt_signal(pipeline, mloop):
     """Handle Ctrl+C."""
     global waiting_for_eos
@@ -53,6 +54,7 @@ def handle_interrupt_signal(pipeline, mloop):
 
 def handle_bus_message(bus, message, mloop):
     """Handle messages posted on pipeline bus."""
+    global eos_received
 
     if message.type == Gst.MessageType.ERROR:
         error, debug_info = message.parse_error()
@@ -62,6 +64,7 @@ def handle_bus_message(bus, message, mloop):
         mloop.quit()
     elif message.type == Gst.MessageType.EOS:
         print("EoS received")
+        eos_received = True
         mloop.quit()
 
     return True
@@ -132,9 +135,40 @@ def create_pipeline(pipeline):
     )
     parser.add_argument("--constants_pose", type=str,
         default=DEFAULT_CONSTANTS_POSE_DETECTION,
-        help="Constants for Object detection model"
+        help="Constants for Pose detection model"
     )
+    parser.add_argument("--tflite_yolov8_model", type=str,
+        default=DEFAULT_TFLITE_YOLOV8_MODEL,
+        help="Path to YOLOv8 TFLite model"
+    )
+    parser.add_argument("--yolov8_labels", type=str,
+        default=DEFAULT_YOLOV8_LABELS,
+        help="Path to YOLOv8 labels"
+    )
+    parser.add_argument("--tflite_pose_model", type=str,
+        default=DEFAULT_TFLITE_POSE_MODEL,
+        help="Path to pose TFLite model"
+    )
+    parser.add_argument("--pose_labels", type=str,
+        default=DEFAULT_POSE_LABELS,
+        help="Path to pose labels"
+    )
+
     args = parser.parse_args()
+
+    # Check if all model and label files are present
+    if not os.path.exists(args.tflite_yolov8_model):
+        print(f"File {args.tflite_yolov8_model} does not exist")
+        sys.exit(1)
+    if not os.path.exists(args.yolov8_labels):
+        print(f"File {args.yolov8_labels} does not exist")
+        sys.exit(1)
+    if not os.path.exists(args.tflite_pose_model):
+        print(f"File {args.tflite_pose_model} does not exist")
+        sys.exit(1)
+    if not os.path.exists(args.pose_labels):
+        print(f"File {args.pose_labels} does not exist")
+        sys.exit(1)
 
     if not args.camera and args.file is None and args.rtsp is None:
         args.camera = True
@@ -225,8 +259,8 @@ def create_pipeline(pipeline):
     # Create capsfilter for detection
     elements["detection_filter"] = create_element("capsfilter", "capsfilter")
 
-    # Create qtioverlay
-    elements["qtioverlay"] = create_element("qtioverlay", "qtioverlay")
+    # Create qtivoverlay
+    elements["qtivoverlay"] = create_element("qtivoverlay", "qtivoverlay")
 
     # Create fpsdisplaysink to display current and average fps
     # as a text overlay
@@ -283,7 +317,7 @@ def create_pipeline(pipeline):
     elements["qtimltflite0"].set_property(
         "external-delegate-path", DELEGATE_PATH)
     elements["qtimltflite0"].set_property(
-        "model", DEFAULT_TFLITE_YOLOV8_MODEL)
+        "model", args.tflite_yolov8_model)
 
     options_structure0 = Gst.Structure.new_empty("QNNExternalDelegate")
     options_structure0.set_value("backend_type", "htp")
@@ -296,7 +330,7 @@ def create_pipeline(pipeline):
     elements["qtimltflite1"].set_property(
         "external-delegate-path", DELEGATE_PATH)
     elements["qtimltflite1"].set_property(
-        "model", DEFAULT_TFLITE_POSE_MODEL)
+        "model", args.tflite_pose_model)
 
     options_structure1 = Gst.Structure.new_empty("QNNExternalDelegate")
     options_structure1.set_value("backend_type", "htp")
@@ -313,16 +347,16 @@ def create_pipeline(pipeline):
     elements["qtimlvdetection"].set_property("module", "yolov8")
     elements["qtimlvdetection"].set_property("threshold", 40.0)
     elements["qtimlvdetection"].set_property("results", 4)
-    elements["qtimlvdetection"].set_property("labels", DEFAULT_YOLOV8_LABELS)
+    elements["qtimlvdetection"].set_property("labels", args.yolov8_labels)
     elements["qtimlvdetection"].set_property("constants", args.constants_detection)
 
     elements["qtimlvpose"].set_property("module", "hrnet")
     elements["qtimlvpose"].set_property("threshold", 51.0)
     elements["qtimlvpose"].set_property("results", 1)
-    elements["qtimlvpose"].set_property("labels", DEFAULT_POSE_LABELS)
+    elements["qtimlvpose"].set_property("labels", args.pose_labels)
     elements["qtimlvpose"].set_property("constants", args.constants_pose)
 
-    elements["qtioverlay"].set_property("engine", "gles")
+    elements["qtivoverlay"].set_property("engine", "gles")
 
     # Set sync to False to override default value
     waylandsink.set_property("sync", True)
@@ -395,7 +429,7 @@ def create_pipeline(pipeline):
 
     link_orders+= [
         [
-            "qtivcomposer", "qtioverlay", "fpsdisplaysink"
+            "qtivcomposer", "qtivoverlay", "fpsdisplaysink"
         ]
     ]
 
@@ -488,6 +522,8 @@ def main():
     mloop = None
     pipeline = None
     Gst.deinit()
+    if eos_received:
+        print("App execution successful")
 
 if __name__ == "__main__":
     sys.exit(main())

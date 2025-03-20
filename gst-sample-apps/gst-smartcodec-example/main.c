@@ -157,9 +157,17 @@ on_pad_added (GstElement * element[0], GstPad * pad, gpointer data)
 static gboolean
 create_pipe (GstSmartCodecContext * appctx)
 {
-  GstElement *qtiqmmfsrc, *capsfilter_ctrl, *capsfilter_enc, *qtismartvencbin,
-      *filesrc, *qtdemux, *vparse, *vdecoder, *pqueue, *queue, *tee, *h264parse,
-      *mp4mux, *filesink, *queue_ctrl, *queue_sc;
+  GstElement *qtismartvencbin, *h264parse, *mp4mux, *filesink, *queue_ctrl, *queue_sc;
+  GstElement *qtiqmmfsrc = NULL;
+  GstElement *capsfilter_ctrl = NULL;
+  GstElement *capsfilter_enc = NULL;
+  GstElement *filesrc = NULL;
+  GstElement *qtdemux = NULL;
+  GstElement *vparse = NULL;
+  GstElement *vdecoder = NULL;
+  GstElement *pqueue = NULL;
+  GstElement *queue = NULL;
+  GstElement *tee = NULL;
   GstCaps *filtercaps;
   GstPad *qmmf_pad, *sc_src, *ctrl_src, *sc_sink, *ctrl_sink;
   gboolean ret = FALSE;
@@ -182,8 +190,7 @@ create_pipe (GstSmartCodecContext * appctx)
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, 1280, "height", G_TYPE_INT, 720,
         "framerate", GST_TYPE_FRACTION, 15, 1, NULL);
-    gst_caps_set_features (filtercaps, 0, gst_caps_features_new ("memory:GBM",
-            NULL));
+
     g_object_set (G_OBJECT (capsfilter_ctrl), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -191,9 +198,8 @@ create_pipe (GstSmartCodecContext * appctx)
     filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
         "NV12", "width", G_TYPE_INT, appctx->width, "height", G_TYPE_INT,
         appctx->height, "framerate", GST_TYPE_FRACTION, 30, 1, "compression",
-        G_TYPE_STRING, "ubwc", NULL);
-    gst_caps_set_features (filtercaps, 0,
-        gst_caps_features_new ("memory:GBM", NULL));
+        NULL);
+
     g_object_set (G_OBJECT (capsfilter_enc), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -241,8 +247,8 @@ create_pipe (GstSmartCodecContext * appctx)
     vdecoder = gst_element_factory_make ("v4l2h264dec", "vdecoder");
 
     // Set capture I/O mode for decoder
-    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (vdecoder), "output-io-mode", 5, NULL);
+    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+    g_object_set (G_OBJECT (vdecoder), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
 
     if (!filesrc || !tee || !qtdemux || !vparse || !pqueue || !queue ||
         !vdecoder) {
@@ -430,12 +436,12 @@ main (gint argc, gchar * argv[])
   {"height", 'h', 0, G_OPTION_ARG_INT, &appctx->height, "height",
       "image height"},
   {"output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
-      "Output Filename , \
-          -o /opt/video.mp4"},
+    "Output Filename",
+    "-o /opt/video.mp4"},
   {"input_file", 'i', 0, G_OPTION_ARG_FILENAME, &appctx->input_file,
-      "Input Filename - i/p mp4 file path and name"
-        "e.g. -i /opt/<file_name>.mp4"},
-  {NULL}
+    "Input Filename - i/p mp4 file path and name",
+    "e.g. -i /opt/<file_name>.mp4"},
+  { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
   // Parse command line entries.
@@ -467,16 +473,16 @@ main (gint argc, gchar * argv[])
   }
 
   // Check for input source
-  #ifdef ENABLE_CAMERA
+  if (is_camera_available ()) {
     g_print ("TARGET Can support file and camera source\n");
-  #else
+  } else {
     g_print ("TARGET Can only support file source.\n");
     if (appctx->input_file == NULL){
       g_print ("User need to give proper input file as source\n");
       gst_app_context_free (appctx);
       return ret;
     }
-  #endif // ENABLE_CAMERA
+  }
 
   // set the Output Filename
   if (appctx->output_file == NULL)

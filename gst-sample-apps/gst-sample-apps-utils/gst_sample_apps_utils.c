@@ -200,6 +200,29 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 }
 
 /**
+ * Sets an enum property on a GstElement
+ *
+ * @param element The GstElement on which to set the property.
+ * @param propname The name of the property to set.
+ * @param valname The value to set the property to.
+ *
+ */
+void
+gst_element_set_enum_property (GstElement * element, const gchar * propname,
+    const gchar * valname)
+{
+  GValue value = G_VALUE_INIT;
+  GParamSpec *propspecs = NULL;
+
+  propspecs = g_object_class_find_property (G_OBJECT_GET_CLASS (element), propname);
+  g_value_init (&value, G_PARAM_SPEC_VALUE_TYPE (propspecs));
+  gst_value_deserialize (&value, valname);
+
+  g_object_set_property (G_OBJECT (element), propname, &value);
+  g_value_unset (&value);
+}
+
+/**
  * Get enum for property nick name
  *
  * @param element Plugin to query the property.
@@ -292,4 +315,35 @@ cleanup_gst (void * first_elem, ...)
     p_gst_obj = va_arg (args, void **);
   }
   va_end (args);
+}
+
+gboolean
+is_camera_available ()
+{
+  gboolean is_qmmf_on = FALSE;
+
+  GError *error = NULL;
+
+  GOptionEntry entries[] = { { NULL } };
+  GOptionContext * ctx = g_option_context_new ("Dummy context");
+  g_option_context_add_main_entries (ctx, entries, NULL);
+  g_option_context_add_group (ctx, gst_init_get_option_group ());
+
+  g_option_context_parse (ctx, NULL, NULL, &error);
+  g_option_context_free (ctx);
+
+  GstRegistry * gst_reg = gst_registry_get ();
+
+  GstPlugin * gst_plugin = NULL;
+
+  if (gst_reg)
+    gst_plugin = gst_registry_find_plugin (gst_reg, "qtiqmmfsrc");
+
+  if (gst_plugin) {
+    gst_object_unref (gst_plugin);
+
+    is_qmmf_on = TRUE;
+  }
+
+  return is_qmmf_on;
 }

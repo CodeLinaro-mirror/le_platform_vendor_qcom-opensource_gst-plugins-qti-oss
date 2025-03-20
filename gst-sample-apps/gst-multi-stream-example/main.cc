@@ -81,7 +81,7 @@ gst_app_context_new ()
   ctx->width = DEFAULT_WIDTH;
   ctx->height = DEFAULT_HEIGHT;
   ctx->stream_count = DEFAULT_NUM_OF_STREAM;
-  ctx->output_file = DEFAULT_OUTPUT_FILENAME;
+  ctx->output_file = const_cast<gchar *> (DEFAULT_OUTPUT_FILENAME);
   return ctx;
 }
 
@@ -124,11 +124,12 @@ gst_app_context_free (GstMultiStreamAppContext * appctx)
     appctx->pipeline = NULL;
   }
 
-  if (appctx->output_file != NULL && appctx->output_file != DEFAULT_OUTPUT_FILENAME)
-    g_free (appctx->output_file);
+  if (appctx->output_file != NULL &&
+    appctx->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME))
+    g_free ((gpointer)appctx->output_file);
 
   if (appctx != NULL)
-    g_free (appctx);
+    g_free ((gpointer)appctx);
 }
 
 /**
@@ -184,8 +185,8 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
 
   // Create v4l2h264enc element and set the properties
   v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
-  g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5, NULL);
-  g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", 5, NULL);
+  g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+  g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
   controls = gst_structure_from_string (
       "controls,video_bitrate_mode=0", NULL);
   g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", controls, NULL);
@@ -231,10 +232,8 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
       "width", G_TYPE_INT, appctx->width,
       "height", G_TYPE_INT, appctx->height,
       "framerate", GST_TYPE_FRACTION, 30, 1,
-      "compression", G_TYPE_STRING, "ubwc",
       NULL);
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
+
   g_object_set (G_OBJECT (capsfilter_dis), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -244,13 +243,10 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
       "width", G_TYPE_INT, appctx->width,
       "height", G_TYPE_INT, appctx->height,
       "framerate", GST_TYPE_FRACTION, 30, 1,
-      "compression", G_TYPE_STRING, "ubwc",
       "interlace-mode", G_TYPE_STRING, "progressive",
       "colorimetry", G_TYPE_STRING, "bt601",
       NULL);
 
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter_enc), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -318,9 +314,9 @@ main (gint argc, gchar *argv[])
     { "num_of_streams", 'n', DEFAULT_NUM_OF_STREAM, G_OPTION_ARG_INT,
       &appctx->stream_count, "num_of_streams", "Stream count for single camera" },
     { "output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
-      "Output Filename , \
-          -o /opt/video.mp4" },
-    { NULL }
+      "Output Filename",
+      "-o /opt/video.mp4" },
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 
   // Parse command line entries.

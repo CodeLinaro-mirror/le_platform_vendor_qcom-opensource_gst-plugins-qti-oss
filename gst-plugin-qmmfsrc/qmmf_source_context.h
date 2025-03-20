@@ -142,6 +142,7 @@ enum
   PARAM_CAMERA_INPUT_ROI,
   PARAM_CAMERA_INPUT_ROI_INFO,
   PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH,
+  PARAM_CAMERA_SUPER_FRAMERATE,
 };
 
 GST_API GstQmmfContext *
@@ -171,13 +172,10 @@ gst_qmmf_context_delete_image_stream (GstQmmfContext * context, GstPad * pad,
                                       gboolean cache);
 
 GST_API gboolean
-gst_qmmf_context_start_video_stream (GstQmmfContext * context, GstPad * pad);
+gst_qmmf_context_start_video_streams (GstQmmfContext * context, GArray * ids);
 
 GST_API gboolean
-gst_qmmf_context_stop_video_stream (GstQmmfContext * context, GstPad * pad);
-
-GST_API gboolean
-gst_qmmf_context_pause_video_stream (GstQmmfContext * context, GstPad * pad);
+gst_qmmf_context_stop_video_streams (GstQmmfContext * context, GArray * ids);
 
 GST_API gboolean
 gst_qmmf_context_capture_image (GstQmmfContext * context,

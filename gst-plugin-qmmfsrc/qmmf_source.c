@@ -73,6 +73,10 @@
 #include <gst/gstpadtemplate.h>
 #include <gst/gstelementfactory.h>
 #include <gst/allocators/allocators.h>
+#include <gst/video/video-utils.h>
+#ifdef ENABLE_RUNTIME_PARSER
+#include <gst/utils/runtime-flags-parser-c-api.h>
+#endif // ENABLE_RUNTIME_PARSER
 
 #include "qmmf_source_utils.h"
 #include "qmmf_source_image_pad.h"
@@ -127,6 +131,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_OPERATION_MODE            CAM_OPMODE_NONE
 #define DEFAULT_PROP_CAMERA_MULTI_ROI                 FALSE
 #define DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH    -1
+#define DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE        GST_PAD_ACTIVATION_MODE_NORMAL
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -142,6 +147,7 @@ enum
   SIGNAL_CANCEL_CAPTURE,
   SIGNAL_RESULT_METADATA,
   SIGNAL_URGENT_METADATA,
+  SIGNAL_VIDEO_PADS_ACTIVATION,
   LAST_SIGNAL
 };
 
@@ -199,75 +205,240 @@ enum
   PROP_CAMERA_INPUT_ROI,
   PROP_CAMERA_INPUT_ROI_INFO,
   PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
+  PROP_CAMERA_PAD_ACTIVATION_MODE,
 };
 
-static GstStaticPadTemplate qmmfsrc_video_src_template =
-    GST_STATIC_PAD_TEMPLATE("video_%u",
-        GST_PAD_SRC,
-        GST_PAD_REQUEST,
-        GST_STATIC_CAPS (
-            QMMFSRC_VIDEO_JPEG_CAPS "; "
-            QMMFSRC_VIDEO_RAW_CAPS (
-                "{ NV12, NV16"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-                ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-                ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-                ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ", NV12_10LE32"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_VIDEO_RAW_CAPS_WITH_FEATURES (
-                GST_CAPS_FEATURE_MEMORY_GBM,
-                "{ NV12, NV16"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-                ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-                ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-                ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ", NV12_10LE32"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_VIDEO_BAYER_CAPS (
-                "{ bggr, rggb, gbrg, grbg, mono }",
-                "{ 8, 10, 12, 16 }")
-        )
-    );
+#ifdef ENABLE_RUNTIME_PARSER
 
-static GstStaticPadTemplate qmmfsrc_image_src_template =
-    GST_STATIC_PAD_TEMPLATE("image_%u",
-        GST_PAD_SRC,
-        GST_PAD_REQUEST,
-        GST_STATIC_CAPS (
-            QMMFSRC_IMAGE_JPEG_CAPS "; "
-            QMMFSRC_IMAGE_RAW_CAPS (
-                "{ NV21"
+#define CAPS_SIZE 255
+
+static GstStaticPadTemplate qmmfsrc_video_src_template;
+static GstStaticPadTemplate qmmfsrc_image_src_template;
+
+static void
+qmmfsrc_deinit_src_templates ()
+{
+  if (NULL != qmmfsrc_video_src_template.static_caps.string) {
+    g_free (qmmfsrc_video_src_template.static_caps.string);
+    qmmfsrc_video_src_template.static_caps.string = NULL;
+  }
+
+  if (NULL != qmmfsrc_image_src_template.static_caps.string) {
+    g_free (qmmfsrc_image_src_template.static_caps.string);
+    qmmfsrc_image_src_template.static_caps.string = NULL;
+  }
+}
+
+static void
+qmmfsrc_init_src_templates ()
+{
+  void* qmmfsrc_parser = get_qmmfsrc_parser ();
+
+  gint video_max_width  = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_WIDTH");
+  gint video_max_height = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_HEIGHT");
+  gint video_max_fps    = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_FPS");
+
+  gchar* common_video_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (common_video_caps, CAPS_SIZE,
+      "width = (int) [ 16, " "%d" " ], "
+      "height = (int) [ 16," "%d" " ], "
+      "framerate = (fraction) [ 0/1, " "%d" " ] ; ",
+      video_max_width,
+      video_max_height,
+      video_max_fps
+  );
+
+  gchar* video_jpeg_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (video_jpeg_caps, CAPS_SIZE,
+      "image/jpeg,"
+      "%s",
+      common_video_caps
+  );
+
+  gchar* video_raw_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (video_raw_caps, CAPS_SIZE,
+      "video/x-raw, "
+      "format = (string) "
+      "{ NV12, NV16"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+      ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+      ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+      ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+      ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+      " }" ", "
+      "%s",
+      common_video_caps
+  );
+
+  gchar* video_raw_caps_with_features = (gchar *) g_malloc (
+      CAPS_SIZE * sizeof (gchar));
+
+  snprintf (video_raw_caps_with_features, CAPS_SIZE,
+      "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
+      "format = (string) "
+      "{ NV12, NV16"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+      ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+      ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+      ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+      ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+      " }" ", "
+      "%s",
+      common_video_caps
+  );
+
+  gchar* video_bayer_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (video_bayer_caps, CAPS_SIZE,
+      "video/x-bayer, "
+      "format = (string) " "{ bggr, rggb, gbrg, grbg, mono }" ", "
+      "bpp = (string) " "{ 8, 10, 12, 16 }" ", "
+      "%s",
+      common_video_caps
+  );
+
+  g_free (common_video_caps);
+
+  const gchar* qmmfsrc_all_video_caps = (const gchar *) g_malloc (
+      4 * CAPS_SIZE * sizeof (gchar));
+
+  snprintf ((gchar *) qmmfsrc_all_video_caps, 4 * CAPS_SIZE,
+      "%s"
+      "%s"
+      "%s"
+      "%s",
+      video_jpeg_caps,
+      video_raw_caps,
+      video_raw_caps_with_features,
+      video_bayer_caps
+  );
+
+  g_free (video_jpeg_caps);
+  g_free (video_raw_caps);
+  g_free (video_raw_caps_with_features);
+  g_free (video_bayer_caps);
+
+  GstStaticCaps static_video_caps = {
+    .caps = NULL,
+    .string = qmmfsrc_all_video_caps,
+    ._gst_reserved = { NULL }
+  };
+
+  qmmfsrc_video_src_template.name_template = "video_%u";
+  qmmfsrc_video_src_template.direction = GST_PAD_SRC;
+  qmmfsrc_video_src_template.presence = GST_PAD_REQUEST;
+  qmmfsrc_video_src_template.static_caps = static_video_caps;
+
+  gint image_max_width  = get_flag_as_int (qmmfsrc_parser, "GST_IMAGE_MAX_WIDTH");
+  gint image_max_height = get_flag_as_int (qmmfsrc_parser, "GST_IMAGE_MAX_HEIGHT");
+
+  gchar* common_image_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (common_image_caps, CAPS_SIZE,
+      "width = (int) [ 16, " "%d" " ], "
+      "height = (int) [ 16," "%d" " ], "
+      "framerate = (fraction) [ 0/1, 30/1 ] ; ",
+      image_max_width,
+      image_max_height
+  );
+
+  gchar* image_jpeg_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (image_jpeg_caps, CAPS_SIZE,
+      "image/jpeg,"
+      "%s",
+      common_image_caps
+  );
+
+  gchar* image_raw_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (image_raw_caps, CAPS_SIZE,
+      "video/x-raw, "
+      "format = (string) "
+      "{ NV21"
 #ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
+      ", NV12"
 #endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (
-                GST_CAPS_FEATURE_MEMORY_GBM,
-                "{ NV21"
+      " }" ", "
+      "%s",
+      common_image_caps
+  );
+
+  gchar* image_raw_caps_with_features = (gchar *) g_malloc (
+      CAPS_SIZE * sizeof (gchar));
+
+  snprintf (image_raw_caps_with_features, CAPS_SIZE,
+      "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
+      "format = (string) "
+      "{ NV21"
 #ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
+      ", NV12"
 #endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_IMAGE_BAYER_CAPS (
-                "{ bggr, rggb, gbrg, grbg, mono }",
-                "{ 8, 10, 12, 16 }")
-        )
-    );
+      " }" ", "
+      "%s",
+      common_image_caps
+  );
+
+  gchar* image_bayer_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
+
+  snprintf (image_bayer_caps, CAPS_SIZE,
+      "video/x-bayer, "
+      "format = (string) " "{ bggr, rggb, gbrg, grbg, mono }" ", "
+      "bpp = (string) " "{ 8, 10, 12, 16 }" ", "
+      "%s",
+      common_image_caps
+  );
+
+  g_free (common_image_caps);
+
+  const gchar* qmmfsrc_all_image_caps = (const gchar *) g_malloc (
+      4 * CAPS_SIZE * sizeof (gchar));
+
+  snprintf ((gchar *) qmmfsrc_all_image_caps, 4 * CAPS_SIZE,
+      "%s"
+      "%s"
+      "%s"
+      "%s",
+      image_jpeg_caps,
+      image_raw_caps,
+      image_raw_caps_with_features,
+      image_bayer_caps
+  );
+
+  g_free (image_jpeg_caps);
+  g_free (image_raw_caps);
+  g_free (image_raw_caps_with_features);
+  g_free (image_bayer_caps);
+
+  GstStaticCaps static_image_caps = {
+    .caps = NULL,
+    .string = qmmfsrc_all_image_caps,
+    ._gst_reserved = { NULL }
+  };
+
+  qmmfsrc_image_src_template.name_template = "image_%u";
+  qmmfsrc_image_src_template.direction = GST_PAD_SRC;
+  qmmfsrc_image_src_template.presence = GST_PAD_REQUEST;
+  qmmfsrc_image_src_template.static_caps = static_image_caps;
+}
+#endif // ENABLE_RUNTIME_PARSER
 
 static gboolean
 qmmfsrc_pad_push_event (GstElement * element, GstPad * pad, gpointer data)
@@ -319,73 +490,94 @@ qmmfsrc_pad_reconfigure (GstPad * pad, GstElement * element)
     return;
   }
 
+  if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED)
+    return;
+
   GST_INFO_OBJECT (qmmfsrc, "Reconfiguration for pad %s in %s state",
       GST_PAD_NAME (pad), gst_element_state_get_name (state));
 
   if (GST_IS_QMMFSRC_VIDEO_PAD (pad)) {
     GST_INFO_OBJECT (qmmfsrc, "Reconfigure video pad");
     GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+    GArray *ids = NULL;
 
-    if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
-      // First delete the previous camera stream associated with this pad.
-      if (GST_QMMFSRC_VIDEO_PAD (pad)->id != 0) {
-        success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
-        success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (
-            qmmfsrc, success, "Video stream deletion failed!");
-      }
+    // First delete the previous camera stream associated with this pad.
+    if (vpad->id != 0) {
+      ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, vpad->id);
 
-      GST_INFO_OBJECT (element, "Create new video stream");
-      success = gst_qmmf_context_create_video_stream (qmmfsrc->context, pad);
+      success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
+      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
+
+      success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
       QMMFSRC_RETURN_IF_FAIL (
-          qmmfsrc, success, "Video stream creation failed!");
+          qmmfsrc, success, "Video stream deletion failed!");
+    }
 
-      if (state == GST_STATE_PLAYING) {
-        success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-        QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
-      }
+    GST_INFO_OBJECT (element, "Create new video stream");
+    success = gst_qmmf_context_create_video_stream (qmmfsrc->context, pad);
+    QMMFSRC_RETURN_IF_FAIL (
+        qmmfsrc, success, "Video stream creation failed!");
+
+    if (state == GST_STATE_PLAYING) {
+      ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, vpad->id);
+
+      success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
+      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
     }
   } else if (GST_IS_QMMFSRC_IMAGE_PAD (pad)) {
     GST_INFO_OBJECT (qmmfsrc, "Reconfigure image pad");
 
-    if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
-      // First delete the previous camera stream associated with this pad.
-      success = gst_qmmf_context_delete_image_stream (qmmfsrc->context, pad,
-          0);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Image Stream delete failed!");
+    // First delete the previous camera stream associated with this pad.
+    success = gst_qmmf_context_delete_image_stream (qmmfsrc->context, pad, 0);
+    QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Image Stream delete failed!");
 
-      GST_INFO_OBJECT (element, "Create new image stream");
-      success = gst_qmmf_context_create_image_stream (
-          qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (
-          qmmfsrc, success, "Image stream creation failed!");
-    }
+    GST_INFO_OBJECT (element, "Create new image stream");
+    success = gst_qmmf_context_create_image_stream (
+        qmmfsrc->context, pad);
+    QMMFSRC_RETURN_IF_FAIL (
+        qmmfsrc, success, "Image stream creation failed!");
   }
 }
 
 static void
-qmmfsrc_pad_activation (GstPad * pad, gboolean activ, GstElement * element)
+qmmfsrc_pad_activation (GstPad * pad, gboolean active, GstElement * element)
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (element);
   GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+  GArray *ids = NULL;
   gboolean success = FALSE;
   GstState state = GST_STATE_VOID_PENDING;
+
   if (gst_element_get_state (element, &state, NULL, 0) ==
       GST_STATE_CHANGE_FAILURE) {
     GST_ERROR_OBJECT (element, "Failed to retrieve pipeline state!");
     return;
   }
 
-  if (state == GST_STATE_PLAYING) {
-    if (activ) {
-      success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream start failed!");
-    } else {
-      success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-      QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
-    }
+  if (state != GST_STATE_PLAYING ||
+      qmmfsrc->pad_activation_mode != GST_PAD_ACTIVATION_MODE_NORMAL)
+    return;
+
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
+  ids = g_array_append_val (ids, vpad->id);
+
+  if (active) {
+    success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+    QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (qmmfsrc, success,
+        { g_array_free (ids, FALSE); }, "Stream start failed!");
+  } else {
+    success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+    QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (qmmfsrc, success,
+        { g_array_free (ids, FALSE); }, "Stream stop failed!");
   }
+
+  g_array_free (ids, TRUE);
 }
 
 static GstPad*
@@ -509,9 +701,15 @@ qmmfsrc_release_pad (GstElement * element, GstPad * pad)
     GST_DEBUG_OBJECT (element, "Releasing video pad %d", index);
 
     if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
+      GArray *ids = g_array_new (FALSE, FALSE, sizeof (guint));
+      ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
+
       GST_DEBUG_OBJECT (element, "Delete stream");
-      success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
+      success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+      g_array_free (ids, TRUE);
+
       QMMFSRC_RETURN_IF_FAIL (qmmfsrc, success, "Stream stop failed!");
+
       success = gst_qmmf_context_delete_video_stream (qmmfsrc->context, pad);
       QMMFSRC_RETURN_IF_FAIL (
           qmmfsrc, success, "Video stream deletion failed!");
@@ -541,6 +739,113 @@ qmmfsrc_release_pad (GstElement * element, GstPad * pad)
   GST_DEBUG_OBJECT (qmmfsrc, "Deleted pad %d", index);
 
   GST_QMMFSRC_UNLOCK (qmmfsrc);
+}
+
+static GstStaticCaps gst_qmmfsrc_video_static_src_caps =
+    GST_STATIC_CAPS (QMMFSRC_VIDEO_JPEG_CAPS "; "
+        QMMFSRC_VIDEO_RAW_CAPS (
+                "{ NV12, NV16, NV12_Q08C"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+                ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+                ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+                ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                " }"));
+
+static GstStaticCaps gst_qmmfsrc_image_static_src_caps =
+    GST_STATIC_CAPS (QMMFSRC_IMAGE_JPEG_CAPS "; "
+        QMMFSRC_IMAGE_RAW_CAPS (
+                "{ NV21"
+#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
+                ", NV12"
+#endif // GST_IMAGE_NV12_FORMAT_ENABLE
+                " }") "; "
+            QMMFSRC_IMAGE_BAYER_CAPS (
+                "{ bggr, rggb, gbrg, grbg, mono }",
+                "{ 8, 10, 12, 16 }"));
+
+static GstCaps *
+gst_qmmfsrc_video_src_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_static_caps_get (&gst_qmmfsrc_video_static_src_caps);
+
+    if (gst_is_gbm_supported()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+              "{ NV12, NV16, NV12_Q08C"
+#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
+                ", YUY2"
+#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
+#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
+                ", UYVY"
+#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
+#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
+                ", P010_10LE"
+#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
+#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                ", NV12_10LE32"
+#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
+                " }"));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstCaps *
+gst_qmmfsrc_image_src_caps (void)
+{
+  static GstCaps *caps = NULL;
+  static gsize inited = 0;
+
+  if (g_once_init_enter (&inited)) {
+    caps = gst_static_caps_get (&gst_qmmfsrc_image_static_src_caps);
+
+    if (gst_is_gbm_supported()) {
+      GstCaps *tmplcaps = gst_caps_from_string (
+          QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+                "{ NV21"
+#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
+                ", NV12"
+#endif // GST_IMAGE_NV12_FORMAT_ENABLE
+                " }"));
+
+      caps = gst_caps_make_writable (caps);
+      gst_caps_append (caps, tmplcaps);
+    }
+
+    g_once_init_leave (&inited, 1);
+  }
+  return caps;
+}
+
+static GstPadTemplate *
+gst_qmmfsrc_video_src_template (void)
+{
+  return gst_pad_template_new_with_gtype ("video_%u", GST_PAD_SRC, GST_PAD_REQUEST,
+      gst_qmmfsrc_video_src_caps (), GST_TYPE_QMMFSRC_VIDEO_PAD);
+}
+
+static GstPadTemplate *
+gst_qmmfsrc_image_src_template (void)
+{
+  return gst_pad_template_new_with_gtype ("image_%u", GST_PAD_SRC, GST_PAD_REQUEST,
+      gst_qmmfsrc_image_src_caps (), GST_TYPE_QMMFSRC_IMAGE_PAD);
 }
 
 static void
@@ -609,13 +914,23 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
   gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GValue sframerate = G_VALUE_INIT;
+
+  g_value_init (&sframerate, G_TYPE_INT);
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
+    GstQmmfSrcVideoPad *vpad = NULL;
+
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
+    vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+
+    gst_qmmf_context_get_camera_param (qmmfsrc->context,
+        PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
+    vpad->superframerate = g_value_get_int(&sframerate);
 
     success = qmmfsrc_video_pad_fixate_caps (pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -640,6 +955,11 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
         "Image stream creation failed!");
   }
 
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
+
   GST_TRACE_OBJECT (qmmfsrc, "Stream created");
 
   return TRUE;
@@ -654,6 +974,11 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
+      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
+      "Failed to flush source pads!");
 
   for (list = qmmfsrc->imgindexes; list != NULL; list = list->next) {
     key = list->data;
@@ -681,17 +1006,19 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
 static gboolean
 qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
 {
-  gboolean success = FALSE;
-  gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GArray *ids = NULL;
+  gboolean success = TRUE;
+  gpointer key;
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Starting stream");
 
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (FALSE));
-  if (!success)
-    GST_WARNING ("There are no src pads!");
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
@@ -703,10 +1030,13 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
       continue;
     }
 
-    success = gst_qmmf_context_start_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream start failed!");
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
   }
+
+  success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+  g_array_free (ids, TRUE);
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream start failed!");
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream started");
 
@@ -716,54 +1046,34 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
 static gboolean
 qmmfsrc_stop_stream (GstQmmfSrc * qmmfsrc)
 {
-  gboolean success = FALSE;
-  gpointer key;
   GstPad *pad = NULL;
   GList *list = NULL;
+  GArray *ids = NULL;
+  gboolean success = TRUE;
+  gpointer key;
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   GST_TRACE_OBJECT (qmmfsrc, "Stopping stream");
 
-  success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
-      qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
-  if (!success)
-    GST_WARNING ("There are no src pads!");
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
 
-    success = gst_qmmf_context_stop_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream stop failed!");
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
   }
+
+  success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+  g_array_free (ids, TRUE);
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE, "Stream stop failed!");
 
   GST_TRACE_OBJECT (qmmfsrc, "Stream stopped");
-
-  return TRUE;
-}
-
-static gboolean
-qmmfsrc_pause_stream (GstQmmfSrc * qmmfsrc)
-{
-  gboolean success = FALSE;
-  gpointer key;
-  GstPad *pad = NULL;
-  GList *list = NULL;
-
-  GST_TRACE_OBJECT (qmmfsrc, "Pausing stream");
-
-  // Iterate over the video pads, fixate caps and create streams.
-  for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
-    key = list->data;
-    pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-
-    success = gst_qmmf_context_pause_video_stream (qmmfsrc->context, pad);
-    QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
-        "Stream pause failed!");
-  }
-
-  GST_TRACE_OBJECT (qmmfsrc, "Stream paused");
 
   return TRUE;
 }
@@ -806,6 +1116,73 @@ qmmfsrc_cancel_capture (GstQmmfSrc * qmmfsrc)
   GST_TRACE_OBJECT (qmmfsrc, "Image capture canceled");
 
   return TRUE;
+}
+
+static gboolean
+qmmfsrc_match_srcpad (gpointer key, gpointer value, gpointer user_data)
+{
+  return g_str_equal (GST_PAD_NAME (GST_PAD (value)), (gchar *)user_data);
+}
+
+static gboolean
+qmmfsrc_signal_video_pads_activation (GstQmmfSrc * qmmfsrc, gboolean activate,
+    GPtrArray * padnames)
+{
+  GstElement *element = GST_ELEMENT (qmmfsrc);
+  GstState state = GST_STATE_VOID_PENDING;
+  GList *list = NULL;
+  GArray *ids = NULL;
+  guint array_index = 0;
+  gboolean success = TRUE;
+
+  GST_INFO_OBJECT (qmmfsrc, "video-pads-activation signal received (%s)",
+      activate ? "activate" : "deactivate");
+
+  if (qmmfsrc->pad_activation_mode != GST_PAD_ACTIVATION_MODE_SIGNAL) {
+    GST_INFO_OBJECT (qmmfsrc, "pad activation mode is normal, "
+        "video-pads-activation signal not enabled");
+    return FALSE;
+  }
+
+  if (gst_element_get_state (element, &state, NULL, 0) ==
+      GST_STATE_CHANGE_FAILURE) {
+    GST_ERROR_OBJECT (element, "Failed to retrieve pipeline state!");
+    return FALSE;
+  }
+
+  if (state != GST_STATE_PLAYING && state != GST_STATE_PAUSED) {
+    GST_ERROR_OBJECT (element, "Video streams activation signal can only "
+        "be triggered on PLAYING / PAUSED state");
+    return FALSE;
+  }
+
+  ids = g_array_new (FALSE, FALSE, sizeof (guint));
+
+  for (array_index = 0; array_index < padnames->len; array_index++) {
+    gchar *pad_name = g_ptr_array_index (padnames, array_index);
+    GstPad *pad = NULL;
+
+    pad = g_hash_table_find (qmmfsrc->srcpads, qmmfsrc_match_srcpad, pad_name);
+
+    if (!(success = (pad != NULL))) {
+      GST_INFO_OBJECT (qmmfsrc, "pad %s is invalid", pad_name);
+      goto cleanup;
+    }
+
+    ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
+  }
+
+  if (activate)
+    success = gst_qmmf_context_start_video_streams (qmmfsrc->context, ids);
+  else
+    success = gst_qmmf_context_stop_video_streams (qmmfsrc->context, ids);
+
+  if (!success)
+    GST_ERROR_OBJECT (qmmfsrc, "Streams %s failed!", activate ? "start" : "stop");
+
+cleanup:
+  g_array_free (ids, FALSE);
+  return success;
 }
 
 static GstStateChangeReturn
@@ -860,16 +1237,6 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
       ret = GST_STATE_CHANGE_SUCCESS;
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      if (!qmmfsrc_pause_stream (qmmfsrc)) {
-        GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to pause stream!"),
-          NULL);
-        return GST_STATE_CHANGE_FAILURE;
-      }
-      // Return NO_PREROLL to inform bin/pipeline we won't be able to
-      // produce data in the PAUSED state, as this is a live source.
-      ret = GST_STATE_CHANGE_NO_PREROLL;
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
       // We will call stop_stream only if the camera is plugged, which
       // is always true for BWC while for PoV it may or may not be true.
       // When PoV is plugged stop_stream will be called from here,
@@ -879,6 +1246,11 @@ qmmfsrc_change_state (GstElement * element, GstStateChange transition)
           NULL);
         return GST_STATE_CHANGE_FAILURE;
       }
+      // Return NO_PREROLL to inform bin/pipeline we won't be able to
+      // produce data in the PAUSED state, as this is a live source.
+      ret = GST_STATE_CHANGE_NO_PREROLL;
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
       if (!qmmfsrc_delete_stream (qmmfsrc)) {
         GST_ELEMENT_ERROR (qmmfsrc, STREAM, FAILED, ("Failed to delete stream!"),
           NULL);
@@ -957,7 +1329,7 @@ qmmfsrc_send_event (GstElement * element, GstEvent * event)
         g_value_set_uint (&value, 1);
         gst_qmmf_context_set_camera_param(qmmfsrc->context,
             PARAM_CAMERA_STANDBY, &value);
-        if (!qmmfsrc_pause_stream(qmmfsrc)) {
+        if (!qmmfsrc_stop_stream(qmmfsrc)) {
           GST_ERROR_OBJECT(qmmfsrc, "Failed to stop stream!");
         }
       }
@@ -1166,6 +1538,9 @@ qmmfsrc_set_property (GObject * object, guint property_id,
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
           PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH, value);
       break;
+    case PROP_CAMERA_PAD_ACTIVATION_MODE:
+      qmmfsrc->pad_activation_mode = g_value_get_enum(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1363,7 +1738,9 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH, value);
       break;
-
+    case PROP_CAMERA_PAD_ACTIVATION_MODE:
+      g_value_set_enum(value, qmmfsrc->pad_activation_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1397,6 +1774,10 @@ qmmfsrc_finalize (GObject * object)
     qmmfsrc->context = NULL;
   }
 
+#ifdef ENABLE_RUNTIME_PARSER
+  qmmfsrc_deinit_src_templates ();
+#endif // ENABLE_RUNTIME_PARSER
+
   G_OBJECT_CLASS (qmmfsrc_parent_class)->finalize (object);
 }
 
@@ -1411,10 +1792,18 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   gobject->get_property = GST_DEBUG_FUNCPTR (qmmfsrc_get_property);
   gobject->finalize     = GST_DEBUG_FUNCPTR (qmmfsrc_finalize);
 
+#ifdef ENABLE_RUNTIME_PARSER
+  qmmfsrc_init_src_templates ();
   gst_element_class_add_static_pad_template_with_gtype (gstelement,
       &qmmfsrc_video_src_template, GST_TYPE_QMMFSRC_VIDEO_PAD);
   gst_element_class_add_static_pad_template_with_gtype (gstelement,
       &qmmfsrc_image_src_template, GST_TYPE_QMMFSRC_IMAGE_PAD);
+#endif // ENABLE_RUNTIME_PARSER
+
+  gst_element_class_add_pad_template (gstelement,
+      gst_qmmfsrc_video_src_template ());
+  gst_element_class_add_pad_template (gstelement,
+      gst_qmmfsrc_image_src_template ());
 
   gst_element_class_set_static_metadata (
       gstelement, "QMMF Video Source", "Source/Video",
@@ -1680,6 +2069,26 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "like IPE",
           DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+#ifdef ENABLE_RUNTIME_PARSER
+  void* qmmfsrc_parser = get_qmmfsrc_parser ();
+
+  gboolean multi_camera_enable = get_flag_as_bool (qmmfsrc_parser,
+      "MULTI_CAMERA_ENABLE");
+
+  if (multi_camera_enable) {
+    g_object_class_install_property (gobject, PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
+        gst_param_spec_array ("multi-camera-exp-time", "Multi Camera Exposure Time",
+            "The exposure time (in nano-seconds) for each camera in multi camera"
+            " setup ('<exp-time-1, exp-time-2>') and it is used only when"
+            " exposure-mode is OFF",
+            g_param_spec_int ("exp-time", "Exposure Time",
+                "One of exp-time-1, exp-time-2 value.", 0, G_MAXINT, 0,
+                G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PLAYING));
+  }
+#else
 #ifdef MULTI_CAMERA_ENABLE // MULTI_CAMERA_ENABLE
   g_object_class_install_property (gobject, PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
       gst_param_spec_array ("multi-camera-exp-time", "Multi Camera Exposure Time",
@@ -1692,6 +2101,7 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif  // MULTI_CAMERA_ENABLE
+#endif // ENABLE_RUNTIME_PARSER
 
   g_object_class_install_property (gobject, PROP_CAMERA_OPERATION_MODE,
       g_param_spec_flags ("op-mode", "Camera operation mode",
@@ -1736,6 +2146,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif
+  g_object_class_install_property (gobject, PROP_CAMERA_PAD_ACTIVATION_MODE,
+      g_param_spec_enum ("video-pads-activation-mode", "Video Pad Activation Mode",
+          "set video pad activation mode, by default is normal, use \"signal\" to "
+          "control video pad activation by plugin signal \"video-pads-activation\" "
+          "together with gst_pad_set_active() ",
+          GST_TYPE_QMMFSRC_PAD_ACTIVATION_MODE,
+          DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),
@@ -1746,6 +2165,12 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_signal_new_class_handler ("cancel-capture", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (qmmfsrc_cancel_capture),
       NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
+
+  signals[SIGNAL_VIDEO_PADS_ACTIVATION] =
+      g_signal_new_class_handler ("video-pads-activation",
+      G_TYPE_FROM_CLASS (klass), G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_CALLBACK (qmmfsrc_signal_video_pads_activation), NULL, NULL, NULL,
+      G_TYPE_BOOLEAN, 2, G_TYPE_BOOLEAN, G_TYPE_PTR_ARRAY);
 
   signals[SIGNAL_RESULT_METADATA] =
       g_signal_new ("result-metadata", G_TYPE_FROM_CLASS (klass),

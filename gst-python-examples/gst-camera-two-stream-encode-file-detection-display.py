@@ -18,16 +18,24 @@ The application:
 and overlay the bounding boxes over the detected objects. The results are shown
 on the display.
 
-The file paths are hard coded in the python script as follows:
+The default file paths in the python script are as follows:
 - Detection model (YOLOv8): /opt/data/YoloV8N_Detection_Quantized.tflite
 - Detection labels: /opt/data/yolov8n.labels
+
+To override the default settings,
+please configure the corresponding module and constants as well.
 """
 
+# Configurations for Detection
 DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE = "yolov8"
 DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
 DEFAULT_OUTPUT_FILE = "/opt/data/test.mp4"
 
-
+eos_received = False
 def create_element(factory_name, name):
     """Create a GStreamer element."""
     element = Gst.ElementFactory.make(factory_name, name)
@@ -78,8 +86,31 @@ def construct_pipeline(pipe):
         default=DEFAULT_OUTPUT_FILE,
         help="Pipeline Output Path",
     )
+    parser.add_argument(
+        "--detection_model", type=str, default=DEFAULT_DETECTION_MODEL,
+        help="Path to TfLite Object Detection Model"
+    )
+    parser.add_argument(
+        "--detection_module", type=str, default=DEFAULT_DETECTION_MODULE,
+        help="Object Detection module for post-procesing"
+    )
+    parser.add_argument(
+        "--detection_labels", type=str, default=DEFAULT_DETECTION_LABELS,
+        help="Path to TfLite Object Detection Labels"
+    )
+    parser.add_argument(
+        "--detection_constants", type=str, default=DEFAULT_DETECTION_CONSTANTS,
+        help="Constants for TfLite Object Detection Model"
+    )
 
     args = parser.parse_args()
+
+    detection = {
+        "model": args.detection_model,
+        "module": args.detection_module,
+        "labels": args.detection_labels,
+        "constants": args.detection_constants
+    }
 
     # Create all elements
     # fmt: off
@@ -148,22 +179,17 @@ def construct_pipeline(pipe):
         "QNNExternalDelegate,backend_type=htp,htp_precision=(string)1;",
     )
     Gst.util_set_object_arg(
-        elements["mltflite"],
-        "model",
-        DEFAULT_DETECTION_MODEL,
+        elements["mltflite"], "model", detection["model"],
     )
 
     Gst.util_set_object_arg(elements["mlvdetection"], "threshold", "75.0")
     Gst.util_set_object_arg(elements["mlvdetection"], "results", "4")
     Gst.util_set_object_arg(elements["mlvdetection"], "module", "yolov8")
     Gst.util_set_object_arg(
-        elements["mlvdetection"],
-        "constants",
-        "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-        q-scales=<3.093529462814331,0.00390625,1.0>;",
+        elements["mlvdetection"], "constants", detection["constants"],
     )
     Gst.util_set_object_arg(
-        elements["mlvdetection"], "labels", DEFAULT_DETECTION_LABELS
+        elements["mlvdetection"], "labels", detection["labels"]
     )
 
     Gst.util_set_object_arg(elements["capsfilter_2"], "caps", "text/x-raw")
@@ -216,9 +242,12 @@ def quit_mainloop(loop):
 
 def bus_call(_, message, loop):
     """Handle bus messages."""
+    global eos_received
+
     message_type = message.type
     if message_type == Gst.MessageType.EOS:
         print("EoS received!")
+        eos_received = True
         quit_mainloop(loop)
     elif message_type == Gst.MessageType.ERROR:
         error, debug_info = message.parse_error()
@@ -284,6 +313,8 @@ def main():
     pipe = None
 
     Gst.deinit()
+    if eos_received:
+        print("App execution successful")
 
     return 0
 

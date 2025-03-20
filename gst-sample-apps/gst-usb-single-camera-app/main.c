@@ -167,7 +167,6 @@ find_usb_camera_node (GstCameraAppContext * appctx)
   while (idx < MAX_VID_DEV_CNT) {
     memset (appctx->dev_video, 0, sizeof (appctx->dev_video));
 
-    // start idx with 2 as 0 and 1 are already allocated nodes for camx
     ret = snprintf (appctx->dev_video, sizeof (appctx->dev_video), "/dev/video%d",
         idx);
     if (ret <= 0) {
@@ -185,10 +184,18 @@ find_usb_camera_node (GstCameraAppContext * appctx)
     }
 
     if (ioctl (mFd, VIDIOC_QUERYCAP, &v2cap) == 0) {
-      int capabilities;
       g_print ("ID_V4L_CAPABILITIES=: %s", v2cap.driver);
-      if (strcmp (v2cap.driver, "uvcvideo") != 0)
+      if (strcmp ((const char *)v2cap.driver, "uvcvideo") != 0) {
+        idx++;
+        close (mFd);
         continue;
+      }
+    } else {
+      g_printerr ("Failed to QUERYCAP device: %s (%s)\n", appctx->dev_video,
+          strerror (errno));
+      idx++;
+      close (mFd);
+      continue;
     }
     break;
   }
@@ -237,7 +244,7 @@ create_pipe (GstCameraAppContext * appctx)
   g_object_set (G_OBJECT (camerasrc), "device", appctx->dev_video, NULL);
   g_object_set (G_OBJECT (qtivtransform), "rotate", 0, NULL);
 
-  // Set the source elements capability and in case YUV dump disable UBWC
+  // Set the source elements capability
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
       "width", G_TYPE_INT, appctx->width,
@@ -245,8 +252,6 @@ create_pipe (GstCameraAppContext * appctx)
       "framerate", GST_TYPE_FRACTION, appctx->framerate, 1,
       NULL);
 
-  gst_caps_set_features (filtercaps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -307,8 +312,8 @@ create_pipe (GstCameraAppContext * appctx)
       g_printerr ("\n Video Encoder elements could not be created \n");
       return FALSE;
     }
-    g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", 5, NULL);
-    g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", 5, NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
     g_object_set (G_OBJECT (h264parse), "config-interval", -1, NULL);
 
     if (appctx->sinktype == GST_RTSP_STREAMING) {
@@ -411,18 +416,18 @@ main (gint argc, gchar *argv[])
     { "framerate", 'f', 0, G_OPTION_ARG_INT, &appctx->framerate, "framerate",
       "camera framerate" },
     { "output", 'o', 0, G_OPTION_ARG_INT, &appctx->sinktype,
-      "Sinktype"
+      "Sinktype",
       "\n\t0-PREVIEW"
       "\n\t1-VIDEOENCODING"
       "\n\t2-YUVDUMP"
       "\n\t3-RTSPSTREAMING" },
     { "ip", 'i', 0, G_OPTION_ARG_STRING,
       &ip_address,
-      "Valid IP address in case of RSTP streaming output" },
+      "RSTP server listening address.", "Valid IP Address" },
     { "port", 'p', 0, G_OPTION_ARG_STRING,
       &port_num,
-      "Valid port number in case of RSTP streaming output" },
-    { NULL }
+      "RSTP server listening port", "Port number." },
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 
   // Parse command line entries.

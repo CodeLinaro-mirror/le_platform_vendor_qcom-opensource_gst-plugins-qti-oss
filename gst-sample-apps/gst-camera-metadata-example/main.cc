@@ -70,16 +70,16 @@ namespace camera = qmmf;
 #define MENU_BACK_OPTION               "b"
 
 #define GST_CAMERA_PIPELINE "qtiqmmfsrc name=camera " \
-    "video_0::type=preview ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1, " \
-    "compression=ubwc,interlace-mode=progressive,colorimetry=bt601 ! " \
+    "video_0::type=preview ! video/x-raw,format=NV12_Q08C,width=1280,height=720,framerate=30/1, " \
+    "interlace-mode=progressive,colorimetry=bt601 ! " \
     "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false"
 
 #define GST_CAMERA_PIPELINE_DISPLAY "qtiqmmfsrc name=camera " \
-    "video_0::type=preview ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1, " \
-    "compression=ubwc,interlace-mode=progressive,colorimetry=bt601 ! " \
+    "video_0::type=preview ! video/x-raw,format=NV12_Q08C,width=1280,height=720,framerate=30/1, " \
+    "interlace-mode=progressive,colorimetry=bt601 ! " \
     "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false " \
-    "camera.video_1 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1, " \
-    "compression=ubwc,interlace-mode=progressive,colorimetry=bt601 ! " \
+    "camera.video_1 ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1, " \
+    "interlace-mode=progressive,colorimetry=bt601 ! " \
     "queue ! waylandsink fullscreen=true"
 
 #define TERMINATE_MESSAGE      "APP_TERMINATE_MSG"
@@ -259,6 +259,8 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
   GstAppContext *appctx = GST_APP_CONTEXT_CAST (userdata);
   static GstState target_state = GST_STATE_VOID_PENDING;
   static gboolean in_progress = FALSE, buffering = FALSE;
+
+  (void)in_progress;
 
   switch (GST_MESSAGE_TYPE (message)) {
     case GST_MESSAGE_ERROR:
@@ -693,8 +695,9 @@ find_tag_by_name (const gchar * section_name, const gchar * tag_name,
   g_free (tag);
 
   // Determine data type of the tag.
-  if (*tag_id < VENDOR_SECTION_START)
-    tag_type = get_camera_metadata_tag_type (*tag_id);
+  if (static_cast<gint32>(*tag_id) < VENDOR_SECTION_START)
+    tag_type =
+        ::camera::CameraMetadata::get_camera_metadata_tag_type (*tag_id);
   else
     tag_type = vtags->getTagType (*tag_id);
 
@@ -705,8 +708,6 @@ static gint
 get_tag_typechar (const gchar * section_name, const gchar * tag_name,
     ::camera::CameraMetadata * meta, gchar ** type, guint32 * tag_id)
 {
-  gchar *tag_value = NULL;
-  status_t status = 0;
   gint tag_type = -1;
 
   if ((tag_type =
@@ -741,7 +742,7 @@ get_tag_typechar (const gchar * section_name, const gchar * tag_name,
   if (!meta->exists (*tag_id)) {
     g_print ("Warning: Tag doesn't exist in the static-metadata.\n");
   }
-  if ((-1 == tag_type) || (-1 == *tag_id)) {
+  if ((-1 == tag_type) || (-1 == static_cast<gint32>(*tag_id))) {
     g_print ("Cannot find tag_type and tag_id.\n");
     *type = g_strdup ("null");
   }
@@ -754,7 +755,6 @@ get_tag (const gchar * section_name, const gchar * tag_name,
     ::camera::CameraMetadata * meta, gchar ** type)
 {
   gchar *tag_value = NULL;
-  status_t status = 0;
   guint32 tag_id = 0;
   gint tag_type = -1;
 
@@ -1101,8 +1101,6 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
     g_printerr ("ERROR: Couldn't collect the value\n");
   }
 
-free:
-
   return 0;
 }
 
@@ -1161,7 +1159,7 @@ print_vendor_tags (::camera::CameraMetadata * meta, FILE * file)
     guint *vtagsId = g_new0 (guint, vtagCount);
     vtags->getTagArray (vtagsId);
 
-    for (size_t i = 0; i < vtagCount; i++) {
+    for (gint i = 0; i < vtagCount; i++) {
       if (!meta->exists (vtagsId[i]))
         continue;
 
@@ -1972,7 +1970,7 @@ main (gint argc, gchar *argv[])
         "Show preview on display", NULL},
     {"timestamps-location", 't', 0, G_OPTION_ARG_FILENAME, &ts_path,
         "File in which original timestamps will be recorded", NULL},
-    {NULL}
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
   optctx = g_option_context_new (GST_APP_SUMMARY);
@@ -1986,7 +1984,6 @@ main (gint argc, gchar *argv[])
     g_option_context_free (optctx);
     g_clear_error (&error);
 
-    gst_app_context_free (appctx);
     return -1;
   }
   g_option_context_free (optctx);

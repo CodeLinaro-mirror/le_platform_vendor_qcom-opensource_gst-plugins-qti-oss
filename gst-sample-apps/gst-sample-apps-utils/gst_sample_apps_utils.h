@@ -77,7 +77,8 @@ typedef enum {
  * @GST_YOLO_TYPE_NONE: Invalid Model Type.
  * @GST_YOLO_TYPE_V5  : Yolov5 Object Detection Model.
  * @GST_YOLO_TYPE_V8  : Yolov8 Object Detection Model.
- * @GST_YOLO_TYPE_NAS: Yolonas Object Detection Model.
+ * @GST_YOLO_TYPE_NAS : Yolonas Object Detection Model.
+ * @GST_YOLO_TYPE_V7  : YoloV7 Object Detection Model.
  *
  * Type of Yolo Model.
  */
@@ -85,7 +86,8 @@ typedef enum {
   GST_YOLO_TYPE_NONE,
   GST_YOLO_TYPE_V5,
   GST_YOLO_TYPE_V8,
-  GST_YOLO_TYPE_NAS
+  GST_YOLO_TYPE_NAS,
+  GST_YOLO_TYPE_V7
 } GstYoloModelType;
 
 /**
@@ -230,6 +232,26 @@ enum GstVideoPlayerCodecType {
   GST_VCODEC_AVC,
   GST_VCODEC_HEVC,
 };
+
+/**
+ * GstV4l2IOMode:
+ * @GST_V4L2_IO_AUTO: Default IO Mode.
+ * @GST_V4L2_IO_RW: RW IO Mode.
+ * @GST_V4L2_IO_MMAP: MMAP IO Mode.
+ * @GST_V4L2_IO_USERPTR: USERPTR IO Mode.
+ * @GST_V4L2_IO_DMABUF: DMABUF IO Mode.
+ * @GST_V4L2_IO_DMABUF_IMPORT: DMABUF_IMPORT IO Mode.
+ *
+ * Type of Video Codec for AV Player.
+ */
+typedef enum {
+  GST_V4L2_IO_AUTO          = 0,
+  GST_V4L2_IO_RW            = 1,
+  GST_V4L2_IO_MMAP          = 2,
+  GST_V4L2_IO_USERPTR       = 3,
+  GST_V4L2_IO_DMABUF        = 4,
+  GST_V4L2_IO_DMABUF_IMPORT = 5
+} GstV4l2IOMode;
 
 /**
  * GstAudioPlayerCodecType:
@@ -422,6 +444,18 @@ void
 state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata);
 
 /**
+ * Sets an enum property on a GstElement
+ *
+ * @param element The GstElement on which to set the property.
+ * @param propname The name of the property to set.
+ * @param valname The value to set the property to.
+ *
+ */
+void
+gst_element_set_enum_property (GstElement * element, const gchar * propname,
+    const gchar * valname);
+
+/**
  * Get enum for property nick name
  *
  * @param element Plugin to query the property.
@@ -446,6 +480,9 @@ unref_elements(void *first_elem, ...);
 // and unrefs the gst element if needed
 void
 cleanup_gst (void * first_elem, ...);
+
+gboolean
+is_camera_available ();
 
 G_END_DECLS
 
