@@ -239,13 +239,6 @@ static inline void
 gst_video_composition_cleanup (gpointer userdata)
 {
   GstVideoComposition *composition = (GstVideoComposition*) userdata;
-  guint idx = 0;
-
-  // Free only source/destination rectangles, frames are owned by the request.
-  for (idx = 0; idx < composition->n_blits; idx++) {
-    g_slice_free (GstVideoRectangle, composition->blits[idx].sources);
-    g_slice_free (GstVideoRectangle, composition->blits[idx].destinations);
-  }
 
   // Free only video blits, output frame is owned by the request.
   g_slice_free (GstVideoBlit, composition->blits);
@@ -457,8 +450,8 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
   inbuffer = composition->blits[0].frame->buffer;
   outbuffer = composition->frame->buffer;
 
-  source = &(composition->blits[0].sources[0]);
-  destination = &(composition->blits[0].destinations[0]);
+  source = &(composition->blits[0].source);
+  destination = &(composition->blits[0].destination);
 
   s_offset.x = source->x;
   s_offset.y = source->y;
@@ -582,8 +575,8 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
   gint maxwidth = 0, maxheight = 0;
 
   outbuffer = composition->frame->buffer;
-  source = &(composition->blits[0].sources[0]);
-  destination = &(composition->blits[0].destinations[0]);
+  source = &(composition->blits[0].source);
+  destination = &(composition->blits[0].destination);
 
   if (roimeta != NULL) {
     source->x = roimeta->x;
@@ -960,7 +953,6 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition = &(g_array_index (compositions, GstVideoComposition, id));
 
       composition->frame = outframe;
-      composition->isubwc = srcpad->isubwc;
       composition->flags = 0;
 
       composition->bgcolor = 0x00000000;
@@ -975,16 +967,10 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->n_blits = 1;
 
       composition->blits[0].frame = inframe;
-      composition->blits[0].isubwc =
-          GST_VIDEO_SPLIT_SINKPAD (vsplit->sinkpad)->isubwc;
 
       composition->blits[0].alpha = G_MAXUINT8;
       composition->blits[0].rotate = GST_VCE_ROTATE_0;
       composition->blits[0].flip = GST_VCE_FLIP_NONE;
-
-      composition->blits[0].sources = g_slice_new (GstVideoRectangle);
-      composition->blits[0].destinations = g_slice_new (GstVideoRectangle);
-      composition->blits[0].n_regions = 1;
 
       // Depending on the mode a different ROI meta is used or none at all.
       if (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE)
@@ -996,8 +982,8 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       gst_video_split_composition_update_regions (srcpad, composition, roimeta);
       gst_video_split_composition_populate_metas (srcpad, composition, roimeta);
 
-      source = &(composition->blits[0].sources[0]);
-      destination = &(composition->blits[0].destinations[0]);
+      source = &(composition->blits[0].source);
+      destination = &(composition->blits[0].destination);
 
       GST_TRACE_OBJECT (srcpad, "Composition [%u] Regions: [%d %d %d %d] ->"
           " [%d %d %d %d]", id, source->x, source->y, source->w, source->h,
@@ -1154,7 +1140,6 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
     gst_video_info_free (GST_VIDEO_SPLIT_SINKPAD (pad)->info);
 
   GST_VIDEO_SPLIT_SINKPAD (pad)->info = gst_video_info_copy (&info);
-  GST_VIDEO_SPLIT_SINKPAD (pad)->isubwc = gst_caps_has_compression (caps, "ubwc");
 
   GST_VIDEO_SPLIT_LOCK (vsplit);
 

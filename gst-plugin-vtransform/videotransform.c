@@ -278,7 +278,6 @@ gst_video_transform_determine_passthrough (GstVideoTransform * vtrans)
   passthrough &= vtrans->rotation == GST_VIDEO_TRANSFORM_ROTATE_NONE;
 
   passthrough &= vtrans->outfeature == vtrans->infeature;
-  passthrough &= vtrans->outubwc == vtrans->inubwc;
 
   GST_DEBUG_OBJECT (vtrans, "Passthrough has been %s",
       passthrough ? "enabled" : "disabled");
@@ -351,11 +350,6 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps)
       gst_clear_object (&pool);
       return NULL;
     }
-  }
-
-  if (gst_caps_has_compression (caps, "ubwc")) {
-    gst_buffer_pool_config_add_option (config,
-        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
   }
 
   gst_buffer_pool_config_set_params (config, caps, info.size,
@@ -705,9 +699,6 @@ gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
   feature = gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM) ?
       GST_CAPS_FEATURE_MEMORY_GBM : NULL;
   vtrans->outfeature = g_quark_from_static_string (feature);
-
-  vtrans->inubwc = gst_caps_has_compression (incaps, "ubwc");
-  vtrans->outubwc = gst_caps_has_compression (outcaps, "ubwc");
 
   if ((vtrans->crop.w == 0) && (vtrans->crop.h == 0)) {
     vtrans->crop.w = GST_VIDEO_INFO_WIDTH (vtrans->ininfo);
@@ -1638,11 +1629,9 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GST_VIDEO_TRANSFORM_LOCK (vtrans);
 
   blit.frame = &inframe;
-  blit.isubwc = vtrans->inubwc;
 
-  blit.sources = &(vtrans->crop);
-  blit.destinations = &(vtrans->destination);
-  blit.n_regions = 1;
+  blit.source = vtrans->crop;
+  blit.destination = vtrans->destination;
 
   blit.flip = gst_video_transform_translate_flip (vtrans->flip_h, vtrans->flip_v);
   blit.rotate = gst_video_transform_translate_rotation (vtrans->rotation);
@@ -1651,7 +1640,6 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   composition.n_blits = 1;
 
   composition.frame = &outframe;
-  composition.isubwc = vtrans->outubwc;
   composition.flags = 0;
 
   composition.bgcolor = vtrans->background;
@@ -1974,9 +1962,6 @@ gst_video_transform_init (GstVideoTransform * vtrans)
 
   vtrans->infeature = g_quark_from_static_string (NULL);
   vtrans->outfeature = g_quark_from_static_string (NULL);
-
-  vtrans->inubwc = FALSE;
-  vtrans->outubwc = FALSE;
 
   vtrans->outpool = NULL;
 }

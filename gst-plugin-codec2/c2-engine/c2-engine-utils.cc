@@ -450,7 +450,7 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format, bool isubwc) {
   if (format == GST_VIDEO_FORMAT_RGBA) {
     return isubwc ? C2PixelFormat::kRGBA_UBWC : C2PixelFormat::kRGBA;
   } else if (format == GST_VIDEO_FORMAT_NV12) {
-    return isubwc ? C2PixelFormat::kNV12UBWC : C2PixelFormat::kNV12;
+    return C2PixelFormat::kNV12;
   } else if (format == GST_VIDEO_FORMAT_NV12_Q08C) {
     return C2PixelFormat::kNV12UBWC;
   } else if (format == GST_VIDEO_FORMAT_YV12) {
