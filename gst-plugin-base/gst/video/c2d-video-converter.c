@@ -311,7 +311,7 @@ gst_c2d_blits_compatible (const GstVideoComposition * l_composition,
 {
   GstVideoBlit *l_blit = NULL, *r_blit = NULL;
   GstVideoRectangle *l_rect = NULL, *r_rect = NULL;
-  guint idx = 0, l_fd = 0, r_fd = 0;
+  guint idx = 0, num = 0, l_fd = 0, r_fd = 0;
 
   // TODO For now, support only same object ordering.
   for (idx = 0; idx < l_composition->n_blits; idx++) {
@@ -333,38 +333,44 @@ gst_c2d_blits_compatible (const GstVideoComposition * l_composition,
     if (l_fd != r_fd)
       return FALSE;
 
-    l_rect = &(l_blit->source);
-    r_rect = &(r_blit->source);
-
-    // Source rectangles must match.
-    if ((l_rect->x != r_rect->x) || (l_rect->y != r_rect->y) ||
-        (l_rect->w != r_rect->w) || (l_rect->h != r_rect->h))
+    // Both entries must have same number of Source - Destionation pairs.
+    if (l_blit->n_regions != r_blit->n_regions)
       return FALSE;
 
-    l_rect = &(l_blit->destination);
-    r_rect = &(r_blit->destination);
+    for (num = 0; num < l_blit->n_regions; num++) {
+      l_rect = &(l_blit->sources[num]);
+      r_rect = &(r_blit->sources[num]);
 
-    // Adjust the dimensions of the target rectangles to be in the same scale.
-    r_rect->x = gst_util_uint64_scale_int (r_rect->x,
-        GST_VIDEO_FRAME_WIDTH (l_composition->frame),
-        GST_VIDEO_FRAME_WIDTH (r_composition->frame));
+      // Source rectangles must match.
+      if ((l_rect->x != r_rect->x) || (l_rect->y != r_rect->y) ||
+          (l_rect->w != r_rect->w) || (l_rect->h != r_rect->h))
+        return FALSE;
 
-    r_rect->y = gst_util_uint64_scale_int (r_rect->y,
-        GST_VIDEO_FRAME_HEIGHT (l_composition->frame),
-        GST_VIDEO_FRAME_HEIGHT (r_composition->frame));
+      l_rect = &(l_blit->destinations[num]);
+      r_rect = &(r_blit->destinations[num]);
 
-    r_rect->w = gst_util_uint64_scale_int (r_rect->w,
-        GST_VIDEO_FRAME_WIDTH (l_composition->frame),
-        GST_VIDEO_FRAME_WIDTH (r_composition->frame));
+      // Adjust the dimensions of the target rectangles to be in the same scale.
+      r_rect->x = gst_util_uint64_scale_int (r_rect->x,
+          GST_VIDEO_FRAME_WIDTH (l_composition->frame),
+          GST_VIDEO_FRAME_WIDTH (r_composition->frame));
 
-    r_rect->h = gst_util_uint64_scale_int (r_rect->h,
-        GST_VIDEO_FRAME_HEIGHT (l_composition->frame),
-        GST_VIDEO_FRAME_HEIGHT (r_composition->frame));
+      r_rect->y = gst_util_uint64_scale_int (r_rect->y,
+          GST_VIDEO_FRAME_HEIGHT (l_composition->frame),
+          GST_VIDEO_FRAME_HEIGHT (r_composition->frame));
 
-    // Target rectangles may not match but must have maximum of 1 pixel delta.
-    if ((ABS (l_rect->x - r_rect->x) > 1) || (ABS (l_rect->y - r_rect->y) > 1) ||
-        (ABS (l_rect->w - r_rect->w) > 1) || (ABS (l_rect->h - r_rect->h) > 1))
-      return FALSE;
+      r_rect->w = gst_util_uint64_scale_int (r_rect->w,
+          GST_VIDEO_FRAME_WIDTH (l_composition->frame),
+          GST_VIDEO_FRAME_WIDTH (r_composition->frame));
+
+      r_rect->h = gst_util_uint64_scale_int (r_rect->h,
+          GST_VIDEO_FRAME_HEIGHT (l_composition->frame),
+          GST_VIDEO_FRAME_HEIGHT (r_composition->frame));
+
+      // Target ractangles may not match but must have maximum of 1 pixel delta.
+      if ((ABS (l_rect->x - r_rect->x) > 1) || (ABS (l_rect->y - r_rect->y) > 1) ||
+          (ABS (l_rect->w - r_rect->w) > 1) || (ABS (l_rect->h - r_rect->h) > 1))
+        return FALSE;
+    }
   }
 
   return TRUE;
@@ -781,14 +787,17 @@ gst_c2d_destroy_surface (gpointer key, gpointer value, gpointer userdata)
 
 static void
 gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
-    const GstVideoBlit * vblit, const GstVideoFrame * outframe)
+    const GstVideoFrame * inframe, const guint8 alpha,
+    const GstVideoConvFlip flip, const GstVideoConvRotate rotate,
+    const GstVideoRectangle * source, const GstVideoRectangle * destination,
+    const GstVideoFrame * outframe)
 {
   gint x = 0, y = 0, width = 0, height = 0;
 
   object->surface_id = surface_id;
   object->config_mask = (C2D_SOURCE_RECT_BIT | C2D_TARGET_RECT_BIT);
 
-  object->global_alpha = vblit->alpha;
+  object->global_alpha = alpha;
   GST_TRACE ("Input surface %x - Global alpha: %u", surface_id,
       object->global_alpha);
 
@@ -796,17 +805,17 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
     object->config_mask |= C2D_GLOBAL_ALPHA_BIT;
 
   // Setup the source rectangle.
-  if ((vblit->source.w != 0) && (vblit->source.h != 0)) {
-    x = vblit->source.x;
-    y = vblit->source.y;
-    width = vblit->source.w;
-    height = vblit->source.h;
+  if (source != NULL) {
+    x = source->x;
+    y = source->y;
+    width = source->w;
+    height = source->h;
   }
 
-  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (vblit->frame) :
-      MIN (width, GST_VIDEO_FRAME_WIDTH (vblit->frame) - x);
-  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (vblit->frame) :
-      MIN (height, GST_VIDEO_FRAME_HEIGHT (vblit->frame) - y);
+  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (inframe) :
+      MIN (width, GST_VIDEO_FRAME_WIDTH (inframe) - x);
+  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (inframe) :
+      MIN (height, GST_VIDEO_FRAME_HEIGHT (inframe) - y);
 
   object->source_rect.x = x << 16;
   object->source_rect.y = y << 16;
@@ -816,40 +825,34 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
   // Apply the flip bits to the object configure mask if set.
   object->config_mask &= ~(C2D_MIRROR_V_BIT | C2D_MIRROR_H_BIT);
 
-  if ((vblit->flip == GST_VCE_FLIP_VERTICAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_VERTICAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->config_mask |= C2D_MIRROR_V_BIT;
     GST_TRACE ("Input surface %x - Flip Vertically", surface_id);
   }
 
-  if ((vblit->flip == GST_VCE_FLIP_HORIZONTAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_HORIZONTAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->config_mask |= C2D_MIRROR_H_BIT;
     GST_TRACE ("Input surface %x - Flip Horizontally", surface_id);
   }
 
-  // Reset the local dimension variables.
-  x = y = width = height = 0;
-
   // Setup the target rectangle.
-  if ((vblit->destination.w != 0) && (vblit->destination.h != 0)) {
-    x = vblit->destination.x;
-    y = vblit->destination.y;
-    width = vblit->destination.w;
-    height = vblit->destination.h;
+  if (destination != NULL) {
+    x = destination->x;
+    y = destination->y;
+    width = destination->w;
+    height = destination->h;
   }
 
   // Setup rotation angle and adjustments.
-  switch (vblit->rotate) {
+  switch (rotate) {
     case GST_VCE_ROTATE_90:
     {
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -862,7 +865,7 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
           GST_VIDEO_FRAME_HEIGHT (outframe) * dar_d / dar_n;
       height = (height != 0) ? height : GST_VIDEO_FRAME_HEIGHT (outframe);
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       object->target_rect.width = height << 16;
@@ -897,10 +900,9 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -916,7 +918,7 @@ gst_c2d_update_object (C2D_OBJECT * object, const guint surface_id,
       object->target_rect.width = height << 16;
       object->target_rect.height = width << 16;
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       // Adjust the target rectangle coordinates.
@@ -1063,6 +1065,7 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
     // Iterate over the input blit entries and update each C2D_OBJECT for draw.
     for (num = 0; num < n_blits; num++) {
       GstVideoBlit *blit = &(blits[num]);
+      guint r_idx = 0;
 
       GST_C2D_LOCK (convert);
 
@@ -1077,22 +1080,31 @@ gst_c2d_video_converter_compose (GstC2dVideoConverter * convert,
         goto cleanup;
       }
 
-      if (n_objects >= GST_C2D_MAX_DRAW_OBJECTS) {
-        GST_ERROR ("Number of objects exceeds %d!", GST_C2D_MAX_DRAW_OBJECTS);
-        goto cleanup;
-      }
+      // Update a new C2D object (at least 1) for each source/destnation pair.
+      do {
+        GstVideoRectangle *source = NULL, *destination = NULL;
 
-      gst_c2d_update_object (&(objects[n_objects]), surface_id, blit, outframe);
+        if (n_objects >= GST_C2D_MAX_DRAW_OBJECTS) {
+          GST_ERROR ("Number of objects exceeds %d!", GST_C2D_MAX_DRAW_OBJECTS);
+          goto cleanup;
+        }
 
-      // Subtract object area from the total area.
-      area -= gst_c2d_composition_object_area (objects, n_objects);
+        source = (blit->n_regions != 0) ? &(blit->sources[r_idx]) : NULL;
+        destination = (blit->n_regions != 0) ? &(blit->destinations[r_idx]) : NULL;
 
-      // Set previous object to point to the current one (linked list).
-      if (n_objects != 0)
-        objects[n_objects - 1].next = &(objects[n_objects]);
+        gst_c2d_update_object (&(objects[n_objects]), surface_id, blit->frame,
+            blit->alpha, blit->flip, blit->rotate, source, destination, outframe);
 
-      // Increment the counter for the total number of C2D objects.
-      n_objects++;
+        // Subtract object area from the total area.
+        area -= gst_c2d_composition_object_area (objects, n_objects);
+
+        // Set previous object to point to the current one (linked list).
+        if (n_objects != 0)
+          objects[n_objects - 1].next = &(objects[n_objects]);
+
+        // Increment the counter for the total number of C2D objects.
+        n_objects++;
+      } while (++r_idx < blit->n_regions);
     }
 
     GST_C2D_LOCK (convert);

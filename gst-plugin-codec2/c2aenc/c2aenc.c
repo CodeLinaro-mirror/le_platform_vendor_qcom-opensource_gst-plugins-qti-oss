@@ -436,6 +436,7 @@ gst_c2_aenc_finish (GstAudioEncoder * encoder)
   return GST_FLOW_OK;
 }
 
+guint32 num = 0;
 static GstFlowReturn
 gst_c2_aenc_handle_frame (GstAudioEncoder * encoder, GstBuffer * inbuf)
 {
@@ -449,8 +450,8 @@ gst_c2_aenc_handle_frame (GstAudioEncoder * encoder, GstBuffer * inbuf)
   // At this point we should wait all queued buffers to be processed
   if (!inbuf) {
     GST_INFO_OBJECT(c2aenc, "Encoder is draining");
-    gst_c2_aenc_finish (encoder);
-    return GST_FLOW_EOS;
+    gst_audio_encoder_finish_frame (encoder, NULL, -1);
+    return GST_FLOW_OK;
   }
 
   // This mutex was locked in the base class before call this function.

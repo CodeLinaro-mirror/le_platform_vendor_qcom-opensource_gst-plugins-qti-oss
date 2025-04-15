@@ -34,8 +34,8 @@
 #define __GST_VIDEO_COMPOSER_SINKPAD_H__
 
 #include <gst/gst.h>
+#include <gst/base/gstaggregator.h>
 #include <gst/video/video.h>
-#include <gst/video/gstvideoaggregator.h>
 
 #include "videocomposerutils.h"
 
@@ -67,13 +67,15 @@ typedef struct _GstVideoComposerSinkPadClass GstVideoComposerSinkPadClass;
 
 struct _GstVideoComposerSinkPad {
   /// Inherited parent structure.
-  GstVideoAggregatorPad   parent;
+  GstAggregatorPad        parent;
 
   /// Global mutex lock.
   GMutex                  lock;
 
   /// Sink pad index.
   guint                   index;
+  /// Negotiated caps on the pad input parsed to video info.
+  GstVideoInfo            *info;
 
   /// Properties.
   GstVideoRectangle       crop;
@@ -87,10 +89,15 @@ struct _GstVideoComposerSinkPad {
 
 struct _GstVideoComposerSinkPadClass {
   /// Inherited parent structure.
-  GstVideoAggregatorPadClass parent;
+  GstAggregatorPadClass parent;
 };
 
 GType gst_video_composer_sinkpad_get_type (void);
+
+gboolean
+gst_video_composer_sinkpad_setcaps (GstAggregatorPad * sinkpad,
+                                    GstAggregator * aggregator,
+                                    GstCaps * caps);
 
 gboolean
 gst_video_composer_sinkpad_acceptcaps (GstAggregatorPad * sinkpad,

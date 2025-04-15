@@ -9,7 +9,7 @@
  *
  * Description:
  * The application takes video stream from camera/file/rtsp and maximum of
- * 32 streams in parallel and give to AI models for inference and
+ * 24 streams in parallel and give to AI models for inference and
  * AI Model output overlayed on incoming videos are arranged in a grid pattern
  * to be displayed on HDMI Screen, save as h264 encoded mp4 file or streamed
  * over rtsp server running on device.
@@ -17,7 +17,7 @@
  * options. Camera default resolution is set to 1280x720. Display will be
  * full screen for 1 input stream, divided into 2x2 grid for 2-4 input streams,
  * divided into 3x3 grid for 5-9 streams and divided into 4x4 grid for 10-16
- * and 5x5 for 17-24 stream and 6x6 for 25-32 stream
+ * and 5x5 for 17-24 stream.
  *
  * Pipeline for Gstreamer:
  * Source -> tee (SPLIT)
@@ -54,10 +54,11 @@
 /**
  * Default constants to dequantize values
  */
-#define DEFAULT_DETECTION_CONSTANTS "YOLOv8,q-offsets=<21.0, 0.0, 0.0>,\
-    q-scales=<3.0546178817749023, 0.003793874057009816, 1.0>;"
+#define DEFAULT_DETECTION_CONSTANTS \
+    "YOLOv8,q-offsets=<-107.0, -128.0, 0.0>,\
+    q-scales=<3.093529462814331, 0.00390625, 1.0>;"
 #define DEFAULT_CLASSIFICATION_CONSTANTS \
-    "Inceptionv3,q-offsets=<38.0>,q-scales=<0.17039915919303894>;"
+    "Mobilenet,q-offsets=<-95.0>,q-scales=<0.18740029633045197>;"
 
 /**
  * To enable softmax operation for post processing
@@ -76,15 +77,15 @@
  * Maximum count of various sources possible to configure
  */
 #define MAX_CAMSRCS 2
-#define MAX_FILESRCS 32
-#define MAX_RTSPSRCS 32
-#define MAX_SRCS_COUNT 32
+#define MAX_FILESRCS 24
+#define MAX_RTSPSRCS 24
+#define MAX_SRCS_COUNT 24
 #define COMPOSER_SINK_COUNT 2
 
 /**
  * Number of Queues used for buffer caching between elements
  */
-#define QUEUE_COUNT 32
+#define QUEUE_COUNT 24
 
 /**
  * Default threshold values
@@ -120,7 +121,6 @@
 typedef struct {
   gchar *mlframework;
   gchar *model_path;
-  GstInputStreamType input_type;
   gchar *labels_path;
   gchar *out_file;
   gchar *constants;
@@ -290,10 +290,8 @@ set_composer_params (GstElement * qtivcomposer, GstAppOptions * options)
     update_window_grid (positions, 3, 3);
   } else if (options->input_count <= 16) {
     update_window_grid (positions, 4, 4);
-  } else if (options->input_count <= 25) {
-    update_window_grid (positions, 5, 5);
   } else {
-    update_window_grid (positions, 6, 6);
+    update_window_grid (positions, 5, 5);
   }
 
   // Set Window Position and Size for each input stream
@@ -474,8 +472,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   // Elements for file source
   GstElement *filesrc[options->num_file], *qtdemux[options->num_file];
   GstElement *file_queue[options->num_file][QUEUE_COUNT];
-  GstElement *file_dec_parse[options->num_file];
-  GstElement *file_v4l2_decoder[options->num_file];
+  GstElement *file_dec_h264parse[options->num_file];
+  GstElement *file_v4l2h264dec[options->num_file];
   GstElement *file_decode_caps[options->num_file];
   GstElement *file_dec_tee[options->num_file];
   GstElement *file_qtimlvconverter[options->num_file];
@@ -484,10 +482,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   GstElement *file_detection_filter[options->num_file];
 
   // Elements for rtsp source
-  GstElement *rtspsrc[options->num_rtsp], *rtph_depay[options->num_rtsp];
+  GstElement *rtspsrc[options->num_rtsp], *rtph264depay[options->num_rtsp];
   GstElement *rtsp_queue[options->num_rtsp][QUEUE_COUNT];
-  GstElement *rtsp_dec_parse[options->num_rtsp];
-  GstElement *rtsp_v4l2_dec[options->num_rtsp];
+  GstElement *rtsp_dec_h264parse[options->num_rtsp];
+  GstElement *rtsp_v4l2h264dec[options->num_rtsp];
   GstElement *rtsp_decode_caps[options->num_rtsp];
   GstElement *rtsp_dec_tee[options->num_rtsp];
   GstElement *rtsp_qtimlvconverter[options->num_rtsp];
@@ -498,8 +496,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   // Elements for sinks
   GstElement *queue[QUEUE_COUNT] = {NULL}, *qtivcomposer = NULL;
   GstElement *waylandsink = NULL, *composer_caps = NULL, *composer_tee = NULL;
-  GstElement *v4l2_encoder = NULL, *enc_tee = NULL;
-  GstElement *file_encoder_parse = NULL, *rtsp_encoder_parse = NULL;
+  GstElement *v4l2h264enc = NULL, *enc_tee = NULL;
+  GstElement *file_enc_h264parse = NULL, *rtsp_enc_h264parse = NULL;
   GstElement *mp4mux = NULL, *filesink = NULL, *fpsdisplaysink = NULL;
   GstElement *qtirtspbin = NULL;
   GstCaps *filtercaps = NULL;
@@ -620,45 +618,23 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
       }
     }
 
-    // Create H.264/H265 frame parser plugin
-    snprintf (element_name, 127, "file_dec_parse-%d", i);
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      file_dec_parse[i] = gst_element_factory_make ("h264parse", element_name);
-      if (!file_dec_parse[i]) {
-        g_printerr ("Failed to create H264 file_dec_parse-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      file_dec_parse[i] = gst_element_factory_make ("h265parse", element_name);
-      if (!file_dec_parse[i]) {
-        g_printerr ("Failed to create H265 file_dec_parse-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create file_dec_parse-%d Invalid input-type \n", i);
+    // Create H.264 frame parser plugin
+    snprintf (element_name, 127, "file_dec_h264parse-%d", i);
+    file_dec_h264parse[i] = gst_element_factory_make ("h264parse", element_name);
+    if (!file_dec_h264parse[i]) {
+      g_printerr ("Failed to create file_dec_h264parse-%d\n", i);
       goto error_clean_elements;
     }
 
-    // Create H.264/H265 Decoder Plugin
-    snprintf (element_name, 127, "file_v4l2_decoder-%d", i);
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      file_v4l2_decoder[i] = gst_element_factory_make ("v4l2h264dec", element_name);
-      if (!file_v4l2_decoder[i]) {
-        g_printerr ("Failed to create file_v4l2_decoder-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      file_v4l2_decoder[i] = gst_element_factory_make ("v4l2h265dec", element_name);
-      if (!file_v4l2_decoder[i]) {
-        g_printerr ("Failed to create file_v4l2_decoder-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create file_v4l2_decoder-%d Invalid input-type \n", i);
+    // Create H.264 Decoder Plugin
+    snprintf (element_name, 127, "file_v4l2h264dec-%d", i);
+    file_v4l2h264dec[i] = gst_element_factory_make ("v4l2h264dec", element_name);
+    if (!file_v4l2h264dec[i]) {
+      g_printerr ("Failed to create file_v4l2h264dec-%d\n", i);
       goto error_clean_elements;
     }
 
-    // Create caps for H.264/H265 Decoder
+    // Create caps for H.264 Decoder
     snprintf (element_name, 127, "file_decode_caps-%d", i);
     file_decode_caps[i] = gst_element_factory_make ("capsfilter", element_name);
     if (!file_decode_caps[i]) {
@@ -727,22 +703,11 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
       goto error_clean_elements;
     }
 
-    // Create rtph_depay plugin for rtsp payload parsing
-    snprintf (element_name, 127, "rtp_depay-%d", i);
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      rtph_depay[i] = gst_element_factory_make ("rtph264depay", element_name);
-      if (!rtph_depay[i]) {
-        g_printerr ("Failed to create rtp_depay-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      rtph_depay[i] = gst_element_factory_make ("rtph265depay", element_name);
-      if (!rtph_depay[i]) {
-        g_printerr ("Failed to create rtp_depay-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create rtp_depay-%d due to invalid input-type\n", i);
+    // Create rtph264depay plugin for rtsp payload parsing
+    snprintf (element_name, 127, "rtph264depay-%d", i);
+    rtph264depay[i] = gst_element_factory_make ("rtph264depay", element_name);
+    if (!rtph264depay[i]) {
+      g_printerr ("Failed to create rtph264depay-%d\n", i);
       goto error_clean_elements;
     }
 
@@ -755,41 +720,19 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
       }
     }
 
-    // Create H.264/H265 frame parser plugin
-    snprintf (element_name, 127, "rtsp_dec_parse-%d", i);
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      rtsp_dec_parse[i] = gst_element_factory_make ("h264parse", element_name);
-      if (!rtsp_dec_parse[i]) {
-        g_printerr ("Failed to create rtsp_dec_parse-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      rtsp_dec_parse[i] = gst_element_factory_make ("h265parse", element_name);
-      if (!rtsp_dec_parse[i]) {
-        g_printerr ("Failed to create rtsp_dec_parse-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create rtsp_dec_parse-%d\n Invalid input_type", i);
+    // Create H.264 frame parser plugin
+    snprintf (element_name, 127, "rtsp_dec_h264parse-%d", i);
+    rtsp_dec_h264parse[i] = gst_element_factory_make ("h264parse", element_name);
+    if (!rtsp_dec_h264parse[i]) {
+      g_printerr ("Failed to create rtsp_dec_h264parse-%d\n", i);
       goto error_clean_elements;
     }
 
-    // Create H.264/H265 Decoder Plugin
-    snprintf (element_name, 127, "rtsp_v4l2_dec-%d", i);
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      rtsp_v4l2_dec[i] = gst_element_factory_make ("v4l2h264dec", element_name);
-      if (!rtsp_v4l2_dec[i]) {
-        g_printerr ("Failed to create rtsp_v4l2_dec-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      rtsp_v4l2_dec[i] = gst_element_factory_make ("v4l2h265dec", element_name);
-      if (!rtsp_v4l2_dec[i]) {
-        g_printerr ("Failed to create rtsp_v4l2_dec-%d\n", i);
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create rtsp_v4l2_dec-%d\n Invalid input-type", i);
+    // Create H.264 Decoder Plugin
+    snprintf (element_name, 127, "rtsp_v4l2h264dec-%d", i);
+    rtsp_v4l2h264dec[i] = gst_element_factory_make ("v4l2h264dec", element_name);
+    if (!rtsp_v4l2h264dec[i]) {
+      g_printerr ("Failed to create rtsp_v4l2h264dec-%d\n", i);
       goto error_clean_elements;
     }
 
@@ -901,20 +844,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
 
   if (options->out_file || options->out_rtsp) {
     // Create H.264 Encoder plugin for file and rtsp output
-    if (options->input_type == GST_INPUT_STREAM_H264) {
-      v4l2_encoder = gst_element_factory_make ("v4l2h264enc", "v4l2_encoder");
-      if (!v4l2_encoder) {
-        g_printerr ("Failed to create v4l2_encoder\n");
-        goto error_clean_elements;
-      }
-    } else if (options->input_type == GST_INPUT_STREAM_H265) {
-      v4l2_encoder = gst_element_factory_make ("v4l2h265enc", "v4l2_encoder");
-      if (!v4l2_encoder) {
-        g_printerr ("Failed to create v4l2_encoder\n");
-        goto error_clean_elements;
-      }
-    } else {
-      g_printerr ("Failed to create v4l2_encoder, Invalid input-type\n");
+    v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
+    if (!v4l2h264enc) {
+      g_printerr ("Failed to create v4l2h264enc\n");
       goto error_clean_elements;
     }
 
@@ -933,22 +865,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
       }
 
       // Create H.264 frame parser plugin
-      if (options->input_type == GST_INPUT_STREAM_H264) {
-        file_encoder_parse = gst_element_factory_make ("h264parse",
-            "file_encoder_parse");
-        if (!file_encoder_parse) {
-          g_printerr ("Failed to create file_encoder_parse\n");
-          goto error_clean_elements;
-        }
-      } else if (options->input_type == GST_INPUT_STREAM_H265) {
-        file_encoder_parse = gst_element_factory_make ("h265parse",
-            "file_encoder_parse");
-        if (!file_encoder_parse) {
-          g_printerr ("Failed to create file_encoder_parse\n");
-          goto error_clean_elements;
-        }
-      } else {
-        g_printerr ("Failed to create file_encoder_parse\n");
+      file_enc_h264parse = gst_element_factory_make ("h264parse",
+          "file_enc_h264parse");
+      if (!file_enc_h264parse) {
+        g_printerr ("Failed to create file_enc_h264parse\n");
         goto error_clean_elements;
       }
 
@@ -962,22 +882,10 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
 
     if (options->out_rtsp) {
       // Create H.264 frame parser plugin
-      if (options->input_type == GST_INPUT_STREAM_H264) {
-        rtsp_encoder_parse = gst_element_factory_make ("h264parse",
-            "rtsp_encoder_parse");
-        if (!rtsp_encoder_parse) {
-          g_printerr ("Failed to create rtsp_encoder_parse\n");
-          goto error_clean_elements;
-        }
-      } else if (options->input_type == GST_INPUT_STREAM_H265) {
-        rtsp_encoder_parse = gst_element_factory_make ("h265parse",
-            "rtsp_encoder_parse");
-        if (!rtsp_encoder_parse) {
-          g_printerr ("Failed to create rtsp_encoder_parse\n");
-          goto error_clean_elements;
-        }
-      } else {
-        g_printerr ("Failed to create rtsp_encoder_parse, Invalid input-type\n");
+      rtsp_enc_h264parse = gst_element_factory_make ("h264parse",
+          "rtsp_enc_h264parse");
+      if (!rtsp_enc_h264parse) {
+        g_printerr ("Failed to create rtsp_enc_h264parse\n");
         goto error_clean_elements;
       }
 
@@ -1013,9 +921,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   for (gint i = 0; i < options->num_file; i++) {
     g_object_set (G_OBJECT (filesrc[i]), "location",
         options->input_file_path[i], NULL);
-    gst_element_set_enum_property (file_v4l2_decoder[i], "capture-io-mode",
+    gst_element_set_enum_property (file_v4l2h264dec[i], "capture-io-mode",
         "dmabuf");
-    gst_element_set_enum_property (file_v4l2_decoder[i], "output-io-mode",
+    gst_element_set_enum_property (file_v4l2h264dec[i], "output-io-mode",
         "dmabuf");
     filtercaps = gst_caps_new_simple ("video/x-raw",
         "format", G_TYPE_STRING, "NV12", NULL);
@@ -1030,9 +938,9 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   for (gint i = 0; i < options->num_rtsp; i++) {
     g_object_set (G_OBJECT (rtspsrc[i]), "location",
         options->input_rtsp_path[i], NULL);
-    gst_element_set_enum_property (rtsp_v4l2_dec[i], "capture-io-mode",
+    gst_element_set_enum_property (rtsp_v4l2h264dec[i], "capture-io-mode",
         "dmabuf");
-    gst_element_set_enum_property (rtsp_v4l2_dec[i], "output-io-mode",
+    gst_element_set_enum_property (rtsp_v4l2h264dec[i], "output-io-mode",
         "dmabuf");
     filtercaps = gst_caps_new_simple ("video/x-raw",
         "format", G_TYPE_STRING, "NV12", NULL);
@@ -1064,14 +972,14 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
 
   // 2.5 Set the properties for file/rtsp sink
   if (options->out_file || options->out_rtsp) {
-    gst_element_set_enum_property (v4l2_encoder, "capture-io-mode",
+    gst_element_set_enum_property (v4l2h264enc, "capture-io-mode",
         "dmabuf");
-    gst_element_set_enum_property (v4l2_encoder, "output-io-mode",
+    gst_element_set_enum_property (v4l2h264enc, "output-io-mode",
         "dmabuf-import");
     // Set bitrate for streaming usecase
     fcontrols = gst_structure_from_string (
         "fcontrols,video_bitrate=6000000,video_bitrate_mode=0", NULL);
-    g_object_set (G_OBJECT (v4l2_encoder), "extra-controls", fcontrols, NULL);
+    g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", fcontrols, NULL);
 
     if (options->out_file) {
       g_object_set (G_OBJECT (filesink), "location", options->out_file, NULL);
@@ -1079,7 +987,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
 
     if (options->out_rtsp) {
       g_print (" ip = %s, port = %s\n", options->ip_address, options->port_num);
-      g_object_set (G_OBJECT (rtsp_encoder_parse), "config-interval", 1, NULL);
+      g_object_set (G_OBJECT (rtsp_enc_h264parse), "config-interval", 1, NULL);
       g_object_set (G_OBJECT (qtirtspbin), "address", options->ip_address,
           "port", options->port_num, NULL);
     }
@@ -1099,7 +1007,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
 
   for (gint i = 0; i < options->num_file; i++) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), filesrc[i], qtdemux[i],
-        file_dec_parse[i], file_v4l2_decoder[i], file_decode_caps[i],
+        file_dec_h264parse[i], file_v4l2h264dec[i], file_decode_caps[i],
         file_dec_tee[i], file_qtimlvconverter[i], file_qtimlelement[i],
         file_qtimlpostprocess[i], file_detection_filter[i], NULL);
     for (gint j = 0; j < QUEUE_COUNT; j++) {
@@ -1108,8 +1016,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   }
 
   for (gint i = 0; i < options->num_rtsp; i++) {
-    gst_bin_add_many (GST_BIN (appctx->pipeline), rtspsrc[i], rtph_depay[i],
-        rtsp_dec_parse[i], rtsp_v4l2_dec[i], rtsp_decode_caps[i],
+    gst_bin_add_many (GST_BIN (appctx->pipeline), rtspsrc[i], rtph264depay[i],
+        rtsp_dec_h264parse[i], rtsp_v4l2h264dec[i], rtsp_decode_caps[i],
         rtsp_dec_tee[i], rtsp_qtimlvconverter[i], rtsp_qtimlelement[i],
         rtsp_qtimlpostprocess[i], rtsp_detection_filter[i], NULL);
     for (gint j = 0; j < QUEUE_COUNT; j++) {
@@ -1130,14 +1038,14 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   }
 
   if (options->out_file || options->out_rtsp) {
-    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2_encoder,
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2h264enc,
         enc_tee, NULL);
     if (options->out_file) {
-      gst_bin_add_many (GST_BIN (appctx->pipeline), mp4mux, file_encoder_parse,
+      gst_bin_add_many (GST_BIN (appctx->pipeline), mp4mux, file_enc_h264parse,
           filesink, NULL);
     }
     if (options->out_rtsp) {
-      gst_bin_add_many (GST_BIN (appctx->pipeline), rtsp_encoder_parse,
+      gst_bin_add_many (GST_BIN (appctx->pipeline), rtsp_enc_h264parse,
           qtirtspbin, NULL);
     }
   }
@@ -1179,8 +1087,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
     }
     // qtdemux -> file_queue[i][0] link is not created here as it is a
     // dymanic link using on_pad_added callback
-    ret = gst_element_link_many (file_queue[i][0], file_dec_parse[i],
-        file_v4l2_decoder[i], file_decode_caps[i],
+    ret = gst_element_link_many (file_queue[i][0], file_dec_h264parse[i],
+        file_v4l2h264dec[i], file_decode_caps[i],
         file_queue[i][1], file_dec_tee[i], NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for %d"
@@ -1208,8 +1116,8 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   for (gint i = 0; i < options->num_rtsp; i++) {
     // rtspsrc -> rtsp_queue[i][0] link is not created here as it is a
     // dymanic link using on_pad_added callback
-    ret = gst_element_link_many (rtsp_queue[i][0], rtph_depay[i],
-        rtsp_dec_parse[i], rtsp_v4l2_dec[i], rtsp_decode_caps[i],
+    ret = gst_element_link_many (rtsp_queue[i][0], rtph264depay[i],
+        rtsp_dec_h264parse[i], rtsp_v4l2h264dec[i], rtsp_decode_caps[i],
         rtsp_queue[i][1], rtsp_dec_tee[i], NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for %d"
@@ -1252,7 +1160,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
   }
 
   if (options->out_file || options->out_rtsp) {
-    ret = gst_element_link_many (composer_tee, queue[2], v4l2_encoder, queue[3],
+    ret = gst_element_link_many (composer_tee, queue[2], v4l2h264enc, queue[3],
         enc_tee, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for"
@@ -1261,7 +1169,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
     }
 
     if (options->out_file) {
-      ret = gst_element_link_many (enc_tee, queue[4], file_encoder_parse,
+      ret = gst_element_link_many (enc_tee, queue[4], file_enc_h264parse,
           mp4mux, filesink, NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked for"
@@ -1271,7 +1179,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
     }
 
     if (options->out_rtsp) {
-      ret = gst_element_link_many (enc_tee, queue[5], rtsp_encoder_parse, queue[6],
+      ret = gst_element_link_many (enc_tee, queue[5], rtsp_enc_h264parse, queue[6],
           qtirtspbin, NULL);
       if (!ret) {
         g_printerr ("Pipeline elements cannot be linked for"
@@ -1314,7 +1222,7 @@ error_clean_elements:
 
   for (gint i = 0; i < options->num_file; i++) {
     cleanup_gst (&filesrc[i], &qtdemux[i],
-        &file_dec_parse[i], &file_v4l2_decoder[i], &file_dec_tee[i],
+        &file_dec_h264parse[i], &file_v4l2h264dec[i], &file_dec_tee[i],
         &file_qtimlvconverter[i], &file_qtimlelement[i], &file_decode_caps[i],
         &file_qtimlpostprocess[i], &file_detection_filter[i], NULL);
     for (gint j = 0; j < QUEUE_COUNT; j++) {
@@ -1323,8 +1231,8 @@ error_clean_elements:
   }
 
   for (gint i = 0; i < options->num_rtsp; i++) {
-    cleanup_gst (&rtspsrc[i], &rtph_depay[i],
-        &rtsp_dec_parse[i], &rtsp_v4l2_dec[i], &rtsp_dec_tee[i],
+    cleanup_gst (&rtspsrc[i], &rtph264depay[i],
+        &rtsp_dec_h264parse[i], &rtsp_v4l2h264dec[i], &rtsp_dec_tee[i],
         &rtsp_qtimlvconverter[i], &rtsp_qtimlelement[i], &rtsp_decode_caps[i],
          &rtsp_qtimlpostprocess[i], &rtsp_detection_filter[i], NULL);
     for (gint j = 0; j < QUEUE_COUNT; j++) {
@@ -1344,12 +1252,12 @@ error_clean_elements:
   }
 
   if (options->out_file || options->out_rtsp) {
-    cleanup_gst (&v4l2_encoder, &enc_tee, NULL);
+    cleanup_gst (&v4l2h264enc, &enc_tee, NULL);
     if (options->out_file) {
-      cleanup_gst (&mp4mux, &file_encoder_parse, &filesink, NULL);
+      cleanup_gst (&mp4mux, &file_enc_h264parse, &filesink, NULL);
     }
     if (options->out_rtsp) {
-      cleanup_gst (&rtsp_encoder_parse, &qtirtspbin, NULL);
+      cleanup_gst (&rtsp_enc_h264parse, &qtirtspbin, NULL);
     }
   }
 
@@ -1389,16 +1297,14 @@ parse_json (gchar * config_file, GstAppOptions * options)
     g_object_unref (parser);
     return -1;
   }
+
   root_obj = json_node_get_object (root);
 
   gboolean camera_is_available = is_camera_available ();
 
   if (camera_is_available) {
-    if (json_object_has_member (root_obj, "num-camera"))
-      options->num_camera = json_object_get_int_member (root_obj, "num-camera");
-
-    if (json_object_has_member (root_obj, "camera-id"))
-      options->camera_id = json_object_get_int_member (root_obj, "camera-id");
+    if (json_object_has_member (root_obj, "num_camera"))
+      options->num_camera = json_object_get_int_member (root_obj, "camera");
   }
 
   if (json_object_has_member (root_obj, "input-file-path")) {
@@ -1426,21 +1332,6 @@ parse_json (gchar * config_file, GstAppOptions * options)
     for (gint i = 0; i < options->num_rtsp; i++) {
       options->input_rtsp_path[i] =
           g_strdup (json_array_get_string_element (rtsp_info, i));
-    }
-  }
-
-  if (json_object_has_member (root_obj, "input-type")) {
-    const gchar* input_type =
-        json_object_get_string_member (root_obj, "input-type");
-    if (g_strcmp0 (input_type, "h264") == 0)
-      options->input_type = GST_INPUT_STREAM_H264;
-    else if (g_strcmp0 (input_type, "h265") == 0)
-      options->input_type = GST_INPUT_STREAM_H265;
-    else {
-      gst_printerr ("Input stream type can only be one of "
-          "\"h264\" or \"h265\" \n");
-      g_object_unref (parser);
-      return -1;
     }
   }
 
@@ -1531,7 +1422,6 @@ main (gint argc, gchar * argv[])
   options.use_case = GST_OBJECT_DETECTION;
   options.mlframework = "qtimltflite";
   options.camera_id = -1;
-  options.input_type = GST_INPUT_STREAM_H264;
 
   gboolean camera_is_available = is_camera_available ();
 
@@ -1554,18 +1444,13 @@ main (gint argc, gchar * argv[])
 
   if (camera_is_available) {
     snprintf (camera_description, sizeof (camera_description),
-      "  num-camera: 1 or 2\n"
-      "      Number of camera streams (max: %d)\n"
-      "  camera-id: 0 or 1\n"
-      "      Use provided camera id as source\n"
-      "      Default input camera=0 if no other input is selected\n"
-      "      This parameter is ignored if num-camera=%d\n",
-      MAX_CAMSRCS, MAX_CAMSRCS);
+      "  num_camera: 1 or 2"
+      "      Number of camera streams (max: %d)\n", MAX_CAMSRCS);
   }
 
   snprintf (help_description, 4095, "\nExample:\n"
       "  %s --config-file=%s\n"
-      "\nThis Sample App demonstrates Object Detection on upto 32 stream "
+      "\nThis Sample App demonstrates Object Detection on upto 24 stream "
       "with various input/output stream combinations\n"
       "\nConfig file fields:\n"
       "%s"
@@ -1610,10 +1495,7 @@ main (gint argc, gchar * argv[])
       "      Put value as true to enable output on wayland display\n"
       "  If no output is selected, wayland output is selected as default\n"
       "  use-case: 0 or 1\n"
-      "      0: detection, 1: classification\n"
-      "  input-type: \"h264\" or \"h265\"\n"
-      "      Encoding type for file/rtsp input\n"
-      "      Default encoding: H264\n",
+      "      0: detection, 1: classification\n",
       app_name, DEFAULT_CONFIG_FILE, camera_description,
       MAX_FILESRCS, MAX_RTSPSRCS, MAX_SRCS_COUNT);
   help_description[4095] = '\0';
@@ -1749,9 +1631,10 @@ main (gint argc, gchar * argv[])
   }
 
   for (gint i = 0; i < options.num_file; i++) {
-    if (!file_exists (options.input_file_path[i])) {
-      g_printerr ("video file does not exist at path: %s\n",
-          options.input_file_path[i]);
+    gchar file_name[128];
+    snprintf (file_name, 127, "/etc/media/video%d.mp4", i+1);
+    if (!file_exists (file_name)) {
+      g_printerr ("video file doesnot exist at path: %s\n", file_name);
       gst_app_context_free (&appctx, &options, config_file);
       return -EINVAL;
     }

@@ -538,10 +538,10 @@ gst_ml_video_classification_fill_text_output (
 
     gst_structure_get_uint (prediction->info, "sequence-index", &sequence_idx);
 
-    id = GST_META_ID (classification->stage_id, sequence_idx, 0);
-
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLClassEntry, num));
+
+      id = GST_META_ID (classification->stage_id, sequence_idx, num);
 
       GST_TRACE_OBJECT (classification, "Batch: %u, ID: %X, Label: %s, "
           "Confidence: %.1f%%", prediction->batch_idx, id,
@@ -555,15 +555,6 @@ gst_ml_video_classification_fill_text_output (
           G_TYPE_DOUBLE,  entry->confidence, "color", G_TYPE_UINT, entry->color,
           NULL);
       g_free (name);
-
-      if (entry->xtraparams != NULL) {
-        GstStructure *xtraparams = g_steal_pointer (&(entry->xtraparams));
-
-        g_value_take_boxed (&value, xtraparams);
-        gst_structure_set_value (structure, "xtraparams", &value);
-
-        g_value_reset (&value);
-      }
 
       g_value_take_boxed (&value, structure);
       gst_value_array_append_value (&labels, &value);

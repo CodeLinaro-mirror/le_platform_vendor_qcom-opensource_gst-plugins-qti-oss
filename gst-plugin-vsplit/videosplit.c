@@ -239,6 +239,13 @@ static inline void
 gst_video_composition_cleanup (gpointer userdata)
 {
   GstVideoComposition *composition = (GstVideoComposition*) userdata;
+  guint idx = 0;
+
+  // Free only source/destination rectangles, frames are owned by the request.
+  for (idx = 0; idx < composition->n_blits; idx++) {
+    g_slice_free (GstVideoRectangle, composition->blits[idx].sources);
+    g_slice_free (GstVideoRectangle, composition->blits[idx].destinations);
+  }
 
   // Free only video blits, output frame is owned by the request.
   g_slice_free (GstVideoBlit, composition->blits);
@@ -351,11 +358,9 @@ gst_buffer_transfer_video_region_of_interest_metas (GstBuffer * outbuffer,
           kp->y = kp->y * h_scale;
         }
 
-        structure = gst_structure_copy (structure);
-        gst_structure_set (structure, "keypoints", G_TYPE_ARRAY, keypoints,
-            "links", G_TYPE_ARRAY, links, "confidence", G_TYPE_DOUBLE,
-            confidence, NULL);
-
+        structure = gst_structure_new ("VideoLandmarks",
+            "keypoints", G_TYPE_ARRAY, keypoints, "links", G_TYPE_ARRAY, links,
+            "confidence", G_TYPE_DOUBLE, confidence, NULL);
         gst_video_region_of_interest_meta_add_param (roimeta, structure);
       } else if (id == g_quark_from_static_string ("ImageClassification")) {
         structure = gst_structure_copy (structure);
@@ -400,9 +405,6 @@ gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
       keypoints, links);
   newmeta->id = lmkmeta->id;
 
-  if (lmkmeta->xtraparams != NULL)
-    newmeta->xtraparams = gst_structure_copy (lmkmeta->xtraparams);
-
   return newmeta;
 }
 
@@ -411,24 +413,9 @@ gst_buffer_transfer_video_classification_meta (GstBuffer * buffer,
     GstVideoClassificationMeta * classmeta)
 {
   GstVideoClassificationMeta *newmeta = NULL;
-  GArray *labels = g_array_copy (classmeta->labels);
-  guint idx = 0;
 
-  // The GArray copy above naturally doesn't copy the data in pointers.
-  // Iterate over the labels and deep copy any extra params.
-  for (idx = 0; idx < labels->len; idx++) {
-    GstClassLabel *label = &(g_array_index (labels, GstClassLabel, idx));
-
-    if (label->xtraparams == NULL)
-      continue;
-
-    label->xtraparams = gst_structure_copy (label->xtraparams);
-  }
-
-  g_array_set_clear_func (labels,
-      (GDestroyNotify) gst_video_classification_label_cleanup);
-
-  newmeta = gst_buffer_add_video_classification_meta (buffer, labels);
+  newmeta = gst_buffer_add_video_classification_meta (buffer,
+      g_array_copy (classmeta->labels));
   newmeta->id = classmeta->id;
 
   return newmeta;
@@ -450,8 +437,8 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
   inbuffer = composition->blits[0].frame->buffer;
   outbuffer = composition->frame->buffer;
 
-  source = &(composition->blits[0].source);
-  destination = &(composition->blits[0].destination);
+  source = &(composition->blits[0].sources[0]);
+  destination = &(composition->blits[0].destinations[0]);
 
   s_offset.x = source->x;
   s_offset.y = source->y;
@@ -498,12 +485,6 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
 
       lmkmeta = gst_buffer_add_video_landmarks_meta (outbuffer, confidence,
           keypoints, links);
-      gst_structure_get_uint (structure, "id", &(lmkmeta->id));
-
-      if ((value = gst_structure_get_value (structure, "xtraparams")) != NULL) {
-        GstStructure *xtraparams = GST_STRUCTURE (g_value_get_boxed (value));
-        lmkmeta->xtraparams = gst_structure_copy (xtraparams);
-      }
 
       GST_TRACE_OBJECT (srcpad, "Attached derived 'VideoLandmarks' meta "
           "with ID[0x%X] to buffer %p", lmkmeta->id, outbuffer);
@@ -511,28 +492,11 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
       GstVideoClassificationMeta *classmeta = NULL;
       GArray *labels = NULL;
       const GValue *value = NULL;
-      guint idx = 0;
 
       value = gst_structure_get_value (structure, "labels");
       labels = g_array_copy (g_value_get_boxed (value));
 
-      // The GArray copy above naturally doesn't copy the data in pointers.
-      // Iterate over the labels and deep copy any extra params.
-      for (idx = 0; idx < labels->len; idx++) {
-        GstClassLabel *label = &(g_array_index (labels, GstClassLabel, idx));
-
-        if (label->xtraparams == NULL)
-          continue;
-
-        label->xtraparams = gst_structure_copy (label->xtraparams);
-      }
-
-      g_array_set_clear_func (labels,
-          (GDestroyNotify) gst_video_classification_label_cleanup);
-
       classmeta = gst_buffer_add_video_classification_meta (outbuffer, labels);
-      gst_structure_get_uint (structure, "id", &(classmeta->id));
-
       GST_TRACE_OBJECT (srcpad, "Attached derived 'ImageClassification' meta "
           "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
     }
@@ -548,8 +512,8 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
       GstVideoClassificationMeta *classmeta =
           GST_VIDEO_CLASSIFICATION_META_CAST (meta);
 
-      classmeta =
-          gst_buffer_transfer_video_classification_meta (outbuffer, classmeta);
+      classmeta = gst_buffer_transfer_video_classification_meta (outbuffer,
+          classmeta);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'ImageClassification' meta "
           "with ID[0x%X] to buffer %p", classmeta->id, outbuffer);
@@ -575,8 +539,8 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
   gint maxwidth = 0, maxheight = 0;
 
   outbuffer = composition->frame->buffer;
-  source = &(composition->blits[0].source);
-  destination = &(composition->blits[0].destination);
+  source = &(composition->blits[0].sources[0]);
+  destination = &(composition->blits[0].destinations[0]);
 
   if (roimeta != NULL) {
     source->x = roimeta->x;
@@ -609,19 +573,8 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
 
   // Propagate the original IDs of the ROI meta via the image region.
   if (roimeta != NULL) {
-    GstStructure *structure = NULL;
-
     rmeta->id = roimeta->id;
     rmeta->parent_id = roimeta->parent_id;
-
-    // Transfer the additional ObjectDetection parameters if present.
-    structure = gst_video_region_of_interest_meta_get_param (roimeta,
-        "ObjectDetection");
-
-    if (structure != NULL) {
-      structure = gst_structure_copy (structure);
-      gst_video_region_of_interest_meta_add_param (rmeta, structure);
-    }
   }
 
   GST_TRACE_OBJECT (srcpad, "Attached 'ImageRegion' meta with ID[0x%X] parent "
@@ -972,6 +925,10 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->blits[0].rotate = GST_VCE_ROTATE_0;
       composition->blits[0].flip = GST_VCE_FLIP_NONE;
 
+      composition->blits[0].sources = g_slice_new (GstVideoRectangle);
+      composition->blits[0].destinations = g_slice_new (GstVideoRectangle);
+      composition->blits[0].n_regions = 1;
+
       // Depending on the mode a different ROI meta is used or none at all.
       if (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE)
         roimeta = gst_buffer_find_region_of_interest_meta (inframe->buffer, num);
@@ -982,8 +939,8 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       gst_video_split_composition_update_regions (srcpad, composition, roimeta);
       gst_video_split_composition_populate_metas (srcpad, composition, roimeta);
 
-      source = &(composition->blits[0].source);
-      destination = &(composition->blits[0].destination);
+      source = &(composition->blits[0].sources[0]);
+      destination = &(composition->blits[0].destinations[0]);
 
       GST_TRACE_OBJECT (srcpad, "Composition [%u] Regions: [%d %d %d %d] ->"
           " [%d %d %d %d]", id, source->x, source->y, source->w, source->h,

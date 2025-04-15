@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -280,71 +280,68 @@ gst_gles_free_cache (gpointer key, gpointer value, gpointer userdata)
 
 static void
 gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
-    const GstVideoBlit * vblit, const GstVideoFrame * outframe)
+    const GstVideoFrame * inframe, const guint8 alpha,
+    const GstVideoConvFlip flip, const GstVideoConvRotate rotate,
+    const GstVideoRectangle * source, const GstVideoRectangle * destination,
+    const GstVideoFrame * outframe)
 {
   gint x = 0, y = 0, width = 0, height = 0;
 
   object->id = surface_id;
   object->mask = 0;
 
-  object->alpha = vblit->alpha;
+  object->alpha = alpha;
   GST_TRACE ("Input surface %lx - Global alpha: %u", surface_id, object->alpha);
 
   // Setup the source rectangle.
-  if ((vblit->source.w != 0) && (vblit->source.h != 0)) {
-    x = vblit->source.x;
-    y = vblit->source.y;
-    width = vblit->source.w;
-    height = vblit->source.h;
+  if (source != NULL) {
+    x = source->x;
+    y = source->y;
+    width = source->w;
+    height = source->h;
   }
 
-  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (vblit->frame) :
-      MIN (width, GST_VIDEO_FRAME_WIDTH (vblit->frame) - x);
-  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (vblit->frame) :
-      MIN (height, GST_VIDEO_FRAME_HEIGHT (vblit->frame) - y);
+  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (inframe) :
+      MIN (width, GST_VIDEO_FRAME_WIDTH (inframe) - x);
+  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (inframe) :
+      MIN (height, GST_VIDEO_FRAME_HEIGHT (inframe) - y);
 
   object->source.x = x;
   object->source.y = y;
   object->source.w = width;
   object->source.h = height;
 
-  if ((vblit->flip == GST_VCE_FLIP_VERTICAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_VERTICAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kVFlip;
     GST_TRACE ("Input surface %lx - Flip Vertically", surface_id);
   }
 
-  if ((vblit->flip == GST_VCE_FLIP_HORIZONTAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_HORIZONTAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kHFlip;
     GST_TRACE ("Input surface %lx - Flip Horizontally", surface_id);
   }
 
-  // Reset the local dimension variables.
-  x = y = width = height = 0;
-
   // Setup the target rectangle.
-  if ((vblit->destination.w != 0) && (vblit->destination.h != 0)) {
-    x = vblit->destination.x;
-    y = vblit->destination.y;
-    width = vblit->destination.w;
-    height = vblit->destination.h;
+  if (destination != NULL) {
+    x = destination->x;
+    y = destination->y;
+    width = destination->w;
+    height = destination->h;
   }
 
   object->destination.x = ((width != 0) && (height != 0)) ? x : 0;
   object->destination.y = ((width != 0) && (height != 0)) ? y : 0;
 
   // Setup rotation angle and adjustments.
-  switch (vblit->rotate) {
+  switch (rotate) {
     case GST_VCE_ROTATE_90:
     {
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -362,7 +359,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       object->destination.w = width;
       object->destination.h = height;
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       // Adjust the target rectangle coordinates.
@@ -389,10 +386,9 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -410,7 +406,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       object->destination.w = width;
       object->destination.h = height;
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       // Adjust the target rectangle coordinates.
@@ -517,6 +513,8 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
     // Iterate over the input blit entries and update each IB2C object.
     for (num = 0; num < n_blits; num++) {
       GstVideoBlit *blit = &(blits[num]);
+      GstVideoRectangle *source = NULL, *destination = NULL;
+      guint r_idx = 0;
 
       GST_GLES_LOCK (convert);
 
@@ -540,10 +538,18 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
         g_array_append_val (fds, fd);
       }
 
-      ::ib2c::Object object;
+      // Update a new C2D object (at least 1) for each source/destnation pair.
+      do {
+        ::ib2c::Object object;
 
-      gst_gles_update_object (&object, surface_id, blit, outframe);
-      objects.push_back(object);
+        source = (blit->n_regions != 0) ? &(blit->sources[r_idx]) : NULL;
+        destination = (blit->n_regions != 0) ? &(blit->destinations[r_idx]) : NULL;
+
+        gst_gles_update_object (&object, surface_id, blit->frame, blit->alpha,
+            blit->flip, blit->rotate, source, destination, outframe);
+
+        objects.push_back(object);
+      } while (++r_idx < blit->n_regions);
     }
 
     GST_GLES_LOCK (convert);

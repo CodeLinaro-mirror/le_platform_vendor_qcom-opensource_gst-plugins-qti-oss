@@ -65,9 +65,9 @@
 #define __GST_QTI_VIDEO_COMPOSER_H__
 
 #include <gst/gst.h>
+#include <gst/base/gstaggregator.h>
 #include <gst/base/gstdataqueue.h>
 #include <gst/video/video.h>
-#include <gst/video/gstvideoaggregator.h>
 #include <gst/video/video-converter-engine.h>
 
 G_BEGIN_DECLS
@@ -94,13 +94,28 @@ typedef struct _GstVideoComposer GstVideoComposer;
 typedef struct _GstVideoComposerClass GstVideoComposerClass;
 
 struct _GstVideoComposer {
-  GstVideoAggregator   parent;
+  GstAggregator        parent;
 
   /// Global mutex lock.
   GMutex               lock;
 
+  /// Number of sink pads.
+  guint                n_inputs;
+
+  /// Output pad caps.
+  GstVideoInfo         *outinfo;
   /// Output buffer pool.
   GstBufferPool        *outpool;
+
+  /// Output buffer duration.
+  GstClockTime         duration;
+
+  /// Worker task.
+  GstTask              *worktask;
+  /// Worker task mutex.
+  GRecMutex            worklock;
+  /// Worker queue.
+  GstDataQueue         *requests;
 
   /// Video converter engine.
   GstVideoConvEngine   *converter;
@@ -111,7 +126,7 @@ struct _GstVideoComposer {
 };
 
 struct _GstVideoComposerClass {
-  GstVideoAggregatorClass parent;
+  GstAggregatorClass parent;
 };
 
 G_GNUC_INTERNAL GType gst_video_composer_get_type (void);
