@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -233,6 +233,9 @@ struct _GstQmmfContext {
   /// Offline IFE enable for multicamera usecase
   gboolean          multicamera_hint;
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
+  gboolean          sw_tnr;
+  /// Capabilities of each camera
+  GHashTable        *static_metas;
 
   /// Logical Camera Information
   GstQmmfLogicalCamInfo logical_cam_info;
@@ -596,6 +599,25 @@ get_vendor_tags (const gchar * section, const gchar * names[], guint n_names,
     gst_structure_set_value (structure, name, &value);
     g_value_unset (&value);
   }
+}
+
+static gint
+gst_qmmf_context_get_cam_static_info (GstQmmfContext * context)
+{
+  ::qmmf::recorder::Recorder *recorder = context->recorder;
+  std::vector<::camera::CameraMetadata> infolist;
+
+  int32_t ret = recorder->GetCamStaticInfo (infolist);
+  if (ret != 0)
+    return ret;
+
+  context->static_metas = g_hash_table_new (NULL, NULL);
+  for (guint i = 0; i < infolist.size(); ++i) {
+    g_hash_table_insert (context->static_metas,
+        GUINT_TO_POINTER (i), &(infolist[i]));
+  }
+
+  return ret;
 }
 
 static gboolean
@@ -1196,6 +1218,11 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->logical_cam_info.phy_cam_num = 0;
   context->camera_switch_info.input_req_id = -1;
 
+  status = gst_qmmf_context_get_cam_static_info (context);
+  QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, status == 0,
+      delete context->recorder; g_slice_free (GstQmmfContext, context);,
+      NULL, "Get Camera Static Info failed!");
+
   GST_INFO ("Created QMMF context: %p", context);
   return context;
 }
@@ -1379,6 +1406,13 @@ gst_qmmf_context_open (GstQmmfContext * context)
   ::qmmf::recorder::OfflineIFE qmmf_offline_ife;
   qmmf_offline_ife.enable = context->multicamera_hint;
   xtraparam.Update (::qmmf::recorder::QMMF_OFFLINE_IFE, qmmf_offline_ife);
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+
+  // SW TNR
+#ifdef FEATURE_SW_TNR
+  ::qmmf::recorder::SWTNR sw_tnr;
+  sw_tnr.enable = context->sw_tnr;
+  xtraparam.Update (::qmmf::recorder::QMMF_SW_TNR, sw_tnr);
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
 
   // Camera Operation Mode
@@ -2225,6 +2259,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->multicamera_hint = g_value_get_boolean (value);
       return;
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
+    case PARAM_CAMERA_SW_TNR:
+      context->sw_tnr = g_value_get_boolean (value);
+      return;
   }
 
   if (context->state >= GST_STATE_READY &&
@@ -2910,6 +2947,12 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       g_value_set_boolean (value, context->multicamera_hint);
       break;
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
+    case PARAM_CAMERA_SW_TNR:
+      g_value_set_boolean (value, context->sw_tnr);
+      break;
+    case PARAM_CAMERA_STATIC_METADATAS:
+      g_value_set_boxed (value, context->static_metas);
+      break;
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
       gchar *string = NULL;
