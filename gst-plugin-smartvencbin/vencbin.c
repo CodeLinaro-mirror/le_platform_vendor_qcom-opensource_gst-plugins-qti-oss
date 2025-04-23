@@ -1,23 +1,19 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
+#include "vencbin.h"
+
 #include <stdio.h>
 
-#include "vencbin.h"
+#include <gst/video/video-utils.h>
 
 #define GST_CAT_DEFAULT gst_venc_bin_debug
 GST_DEBUG_CATEGORY (gst_venc_bin_debug);
 
 #define gst_venc_bin_parent_class parent_class
 G_DEFINE_TYPE (GstVideoEncBin, gst_venc_bin, GST_TYPE_BIN);
-
-#define GST_VENC_BIN_MAIN_SINK_CAPS \
-    "video/x-raw(ANY)"
-
-#define GST_VENC_BIN_AUX_SINK_CAPS \
-    "video/x-raw(ANY)"
 
 #define GST_VENC_BIN_SRC_CAPS \
     "video/x-h264; " \
@@ -48,13 +44,14 @@ enum
   PROP_MAX_GOP_LENGTH,
   PROP_LEVELS_OVERRIDE,
   PROP_ROI_QUALITY_CFG,
+  PROP_MIN_BUFFERS,
 };
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
 #endif
 
-#define GST_VIDEO_FORMATS "{ NV12 }"
+#define GST_VIDEO_FORMATS "{ NV12, NV12_Q08C }"
 
 #define GST_ML_VIDEO_DETECTION_TEXT_FORMATS \
     "{ utf8 }"
@@ -63,23 +60,24 @@ enum
     "text/x-raw, "                                                 \
     "format = (string) " GST_ML_VIDEO_DETECTION_TEXT_FORMATS
 
-static GstStaticPadTemplate gst_venc_bin_main_sink_template =
-GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
-        GST_VIDEO_FORMATS))
-);
-
-static GstStaticPadTemplate gst_venc_bin_control_sink_template =
-GST_STATIC_PAD_TEMPLATE ("sink_ctrl",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS) ";"
-        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
-        GST_VIDEO_FORMATS))
-);
+static GstCaps *
+gst_venc_bin_sink_caps (void)
+{
+    static GstCaps *caps = NULL;
+    static gsize inited = 0;
+    if (g_once_init_enter (&inited)) {
+        caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
+        if (gst_is_gbm_supported ()) {
+            GstCaps *tmplcaps = gst_caps_from_string (
+                GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
+                GST_VIDEO_FORMATS));
+            caps = gst_caps_make_writable (caps);
+            gst_caps_append (caps, tmplcaps);
+        }
+        g_once_init_leave (&inited, 1);
+    }
+    return caps;
+}
 
 static GstStaticPadTemplate gst_venc_bin_ml_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink_ml",
@@ -186,7 +184,7 @@ gst_venc_bin_update_encoder (GstVideoEncBin * vencbin)
       }
 
       // Set default properties
-      g_object_set (G_OBJECT (vencbin->encoder), "capture-io-mode", 5, NULL);
+      g_object_set (G_OBJECT (vencbin->encoder), "capture-io-mode", 4, NULL);
       g_object_set (G_OBJECT (vencbin->encoder), "output-io-mode", 5, NULL);
 
       snprintf(controls, GST_CONTROLS_MAX_SIZE, "controls,video_bitrate=%u;",
@@ -707,7 +705,7 @@ gst_venc_bin_worker_task (gpointer user_data)
   GST_VENC_BIN_LOCK (vencbin);
 
   gst_data_queue_get_level (vencbin->main_frames, &queuelevel);
-  if (queuelevel.visible >= vencbin->buff_cnt_delay) {
+  if (queuelevel.visible >= vencbin->min_buffers) {
     if (!gst_data_queue_pop (vencbin->main_frames, &item)) {
       GST_INFO_OBJECT (vencbin, "buffers_queue flushing");
       GST_VENC_BIN_UNLOCK (vencbin);
@@ -911,10 +909,6 @@ gst_venc_bin_change_state (GstElement * element, GstStateChange transition)
       gst_data_queue_set_flushing (vencbin->ctrl_frames, TRUE);
       gst_data_queue_flush (vencbin->ctrl_frames);
       break;
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      GST_DEBUG_OBJECT (vencbin, "Engine flush");
-      gst_smartcodec_engine_flush (vencbin->engine);
-      break;
     default:
       break;
   }
@@ -1031,6 +1025,11 @@ gst_venc_bin_set_property (GObject * object, guint prop_id,
       g_value_unset (&value);
       break;
     }
+    case PROP_MIN_BUFFERS:
+    {
+      vencbin->min_buffers = g_value_get_uint (value);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1088,6 +1087,11 @@ gst_venc_bin_get_property (GObject * object, guint prop_id, GValue * value,
 
       break;
     }
+    case PROP_MIN_BUFFERS:
+    {
+      g_value_set_uint (value, vencbin->min_buffers);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1106,6 +1110,11 @@ gst_venc_bin_finalize (GObject * object)
 
   if (vencbin->roi_qualitys != NULL)
     gst_structure_free (vencbin->roi_qualitys);
+
+  if (vencbin->engine) {
+    gst_smartcodec_engine_free (vencbin->engine);
+    vencbin->engine = NULL;
+  }
 
   if (vencbin->ctrl_frames != NULL) {
     gst_data_queue_set_flushing (vencbin->ctrl_frames, TRUE);
@@ -1129,11 +1138,6 @@ gst_venc_bin_finalize (GObject * object)
   if (vencbin->encoders)
     gst_plugin_feature_list_free (vencbin->encoders);
 
-  if (vencbin->engine) {
-    gst_smartcodec_engine_free (vencbin->engine);
-    vencbin->engine = NULL;
-  }
-
   g_mutex_clear (&vencbin->lock);
   g_rec_mutex_clear (&vencbin->worklock);
   g_cond_clear (&vencbin->wakeup);
@@ -1151,10 +1155,14 @@ gst_venc_bin_class_init (GstVideoEncBinClass *klass)
   gobject->get_property = GST_DEBUG_FUNCPTR (gst_venc_bin_get_property);
   gobject->finalize = GST_DEBUG_FUNCPTR (gst_venc_bin_finalize);
 
-  gst_element_class_add_pad_template (element,
-      gst_static_pad_template_get (&gst_venc_bin_main_sink_template));
-  gst_element_class_add_pad_template (element,
-      gst_static_pad_template_get (&gst_venc_bin_control_sink_template));
+  // Create dynamic pad templates
+  GstPadTemplate *main_sink_template = gst_pad_template_new (
+      "sink", GST_PAD_SINK, GST_PAD_ALWAYS, gst_venc_bin_sink_caps ());
+  GstPadTemplate *control_sink_template = gst_pad_template_new (
+      "sink_ctrl", GST_PAD_SINK, GST_PAD_ALWAYS, gst_venc_bin_sink_caps ());
+
+  gst_element_class_add_pad_template (element, main_sink_template);
+  gst_element_class_add_pad_template (element, control_sink_template);
   gst_element_class_add_pad_template (element,
       gst_static_pad_template_get (&gst_venc_bin_ml_sink_template));
   gst_element_class_add_pad_template (element,
@@ -1208,6 +1216,12 @@ gst_venc_bin_class_init (GstVideoEncBinClass *klass)
           "ROI Quality Config "
           "e.g. \"ROIQPs,car=2,person=1,tree=-2;\"",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_MIN_BUFFERS,
+      g_param_spec_uint ("min-buffers", "Min Buffers",
+          "Min buffers the enc requires to adapt to the set enc properties. "
+          "The default value is overriden based on the video stream.",
+          0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   gst_element_class_set_static_metadata (element, "Smart Video Encode Bin",
       "Generic/Bin/Encoder", "Smart control over video encoding", "QTI");
@@ -1262,7 +1276,8 @@ gst_venc_bin_init (GstVideoEncBin * vencbin)
       gst_data_queue_new (queue_is_full_cb, NULL, NULL, NULL);
 
   // Create sink proxy pad.
-  template = gst_static_pad_template_get (&gst_venc_bin_main_sink_template);
+  template = gst_pad_template_new (
+      "sink", GST_PAD_SINK, GST_PAD_ALWAYS, gst_venc_bin_sink_caps ());
   vencbin->sinkpad =
       gst_ghost_pad_new_no_target_from_template ("sink", template);
   gst_object_unref (template);
@@ -1275,7 +1290,8 @@ gst_venc_bin_init (GstVideoEncBin * vencbin)
   gst_element_add_pad (GST_ELEMENT_CAST (vencbin), vencbin->sinkpad);
 
   // Create sink_control proxy pad.
-  template = gst_static_pad_template_get (&gst_venc_bin_control_sink_template);
+  template = gst_pad_template_new (
+      "sink_ctrl", GST_PAD_SINK, GST_PAD_ALWAYS, gst_venc_bin_sink_caps ());
   vencbin->sinkctrlpad = gst_pad_new_from_template (template, "sink_ctrl");
   gst_object_unref (template);
   gst_pad_set_event_function (vencbin->sinkctrlpad,
@@ -1314,7 +1330,7 @@ gst_venc_bin_init (GstVideoEncBin * vencbin)
   }
 
   // Get buffer count delay
-  vencbin->buff_cnt_delay =
+  vencbin->min_buffers =
       gst_smartcodec_engine_get_buff_cnt_delay (vencbin->engine);
 }
 

@@ -125,7 +125,7 @@ G_DEFINE_TYPE (GstMLVideoDetection, gst_ml_video_detection,
 
 #define DEFAULT_MIN_BUFFERS      2
 #define DEFAULT_MAX_BUFFERS      10
-#define DEFAULT_TEXT_BUFFER_SIZE 8192
+#define DEFAULT_TEXT_BUFFER_SIZE 204840
 #define DEFAULT_VIDEO_WIDTH      320
 #define DEFAULT_VIDEO_HEIGHT     240
 
@@ -699,8 +699,8 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
       structure = gst_structure_new (name, "id", G_TYPE_UINT, id, "confidence",
           G_TYPE_DOUBLE, entry->confidence, "color", G_TYPE_UINT, entry->color,
           NULL);
-      g_free (name);
 
+      g_free (name);
       g_value_init (&value, G_TYPE_FLOAT);
 
       g_value_set_float (&value, x);
@@ -746,6 +746,15 @@ gst_ml_video_detection_fill_text_output (GstMLVideoDetection * detection,
 
         gst_structure_set_value (structure, "landmarks", &array);
         g_value_reset (&array);
+      }
+
+      if (entry->xtraparams != NULL) {
+        GstStructure *xtraparams = g_steal_pointer (&(entry->xtraparams));
+
+        g_value_take_boxed (&value, xtraparams);
+        gst_structure_set_value (structure, "xtraparams", &value);
+
+        g_value_reset (&value);
       }
 
       g_value_take_boxed (&value, structure);
@@ -1496,7 +1505,7 @@ gst_ml_video_detection_class_init (GstMLVideoDetectionClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_NUM_RESULTS,
       g_param_spec_uint ("results", "Results",
-          "Number of results to display", 0, 10, DEFAULT_PROP_NUM_RESULTS,
+          "Number of results to display", 0, 50, DEFAULT_PROP_NUM_RESULTS,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_THRESHOLD,
       g_param_spec_double ("threshold", "Threshold",
@@ -1550,7 +1559,7 @@ gst_ml_video_detection_init (GstMLVideoDetection * detection)
   detection->stashedmlboxes = NULL;
   detection->stage_id = 0;
 
-  detection->predictions = g_array_new (FALSE, FALSE, sizeof (GstMLBoxPrediction));
+  detection->predictions = g_array_new (FALSE, TRUE, sizeof (GstMLBoxPrediction));
   g_return_if_fail (detection->predictions != NULL);
 
   g_array_set_clear_func (detection->predictions,

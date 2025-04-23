@@ -1,17 +1,40 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#!/usr/bin/env python3
+
+################################################################################
+# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+################################################################################
 
 import os
 import sys
 import signal
 import gi
 import argparse
+import re
 
 gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
-DESCRIPTION = """
+# Configurations for Detection
+DEFAULT_DETECTION_MODEL = "/etc/models/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_LABELS = "/etc/labels/yolov8n.labels"
+DEFAULT_DETECTION_MODULE = "yolov8"
+DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+# Configurations for Classification
+DEFAULT_CLASSIFICATION_MODEL = "/etc/models/Resnet101_Quantized.tflite"
+DEFAULT_CLASSIFICATION_LABELS = "/etc/labels/resnet101.labels"
+DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
+DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
+    q-scales=<0.21351955831050873>;"
+
+DEFAULT_RTSP_LOCATION = "rtsp://127.0.0.1:8900/live"
+
+DEFAULT_OUTPUT_FILE = "/etc/media/test.mp4"
+
+DESCRIPTION = f"""
 The application:
 - Encodes camera stream and dump the output.
 - Uses YOLOv8 TFLite model to identify the object in scene from camera stream
@@ -19,37 +42,19 @@ and overlay the bounding boxes over the detected objects. The results are shown
 on the display.
 - Uses Resnet101 TFLite model to classify scene from camera stream and overlay
 the classification labels on the top left corner. The results are streamed over
-RTSP (rtsp://127.0.0.1:8900/live)
+RTSP.
+
+Default RTSP location : {DEFAULT_RTSP_LOCATION}
 
 The default file paths in the python script are as follows:
-- Detection model: /opt/data/YoloV8N_Detection_Quantized.tflite
-- Detection labels: /opt/data/yolov8n.labels
-- Classification model: /opt/data/Resnet101_Quantized.tflite
-- Classification labels: /opt/data/resnet101.labels
+- Detection model:       {DEFAULT_DETECTION_MODEL}
+- Detection labels:      {DEFAULT_DETECTION_LABELS}
+- Classification model:  {DEFAULT_CLASSIFICATION_MODEL}
+- Classification labels: {DEFAULT_CLASSIFICATION_LABELS}
 
 To override the default settings,
 please configure the corresponding module and constants as well.
 """
-
-# Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
-DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
-DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-    q-scales=<3.093529462814331,0.00390625,1.0>;"
-
-# Configurations for Classification
-DEFAULT_CLASSIFICATION_MODEL = "/opt/data/Resnet101_Quantized.tflite"
-DEFAULT_CLASSIFICATION_LABELS = "/opt/data/resnet101.labels"
-DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
-DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
-    q-scales=<0.21351955831050873>;"
-
-DEFAULT_RTSP_ADDRESS = "127.0.0.1"
-DEFAULT_RTSP_PORT = "8900"
-DEFAULT_RTSP_MPOINT = "/live"
-
-DEFAULT_OUTPUT_FILE = "/opt/data/test.mp4"
 
 eos_received = False
 def create_element(factory_name, name):
@@ -73,34 +78,50 @@ def link_elements(link_orders, elements):
                 )
             src = dest
 
+def parse_rtsp_location(rtsp_location):
+    """Parses an RTSP location string into its components"""
+    # Define the regex pattern to match the address, port, and mpoint
+    pattern = r'^rtsp://(?P<address>[^:]+):(?P<port>\d+)(?P<mpoint>/.*)$'
+
+    # Match the pattern with the RTSP location string
+    match = re.match(pattern, rtsp_location)
+
+    if match:
+        # Extract the address, port, and mpoint from the match object
+        address = match.group('address')
+        port = match.group('port')
+        mpoint = match.group('mpoint')
+        return {
+            "address" : address,
+            "port"    : port,
+            "mpoint"  : mpoint
+        }
+    else:
+        raise ValueError("Invalid RTSP location")
 
 def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        add_help=False,
+        description=DESCRIPTION,
         formatter_class=type(
-            "CustomFormatter",
-            (
-                argparse.ArgumentDefaultsHelpFormatter,
-                argparse.RawTextHelpFormatter,
-            ),
-            {},
-        ),
+            'CustomFormatter',
+            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
+            {}
+        )
     )
 
-    parser.add_argument(
-        "-h",
-        "--help",
-        action="help",
-        default=argparse.SUPPRESS,
-        help=DESCRIPTION,
-    )
     parser.add_argument(
         "--output_path",
         type=str,
         default=DEFAULT_OUTPUT_FILE,
         help="Pipeline Output Path",
+    )
+    parser.add_argument(
+        "--rtsp",
+        type=str,
+        default=DEFAULT_RTSP_LOCATION,
+        help="RTSP location for streaming",
     )
     parser.add_argument(
         "--detection_model", type=str, default=DEFAULT_DETECTION_MODEL,
@@ -149,6 +170,7 @@ def construct_pipeline(pipe):
         "labels": args.classification_labels,
         "constants": args.classification_constants
     }
+    rtsp = parse_rtsp_location(args.rtsp)
 
     # Create all elements
     # fmt: off
@@ -202,12 +224,12 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_0"],
         "caps",
-        "video/x-raw(memory:GBM),format=NV12,compression=ubwc,\
+        "video/x-raw,format=NV12_Q08C,\
         width=1920,height=1080,framerate=30/1,colorimetry=bt709",
     )
 
-    Gst.util_set_object_arg(elements["v4l2h264enc_0"], "capture-io-mode", "5")
-    Gst.util_set_object_arg(elements["v4l2h264enc_0"], "output-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264enc_0"], "capture-io-mode", "dmabuf")
+    Gst.util_set_object_arg(elements["v4l2h264enc_0"], "output-io-mode", "dmabuf-import")
 
     Gst.util_set_object_arg(elements["h264parse_0"], "config-interval", "1")
 
@@ -217,7 +239,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_1"],
         "caps",
-        "video/x-raw\(memory:GBM\),format=NV12,\
+        "video/x-raw,format=NV12,\
         width=640,height=360,framerate=30/1",
     )
 
@@ -259,7 +281,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_3"],
         "caps",
-        "video/x-raw\(memory:GBM\),format=NV12,\
+        "video/x-raw,format=NV12,\
         width=640,height=360,framerate=30/1",
     )
 
@@ -297,16 +319,16 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["overlay_1"], "engine", "gles")
 
-    Gst.util_set_object_arg(elements["v4l2h264enc_1"], "capture-io-mode", "5")
-    Gst.util_set_object_arg(elements["v4l2h264enc_1"], "output-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264enc_1"], "capture-io-mode", "dmabuf")
+    Gst.util_set_object_arg(elements["v4l2h264enc_1"], "output-io-mode", "dmabuf")
 
     Gst.util_set_object_arg(elements["h264parse_1"], "config-interval", "1")
 
     Gst.util_set_object_arg(
-        elements["rtspbin"], "address", DEFAULT_RTSP_ADDRESS
+        elements["rtspbin"], "address", rtsp["address"]
     )
-    Gst.util_set_object_arg(elements["rtspbin"], "port", DEFAULT_RTSP_PORT)
-    Gst.util_set_object_arg(elements["rtspbin"], "mpoint", DEFAULT_RTSP_MPOINT)
+    Gst.util_set_object_arg(elements["rtspbin"], "port", rtsp["port"])
+    Gst.util_set_object_arg(elements["rtspbin"], "mpoint", rtsp["mpoint"])
 
     # Add all elements
     for element in elements.values():
@@ -393,11 +415,23 @@ def handle_interrupt_signal(pipe, loop):
         quit_mainloop(loop)
     return GLib.SOURCE_CONTINUE
 
+def is_linux():
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "Linux" in line:
+                    return True
+    except FileNotFoundError:
+        return False
+    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+
+    # Set the environment
+    if is_linux():
+        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     Gst.init(None)
 

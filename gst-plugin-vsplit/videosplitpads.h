@@ -125,8 +125,6 @@ struct _GstVideoSplitSinkPad {
 
   /// Video info from caps.
   GstVideoInfo *info;
-  /// Whether input buffers have Universal Bandwidth Compression.
-  gboolean     isubwc;
 
   /// Buffer requests.
   GstDataQueue *requests;
@@ -154,8 +152,6 @@ struct _GstVideoSplitSrcPad {
 
   /// Video info from caps.
   GstVideoInfo      *info;
-  /// Whether output buffers have Universal Bandwidth Compression.
-  gboolean          isubwc;
   /// Passthrough when mode is 'none' and sink to source caps match.
   gboolean          passthrough;
 
@@ -181,7 +177,8 @@ gboolean
 gst_video_split_srcpad_setcaps (GstVideoSplitSrcPad * srcpad, GstCaps * incaps);
 
 GstBufferPool *
-gst_video_split_create_pool (GstPad * pad, GstCaps * caps);
+gst_video_split_create_pool (GstPad * pad, GstCaps * caps,
+    GstVideoAlignment * align, GstAllocationParams * params);
 
 G_END_DECLS
 
