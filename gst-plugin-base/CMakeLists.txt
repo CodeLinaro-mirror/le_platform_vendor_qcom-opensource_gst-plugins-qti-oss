@@ -4,6 +4,7 @@ project(GST_PLUGINS_QTI_OSS_BASE LANGUAGES C CXX)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories(${SYSROOT_INCDIR})
+include_directories(${SYSROOT_INCDIR}/linux-msm/usr/include/)
 link_directories(${SYSROOT_LIBDIR})
 
 find_package(PkgConfig)
