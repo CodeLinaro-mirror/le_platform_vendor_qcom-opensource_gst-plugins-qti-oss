@@ -12,6 +12,7 @@
 
 #define DASH_LINE  "-------------------------------------------------------"
 #define SPACE      "                                                       "
+#define ENABLE_WIDEVINE 1
 
 // Manifest will be downloaded here.
 #define MANIFEST_DOWNLOAD_PATH "/data/manifest.xml"
