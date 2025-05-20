@@ -239,13 +239,6 @@ static inline void
 gst_video_composition_cleanup (gpointer userdata)
 {
   GstVideoComposition *composition = (GstVideoComposition*) userdata;
-  guint idx = 0;
-
-  // Free only source/destination rectangles, frames are owned by the request.
-  for (idx = 0; idx < composition->n_blits; idx++) {
-    g_slice_free (GstVideoRectangle, composition->blits[idx].sources);
-    g_slice_free (GstVideoRectangle, composition->blits[idx].destinations);
-  }
 
   // Free only video blits, output frame is owned by the request.
   g_slice_free (GstVideoBlit, composition->blits);
@@ -457,8 +450,8 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
   inbuffer = composition->blits[0].frame->buffer;
   outbuffer = composition->frame->buffer;
 
-  source = &(composition->blits[0].sources[0]);
-  destination = &(composition->blits[0].destinations[0]);
+  source = &(composition->blits[0].source);
+  destination = &(composition->blits[0].destination);
 
   s_offset.x = source->x;
   s_offset.y = source->y;
@@ -582,8 +575,8 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
   gint maxwidth = 0, maxheight = 0;
 
   outbuffer = composition->frame->buffer;
-  source = &(composition->blits[0].sources[0]);
-  destination = &(composition->blits[0].destinations[0]);
+  source = &(composition->blits[0].source);
+  destination = &(composition->blits[0].destination);
 
   if (roimeta != NULL) {
     source->x = roimeta->x;
@@ -979,10 +972,6 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->blits[0].rotate = GST_VCE_ROTATE_0;
       composition->blits[0].flip = GST_VCE_FLIP_NONE;
 
-      composition->blits[0].sources = g_slice_new (GstVideoRectangle);
-      composition->blits[0].destinations = g_slice_new (GstVideoRectangle);
-      composition->blits[0].n_regions = 1;
-
       // Depending on the mode a different ROI meta is used or none at all.
       if (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE)
         roimeta = gst_buffer_find_region_of_interest_meta (inframe->buffer, num);
@@ -993,8 +982,8 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       gst_video_split_composition_update_regions (srcpad, composition, roimeta);
       gst_video_split_composition_populate_metas (srcpad, composition, roimeta);
 
-      source = &(composition->blits[0].sources[0]);
-      destination = &(composition->blits[0].destinations[0]);
+      source = &(composition->blits[0].source);
+      destination = &(composition->blits[0].destination);
 
       GST_TRACE_OBJECT (srcpad, "Composition [%u] Regions: [%d %d %d %d] ->"
           " [%d %d %d %d]", id, source->x, source->y, source->w, source->h,
@@ -1207,7 +1196,6 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
       GstCaps *caps = NULL;
       GstBufferPool *pool = NULL;
       GstVideoInfo info;
-      guint size = 0;
       gboolean needpool = FALSE;
 
       // Extract caps from the query.
@@ -1223,17 +1211,18 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
         return FALSE;
       }
 
-      // Get the size from video info.
-      size = GST_VIDEO_INFO_SIZE (&info);
-
       if (needpool) {
         GstStructure *structure = NULL;
+        GstVideoAlignment align = { 0, };
 
-        pool = gst_video_split_create_pool (pad, caps);
+        gst_video_utils_get_gpu_align (&info, &align);
+        gst_video_info_align (&info, &align);
+
+        pool = gst_video_split_create_pool (pad, caps, &align, NULL);
         structure = gst_buffer_pool_get_config (pool);
 
         // Set caps and size in query.
-        gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+        gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
 
         if (!gst_buffer_pool_set_config (pool, structure)) {
           GST_ERROR_OBJECT (pad, "Failed to set buffer pool configuration!");
@@ -1243,7 +1232,7 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
       }
 
       // If upstream does't have a pool requirement, set only size in query.
-      gst_query_add_allocation_pool (query, needpool ? pool : NULL, size, 0, 0);
+      gst_query_add_allocation_pool (query, pool, info.size, 0, 0);
 
       if (pool != NULL)
         gst_object_unref (pool);
