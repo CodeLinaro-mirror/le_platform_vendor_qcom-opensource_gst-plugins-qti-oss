@@ -55,7 +55,7 @@
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_FILE  "/opt/video_transform.mp4"
+#define DEFAULT_OUTPUT_FILE  "/etc/media/video_transform.mp4"
 
 #define DEFAULT_INPUT_WIDTH  1920
 #define DEFAULT_INPUT_HEIGHT 1080
@@ -78,18 +78,18 @@
   "\nCommand:\n"                                                                     \
   "All three operations with camera source\n"                                        \
   "  gst-transform-example -r 90 -f 2 --input_width 3840 --input_height 2160 "       \
-  "--output_width 1920 --output_height 1080 -o /opt/video_transform.mp4 \n"          \
+  "--output_width 1920 --output_height 1080 -o /etc/media/video_transform.mp4 \n"          \
   "All three operations with filesource       \n"                                    \
   "  gst-transform-example -r 90 -f 2 --output_width 1920 --output_height 1080 "     \
-  " -o /opt/video_transform.mp4 -i <inputfile>.mp4 \n"                               \
+  " -o /etc/media/video_transform.mp4 -i <inputfile>.mp4 \n"                               \
   "Execute rotations with camera source \n"                                          \
-  "  gst-transform-example -r 270 -o /opt/video_transform.mp4 \n"                    \
+  "  gst-transform-example -r 270 -o /etc/media/video_transform.mp4 \n"                    \
   "Execute rotations with file source \n"                                            \
-  "  gst-transform-example -r 270 -o /opt/video_transform.mp4 -i <inputfile>.mp4 \n" \
+  "  gst-transform-example -r 270 -o /etc/media/video_transform.mp4 -i <inputfile>.mp4 \n" \
   "\nOutput:\n"                                                                      \
   "  Upon execution, the application presents the output for preview on the "        \
   "display. Once the use case concludes, the recorded output file is saved "         \
-  "at the specified path.(/opt/)"
+  "at the specified path.(/etc/media/)"
 
 // Structure to hold the application context
 struct _GstTransformAppContext
@@ -207,7 +207,6 @@ create_transform_pipeline (GstTransformAppContext * appctx)
   GstElement *scale_filter, *tee;
   GstElement *qtiqmmfsrc = NULL;
   GstElement *qmmfsrc_filter = NULL;
-  GstElement *dis_capsfilter = NULL;
   GstElement *filesrc = NULL;
   GstElement *qtdemux = NULL;
   GstElement *vparse = NULL;
@@ -268,10 +267,6 @@ create_transform_pipeline (GstTransformAppContext * appctx)
     // Create video decoder element
     vdecoder = gst_element_factory_make ("v4l2h264dec", "vdecoder");
 
-    // Set capture I/O mode for decoder
-    g_object_set (G_OBJECT (vdecoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
-    g_object_set (G_OBJECT (vdecoder), "output-io-mode", GST_V4L2_IO_DMABUF, NULL);
-
     // Check if all elements are created successfully
     if (!filesrc || !qtdemux || !vparse || !vdecoder || !pqueue) {
       g_printerr ("Failed to create above elements!\n");
@@ -297,13 +292,6 @@ create_transform_pipeline (GstTransformAppContext * appctx)
   // Create filesink element
   filesink = gst_element_factory_make ("filesink", "filesink");
 
-  // Create display capsfilter
-  dis_capsfilter = gst_element_factory_make ("capsfilter", "dis_capsfilter");
-  filtercaps = gst_caps_new_simple ("video/x-raw", "format",
-     G_TYPE_STRING, "NV12", NULL);
-  g_object_set (G_OBJECT (dis_capsfilter), "caps", filtercaps, NULL);
-  gst_caps_unref (filtercaps);
-
   // Create waylandsink element
   waylandsink = gst_element_factory_make ("waylandsink", "waylandsink");
 
@@ -318,10 +306,10 @@ create_transform_pipeline (GstTransformAppContext * appctx)
   }
 
   if (!qtivtransform || !tee || !encoder || !scale_filter || !h264parse ||
-      !mp4mux || !filesink || !waylandsink || !dis_capsfilter) {
+      !mp4mux || !filesink || !waylandsink) {
     g_printerr ("Failed to create elements!\n");
     unref_elements (qtivtransform, tee, scale_filter, encoder, h264parse,
-        mp4mux, filesink, dis_capsfilter, waylandsink, "NULL");
+        mp4mux, filesink, waylandsink, "NULL");
     return FALSE;
   }
   // Set rotation property
@@ -339,10 +327,6 @@ create_transform_pipeline (GstTransformAppContext * appctx)
     g_print ("Flip is not enabled\n");
   }
 
-  // Set capture I/O mode for encoder
-  g_object_set (G_OBJECT (encoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
-  g_object_set (G_OBJECT (encoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
-
   // Set waylandsink properties
   g_object_set (G_OBJECT (waylandsink), "fullscreen", true, NULL);
 
@@ -351,12 +335,10 @@ create_transform_pipeline (GstTransformAppContext * appctx)
 
   if (appctx->input_file == NULL) {
     // Configure the main stream capabilities based on width and height
-    filtercaps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING,"NV12_Q08C",
-        "width", G_TYPE_INT, appctx->input_width,
-        "height", G_TYPE_INT, appctx->input_height,
-        "framerate", GST_TYPE_FRACTION, 30, 1,
-        NULL);
+    filtercaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING,
+        "NV12", "width", G_TYPE_INT, appctx->input_width, "height", G_TYPE_INT,
+        appctx->input_height, "framerate", GST_TYPE_FRACTION, 30, 1,
+        "colorimetry", G_TYPE_STRING, "bt601", NULL);
 
     g_object_set (G_OBJECT (qmmfsrc_filter), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
@@ -367,11 +349,10 @@ create_transform_pipeline (GstTransformAppContext * appctx)
     appctx->output_height = appctx->input_height;
   }
 
-  filtercaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12_Q08C",
-      "width", G_TYPE_INT, appctx->output_width,
-      "height", G_TYPE_INT, appctx->output_height,
-      NULL);
+  filtercaps =
+      gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "NV12",
+      "width", G_TYPE_INT, appctx->output_width, "height", G_TYPE_INT,
+      appctx->output_height, NULL);
 
   g_object_set (G_OBJECT (scale_filter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
@@ -380,7 +361,7 @@ create_transform_pipeline (GstTransformAppContext * appctx)
     // Add elements to the pipeline and link them
     gst_bin_add_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, qmmfsrc_filter,
         qtivtransform, scale_filter, tee, encoder, h264parse, mp4mux, filesink,
-        dis_capsfilter, waylandsink, NULL);
+        waylandsink, NULL);
 
     for (gint i = 0; i < QUEUE_COUNT; i++) {
       gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
@@ -388,7 +369,7 @@ create_transform_pipeline (GstTransformAppContext * appctx)
 
     // Link camera stream to waylandsink
     ret = gst_element_link_many (qtiqmmfsrc, qmmfsrc_filter, queue[0],
-        qtivtransform, scale_filter, queue[1], tee, dis_capsfilter, queue[2], waylandsink,
+        qtivtransform, scale_filter, queue[1], tee, queue[2], waylandsink,
         NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
@@ -404,12 +385,11 @@ create_transform_pipeline (GstTransformAppContext * appctx)
 
     g_print ("All elements are linked successfully\n");
 
-    return TRUE;
   } else {
     // Add elements to the pipeline and link them
     gst_bin_add_many (GST_BIN (appctx->pipeline), filesrc, qtdemux, vparse,
         vdecoder, qtivtransform, scale_filter, tee, encoder, h264parse, pqueue,
-        mp4mux, filesink, dis_capsfilter, waylandsink, NULL);
+        mp4mux, filesink, waylandsink, NULL);
 
     for (gint i = 0; i < QUEUE_COUNT; i++) {
       gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
@@ -417,8 +397,8 @@ create_transform_pipeline (GstTransformAppContext * appctx)
 
     // Link camera stream to waylandsink
     gst_element_link (filesrc, qtdemux);
-    ret = gst_element_link_many (pqueue, vparse, vdecoder, dis_capsfilter,
-        qtivtransform, scale_filter, tee, queue[1], waylandsink, NULL);
+    ret = gst_element_link_many (pqueue, vparse, vdecoder, qtivtransform,
+        scale_filter, tee, queue[1], waylandsink, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
       goto error;
@@ -435,12 +415,19 @@ create_transform_pipeline (GstTransformAppContext * appctx)
 
     g_print ("All elements are linked successfully\n");
 
-    return TRUE;
   }
+
+  if (appctx->input_file != NULL) {
+    gst_element_set_enum_property (vdecoder, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (vdecoder, "output-io-mode", "dmabuf");
+  }
+
+  return TRUE;
+
 error:
   gst_bin_remove_many (GST_BIN (appctx->pipeline), qtiqmmfsrc, filesrc, qtdemux,
       qmmfsrc_filter, vparse, vdecoder, qtivtransform, scale_filter, tee,
-      encoder, pqueue, h264parse, mp4mux, filesink, dis_capsfilter, waylandsink, NULL);
+      encoder, pqueue, h264parse, mp4mux, filesink, waylandsink, NULL);
 
   for (gint i = 0; i < QUEUE_COUNT; i++) {
     gst_bin_remove_many (GST_BIN (appctx->pipeline), queue[i], NULL);
@@ -505,9 +492,9 @@ main (gint argc, gchar ** argv)
       "image scale output height default 1080"},
   {"input_file", 'i', 0, G_OPTION_ARG_FILENAME, &app_ctx->input_file,
       "Input Filename - i/p mp4 file path and name",
-      "e.g. -i /opt/<file_name>.mp4"},
+      "e.g. -i /etc/media/<file_name>.mp4"},
   {"output_file", 'o', 0, G_OPTION_ARG_STRING, &app_ctx->output_file,
-      "Output Filename", "default - /opt/video_AVC_transform.mp4"},
+      "Output Filename", "default - /etc/media/video_AVC_transform.mp4"},
   camera_entries[0],
   camera_entries[1],
   { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }

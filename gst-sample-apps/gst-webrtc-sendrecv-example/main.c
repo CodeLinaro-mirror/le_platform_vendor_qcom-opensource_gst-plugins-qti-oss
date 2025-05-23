@@ -32,6 +32,7 @@
 #include <gst/webrtc/webrtc.h>
 
 #include <libsoup/soup.h>
+#include <gio/gio.h>
 #include <json-glib/json-glib.h>
 
 #include <string.h>
@@ -66,8 +67,8 @@ enum AppState
   "the streaming"
 
 #define SIGNALING_SERVER "wss://webrtc.nirbheek.in:8443"
-#define DEFAULT_PRIMARY_STREAM "qtiqmmfsrc name=camsrc ! video/x-raw(memory:GBM),format=NV12,width=1920,height=1080,framerate=30/1 ! queue ! v4l2h264enc capture-io-mode=5 output-io-mode=5 ! queue ! h264parse ! rtph264pay config-interval=-1 ! webrtcbin name=webrtcbin stun-server=stun://stun1.l.google.com bundle-policy=3"
-#define DEFAULT_SECONDARY_STREAM "appsrc name=appsrc ! rtph264depay name=rtph264depay ! queue ! h264parse ! v4l2h264dec capture-io-mode=5 output-io-mode=5 ! queue ! waylandsink fullscreen=true async=true sync=false"
+#define DEFAULT_PRIMARY_STREAM "qtiqmmfsrc name=camsrc ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue ! v4l2h264enc capture-io-mode=4 output-io-mode=5 ! queue ! h264parse ! rtph264pay config-interval=-1 ! webrtcbin name=webrtcbin stun-server=stun://stun1.l.google.com bundle-policy=3"
+#define DEFAULT_SECONDARY_STREAM "appsrc name=appsrc ! rtph264depay name=rtph264depay ! queue ! h264parse ! v4l2h264dec capture-io-mode=4 output-io-mode=4 ! queue ! waylandsink fullscreen=true async=true sync=false"
 
 typedef struct _GstAppContext GstAppContext;
 struct _GstAppContext
@@ -866,31 +867,47 @@ on_server_connected (SoupSession * session, GAsyncResult * res,
   g_free (hello_str);
 }
 
+static gboolean
+accept_certificate_cb (SoupMessage * msg, GTlsCertificate * certificate,
+    GTlsCertificateFlags tls_errors, gpointer user_data)
+{
+  return TRUE;
+}
+
 // Connect to the signalling server
 static void
 connect_to_websocket_server_async (GstAppContext * appctx)
 {
   SoupLogger *logger;
   SoupSession *session;
-  const char *https_aliases[] = { "wss", NULL };
 
-  session =
-      soup_session_new_with_options (SOUP_SESSION_SSL_STRICT, FALSE,
-      SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE,
-      //SOUP_SESSION_SSL_CA_FILE, "/etc/ssl/certs/ca-certificates.crt",
-      SOUP_SESSION_HTTPS_ALIASES, https_aliases, NULL);
+  session = soup_session_new ();
 
+#ifdef GST_SOUP3
+  logger = soup_logger_new (SOUP_LOGGER_LOG_BODY);
+#else
   logger = soup_logger_new (SOUP_LOGGER_LOG_BODY, -1);
+#endif
   soup_session_add_feature (session, SOUP_SESSION_FEATURE (logger));
   g_object_unref (logger);
 
   appctx->soup_message = soup_message_new (SOUP_METHOD_GET, SIGNALING_SERVER);
 
+  g_signal_connect (appctx->soup_message, "accept-certificate",
+      G_CALLBACK (accept_certificate_cb), NULL);
+
   gst_print ("Connecting to server...\n");
 
   // Connect to the signaling server
+#ifdef GST_SOUP3
   soup_session_websocket_connect_async (session, appctx->soup_message, NULL,
-      NULL, NULL, (GAsyncReadyCallback) on_server_connected, appctx);
+      NULL, G_PRIORITY_DEFAULT, NULL,
+      (GAsyncReadyCallback) on_server_connected, appctx);
+#else
+  soup_session_websocket_connect_async (session, appctx->soup_message, NULL,
+      NULL, NULL,
+      (GAsyncReadyCallback) on_server_connected, appctx);
+#endif
   appctx->app_state = SERVER_CONNECTING;
 }
 

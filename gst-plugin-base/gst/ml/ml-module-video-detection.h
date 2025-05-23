@@ -100,6 +100,12 @@ struct _GstMLBoxLandmark {
  * @bottom: Y axis coordinate of lower-right corner.
  * @right: X axis coordinate of lower-right corner.
  * @landmarks: Optional list of #GstMLBoxLandmark.
+ * @xtraparams: Optional custom parameters. The names for the custom parameters
+ *          inside the #GstStructure must be lower case with dash ('-') for
+ *          whitepace e.g. "param-example-name". The following parameter names
+ *          are forbidden: 'name', 'confidence', 'color', 'top', 'left',
+ *          'bottom', 'right' and 'landmarks'. The name given to the structure
+ *          on creation must be the reserved naming "ExtraParams".
  *
  * Information describing prediction result from object detection models.
  * All fields are mandatory and need to be filled by the submodule.
@@ -108,22 +114,22 @@ struct _GstMLBoxLandmark {
  * coordinate system.
  */
 struct _GstMLBoxEntry {
-  GQuark name;
-  gfloat confidence;
+  GQuark       name;
+  gfloat       confidence;
 
-  guint  color;
+  guint        color;
 
-  gfloat top;
-  gfloat left;
-  gfloat bottom;
-  gfloat right;
+  gfloat       top;
+  gfloat       left;
+  gfloat       bottom;
+  gfloat       right;
 
-  GArray *landmarks;
+  GArray       *landmarks;
+  GstStructure *xtraparams;
 };
 
 /**
  * GstMLBoxPrediction:
- * @batch_idx: Position of the entries in the batch.
  * @entries: GArray of #GstMLBoxEntry.
  * @info: Additonal info structure, beloging to the batch #GstProtectionMeta
  *        in the ML tensor buffer from which the prediction result was produced.
@@ -133,7 +139,6 @@ struct _GstMLBoxEntry {
  * All fields are mandatory and need to be filled by the submodule.
  */
 struct _GstMLBoxPrediction {
-  guint8             batch_idx;
   GArray             *entries;
   const GstStructure *info;
 };

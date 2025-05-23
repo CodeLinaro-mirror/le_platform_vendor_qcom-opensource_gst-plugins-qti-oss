@@ -275,8 +275,8 @@ create_encoder_stream (GstActivateDeactivateAppContext * appctx, GstStreamInf * 
   g_object_set (G_OBJECT (stream->capsfilter), "caps", stream->qmmf_caps, NULL);
 
   // Set encoder properties
-  g_object_set (G_OBJECT (stream->encoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
-  g_object_set (G_OBJECT (stream->encoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
+  gst_element_set_enum_property (stream->encoder, "capture-io-mode", "dmabuf");
+  gst_element_set_enum_property (stream->encoder, "output-io-mode", "dmabuf-import");
 
   // Set mp4mux in robust mode
   g_object_set (G_OBJECT (stream->mp4mux), "reserved-moov-update-period",
@@ -286,7 +286,7 @@ create_encoder_stream (GstActivateDeactivateAppContext * appctx, GstStreamInf * 
   g_object_set (G_OBJECT (stream->mp4mux), "reserved-max-duration", 1000000000,
       NULL);
 
-  snprintf (temp_str, sizeof (temp_str), "/opt/video_%d.mp4", output_cnt++);
+  snprintf (temp_str, sizeof (temp_str), "/etc/media/video_%d.mp4", output_cnt++);
   g_object_set (G_OBJECT (stream->filesink), "location", temp_str, NULL);
 
   gst_bin_add_many (GST_BIN (appctx->pipeline),
@@ -402,15 +402,6 @@ create_display_stream (GstActivateDeactivateAppContext * appctx, GstStreamInf * 
 
   // Set caps the the caps filter
   g_object_set (G_OBJECT (stream->capsfilter), "caps", stream->qmmf_caps, NULL);
-
-  // Set waylandsink properties
-  g_object_set (G_OBJECT (stream->waylandsink), "x", x, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "y", y, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "width", 640, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "height", 480, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "async", TRUE, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "enable-last-sample", FALSE,
-      NULL);
 
   // Add the elements to the pipeline
   gst_bin_add_many (GST_BIN (appctx->pipeline),

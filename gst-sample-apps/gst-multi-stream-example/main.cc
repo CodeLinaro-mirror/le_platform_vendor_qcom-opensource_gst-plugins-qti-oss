@@ -32,7 +32,7 @@
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_FILENAME "/opt/video.mp4"
+#define DEFAULT_OUTPUT_FILENAME "/etc/media/video.mp4"
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
 #define DEFAULT_NUM_OF_STREAM 2
@@ -43,7 +43,7 @@
   "encoded stream. \n " \
   "\nCommand:\n" \
   "For Two Stream \n" \
-  "  gst-multi-stream-example -w 1920 -h 1080 -n 2 -o /opt/video.mp4 \n" \
+  "  gst-multi-stream-example -w 1920 -h 1080 -n 2 -o /etc/media/video.mp4 \n" \
   "\nOutput:\n" \
   "  Upon execution, application will generates output as preview and " \
   "encoded mp4 file."
@@ -184,8 +184,8 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
 
   g_print ("Preview Pad received - %s\n",  gst_pad_get_name (ppad));
 
-  g_object_set (G_OBJECT (vpad), "type", "video", NULL);
-  g_object_set (G_OBJECT (ppad), "type", "preview", NULL);
+  g_object_set (G_OBJECT (vpad), "type", 0, NULL);
+  g_object_set (G_OBJECT (ppad), "type", 1, NULL);
   gst_object_unref (vpad);
   gst_object_unref (ppad);
 
@@ -200,8 +200,8 @@ create_two_stream_pipe (GstMultiStreamAppContext * appctx)
 
   // Create v4l2h264enc element and set the properties
   v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
-  g_object_set (G_OBJECT (v4l2h264enc), "capture-io-mode", "dmabuf", NULL);
-  g_object_set (G_OBJECT (v4l2h264enc), "output-io-mode", "dmabuf-import", NULL);
+  gst_element_set_enum_property (v4l2h264enc, "capture-io-mode", "dmabuf");
+  gst_element_set_enum_property (v4l2h264enc, "output-io-mode", "dmabuf-import");
   controls = gst_structure_from_string (
       "controls,video_bitrate_mode=0", NULL);
   g_object_set (G_OBJECT (v4l2h264enc), "extra-controls", controls, NULL);
@@ -328,7 +328,7 @@ main (gint argc, gchar *argv[])
       &appctx->stream_count, "num_of_streams", "Stream count for single camera" },
     { "output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
       "Output Filename",
-      "-o /opt/video.mp4" },
+      "-o /etc/media/video.mp4" },
     { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 

@@ -44,11 +44,8 @@ enum
   PROP_MAX_GOP_LENGTH,
   PROP_LEVELS_OVERRIDE,
   PROP_ROI_QUALITY_CFG,
+  PROP_MIN_BUFFERS,
 };
-
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
 
 #define GST_VIDEO_FORMATS "{ NV12, NV12_Q08C }"
 
@@ -66,7 +63,7 @@ gst_venc_bin_sink_caps (void)
     static gsize inited = 0;
     if (g_once_init_enter (&inited)) {
         caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
-        if (gst_is_gbm_supported ()) {
+        if (gst_gbm_qcom_backend_is_supported ()) {
             GstCaps *tmplcaps = gst_caps_from_string (
                 GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
                 GST_VIDEO_FORMATS));
@@ -704,7 +701,7 @@ gst_venc_bin_worker_task (gpointer user_data)
   GST_VENC_BIN_LOCK (vencbin);
 
   gst_data_queue_get_level (vencbin->main_frames, &queuelevel);
-  if (queuelevel.visible >= vencbin->buff_cnt_delay) {
+  if (queuelevel.visible >= vencbin->min_buffers) {
     if (!gst_data_queue_pop (vencbin->main_frames, &item)) {
       GST_INFO_OBJECT (vencbin, "buffers_queue flushing");
       GST_VENC_BIN_UNLOCK (vencbin);
@@ -908,10 +905,6 @@ gst_venc_bin_change_state (GstElement * element, GstStateChange transition)
       gst_data_queue_set_flushing (vencbin->ctrl_frames, TRUE);
       gst_data_queue_flush (vencbin->ctrl_frames);
       break;
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      GST_DEBUG_OBJECT (vencbin, "Engine flush");
-      gst_smartcodec_engine_flush (vencbin->engine);
-      break;
     default:
       break;
   }
@@ -1028,6 +1021,11 @@ gst_venc_bin_set_property (GObject * object, guint prop_id,
       g_value_unset (&value);
       break;
     }
+    case PROP_MIN_BUFFERS:
+    {
+      vencbin->min_buffers = g_value_get_uint (value);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1085,6 +1083,11 @@ gst_venc_bin_get_property (GObject * object, guint prop_id, GValue * value,
 
       break;
     }
+    case PROP_MIN_BUFFERS:
+    {
+      g_value_set_uint (value, vencbin->min_buffers);
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1103,6 +1106,11 @@ gst_venc_bin_finalize (GObject * object)
 
   if (vencbin->roi_qualitys != NULL)
     gst_structure_free (vencbin->roi_qualitys);
+
+  if (vencbin->engine) {
+    gst_smartcodec_engine_free (vencbin->engine);
+    vencbin->engine = NULL;
+  }
 
   if (vencbin->ctrl_frames != NULL) {
     gst_data_queue_set_flushing (vencbin->ctrl_frames, TRUE);
@@ -1125,11 +1133,6 @@ gst_venc_bin_finalize (GObject * object)
 
   if (vencbin->encoders)
     gst_plugin_feature_list_free (vencbin->encoders);
-
-  if (vencbin->engine) {
-    gst_smartcodec_engine_free (vencbin->engine);
-    vencbin->engine = NULL;
-  }
 
   g_mutex_clear (&vencbin->lock);
   g_rec_mutex_clear (&vencbin->worklock);
@@ -1209,6 +1212,12 @@ gst_venc_bin_class_init (GstVideoEncBinClass *klass)
           "ROI Quality Config "
           "e.g. \"ROIQPs,car=2,person=1,tree=-2;\"",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_MIN_BUFFERS,
+      g_param_spec_uint ("min-buffers", "Min Buffers",
+          "Min buffers the enc requires to adapt to the set enc properties. "
+          "The default value is overriden based on the video stream.",
+          0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   gst_element_class_set_static_metadata (element, "Smart Video Encode Bin",
       "Generic/Bin/Encoder", "Smart control over video encoding", "QTI");
@@ -1317,7 +1326,7 @@ gst_venc_bin_init (GstVideoEncBin * vencbin)
   }
 
   // Get buffer count delay
-  vencbin->buff_cnt_delay =
+  vencbin->min_buffers =
       gst_smartcodec_engine_get_buff_cnt_delay (vencbin->engine);
 }
 

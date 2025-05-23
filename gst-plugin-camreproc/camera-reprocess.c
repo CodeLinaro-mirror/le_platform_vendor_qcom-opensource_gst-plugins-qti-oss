@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -11,6 +11,7 @@
 
 #include <gst/video/gstimagepool.h>
 #include <gst/utils/common-utils.h>
+#include <gst/video/video-utils.h>
 
 #define GST_CAT_DEFAULT camera_reprocess_debug
 GST_DEBUG_CATEGORY_STATIC (camera_reprocess_debug);
@@ -25,8 +26,7 @@ GST_DEBUG_CATEGORY_STATIC (camera_reprocess_debug);
 #define DEFAULT_PROP_EIS                   GST_CAMERA_REPROCESS_EIS_NONE
 
 // Pad Template
-#define GST_CAPS_FORMATS "{ NV12 }"
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
+#define GST_CAPS_FORMATS "{ NV12, NV12_Q08C }"
 
 // GType
 #define GST_TYPE_CAMERA_REPROCESS_EIS (gst_camera_reprocess_eis_get_type())
@@ -311,7 +311,6 @@ gst_camera_reprocess_set_caps (GstBaseTransform *base, GstCaps *incaps,
   gst_structure_get_int (in, "height", &params[0].height);
   params[0].format = gst_video_format_from_string (
       gst_structure_get_string (in, "format"));
-  params[0].isubwc = gst_caps_has_compression (incaps, "ubwc");
 
   // Output BufferParams
   out = gst_caps_get_structure (outcaps, 0);
@@ -319,7 +318,6 @@ gst_camera_reprocess_set_caps (GstBaseTransform *base, GstCaps *incaps,
   gst_structure_get_int (out, "height", &params[1].height);
   params[1].format = gst_video_format_from_string (
       gst_structure_get_string (out, "format"));
-  params[1].isubwc = gst_caps_has_compression (outcaps, "ubwc");
 
   GST_DEBUG_OBJECT (camreproc, "Creating camera reprocess module.");
 
@@ -348,33 +346,39 @@ gst_camera_reprocess_create_buffer_pool (GstCameraReprocess *camreproc,
     return NULL;
   }
 
-  // If downstream allocation query supports GBM, allocate gbm memory.
+  if ((pool = gst_image_buffer_pool_new ()) == NULL) {
+    GST_ERROR_OBJECT (camreproc, "Failed to create image pool!");
+    return NULL;
+  }
+
   if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
+    allocator = gst_fd_allocator_new ();
     GST_INFO_OBJECT (camreproc, "Buffer pool uses GBM memory");
   } else {
-    pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
-    GST_INFO_OBJECT (camreproc, "Buffer pool uses ION memory");
+    allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+    GST_INFO_OBJECT (camreproc, "Buffer pool uses DMA memory");
+  }
+
+  if (allocator == NULL) {
+    GST_ERROR_OBJECT (camreproc, "Failed to create allocator");
+    gst_clear_object (&pool);
+    return NULL;
   }
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_POOL_MIN_BUFFERS, DEFAULT_POOL_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
-  if (gst_caps_has_compression (caps, "ubwc")) {
-    GST_DEBUG_OBJECT (camreproc, "Buffer pool uses ubwc mode.");
-    gst_buffer_pool_config_add_option (config,
-        GST_IMAGE_BUFFER_POOL_OPTION_UBWC_MODE);
-  }
+  if (GST_VIDEO_INFO_FORMAT (&info) == GST_VIDEO_FORMAT_NV12_Q08C ||
+      GST_VIDEO_INFO_FORMAT (&info) == GST_VIDEO_FORMAT_NV12_Q10LE32C)
+    GST_DEBUG_OBJECT (camreproc, "Buffer pool uses UBWC mode.");
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_ERROR_OBJECT (camreproc, "Failed to set pool configuration!");
-    gst_object_unref (pool);
-    pool = NULL;
+    gst_clear_object (&pool);
   }
 
   gst_object_unref (allocator);
@@ -490,7 +494,7 @@ gst_camera_reprocess_transform_caps (GstBaseTransform *base,
       gst_structure_set (structure, "height", GST_TYPE_INT_RANGE, 1, G_MAXINT,
         NULL);
 
-    gst_structure_remove_fields (structure, "compression", NULL);
+    gst_structure_remove_fields (structure, "format", NULL);
 
     gst_caps_append_structure_full (result, structure,
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL));
