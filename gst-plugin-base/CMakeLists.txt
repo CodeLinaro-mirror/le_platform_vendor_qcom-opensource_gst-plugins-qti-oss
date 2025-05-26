@@ -15,6 +15,7 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(ADRENO_UTILS REQUIRED adreno_utils)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)

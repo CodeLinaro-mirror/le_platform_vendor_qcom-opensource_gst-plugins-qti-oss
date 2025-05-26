@@ -6,14 +6,16 @@
 #include <cstdlib>
 #include <dlfcn.h>
 #include <gst/gst.h>
+#include <string>
 
 #include "open_cl_funcs.h"
 
 std::shared_ptr<OpenClFuncs> OpenClFuncs::New() {
   void* lib_opencl_handle;
+  std::string libname = "libOpenCL.so." + std::string(OPENCL_VERSION);
 
   dlerror();
-  lib_opencl_handle = dlopen ("libOpenCL.so", RTLD_LAZY);
+  lib_opencl_handle = dlopen (libname.c_str(), RTLD_LAZY);
 
   if (nullptr == lib_opencl_handle) {
     GST_ERROR ("Cannot load lib libOpenCL.so : %s", dlerror());

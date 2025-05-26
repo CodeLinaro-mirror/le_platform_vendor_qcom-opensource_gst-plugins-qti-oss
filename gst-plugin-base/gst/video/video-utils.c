@@ -70,6 +70,7 @@ gst_adreno_get_pixel_alignment ()
   void *handle = NULL;
   get_gpu_pixel_alignment GetGpuPixelAlignment = NULL;
   gboolean success = FALSE;
+  gchar libname[256];
 
   g_mutex_lock (&mutex);
 
@@ -77,7 +78,8 @@ gst_adreno_get_pixel_alignment ()
   if (alignment != -1)
     goto cleanup;
 
-  if ((handle = dlopen ("libadreno_utils.so", RTLD_NOW)) == NULL) {
+  g_snprintf (libname, sizeof(libname), "libadreno_utils.so.%s", ADRENO_UTILS_VERSION);
+  if ((handle = dlopen (libname, RTLD_NOW)) == NULL) {
     GST_WARNING ("Failed to load Adreno utils lib using default alignment,"
         " error: %s", dlerror());
     alignment = GST_GPU_DEFAULT_ALIGNMENT;
