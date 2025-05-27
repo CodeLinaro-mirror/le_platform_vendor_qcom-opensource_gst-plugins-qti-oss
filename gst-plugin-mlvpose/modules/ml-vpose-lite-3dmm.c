@@ -534,5 +534,8 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
         kp->confidence);
   }
 
+  entry->xtraparams = gst_structure_new ("ExtraParams", "roll", G_TYPE_FLOAT,
+      roll, "yaw", G_TYPE_FLOAT, yaw, "pitch", G_TYPE_FLOAT, pitch, NULL);
+
   return TRUE;
 }

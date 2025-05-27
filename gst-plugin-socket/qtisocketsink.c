@@ -439,12 +439,16 @@ static gpointer
 gst_socket_sink_wait_message_loop (gpointer user_data)
 {
   GstFdSocketSink *sink = GST_SOCKET_SINK (user_data);
+  GstBuffer *buffer = NULL;
+  GstPayloadInfo pl_info = {0};
+  struct pollfd poll_fd;
+  gint ret = 0;
   gboolean running = TRUE;
 
   while (running) {
     switch (sink->state) {
 
-      case GST_SOCKET_TRY_CONNECT:
+      case GST_SOCKET_TRY_CONNECT: {
         if (g_atomic_int_get (&sink->should_stop)) {
           running = FALSE;
           break;
@@ -457,13 +461,9 @@ gst_socket_sink_wait_message_loop (gpointer user_data)
 
         usleep (10000);
         break;
+      }
 
-      case GST_SOCKET_RUNNING:
-        GstBuffer *buffer = NULL;
-        GstPayloadInfo pl_info = {0};
-        struct pollfd poll_fd;
-        gint ret;
-
+      case GST_SOCKET_RUNNING: {
         if (g_atomic_int_get (&sink->should_disconnect)) {
           if (sink->mode == DATA_MODE_VIDEO ||
               sink->mode == DATA_MODE_TENSOR) {
@@ -557,8 +557,9 @@ gst_socket_sink_wait_message_loop (gpointer user_data)
 
         free_pl_struct (&pl_info);
         break;
+      }
 
-      case GST_SOCKET_DISCONNECT:
+      case GST_SOCKET_DISCONNECT: {
         g_mutex_lock (&sink->socklock);
 
         g_atomic_int_set (&sink->connected, FALSE);
@@ -582,6 +583,7 @@ gst_socket_sink_wait_message_loop (gpointer user_data)
         sink->state = GST_SOCKET_TRY_CONNECT;
 
         break;
+      }
     }
   }
 

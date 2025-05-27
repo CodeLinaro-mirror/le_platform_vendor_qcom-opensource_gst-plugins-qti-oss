@@ -49,29 +49,34 @@ def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        add_help=False,
+        description=DESCRIPTION,
         formatter_class=type(
-            "CustomFormatter",
-            (
-                argparse.ArgumentDefaultsHelpFormatter,
-                argparse.RawTextHelpFormatter,
-            ),
-            {},
-        ),
+            'CustomFormatter',
+            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
+            {}
+        )
     )
 
     parser.add_argument(
-        "-h",
-        "--help",
-        action="help",
-        default=argparse.SUPPRESS,
-        help=DESCRIPTION,
+        '-c', '--camera', type=int, choices=[0, 1], default=0,
+        help='Select (0) for Primary Camera and (1) for Secondary Camera.'
     )
     parser.add_argument(
-        "--output_path",
-        type=str,
-        default=DEFAULT_OUTPUT_FILE,
-        help="Pipeline Output Path",
+        '-cw', '--width', type=int, default=1280,
+        help='Camera Output Width'
+    )
+    parser.add_argument(
+        '-ch', '--height', type=int, default=720,
+        help='Camera Output Height'
+    )
+    parser.add_argument(
+        '-cf', '--framerate', type=str, default='30/1',
+        help='Camera Output Framerate (fraction)'
+    )
+
+    parser.add_argument(
+        "--output", type=str, default=DEFAULT_OUTPUT_FILE,
+        help="Output File Path"
     )
 
     args = parser.parse_args()
@@ -91,13 +96,13 @@ def construct_pipeline(pipe):
     # fmt: on
 
     # Set element properties
-    Gst.util_set_object_arg(elements["qmmfsrc"], "camera", "0")
+    Gst.util_set_object_arg(elements["qmmfsrc"], "camera", f"{args.camera}")
 
     Gst.util_set_object_arg(
         elements["capsfilter_0"],
         "caps",
-        "video/x-raw,format=NV12,\
-        width=1920,height=1080,framerate=30/1",
+        "video/x-raw,format=NV12,"
+        f"width={args.width},height={args.height},framerate={args.framerate}",
     )
 
     Gst.util_set_object_arg(elements["vtransform"], "rotate", "90CW")
@@ -113,7 +118,7 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse"], "config-interval", "1")
 
-    Gst.util_set_object_arg(elements["filesink"], "location", args.output_path)
+    Gst.util_set_object_arg(elements["filesink"], "location", args.output)
 
     # Add all elements
     for element in elements.values():
