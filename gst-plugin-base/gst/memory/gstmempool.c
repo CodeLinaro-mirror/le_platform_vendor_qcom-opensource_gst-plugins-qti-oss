@@ -85,8 +85,8 @@ open_ion_device (GstMemBufferPool * mempool, gboolean secure)
   GstMemBufferPoolPrivate *priv = mempool->priv;
 
   if (secure) {
-    GST_INFO_OBJECT (mempool, "Open /dev/dma_heap/system-secure");
-    priv->devfd = open ("/dev/dma_heap/system-secure", O_RDONLY | O_CLOEXEC);
+    GST_ERROR_OBJECT (mempool, "Open /dev/dma_heap/qcom,system");
+    priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
   } else {
     GST_INFO_OBJECT (mempool, "Open /dev/dma_heap/qcom,system");
     priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);

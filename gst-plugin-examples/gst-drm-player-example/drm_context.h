@@ -10,7 +10,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#define ENABLE_WIDEVINE 1
+
 #ifdef ENABLE_WIDEVINE
 #include <cdm.h>
 #endif

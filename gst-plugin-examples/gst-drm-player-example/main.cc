@@ -12,7 +12,6 @@
 
 #define DASH_LINE  "-------------------------------------------------------"
 #define SPACE      "                                                       "
-#define ENABLE_WIDEVINE 1
 
 // Manifest will be downloaded here.
 #define MANIFEST_DOWNLOAD_PATH "/data/manifest.xml"
@@ -334,7 +333,7 @@ handle_stdin_source (GIOChannel * source, GIOCondition condition, gpointer data)
     }
   } while (status == G_IO_STATUS_AGAIN);
 
-  if (strlen (input) > 1)
+  if (input && strlen (input) > 1)
     input = g_strchomp (input);
 
   g_async_queue_push (appctx->messages, gst_structure_new (STDIN_MESSAGE,
@@ -712,9 +711,7 @@ parse_hls_key_tag (gchar ** split_content, gint index, gchar ** header)
       // will be invalid.
       if (license == LICENSE_BOTH)
         break;
-    }
-
-    if (g_str_equal (keyformat, "com.widevine") ||
+    } else if (g_str_equal (keyformat, "com.widevine") ||
         g_str_equal (keyformat, WIDEVINE_UUID)) {
       g_free (keyformat);
 
@@ -987,7 +984,7 @@ main_menu (gpointer data)
   while (active) {
     print_menu ();
 
-    if (!wait_stdin_message (appctx->messages, &str) || g_str_equal (str, QUIT))
+    if (!wait_stdin_message (appctx->messages, &str) || !str || g_str_equal (str, QUIT))
       active = FALSE;
     else if (g_str_equal (str, PLAY))
       toggle_play (appctx);

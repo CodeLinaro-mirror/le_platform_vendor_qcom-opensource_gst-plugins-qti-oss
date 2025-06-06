@@ -22,8 +22,8 @@
     "rightsmanager.asmx?cfg=(securestop:false,persist:false,sl:150)"
 
 // To be obtained and specified post Widevine license agreement.
-#define CDM_PROV_URL           ""
-#define CDM_LIC_URL            ""
+#define CDM_LIC_URL           "https://proxy.uat.widevine.com/proxy"
+#define CDM_PROV_URL           "https://www.googleapis.com/certificateprovisioning/v1/devicecertificates/create?key=AIzaSyB-5OLKTx2iU5mko18DfdwK5611JIjbUhE&signedRequest="
 
 const std::string kProductName = "DRMPlayer";
 const std::string kCompanyName = "QTI";
