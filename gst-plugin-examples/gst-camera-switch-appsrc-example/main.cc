@@ -140,8 +140,7 @@ create_image_pool (GstCameraSwitchCtx *cameraswitchctx)
     return FALSE;
   }
 
-  cameraswitchctx->pool =
-      gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
+  cameraswitchctx->pool = gst_image_buffer_pool_new ();
   if (!cameraswitchctx->pool) {
     gst_printerr ("Failed to ccreate a new pool!");
     return FALSE;
@@ -1070,9 +1069,6 @@ main (gint argc, gchar * argv[])
   g_main_loop_run (mloop);
   g_print ("main loop ends\n");
 
-  // Disable buffers queue
-  gst_data_queue_set_flushing (cameraswitchctx.buffers_queue, TRUE);
-
   // Stop tasks
   if (!gst_task_stop (workertask))
     g_printerr ("Failed to stop workertask!\n");
@@ -1084,6 +1080,9 @@ main (gint argc, gchar * argv[])
   // Make sure task is not running.
   g_rec_mutex_lock (&workerlock);
   g_rec_mutex_unlock (&workerlock);
+
+  // Disable buffers queue
+  gst_data_queue_set_flushing (cameraswitchctx.buffers_queue, TRUE);
 
   g_print ("Run mutex lock for bufferslock\n");
   // Make sure task is not running.
