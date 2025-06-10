@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -234,8 +234,10 @@ struct _GstQmmfContext {
   gboolean          multicamera_hint;
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
   gboolean          sw_tnr;
+#ifdef GET_CAMERA_STATIC_INFO_ENABLE
   /// Capabilities of each camera
   GHashTable        *static_metas;
+#endif
 
   /// Logical Camera Information
   GstQmmfLogicalCamInfo logical_cam_info;
@@ -602,10 +604,13 @@ get_vendor_tags (const gchar * section, const gchar * names[], guint n_names,
 static gint
 gst_qmmf_context_get_cam_static_info (GstQmmfContext * context)
 {
+  int32_t ret = 0;
+
+#ifdef GET_CAMERA_STATIC_INFO_ENABLE
   ::qmmf::recorder::Recorder *recorder = context->recorder;
   std::vector<::camera::CameraMetadata> infolist;
 
-  int32_t ret = recorder->GetCamStaticInfo (infolist);
+  ret = recorder->GetCamStaticInfo (infolist);
   if (ret != 0)
     return ret;
 
@@ -614,6 +619,7 @@ gst_qmmf_context_get_cam_static_info (GstQmmfContext * context)
     g_hash_table_insert (context->static_metas,
         GUINT_TO_POINTER (i), &(infolist[i]));
   }
+#endif // GET_CAMERA_STATIC_INFO_ENABLE
 
   return ret;
 }
@@ -2951,9 +2957,11 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_SW_TNR:
       g_value_set_boolean (value, context->sw_tnr);
       break;
+#ifdef GET_CAMERA_STATIC_INFO_ENABLE
     case PARAM_CAMERA_STATIC_METADATAS:
       g_value_set_boxed (value, context->static_metas);
       break;
+#endif
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
     {
       gchar *string = NULL;
