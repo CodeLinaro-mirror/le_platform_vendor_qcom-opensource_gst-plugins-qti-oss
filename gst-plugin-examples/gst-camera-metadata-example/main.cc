@@ -89,13 +89,13 @@ namespace camera = qmmf;
 #define MENU_BACK_OPTION               "b"
 
 #define GST_CAMERA_PIPELINE "qtiqmmfsrc name=camera " \
-    "camera.video_0 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
+    "camera.video_0 ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! " \
     "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false"
 
 #define GST_CAMERA_PIPELINE_DISPLAY "qtiqmmfsrc name=camera " \
-    "camera.video_0 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
+    "camera.video_0 ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! " \
     "queue ! appsink name=sink emit-signals=true async=false enable-last-sample=false " \
-    "camera.video_1 ! video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
+    "camera.video_1 ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! " \
     "queue ! waylandsink fullscreen=true"
 
 #define TERMINATE_MESSAGE      "APP_TERMINATE_MSG"
