@@ -34,7 +34,7 @@
 
 #include "c2-engine-params.h"
 
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <algorithm>
