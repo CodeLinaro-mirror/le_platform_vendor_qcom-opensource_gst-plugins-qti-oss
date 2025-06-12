@@ -687,12 +687,14 @@ gst_gles_video_converter_new (GstStructure * settings)
   GstGlesVideoConverter *convert = NULL;
   ::ib2c::NewIEngine NewEngine;
 
+  std::string libname = "libIB2C.so." + std::string(IB2C_VERSION);
+
   convert = g_slice_new0 (GstGlesVideoConverter);
   g_return_val_if_fail (convert != NULL, NULL);
 
   g_mutex_init (&convert->lock);
 
-  if ((convert->ib2chandle = dlopen ("libIB2C.so", RTLD_NOW)) == NULL) {
+  if ((convert->ib2chandle = dlopen (libname.c_str(), RTLD_NOW)) == NULL) {
     GST_ERROR ("Failed to open IB2C library, error: %s!", dlerror());
     goto cleanup;
   }

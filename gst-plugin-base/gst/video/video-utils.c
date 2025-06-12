@@ -78,7 +78,8 @@ gst_adreno_get_pixel_alignment ()
   if (alignment != -1)
     goto cleanup;
 
-  g_snprintf (libname, sizeof(libname), "libadreno_utils.so.%s", ADRENO_UTILS_VERSION);
+  g_snprintf (libname, sizeof(libname), "libadreno_utils.so.%s",
+      ADRENO_UTILS_VERSION_MAJOR);
   if ((handle = dlopen (libname, RTLD_NOW)) == NULL) {
     GST_WARNING ("Failed to load Adreno utils lib using default alignment,"
         " error: %s", dlerror());

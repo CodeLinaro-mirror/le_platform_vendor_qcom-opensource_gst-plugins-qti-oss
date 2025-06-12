@@ -19,6 +19,7 @@ pkg_check_modules(GST_ALLOC
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(OPENCL REQUIRED opencl)
+pkg_check_modules(QCOM_IB2C qcom-ib2c)
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
@@ -74,7 +75,7 @@ target_include_directories(${GST_QTI_OVERLAY} PRIVATE
 
 target_compile_definitions(${GST_QTI_OVERLAY} PRIVATE
   $<$<BOOL:${HAVE_C2D_H}>:ENABLE_C2D>
-  $<$<BOOL:${HAVE_GLES_H}>:ENABLE_GLES>
+  $<$<BOOL:${QCOM_IB2C_FOUND}>:ENABLE_GLES>
 )
 
 target_link_libraries(${GST_QTI_OVERLAY} PRIVATE

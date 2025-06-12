@@ -753,7 +753,8 @@ int32_t Overlay::Init (OverlayBlitType blit_type)
 #endif // ENABLE_C2D
   } else if (blit_type_ == OverlayBlitType::kGLES) {
 #ifdef ENABLE_GLES
-    void* handle = dlopen("libIB2C.so", RTLD_NOW);
+    std::string libname = "libIB2C.so." + std::string(IB2C_VERSION);
+    void* handle = dlopen(libname.c_str(), RTLD_NOW);
     if (!handle || dlerror()) {
       GST_ERROR ("dlopen failed: '%s'", dlerror());
       return -1;

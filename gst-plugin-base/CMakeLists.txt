@@ -18,6 +18,7 @@ pkg_check_modules(GST_VIDEO
 pkg_check_modules(FASTCV fastcv-noship)
 pkg_check_modules(GBM gbm)
 pkg_check_modules(ADRENO_UTILS REQUIRED adreno_utils)
+pkg_check_modules(QCOM_IB2C qcom-ib2c)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
