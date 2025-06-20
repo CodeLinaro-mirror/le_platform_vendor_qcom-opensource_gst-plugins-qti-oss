@@ -18,6 +18,7 @@ pkg_check_modules(GST_BASE REQUIRED
   gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED
   gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(TFLITE REQUIRED tensorflow-lite)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
@@ -106,7 +107,10 @@ add_library(${GST_QTI_ML_TFLITE} SHARED
   ${GST_QTI_ML_TFLITE_SRC}
 )
 
+string(REGEX MATCH "^[0-9]+" TFLITE_VERSION_MAJOR ${TFLITE_VERSION})
+
 target_compile_definitions(${GST_QTI_ML_TFLITE} PRIVATE
+  TFLITE_VERSION="${TFLITE_VERSION_MAJOR}"
   $<$<BOOL:${HAVE_HEXAGON_DELEGATE_H}>:HAVE_HEXAGON_DELEGATE_H>
   $<$<BOOL:${HAVE_EXTERNAL_DELEGATE_H}>:HAVE_EXTERNAL_DELEGATE_H>
   ${TARGET_COMPILE_DEFINITIONS}

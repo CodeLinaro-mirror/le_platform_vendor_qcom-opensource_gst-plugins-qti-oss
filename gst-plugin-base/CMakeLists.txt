@@ -15,7 +15,10 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(FASTCV fastcv-noship)
+pkg_check_modules(GBM gbm)
 pkg_check_modules(ADRENO_UTILS REQUIRED adreno_utils)
+pkg_check_modules(QCOM_IB2C qcom-ib2c)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
@@ -42,9 +45,6 @@ check_include_file("adreno/c2d2.h" HAVE_ADRENO_C2D2_H)
 
 # Check whether IOT CORE IB2C header is present.
 check_include_file_cxx("iot-core-algs/ib2c.h" HAVE_IOT_CORE_IB2C_H)
-
-# Check whether FastCV header is present.
-check_include_file("fastcv/fastcv.h" HAVE_FASTCV_H)
 
 # Check whether GBM header is present.
 check_include_file("gbm_priv.h" HAVE_GBM_PRIV_H)

@@ -12,7 +12,7 @@
 
 std::shared_ptr<OpenClFuncs> OpenClFuncs::New() {
   void* lib_opencl_handle;
-  std::string libname = "libOpenCL.so." + std::string(OPENCL_VERSION);
+  std::string libname = "libOpenCL.so." + std::string(OPENCL_VERSION_MAJOR);
 
   dlerror();
   lib_opencl_handle = dlopen (libname.c_str(), RTLD_LAZY);

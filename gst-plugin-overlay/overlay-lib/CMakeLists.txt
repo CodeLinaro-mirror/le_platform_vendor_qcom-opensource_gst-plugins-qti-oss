@@ -28,6 +28,9 @@ target_include_directories(overlay_lib
 target_include_directories(overlay_lib
  PRIVATE ${PKG_CONFIG_SYSROOT_DIR}/usr/include/ion_headers)
 
+string(REGEX MATCH "^[0-9]+" OPENCL_VERSION_MAJOR ${OPENCL_VERSION})
+string(REGEX MATCH "^[0-9]+" QCOM_IB2C_VERSION_MAJOR ${QCOM_IB2C_VERSION})
+
 target_compile_definitions(overlay_lib PRIVATE
   $<$<BOOL:${HAVE_C2D_H}>:ENABLE_C2D>
   $<$<BOOL:${HAVE_GLES_H}>:ENABLE_GLES>
@@ -35,7 +38,8 @@ target_compile_definitions(overlay_lib PRIVATE
   $<$<BOOL:${HAVE_MSM_MEDIA_INFO_H}>:HAVE_MSM_MEDIA_INFO_H>
   $<$<BOOL:${HAVE_LINUX_DMA_HEAP_H}>:HAVE_LINUX_DMA_HEAP_H>
   $<$<BOOL:${HAVE_LINUX_DMA_BUF_H}>:HAVE_LINUX_DMA_BUF_H>
-  OPENCL_VERSION=${OPENCL_VERSION_MAJOR}
+  OPENCL_VERSION_MAJOR="${OPENCL_VERSION_MAJOR}"
+  IB2C_VERSION="${QCOM_IB2C_VERSION_MAJOR}"
 )
 
 install(TARGETS overlay_lib DESTINATION lib OPTIONAL)

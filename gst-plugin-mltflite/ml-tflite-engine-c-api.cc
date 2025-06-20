@@ -345,7 +345,8 @@ load_symbol (gpointer* method, gpointer handle, const gchar* name)
 static gboolean
 gst_ml_tflite_initialize_library (GstMLTFLiteEngine * engine)
 {
-  engine->libhandle = dlopen ("libtensorflowlite_c.so", RTLD_NOW | RTLD_LOCAL);
+  std::string libname = "libtensorflowlite_c.so." + std::string(TFLITE_VERSION);
+  engine->libhandle = dlopen (libname.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (engine->libhandle == NULL) {
     GST_ERROR ("Failed to open TFLite library, error: %s!", dlerror());
     return FALSE;

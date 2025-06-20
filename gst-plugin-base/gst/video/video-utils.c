@@ -78,7 +78,8 @@ gst_adreno_get_pixel_alignment ()
   if (alignment != -1)
     goto cleanup;
 
-  g_snprintf (libname, sizeof(libname), "libadreno_utils.so.%s", ADRENO_UTILS_VERSION);
+  g_snprintf (libname, sizeof(libname), "libadreno_utils.so.%s",
+      ADRENO_UTILS_VERSION_MAJOR);
   if ((handle = dlopen (libname, RTLD_NOW)) == NULL) {
     GST_WARNING ("Failed to load Adreno utils lib using default alignment,"
         " error: %s", dlerror());
@@ -112,6 +113,7 @@ gst_gbm_qcom_backend_is_supported (void)
 
   if (g_once_init_enter (&inited)) {
     struct gbm_device* device = NULL;
+    gchar libname[256];
     gpointer libhandle = NULL;
     gbm_create_device_func gbm_create_device = NULL;
     gbm_device_destroy_func gbm_device_destroy = NULL;
@@ -120,7 +122,8 @@ gst_gbm_qcom_backend_is_supported (void)
     gint fd = -1;
 
     // Load GBM library and symbols.
-    libhandle = dlopen ("libgbm.so", RTLD_NOW);
+    g_snprintf (libname, sizeof (libname), "libgbm.so.%s", GBM_VERSION);
+    libhandle = dlopen (libname, RTLD_NOW);
     if (libhandle != NULL) {
       success = load_symbol ((gpointer*)&gbm_create_device, libhandle,
           "gbm_create_device");
