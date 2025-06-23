@@ -477,8 +477,6 @@ create_stream (GstAppContext * appctx, gint x, gint y, gint w, gint h)
       "height", G_TYPE_INT, h,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
-  gst_caps_set_features (stream->qmmf_caps, 0,
-      gst_caps_features_new ("memory:GBM", NULL));
 
   // Get qmmfsrc Element class
   GstElementClass *qtiqmmfsrc_klass = GST_ELEMENT_GET_CLASS (qtiqmmfsrc);
