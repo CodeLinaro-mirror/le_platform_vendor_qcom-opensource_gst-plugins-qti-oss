@@ -21,6 +21,11 @@ pkg_check_modules(GST_VIDEO
 pkg_check_modules(OPENCL REQUIRED opencl)
 pkg_check_modules(QCOM_IB2C qcom-ib2c)
 
+if(NOT QCOM_IB2C_FOUND)
+  set(QCOM_IB2C_VERSION "1.0.0")
+  set(QCOM_IB2C_FOUND TRUE)
+endif()
+
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})

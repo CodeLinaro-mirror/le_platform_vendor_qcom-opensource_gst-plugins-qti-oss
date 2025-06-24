@@ -29,7 +29,10 @@ target_include_directories(overlay_lib
  PRIVATE ${PKG_CONFIG_SYSROOT_DIR}/usr/include/ion_headers)
 
 string(REGEX MATCH "^[0-9]+" OPENCL_VERSION_MAJOR ${OPENCL_VERSION})
-string(REGEX MATCH "^[0-9]+" QCOM_IB2C_VERSION_MAJOR ${QCOM_IB2C_VERSION})
+
+if(QCOM_IB2C_FOUND)
+  string(REGEX MATCH "^[0-9]+" QCOM_IB2C_VERSION_MAJOR ${QCOM_IB2C_VERSION})
+endif()
 
 target_compile_definitions(overlay_lib PRIVATE
   $<$<BOOL:${HAVE_C2D_H}>:ENABLE_C2D>

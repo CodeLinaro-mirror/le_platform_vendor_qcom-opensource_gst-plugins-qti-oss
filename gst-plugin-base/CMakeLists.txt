@@ -20,6 +20,16 @@ pkg_check_modules(GBM gbm)
 pkg_check_modules(ADRENO_UTILS REQUIRED adreno_utils)
 pkg_check_modules(QCOM_IB2C qcom-ib2c)
 
+if(NOT FASTCV_FOUND)
+  set(FASTCV_VERSION "1.7")
+  set(FASTCV_FOUND TRUE)
+endif()
+
+if(NOT QCOM_IB2C_FOUND)
+  set(QCOM_IB2C_VERSION "1.0.0")
+  set(QCOM_IB2C_FOUND TRUE)
+endif()
+
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
 
