@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -78,6 +78,7 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_NUM_LTR_FRAMES       (0xffffffff)
 #define DEFAULT_PROP_PRIORITY             (0xffffffff)
 #define DEFAULT_PROP_TEMPORAL_LAYER_NUM   (0xffffffff)
+#define DEFAULT_PROP_VBV_DELAY            (0x7fffffff)
 
 #ifndef GST_CAPS_FEATURE_MEMORY_GBM
 #define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
@@ -114,6 +115,7 @@ enum
   PROP_NUM_LTR_FRAMES,
   PROP_PRIORITY,
   PROP_TEMPORAL_LAYER,
+  PROP_VBV_DELAY,
 };
 
 static GstStaticPadTemplate gst_c2_venc_sink_pad_template =
@@ -727,6 +729,15 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
         GST_C2_PARAM_SUPER_FRAME, GPOINTER_CAST (&c2venc->n_super_frames));
     if (!success) {
       GST_ERROR_OBJECT (c2venc, "Failed to set super frame!");
+      return FALSE;
+    }
+  }
+
+  if (c2venc->vbv_delay != DEFAULT_PROP_VBV_DELAY) {
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_VBV_DELAY, GPOINTER_CAST (&c2venc->vbv_delay));
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set vbv delay!");
       return FALSE;
     }
   }
@@ -1629,6 +1640,9 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->temp_layer.n_blayers = blayers;
       break;
     }
+    case PROP_VBV_DELAY:
+      c2venc->vbv_delay = g_value_get_int (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1771,6 +1785,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       g_value_unset (&val);
       break;
     }
+    case PROP_VBV_DELAY:
+      g_value_set_int (value, c2venc->vbv_delay);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1967,6 +1984,14 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
               "One of layers number, b-layers number", G_MININT,
               G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject, PROP_VBV_DELAY,
+      g_param_spec_int ("vbv-delay", "Video Buffer Verifier Delay",
+          "The buffering delay in milliseconds which is used to stabilize "
+          "bitrate, equivalent to target bitrate measured in thousandth unit."
+          "(0x7fffffff=component default, limited below 100 milliseconds, "
+          "i.e 1/10 of the target bitrate)",
+          0, G_MAXINT, DEFAULT_PROP_VBV_DELAY,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
 
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_trigger_iframe),
@@ -2054,8 +2079,8 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->priority = DEFAULT_PROP_PRIORITY;
   c2venc->temp_layer.n_layers = DEFAULT_PROP_TEMPORAL_LAYER_NUM;
   c2venc->temp_layer.n_blayers = DEFAULT_PROP_TEMPORAL_LAYER_NUM;
-
   c2venc->n_super_frames = 0;
+  c2venc->vbv_delay = DEFAULT_PROP_VBV_DELAY;
 
   GST_DEBUG_CATEGORY_INIT (c2_venc_debug, "qtic2venc", 0,
       "QTI c2venc encoder");
