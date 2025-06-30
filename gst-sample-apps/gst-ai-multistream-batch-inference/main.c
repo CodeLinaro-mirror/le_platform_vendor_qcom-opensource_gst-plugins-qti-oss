@@ -70,7 +70,7 @@
           "labels-path":"/etc/labels/deeplabv3_resnet50.labels",
 
           # Constant values from model
-          "constants":"deeplab,q-offsets=<92.0>,q-scales=<0.04518842324614525>;",
+          "constants":"deeplab,q-offsets=<0.0>,q-scales=<1.0>;",
 
           # Post process plugin qtimlvsegmentation/qtimlvdetection
           "post-process-plugin": "qtimlvsegmentation"
@@ -119,12 +119,14 @@
  * Structure for various application specific options
  */
 typedef struct {
-  gchar *mlframework;
   gchar *model_path;
   gchar *labels_path;
   gchar *post_process;
   gchar *constants;
+  gchar **snpe_layers;
   gchar *file_path[DEFAULT_BATCH_SIZE];
+  GstModelType model_type;
+  gint snpe_layer_count;
 } GstAppOptions;
 
 /**
@@ -201,6 +203,8 @@ set_ml_params (GstElement * qtimlpostprocess,
   GstStructure *delegate_options = NULL;
   gint module_id;
   gchar delegate_string[128];
+  GValue layers = G_VALUE_INIT;
+  GValue value = G_VALUE_INIT;
 
   snprintf (delegate_string, 127, "QNNExternalDelegate,backend_type=htp,\
     htp_device_id=(string)%u,htp_performance_mode=(string)2,\
@@ -209,18 +213,48 @@ set_ml_params (GstElement * qtimlpostprocess,
   delegate_options = gst_structure_from_string (
     delegate_string, NULL);
 
-  g_object_set (G_OBJECT (qtielement), "model", options.model_path,
-      "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
-  g_object_set (G_OBJECT (qtielement),
-      "external-delegate-path", "libQnnTFLiteDelegate.so", NULL);
-  g_object_set (G_OBJECT (qtielement),
-      "external-delegate-options", delegate_options, NULL);
-  gst_structure_free (delegate_options);
+  if (options.model_type == GST_MODEL_TYPE_TFLITE) {
+    g_object_set (G_OBJECT (qtielement), "model", options.model_path,
+        "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+    g_object_set (G_OBJECT (qtielement),
+        "external-delegate-path", "libQnnTFLiteDelegate.so", NULL);
+    g_object_set (G_OBJECT (qtielement),
+        "external-delegate-options", delegate_options, NULL);
+    gst_structure_free (delegate_options);
+    g_object_set (G_OBJECT (qtimlpostprocess),
+        "constants", options.constants, NULL);
+  } else if (options.model_type == GST_MODEL_TYPE_SNPE) {
+    if (g_strcmp0 (options.post_process, "qtimlvdetection") == 0 ) {
+      g_value_init (&layers, GST_TYPE_ARRAY);
+      g_value_init (&value, G_TYPE_STRING);
+      for (gint i = 0; i < options.snpe_layer_count; i++) {
+        g_value_set_string (&value, options.snpe_layers[i]);
+        gst_value_array_append_value (&layers, &value);
+      }
+      g_object_set_property (G_OBJECT (qtielement), "tensors", &layers);
+    }
+    g_object_set (G_OBJECT (qtielement), "model", options.model_path,
+        "delegate", GST_ML_SNPE_DELEGATE_DSP, NULL);
+  } else if (options.model_type == GST_MODEL_TYPE_QNN) {
+    if (g_strcmp0 (options.post_process, "qtimlvdetection") == 0 ) {
+      g_value_init (&layers, GST_TYPE_ARRAY);
+      g_value_init (&value, G_TYPE_STRING);
+      for (gint i = 0; i < options.snpe_layer_count; i++) {
+        g_value_set_string (&value, options.snpe_layers[i]);
+        gst_value_array_append_value (&layers, &value);
+      }
+      g_object_set_property (G_OBJECT (qtielement), "tensors", &layers);
+    }
+    g_object_set (G_OBJECT (qtielement), "model", options.model_path,
+        "backend", "/usr/lib/libQnnHtp.so", NULL);
+  } else {
+    g_printerr ("Invalid Model Type selected\n");
+    return FALSE;
+  }
 
   // Set properties for ML postproc plugins- labels, module, threshold & constants
   g_object_set (G_OBJECT (qtimlpostprocess),
       "labels", options.labels_path, NULL);
-
   if (g_strcmp0 (options.post_process, "qtimlvsegmentation") == 0) {
     module = "deeplab-argmax";
   } else if (g_strcmp0 (options.post_process, "qtimlvdetection") == 0) {
@@ -234,9 +268,6 @@ set_ml_params (GstElement * qtimlpostprocess,
     g_printerr ("Module %s is not available in qtimlpostprocess\n", module);
     return FALSE;
   }
-
-  g_object_set (G_OBJECT (qtimlpostprocess),
-      "constants", options.constants, NULL);
 
   // Set the properties of pad_filter for negotiation with qtivcomposer
   if (g_strcmp0 (options.post_process, "qtimlvsegmentation") == 0) {
@@ -414,47 +445,40 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions options[],
     g_main_loop_unref (appctx->mloop);
     appctx->mloop = NULL;
   }
-
   if (source_count.out_file != NULL) {
     g_free (source_count.out_file);
     source_count.out_file = NULL;
   }
-
   for (gint i = 0; i < streams; i++) {
-    if (options[i].mlframework != NULL) {
-      g_free (options[i].mlframework);
-      options[i].mlframework = NULL;
-    }
-
     if (options[i].model_path != NULL) {
       g_free (options[i].model_path);
       options[i].model_path = NULL;
     }
-
     if (options[i].labels_path != NULL) {
       g_free (options[i].labels_path);
       options[i].labels_path = NULL;
     }
-
+    if (options[i].snpe_layers != NULL) {
+      for (gint j = 0; j < options[i].snpe_layer_count; j++) {
+        g_free ((gpointer)options[i].snpe_layers[j]);
+      }
+      g_free ((gpointer) options[i].snpe_layers);
+    }
     if (options[i].constants != NULL) {
       g_free (options[i].constants);
       options[i].constants = NULL;
     }
-
     if (options[i].post_process != NULL) {
       g_free (options[i].post_process);
       options[i].post_process = NULL;
     }
-
     for (gint j = 0;j < DEFAULT_BATCH_SIZE; j++) {
       if (options[i].file_path[j] != NULL) {
         g_free (options[i].file_path[j]);
         options[i].file_path[j] = NULL;
       }
     }
-
   }
-
   if (appctx->pipeline != NULL) {
     gst_object_unref (appctx->pipeline);
     appctx->pipeline = NULL;
@@ -596,11 +620,27 @@ create_pipe (GstAppContext * appctx, const GstAppOptions  options[],
 
     // Create ML Framework Plugin
     snprintf (element_name, 127, "file_qtimlelement-%d", i);
-    file_qtimlelement[i] = gst_element_factory_make (
-        options[i].mlframework, element_name);
-    if (!file_qtimlelement[i]) {
-      g_printerr ("Failed to create file_qtimlelement-%d\n", i);
-      goto error_clean_elements;
+    if (options[i].model_type == GST_MODEL_TYPE_TFLITE) {
+      file_qtimlelement[i] = gst_element_factory_make (
+          "qtimltflite", element_name);
+      if (!file_qtimlelement[i]) {
+        g_printerr ("Failed to create file_qtimlelement-%d\n", i);
+        goto error_clean_elements;
+      }
+    } else if (options[i].model_type == GST_MODEL_TYPE_QNN) {
+      file_qtimlelement[i] = gst_element_factory_make (
+        "qtimlqnn", element_name);
+      if (!file_qtimlelement[i]) {
+        g_printerr ("Failed to create file_qtimlelement-%d\n", i);
+        goto error_clean_elements;
+      }
+    } else {
+      file_qtimlelement[i] = gst_element_factory_make (
+        "qtimlsnpe", element_name);
+      if (!file_qtimlelement[i]) {
+        g_printerr ("Failed to create file_qtimlelement-%d\n", i);
+        goto error_clean_elements;
+      }
     }
 
     for (gint j = 0; j < DEFAULT_BATCH_SIZE; j++) {
@@ -1012,6 +1052,7 @@ main (gint argc, gchar * argv[])
   const gchar *app_name = NULL;
   JsonParser *parser = NULL;
   JsonArray *pipeline_info = NULL;
+  JsonArray *snpe_layers = NULL;
   JsonNode *root = NULL;
   JsonObject *root_obj = NULL;
   gchar *config_file = NULL;
@@ -1167,23 +1208,36 @@ main (gint argc, gchar * argv[])
         g_strdup (json_object_get_string_member (info, "labels-path"));
     options[id].post_process =
         g_strdup (json_object_get_string_member (info, "post-process-plugin"));
-    options[id].mlframework = g_strdup (json_object_get_string_member (info,
+    const gchar* framework = g_strdup (json_object_get_string_member (info,
         "mlframework"));
+    if (g_strcmp0 (framework, "snpe") == 0) {
+      options[id].model_type = GST_MODEL_TYPE_SNPE;
+    } else if (g_strcmp0 (framework, "tflite") == 0) {
+      options[id].model_type = GST_MODEL_TYPE_TFLITE;
+    } else if (g_strcmp0 (framework, "qnn") == 0) {
+      options[id].model_type = GST_MODEL_TYPE_QNN;
+    } else {
+      gst_printerr ("ml-framework can only be one of "
+          "\"snpe\", \"tflite\" or \"qnn\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+
+    snpe_layers = json_object_get_array_member (info, "snpe-layers");
+    options[id].snpe_layer_count = json_array_get_length (snpe_layers);
+    options[id].snpe_layers = (gchar **) g_malloc (
+        sizeof (gchar **) * options[id].snpe_layer_count);
+    for (gint i = 0; i < options[id].snpe_layer_count; i++) {
+      options[id].snpe_layers[i] =
+          g_strdup (json_array_get_string_element (snpe_layers, i));
+    }
+
     options[id].constants =
         g_strdup (json_object_get_string_member (info, "constants"));
-
-    g_print ("MLframework: %s\n", options[id].mlframework);
     g_print ("Model Path: %s\n", options[id].model_path);
     g_print ("Labels path: %s\n", options[id].labels_path);
     g_print ("Post process: %s\n", options[id].post_process);
     g_print ("Constants: %s\n\n", options[id].constants);
-
-    if ((g_strcmp0 (options[id].mlframework, "qtimltflite") != 0)) {
-      g_printerr ("Only qtimltflite is supported\n");
-      gst_app_context_free (&appctx, options, source_count, streams);
-      return -EINVAL;
-    }
-
     if ((g_strcmp0 (options[id].post_process, "qtimlvsegmentation") != 0) &&
         (g_strcmp0 (options[id].post_process, "qtimlvdetection") != 0)) {
       g_printerr ("Only qtimlvsegmentation and "

@@ -73,13 +73,19 @@ struct _GstBatch
   /// Convenient local reference to source pad.
   GstPad         *srcpad;
 
-  /// Worker task.
-  GstTask        *worktask;
-  // Indicates whether the worker task is active or not.
-  gboolean       active;
+  /// Output buffers duration.
+  GstClockTime   duration;
+
   /// Worker task mutex.
   GRecMutex      worklock;
-  /// Condition for push/pop buffers from the queues.
+  /// Worker task.
+  GstTask        *worktask;
+
+  // Indicates whether the worker task is active or not.
+  gboolean       active;
+  /// End monotonic time until which to wait for buffers in the worker task.
+  gint64         endtime;
+  /// Condition for negotiating output caps and push/pop buffers from the queues.
   GCond          wakeup;
 };
 

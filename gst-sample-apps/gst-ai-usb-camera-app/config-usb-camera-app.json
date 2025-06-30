@@ -1,0 +1,17 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "framerate": 30,
+  "output":"waylandsink",
+  "model":"/etc/models/yolov8_det_quantized.tflite",
+  "labels":"/etc/labels/yolov8.labels",
+  "output-file":"/etc/media/output.mp4",
+  "ip-address":"127.0.0.1",
+  "port":"8900",
+  "enable-object-detection": "TRUE",
+  "ml-framework": "tflite",
+  "yolo-model-type": "yolov8",
+  "constants": "YOLOv8,q-offsets=<12.0, 0.0, 0.0>,q-scales=<2.8047633171081543, 0.00390625, 0.0>;",
+  "threshold": 75,
+  "runtime": "dsp"
+}

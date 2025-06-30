@@ -28,7 +28,7 @@
 *
 * Changes from Qualcomm Innovation Center are provided under the following license:
 *
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -132,6 +132,10 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_MULTI_ROI                 FALSE
 #define DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH    -1
 #define DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE        GST_PAD_ACTIVATION_MODE_NORMAL
+#ifdef FEATURE_OFFLINE_IFE_SUPPORT
+#define DEFAULT_PROP_CAMERA_MULTICAMERA_HINT          FALSE
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+#define DEFAULT_PROP_CAMERA_SW_TNR                    FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
 
@@ -206,6 +210,11 @@ enum
   PROP_CAMERA_INPUT_ROI_INFO,
   PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
   PROP_CAMERA_PAD_ACTIVATION_MODE,
+#ifdef FEATURE_OFFLINE_IFE_SUPPORT
+  PROP_CAMERA_MULTICAMERA_HINT,
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+  PROP_CAMERA_SW_TNR,
+  PROP_CAMERA_STATIC_METADATAS,
 };
 
 #ifdef ENABLE_RUNTIME_PARSER
@@ -273,7 +282,7 @@ qmmfsrc_init_src_templates ()
       ", P010_10LE"
 #endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
 #ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      ", NV12_10LE32"
+      ", NV12_Q10LE32C"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
       " }" ", "
       "%s",
@@ -297,7 +306,7 @@ qmmfsrc_init_src_templates ()
       ", P010_10LE"
 #endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
 #ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      ", NV12_10LE32"
+      ", NV12_Q10LE32C"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
       " }" ", "
       "%s",
@@ -744,7 +753,7 @@ qmmfsrc_release_pad (GstElement * element, GstPad * pad)
 static GstStaticCaps gst_qmmfsrc_video_static_src_caps =
     GST_STATIC_CAPS (QMMFSRC_VIDEO_JPEG_CAPS "; "
         QMMFSRC_VIDEO_RAW_CAPS (
-                "{ NV12, NV16, NV12_Q08C"
+                "{ NV12, NV16, NV12_Q08C, RGB"
 #ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
                 ", YUY2"
 #endif // GST_VIDEO_YUY2_FORMAT_ENABLE
@@ -755,9 +764,12 @@ static GstStaticCaps gst_qmmfsrc_video_static_src_caps =
                 ", P010_10LE"
 #endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
 #ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ", NV12_10LE32"
+                ", NV12_Q10LE32C"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                " }"));
+                " }") "; "
+            QMMFSRC_VIDEO_BAYER_CAPS (
+                "{ bggr, rggb, gbrg, grbg, mono }",
+                "{ 8, 10, 12, 16 }"));
 
 static GstStaticCaps gst_qmmfsrc_image_static_src_caps =
     GST_STATIC_CAPS (QMMFSRC_IMAGE_JPEG_CAPS "; "
@@ -780,7 +792,7 @@ gst_qmmfsrc_video_src_caps (void)
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_qmmfsrc_video_static_src_caps);
 
-    if (gst_is_gbm_supported()) {
+    if (gst_gbm_qcom_backend_is_supported ()) {
       GstCaps *tmplcaps = gst_caps_from_string (
           GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
               "{ NV12, NV16, NV12_Q08C"
@@ -794,7 +806,7 @@ gst_qmmfsrc_video_src_caps (void)
                 ", P010_10LE"
 #endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
 #ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ", NV12_10LE32"
+                ",  NV12_Q10LE32C"
 #endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
                 " }"));
 
@@ -816,7 +828,7 @@ gst_qmmfsrc_image_src_caps (void)
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_qmmfsrc_image_static_src_caps);
 
-    if (gst_is_gbm_supported()) {
+    if (gst_gbm_qcom_backend_is_supported ()) {
       GstCaps *tmplcaps = gst_caps_from_string (
           QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
                 "{ NV21"
@@ -911,26 +923,31 @@ static gboolean
 qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
 {
   gboolean success = FALSE;
-  gpointer key;
+  gpointer key = NULL;
   GstPad *pad = NULL;
   GList *list = NULL;
-  GValue sframerate = G_VALUE_INIT;
+  GValue isslave = G_VALUE_INIT, sframerate = G_VALUE_INIT;
 
+  g_value_init (&isslave, G_TYPE_BOOLEAN);
   g_value_init (&sframerate, G_TYPE_INT);
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
 
   // Iterate over the video pads, fixate caps and create streams.
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
-    GstQmmfSrcVideoPad *vpad = NULL;
-
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-    vpad = GST_QMMFSRC_VIDEO_PAD (pad);
 
     gst_qmmf_context_get_camera_param (qmmfsrc->context,
-        PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
-    vpad->superframerate = g_value_get_int(&sframerate);
+        PARAM_CAMERA_SLAVE, &isslave);
+
+    if (!g_value_get_boolean (&isslave)) {
+      GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
+
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
+      vpad->superframerate = g_value_get_int (&sframerate);
+    }
 
     success = qmmfsrc_video_pad_fixate_caps (pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -940,6 +957,9 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Video stream creation failed!");
   }
+
+  g_value_unset (&isslave);
+  g_value_unset (&sframerate);
 
   // Iterate over the image pads, fixate caps and create streams.
   for (list = qmmfsrc->imgindexes; list != NULL; list = list->next) {
@@ -1541,6 +1561,16 @@ qmmfsrc_set_property (GObject * object, guint property_id,
     case PROP_CAMERA_PAD_ACTIVATION_MODE:
       qmmfsrc->pad_activation_mode = g_value_get_enum(value);
       break;
+#ifdef FEATURE_OFFLINE_IFE_SUPPORT
+    case PROP_CAMERA_MULTICAMERA_HINT:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_MULTICAMERA_HINT, value);
+      break;
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+    case PROP_CAMERA_SW_TNR:
+      gst_qmmf_context_set_camera_param (qmmfsrc->context,
+           PARAM_CAMERA_SW_TNR, value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -1740,6 +1770,20 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
       break;
     case PROP_CAMERA_PAD_ACTIVATION_MODE:
       g_value_set_enum(value, qmmfsrc->pad_activation_mode);
+      break;
+#ifdef FEATURE_OFFLINE_IFE_SUPPORT
+    case PROP_CAMERA_MULTICAMERA_HINT:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_MULTICAMERA_HINT, value);
+      break;
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+    case PROP_CAMERA_SW_TNR:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_SW_TNR, value);
+      break;
+    case PROP_CAMERA_STATIC_METADATAS:
+      gst_qmmf_context_get_camera_param (qmmfsrc->context,
+          PARAM_CAMERA_STATIC_METADATAS, value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -2069,6 +2113,11 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "like IPE",
           DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_STATIC_METADATAS,
+      g_param_spec_boxed ("static-metas", "Static Metadata's",
+          "It contains the map of each connected camera and its metadata",
+          G_TYPE_HASH_TABLE,
+          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
 #ifdef ENABLE_RUNTIME_PARSER
   void* qmmfsrc_parser = get_qmmfsrc_parser ();
@@ -2155,6 +2204,22 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+#ifdef FEATURE_OFFLINE_IFE_SUPPORT
+  g_object_class_install_property (gobject, PROP_CAMERA_MULTICAMERA_HINT,
+      g_param_spec_boolean ("multicamera-hint", "multicamera-hint",
+          "multicamera-hint if enabled, this flag will make camera hardwares "
+          "to work in offline which is useful when camera sensors are more then "
+          "camera hardwares, it has impact on memory usage and latency.",
+          DEFAULT_PROP_CAMERA_MULTICAMERA_HINT,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+#endif // FEATURE_OFFLINE_IFE_SUPPORT
+#ifdef FEATURE_SW_TNR
+  g_object_class_install_property (gobject, PROP_CAMERA_SW_TNR,
+      g_param_spec_boolean ("sw-tnr", "SW TNR",
+          "this flag will enable sw based TNR.",
+          DEFAULT_PROP_CAMERA_SW_TNR,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+#endif // FEATURE_SW_TNR
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),

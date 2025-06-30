@@ -48,6 +48,8 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
+#include <glib.h>
+#include <json-glib/json-glib.h>
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
@@ -55,7 +57,7 @@
  * Default models path and labels path
  */
 #define DEFAULT_TFLITE_OBJECT_DETECTION_MODEL \
-    "/etc/models/YOLOv8-Detection-Quantized.tflite"
+    "/etc/models/yolov8_det_quantized.tflite"
 #define DEFAULT_OBJECT_DETECTION_LABELS "/etc/labels/yolov8.labels"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
     "/etc/models/inception_v3_quantized.tflite"
@@ -66,6 +68,11 @@
 #define DEFAULT_TFLITE_SEGMENTATION_MODEL \
     "/etc/models/deeplabv3_plus_mobilenet_quantized.tflite"
 #define DEFAULT_SEGMENTATION_LABELS "/etc/labels/deeplabv3_resnet50.labels"
+
+/**
+ * Default path of config file
+ */
+#define DEFAULT_CONFIG_FILE "/etc/configs/config-parallel-inference.json"
 
 /**
  * Length of string for when models path and labels path need to be
@@ -79,8 +86,8 @@
  * Default settings of camera output resolution, Scaling of camera output
  * will be done in qtimlvconverter based on model input size
  */
-#define DEFAULT_CAMERA_OUTPUT_WIDTH 1920
-#define DEFAULT_CAMERA_OUTPUT_HEIGHT 1080
+#define DEFAULT_CAMERA_OUTPUT_WIDTH 1280
+#define DEFAULT_CAMERA_OUTPUT_HEIGHT 720
 #define SECONDARY_CAMERA_OUTPUT_WIDTH 1280
 #define SECONDARY_CAMERA_OUTPUT_HEIGHT 720
 #define DEFAULT_CAMERA_FRAME_RATE 30
@@ -95,13 +102,14 @@
  * Default constants to dequantize values for classification stream
  */
 #define DEFAULT_CONSTANTS_CLASSIFICATION \
-    "Mobilenet,q-offsets=<-95.0>,q-scales=<0.18740029633045197>;"
+    "Inceptionv3,q-offsets=<38.0>,q-scales=<0.17039915919303894>;"
 
 /**
  * Default constants to dequantize values for object detection stream
  */
 #define DEFAULT_CONSTANTS_OBJECT_DETECTION \
-    "YOLOv8,q-offsets=<21.0, 0.0, 0.0>,q-scales=<3.093529462814331, 0.00390625, 1.0>;"
+    "YOLOv8,q-offsets=<21.0, 0.0, 0.0>,\
+    q-scales=<3.0546178817749023, 0.003793874057009816, 1.0>;"
 
 /**
  * Default constants to dequantize values for pose detection stream
@@ -359,7 +367,7 @@ GstPipelineData *create_ml_pipeline_data (char **options_models,
  * @param appctx Application Context object
  */
 static void
-gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
 {
   // If specific pointer is not NULL, unref it
   if (appctx->mloop != NULL) {
@@ -449,6 +457,12 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
 
   if (options->pipeline_data != NULL) {
     g_free ((gpointer)options->pipeline_data);
+  }
+
+  if (config_file != NULL &&
+      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
+    g_free ((gpointer)config_file);
+    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -1000,6 +1014,122 @@ error_clean_pipeline:
   return FALSE;
 }
 
+/**
+ * Parse JSON file to read input parameters
+ *
+ * @param config_file Path to config file
+ * @param options Application specific options
+ */
+gint
+parse_json (gchar * config_file, GstAppOptions * options)
+{
+  JsonParser *parser = NULL;
+  JsonNode *root = NULL;
+  JsonObject *root_obj = NULL;
+  GError *error = NULL;
+
+  parser = json_parser_new ();
+
+  // Load the JSON file
+  if (!json_parser_load_from_file (parser, config_file, &error)) {
+    g_printerr ("Unable to parse JSON file: %s\n", error->message);
+    g_error_free (error);
+    g_object_unref (parser);
+    return -1;
+  }
+
+  // Get the root object
+  root = json_parser_get_root (parser);
+  if (!JSON_NODE_HOLDS_OBJECT (root)) {
+    gst_printerr ("Failed to load json object\n");
+    g_object_unref (parser);
+    return -1;
+  }
+
+  root_obj = json_node_get_object (root);
+
+  gboolean camera_is_available = is_camera_available ();
+
+
+  if (camera_is_available) {
+    if (json_object_has_member (root_obj, "camera"))
+      options->camera_type = json_object_get_int_member (root_obj, "camera");
+  }
+
+  if (json_object_has_member (root_obj, "file-path")) {
+    options->file_path =
+        g_strdup (json_object_get_string_member (root_obj, "file-path"));
+  }
+
+  if (json_object_has_member (root_obj, "rtsp-ip-port")) {
+    options->rtsp_ip_port =
+        g_strdup (json_object_get_string_member (root_obj, "rtsp-ip-port"));
+  }
+
+  if (json_object_has_member (root_obj, "detection-model")) {
+    options->object_detection_model_path =
+        g_strdup (json_object_get_string_member (root_obj, "detection-model"));
+  }
+
+  if (json_object_has_member (root_obj, "detection-labels")) {
+    options->object_detection_labels_path =
+        g_strdup (json_object_get_string_member (root_obj, "detection-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "detection-constants")) {
+    options->object_detection_constants =
+        g_strdup (json_object_get_string_member (root_obj, "detection-constants"));
+  }
+
+  if (json_object_has_member (root_obj, "pose-model")) {
+    options->pose_detection_model_path =
+        g_strdup (json_object_get_string_member (root_obj, "pose-model"));
+  }
+
+  if (json_object_has_member (root_obj, "pose-labels")) {
+    options->pose_detection_labels_path =
+        g_strdup (json_object_get_string_member (root_obj, "pose-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "pose-constants")) {
+    options->pose_detection_constants =
+        g_strdup (json_object_get_string_member (root_obj, "pose-constants"));
+  }
+
+  if (json_object_has_member (root_obj, "segmentation-model")) {
+    options->segmentation_model_path =
+        g_strdup (json_object_get_string_member (root_obj, "segmentation-model"));
+  }
+
+  if (json_object_has_member (root_obj, "segmentation-labels")) {
+    options->segmentation_labels_path =
+        g_strdup (json_object_get_string_member (root_obj, "segmentation-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "segmentation-constants")) {
+    options->segmentation_constants =
+        g_strdup (json_object_get_string_member (root_obj, "segmentation-constants"));
+  }
+
+  if (json_object_has_member (root_obj, "classification-model")) {
+    options->classification_model_path =
+        g_strdup (json_object_get_string_member (root_obj, "classification-model"));
+  }
+
+  if (json_object_has_member (root_obj, "classification-labels")) {
+    options->classification_labels_path =
+        g_strdup (json_object_get_string_member (root_obj, "classification-labels"));
+  }
+
+  if (json_object_has_member (root_obj, "classification-constants")) {
+    options->classification_constants =
+        g_strdup (json_object_get_string_member (root_obj, "classification-constants"));
+  }
+
+  g_object_unref (parser);
+  return 0;
+}
+
 gint
 main (gint argc, gchar * argv[])
 {
@@ -1007,11 +1137,12 @@ main (gint argc, gchar * argv[])
   GMainLoop *mloop = NULL;
   GstElement *pipeline = NULL;
   const gchar *app_name = NULL;
+  gchar *config_file = NULL;
   GstAppContext appctx = {};
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
   GOptionContext *ctx = NULL;
-  gchar help_description[2048];
+  gchar help_description[4096];
   GstAppOptions options = {};
 
   options.camera_type = GST_CAMERA_TYPE_NONE;
@@ -1047,169 +1178,94 @@ main (gint argc, gchar * argv[])
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
-  GOptionEntry camera_entry = {};
-
   gboolean camera_is_available = is_camera_available ();
-
-  if (camera_is_available) {
-    GOptionEntry temp_camera_entry = {
-      "camera", 'c', 0, G_OPTION_ARG_INT,
-      &options.camera_type,
-      "Select (0) for Primary Camera and (1) for secondary one.\n"
-      "      invalid camera id will switch to primary camera",
-      "0 or 1"
-    };
-
-    camera_entry = temp_camera_entry;
-  } else {
-    GOptionEntry temp_camera_entry = { NULL };
-
-    camera_entry = temp_camera_entry;
-  }
-
   // Structure to define the user options selection
   GOptionEntry entries[] = {
-    { "file-path", 's', 0, G_OPTION_ARG_STRING,
-      &options.file_path,
-      "File source path",
-      "/PATH"
+    { "config-file", 0, 0, G_OPTION_ARG_STRING,
+      &config_file,
+      "Path to config file\n",
+      NULL
     },
-    { "rtsp-ip-port", 0, 0, G_OPTION_ARG_STRING,
-      &options.rtsp_ip_port,
-      "Use this parameter to provide the rtsp input.\n"
-      "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
-      "      eg: rtsp://192.168.1.110:8554/live.mkv",
-      "rtsp://<ip>:<port>/<stream>"
-    },
-    { "object-detection-model-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.object_detection_model_path,
-      "Path to inference model used by the object detection module \n"
-      "      for processing of incoming tensors."
-      "      Default model: " DEFAULT_TFLITE_OBJECT_DETECTION_MODEL,
-      "/MODEL"
-    },
-    { "object-detection-labels-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.object_detection_labels_path,
-      "Path to labels used by the object detection module \n"
-      "      for processing of incoming tensors."
-      "      Default labels: " DEFAULT_OBJECT_DETECTION_LABELS,
-      "/LABELS"
-    },
-    { "object-detection-constants", 0, 0, G_OPTION_ARG_STRING,
-      &options.object_detection_constants,
-      "Constants, offsets and coefficients used by the object detection module \n"
-      "      for post-processing of incoming tensors."
-      " Applicable only for some modules\n"
-      "      Default constants: \"" DEFAULT_CONSTANTS_OBJECT_DETECTION "\"",
-      "/CONSTANTS"
-    },
-    { "pose-detection-model-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.pose_detection_model_path,
-      "Path to inference model used by the pose detection module \n"
-      "      for processing of incoming tensors."
-      "      Default constants: " DEFAULT_TFLITE_POSE_DETECTION_MODEL,
-      "/MODEL"
-    },
-    { "pose-detection-labels-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.pose_detection_labels_path,
-      "Path to labels used by the pose detection module \n"
-      "      for processing of incoming tensors."
-      "      Default constants: " DEFAULT_POSE_DETECTION_LABELS,
-      "/LABELS"
-    },
-    { "pose-detection-constants", 0, 0, G_OPTION_ARG_STRING,
-      &options.pose_detection_constants,
-      "Constants, offsets and coefficients used by the pose detection module \n"
-      "      for post-processing of incoming tensors."
-      " Applicable only for some modules\n"
-      "      Default constants: \"" DEFAULT_CONSTANTS_POSE_DETECTION "\"",
-      "/CONSTANTS"
-    },
-    { "segmentation-model-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.segmentation_model_path,
-      "Path to inference model used by the segmentation module \n"
-      "      for processing of incoming tensors."
-      "      Default model: " DEFAULT_TFLITE_SEGMENTATION_MODEL,
-      "/MODEL"
-    },
-    { "segmentation-labels-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.segmentation_labels_path,
-      "Path to labels used by the segmentation module \n"
-      "      for processing of incoming tensors."
-      "      Default labels: " DEFAULT_SEGMENTATION_LABELS,
-      "/LABELS"
-    },
-    { "segmentation-constants", 0, 0, G_OPTION_ARG_STRING,
-      &options.segmentation_constants,
-      "Constants, offsets and coefficients used by the segmentation module \n"
-      "      for post-processing of incoming tensors."
-      " Applicable only for some modules\n"
-      "      Default constants: \"" DEFAULT_CONSTANTS_SEGMENTATION "\"",
-      "/CONSTANTS"
-    },
-    { "classification-model-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.classification_model_path,
-      "Path to inference model used by the classification module \n"
-      "      for processing of incoming tensors."
-      "      Default model: " DEFAULT_TFLITE_CLASSIFICATION_MODEL,
-      "/MODEL"
-    },
-    { "classification-labels-path", 0, 0, G_OPTION_ARG_STRING,
-      &options.classification_labels_path,
-      "Path to labels used by the classification module \n"
-      "      for processing of incoming tensors."
-      "      Default labels: " DEFAULT_CLASSIFICATION_LABELS,
-      "/LABELS"
-    },
-    { "classification-constants", 0, 0, G_OPTION_ARG_STRING,
-      &options.classification_constants,
-      "Constants, offsets and coefficients used by the classification module \n"
-      "      for post-processing of incoming tensors."
-      " Applicable only for some modules\n"
-      "      Default constants: \"" DEFAULT_CONSTANTS_CLASSIFICATION "\"",
-      "/CONSTANTS"
-    },
-    camera_entry,
     { NULL }
   };
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
 
-  gchar camera_description[255] = {};
+  gchar camera_description[128] = {};
 
   if (camera_is_available) {
     snprintf (camera_description, sizeof (camera_description),
-      "  %s --camera=0\n",
-      app_name);
+      "  camera: 0 or 1\n"
+      "      Select (0) for Primary Camera and (1) for secondary one.\n"
+    );
   }
 
-  snprintf (help_description, 2047, "\nExample:\n"
-      "  %s\n"
-      "  %s --file-path=\"/etc/media/video.mp4\"\n"
-      "  %s --rtsp-ip-port=\"rtsp://<ip>:<port>/<stream>\"\n"
-      "\nThis Sample App demonstrates Classification, Segmemtation"
-      "Object Detection, Pose Detection On Live Stream "
-      "and output 4 Parallel Stream.\n\n"
-      "Default Path for model and labels used are as below:\n"
-      "  ------------------------------------------------------------"
-      "--------------------------------------------\n"
-      "  |Algorithm         %-50s  %-32s|\n"
-      "  ------------------------------------------------------------"
-      "--------------------------------------------\n"
-      "  |Object detection  %-50s  %-32s|\n"
-      "  |Pose estimation   %-50s  %-32s|\n"
-      "  |Segmentation      %-50s  %-32s|\n"
-      "  |Classification    %-50s  %-32s|\n"
-      "  ------------------------------------------------------------"
-      "--------------------------------------------\n"
-      "\nTo use your own model and labels replace at the default paths\n",
-      camera_description,
-      app_name, app_name, "Model", "Labels",
-      DEFAULT_TFLITE_OBJECT_DETECTION_MODEL, DEFAULT_OBJECT_DETECTION_LABELS,
-      DEFAULT_TFLITE_POSE_DETECTION_MODEL,DEFAULT_POSE_DETECTION_LABELS,
-      DEFAULT_TFLITE_SEGMENTATION_MODEL, DEFAULT_SEGMENTATION_LABELS,
-      DEFAULT_TFLITE_CLASSIFICATION_MODEL, DEFAULT_CLASSIFICATION_LABELS);
-  help_description[2047] = '\0';
+  snprintf (help_description, 4095, "\nExample:\n"
+    "  %s --config-file=%s\n"
+    "\nThis Sample App demonstrates Classification, Segmemtation, Object "
+    "Detection, Pose Detection On Live Stream and output 4 Parallel Stream.\n"
+    "\nConfig file Fields:\n"
+    "%s"
+    "  file-path: \"/PATH\"\n"
+    "      File source path\n"
+    "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
+    "      Use this parameter to provide the rtsp input.\n"
+    "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
+    "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
+    "  detection-model: \"/PATH\"\n"
+    "      Path to Object Detection model\n"
+    "      Default Object Detection model: "
+    DEFAULT_TFLITE_OBJECT_DETECTION_MODEL"\n"
+    "  detection-labels: \"/PATH\"\n"
+    "      Path to Object Detection labels\n"
+    "      Default Object Detection labels: "
+    DEFAULT_OBJECT_DETECTION_LABELS"\n"
+    "  detection-constants: \"CONSTANTS\"\n"
+    "      Constants used by the Object Detection module\n"
+    "      for processing of incoming tensors.\n"
+    "      Default Object Detection constants: "
+    DEFAULT_CONSTANTS_OBJECT_DETECTION"\n"
+    "  pose-model: \"/PATH\"\n"
+    "      Path to Pose Detection model\n"
+    "      Default Pose Detection model: "
+    DEFAULT_TFLITE_POSE_DETECTION_MODEL"\n"
+    "  pose-labels: \"/PATH\"\n"
+    "      Path to Pose Detection labels\n"
+    "      Default Pose Detection labels: "
+    DEFAULT_POSE_DETECTION_LABELS"\n"
+    "  pose-constants: \"CONSTANTS\"\n"
+    "      Constants used by the Pose Detection module\n"
+    "      for processing of incoming tensors.\n"
+    "      Default Pose Detection constants: "
+    DEFAULT_CONSTANTS_POSE_DETECTION"\n"
+    "  segmentation-model: \"/PATH\"\n"
+    "      Path to Segmentation model\n"
+    "      Default Segmentation model: "
+    DEFAULT_TFLITE_SEGMENTATION_MODEL"\n"
+    "  segmentation-labels: \"/PATH\"\n"
+    "      Path to Segmentation labels\n"
+    "      Default Segmentation labels: "
+    DEFAULT_SEGMENTATION_LABELS"\n"
+    "  segmentation-constants: \"CONSTANTS\"\n"
+    "      Constants used by the Segmentation module\n"
+    "      for processing of incoming tensors.\n"
+    "      Default Segmentation constants: "
+    DEFAULT_CONSTANTS_SEGMENTATION"\n"
+    "  classification-model: \"/PATH\"\n"
+    "      Path to Classification model\n"
+    "      Default Classification model: "
+    DEFAULT_TFLITE_CLASSIFICATION_MODEL"\n"
+    "  classification-labels: \"/PATH\"\n"
+    "      Path to Classification labels\n"
+    "      Default Classification labels: "
+    DEFAULT_CLASSIFICATION_LABELS"\n"
+    "  classification-constants: \"CONSTANTS\"\n"
+    "      Constants used by the Classification module\n"
+    "      for processing of incoming tensors.\n"
+    "      Default Classification constants: "
+    DEFAULT_CONSTANTS_CLASSIFICATION"\n",
+    app_name, DEFAULT_CONFIG_FILE, camera_description);
+  help_description[4095] = '\0';
 
   // Parse command line entries.
   if ((ctx = g_option_context_new (help_description)) != NULL) {
@@ -1226,17 +1282,33 @@ main (gint argc, gchar * argv[])
       g_printerr ("Failed to parse command line options: %s!\n",
           GST_STR_NULL (error->message));
       g_clear_error (&error);
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EFAULT;
     } else if (!success && (NULL == error)) {
       g_printerr ("Initializing: Unknown error!\n");
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EFAULT;
     }
   } else {
     g_printerr ("Failed to create options context!\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -EFAULT;
+  }
+
+  // Choose default config file if config file not provided
+  if (config_file == NULL) {
+    config_file = DEFAULT_CONFIG_FILE;
+  }
+
+  if (!file_exists (config_file)) {
+    g_printerr ("Invalid config file path: %s\n", config_file);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
+  if (parse_json (config_file, &options) != 0) {
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
   }
 
   // Check for input source
@@ -1246,7 +1318,7 @@ main (gint argc, gchar * argv[])
     g_print ("TARGET Can only support file source and RTSP source.\n");
     if (options.file_path == NULL && options.rtsp_ip_port == NULL) {
       g_print ("User need to give proper input file as source\n");
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EINVAL;
     }
   }
@@ -1277,7 +1349,7 @@ main (gint argc, gchar * argv[])
         "    SECONDARY %d\n",
         GST_CAMERA_TYPE_PRIMARY,
         GST_CAMERA_TYPE_SECONDARY);
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
 
@@ -1289,7 +1361,7 @@ main (gint argc, gchar * argv[])
   // Terminate if more than one source are there.
   if (options.use_file + options.use_camera + options.use_rtsp > 1) {
     g_printerr ("Select anyone source type either Camera or File or RTSP\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   }
 
@@ -1320,13 +1392,13 @@ main (gint argc, gchar * argv[])
   for (gint i = 0; i < GST_PIPELINE_CNT; i++) {
     if (!file_exists (options.pipeline_data[i].model)) {
       g_printerr ("File does not exist: %s\n", options.pipeline_data[i].model);
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EINVAL;
     }
 
     if (!file_exists (options.pipeline_data[i].labels)) {
       g_printerr ("File does not exist: %s\n", options.pipeline_data[i].labels);
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EINVAL;
     }
   }
@@ -1334,7 +1406,7 @@ main (gint argc, gchar * argv[])
   if (options.use_file) {
     if (!file_exists (options.file_path)) {
       g_print ("Invalid file source path: %s\n", options.file_path);
-      gst_app_context_free (&appctx, &options);
+      gst_app_context_free (&appctx, &options, config_file);
       return -EINVAL;
     }
   }
@@ -1346,7 +1418,7 @@ main (gint argc, gchar * argv[])
   pipeline = gst_pipeline_new (app_name);
   if (!pipeline) {
     g_printerr ("ERROR: failed to create pipeline.\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -1;
   }
 
@@ -1356,14 +1428,14 @@ main (gint argc, gchar * argv[])
   ret = create_pipe (&appctx, &options);
   if (!ret) {
     g_printerr ("ERROR: failed to create GST pipe.\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -1;
   }
 
   // Initialize main loop.
   if ((mloop = g_main_loop_new (NULL, FALSE)) == NULL) {
     g_printerr ("ERROR: Failed to create Main loop!\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -1;
   }
   appctx.mloop = mloop;
@@ -1372,7 +1444,7 @@ main (gint argc, gchar * argv[])
   // Bus is message queue for getting callback from gstreamer pipeline
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
-    gst_app_context_free (&appctx, &options);
+    gst_app_context_free (&appctx, &options, config_file);
     return -1;
   }
 
@@ -1425,7 +1497,7 @@ error:
   gst_element_set_state (pipeline, GST_STATE_NULL);
 
   g_print ("Destroy pipeline\n");
-  gst_app_context_free (&appctx, &options);
+  gst_app_context_free (&appctx, &options, config_file);
 
   g_print ("gst_deinit\n");
   gst_deinit ();

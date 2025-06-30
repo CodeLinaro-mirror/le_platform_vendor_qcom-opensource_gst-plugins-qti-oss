@@ -238,8 +238,8 @@ create_pipe (GstVideoAppContext *appctx)
   appctx->plugins = g_list_append (appctx->plugins, vsink);
 
   // Set decoder properties
-  g_object_set (G_OBJECT (vdecoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
-  g_object_set (G_OBJECT (vdecoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
+  g_object_set (G_OBJECT (vdecoder), "capture-io-mode", "dmabuf", NULL);
+  g_object_set (G_OBJECT (vdecoder), "output-io-mode", "dmabuf", NULL);
 
   // Set location
   g_object_set (G_OBJECT (filesrc), "location", appctx->input_file, NULL);
@@ -334,7 +334,7 @@ main (gint argc, gchar *argv[])
     { "input_file", 'i', 0,
       G_OPTION_ARG_FILENAME, &appctx->input_file,
       "Input Filename - i/p mp4 file path and name",
-      "e.g. -i /opt/<file_name>.mp4"
+      "e.g. -i /etc/media/<file_name>.mp4"
     },
     { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };

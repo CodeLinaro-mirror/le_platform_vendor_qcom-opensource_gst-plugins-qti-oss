@@ -1,5 +1,9 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#!/usr/bin/env python3
+
+################################################################################
+# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+################################################################################
 
 import os
 import sys
@@ -11,28 +15,28 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
-DESCRIPTION = """
+DEFAULT_RTSP_SRC = "rtsp://127.0.0.1:8900/live"
+
+# Configurations for Detection
+DEFAULT_DETECTION_MODEL = "/etc/models/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE = "yolov8"
+DEFAULT_DETECTION_LABELS = "/etc/labels/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+DESCRIPTION = f"""
 The application receives an RTSP stream as source, decodes it, uses YOLOv8
 TFLite model to identify the object in scene from camera stream and overlay
 the bounding boxes over the detected objects. The results are shown on the
 display.
 
 The default file paths in the python script are as follows:
-- Detection model (YOLOv8): /opt/data/YoloV8N_Detection_Quantized.tflite
-- Detection labels: /opt/data/yolov8n.labels
+- Detection model (YOLOv8): {DEFAULT_DETECTION_MODEL}
+- Detection labels:         {DEFAULT_DETECTION_LABELS}
 
 To override the default settings,
 please configure the corresponding module and constants as well.
 """
-
-DEFAULT_RTSP_SRC = "rtsp://127.0.0.1:8900/live"
-
-# Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
-DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
-DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-    q-scales=<3.093529462814331,0.00390625,1.0>;"
 
 eos_received = False
 def create_element(factory_name, name):
@@ -61,23 +65,14 @@ def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        add_help=False,
+        description=DESCRIPTION,
         formatter_class=type(
-            "CustomFormatter",
-            (
-                argparse.ArgumentDefaultsHelpFormatter,
-                argparse.RawTextHelpFormatter,
-            ),
-            {},
-        ),
+            'CustomFormatter',
+            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
+            {}
+        )
     )
-    parser.add_argument(
-        "-h",
-        "--help",
-        action="help",
-        default=argparse.SUPPRESS,
-        help=DESCRIPTION,
-    )
+
     parser.add_argument(
         "--rtsp", type=str, default=DEFAULT_RTSP_SRC,
         help="RTSP URL"
@@ -124,6 +119,7 @@ def construct_pipeline(pipe):
         "capsfilter_0": create_element("capsfilter", "rtph264depaycaps"),
         "h264parse":    create_element("h264parse", "h264parser"),
         "v4l2h264dec":  create_element("v4l2h264dec", "v4l2h264decoder"),
+        "deccaps":      create_element("capsfilter", "deccaps"),
         "tee":          create_element("tee", "split"),
         "mlvconverter": create_element("qtimlvconverter", "converter"),
         "queue_0":      create_element("queue", "queue0"),
@@ -150,8 +146,12 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse"], "config-interval", "1")
 
-    Gst.util_set_object_arg(elements["v4l2h264dec"], "capture-io-mode", "5")
-    Gst.util_set_object_arg(elements["v4l2h264dec"], "output-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264dec"], "capture-io-mode", "dmabuf")
+    Gst.util_set_object_arg(elements["v4l2h264dec"], "output-io-mode", "dmabuf")
+
+    Gst.util_set_object_arg(
+        elements["deccaps"], "caps", "video/x-raw,format=NV12"
+    )
 
     Gst.util_set_object_arg(elements["mltflite"], "delegate", "external")
     Gst.util_set_object_arg(
@@ -193,7 +193,7 @@ def construct_pipeline(pipe):
     # fmt: off
     link_orders = [
         [
-            "rtph264depay", "capsfilter_0", "h264parse", "v4l2h264dec",
+            "rtph264depay", "capsfilter_0", "h264parse", "v4l2h264dec", "deccaps",
             "tee", "metamux", "overlay", "queue_4", "display"
         ],
         [
@@ -262,11 +262,23 @@ def handle_interrupt_signal(pipe, loop):
         quit_mainloop(loop)
     return GLib.SOURCE_CONTINUE
 
+def is_linux():
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "Linux" in line:
+                    return True
+    except FileNotFoundError:
+        return False
+    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+
+    # Set the environment
+    if is_linux():
+        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     Gst.init(None)
 

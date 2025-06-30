@@ -24,7 +24,7 @@
 gboolean
 file_exists (const gchar * path)
 {
-  FILE *fp = fopen (path, "r+");
+  FILE *fp = fopen (path, "r");
   if (fp) {
     fclose (fp);
     return TRUE;
@@ -60,7 +60,7 @@ gboolean
 get_active_display_mode (gint * width, gint * height)
 {
   gchar line[128];
-  FILE *fp = fopen ("/sys/class/drm/card0-DSI-1/modes", "rb");
+  FILE *fp = fopen ("/sys/class/drm/card0-HDMI-A-1/modes", "rb");
   if (!fp) {
     return FALSE;
   }

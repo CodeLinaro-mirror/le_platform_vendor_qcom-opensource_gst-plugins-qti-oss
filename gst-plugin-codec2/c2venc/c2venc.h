@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -66,8 +66,6 @@ struct _GstC2VEncoder {
 
   /// Negotiated input resolution, format, etc.
   GstVideoCodecState   *instate;
-  /// TRUE if the negotiated input format is UBWC.
-  gboolean             isubwc;
   /// TRUE if the negotiated input subformat is heif.
   gboolean             isheif;
   /// TRUE if the negotiated input feature is GBM.
@@ -84,15 +82,16 @@ struct _GstC2VEncoder {
   /// List of incomplete buffers.
   GstBufferList        *incomplete_buffers;
 
-  /// Number of subframes contained in one superframe.
-  guint32              n_super_frames;
+  /// Number of subframes contained in one buffer.
+  guint32              n_subframes;
 
   /// Properties
   GstC2VideoRotate     rotate;
+  GstC2VideoFlip       flip;
   GstC2RateControl     control_rate;
   guint32              target_bitrate;
 
-  guint32              idr_interval;
+  gint                 idr_interval;
   GstC2IntraRefresh    intra_refresh;
   guint32              bframes;
 

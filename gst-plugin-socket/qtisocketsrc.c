@@ -134,6 +134,7 @@ gst_socketsrc_buffer_pool_class_init (GstSocketSrcBufferPoolClass * klass)
 static void
 gst_socketsrc_buffer_pool_init (GstSocketSrcBufferPool * pool)
 {
+  (void) pool;
   GST_DEBUG ("Initializing pool!");
 }
 
@@ -420,16 +421,6 @@ gst_socket_src_start (GstBaseSrc * bsrc)
 }
 
 static gboolean
-gst_socket_src_stop (GstBaseSrc * bsrc)
-{
-  GstFdSocketSrc *src = GST_SOCKET_SRC (bsrc);
-
-  gst_socket_src_socket_release (src);
-
-  return TRUE;
-}
-
-static gboolean
 gst_socket_src_query (GstBaseSrc * basesrc, GstQuery * query)
 {
   return GST_BASE_SRC_CLASS (parent_class)->query (basesrc, query);
@@ -457,6 +448,68 @@ gst_socket_src_buffer_release (GstBufferReleaseData * release_data)
   g_free (release_data);
 }
 
+static void
+gst_socket_src_flush_socket_queue (GstFdSocketSrc * src)
+{
+  gint ret;
+
+  do {
+    struct pollfd poll_fd;
+
+    poll_fd.fd = src->client_sock;
+    poll_fd.events = POLLIN;
+
+    ret = poll (&poll_fd, 1, 0);
+
+    if (poll_fd.revents & POLLHUP ||
+        poll_fd.revents & POLLERR) {
+      break;
+    }
+
+    if (ret > 0) {
+      GstBufferReleaseData * release_data = g_malloc0 (sizeof (GstBufferReleaseData));
+      GstPayloadInfo pl_info = {
+        .mem_block_info = g_ptr_array_new (),
+        .protection_metadata_info = g_ptr_array_new (),
+        .roi_meta_info = g_ptr_array_new (),
+        .class_meta_info = g_ptr_array_new (),
+        .lm_meta_info = g_ptr_array_new ()
+      };
+
+      gint fds[GST_MAX_MEM_BLOCKS] = {0};
+
+      pl_info.fds = fds;
+
+      release_data->socket = src->client_sock;
+
+      if (receive_socket_message (src->client_sock, &pl_info, 0) < 0) {
+        g_free (release_data);
+        free_pl_struct (&pl_info);
+        break;
+      }
+
+      if (pl_info.fd_count != NULL) {
+        release_data->n_fds = pl_info.fd_count->n_fds;
+      } else {
+        release_data->n_fds = pl_info.mem_block_info->len;
+      }
+
+      if (GST_PL_INFO_IS_MESSAGE (&pl_info, MESSAGE_EOS)) {
+        g_free (release_data);
+        free_pl_struct (&pl_info);
+        break;
+      }
+
+      for (guint i = 0; i < pl_info.mem_block_info->len; i++) {
+        release_data->buf_id[i] = pl_info.buffer_info->buf_id[i];
+      }
+
+      gst_socket_src_buffer_release (release_data);
+    }
+
+  } while (ret > 0);
+}
+
 static GstFlowReturn
 gst_socket_src_fill_buffer (GstFdSocketSrc * src, GstBuffer ** outbuf)
 {
@@ -466,7 +519,10 @@ gst_socket_src_fill_buffer (GstFdSocketSrc * src, GstBuffer ** outbuf)
   GstBufferReleaseData * release_data = g_malloc0 (sizeof (GstBufferReleaseData));
   GstPayloadInfo pl_info = {
       .mem_block_info = g_ptr_array_new (),
-      .protection_metadata_info = g_ptr_array_new ()
+      .protection_metadata_info = g_ptr_array_new (),
+      .roi_meta_info = g_ptr_array_new (),
+      .class_meta_info = g_ptr_array_new (),
+      .lm_meta_info = g_ptr_array_new ()
   };
 
   gint fds[GST_MAX_MEM_BLOCKS] = {0};
@@ -475,7 +531,7 @@ gst_socket_src_fill_buffer (GstFdSocketSrc * src, GstBuffer ** outbuf)
   pl_info.fds = fds;
 
   release_data->socket = src->client_sock;
-  if (receive_socket_message (src->client_sock, &pl_info, 0) < 0) {
+  if (receive_socket_message (src->client_sock, &pl_info, 0) <= 0) {
     g_free (release_data);
     free_pl_struct (&pl_info);
     return GST_FLOW_ERROR;
@@ -646,6 +702,139 @@ gst_socket_src_fill_buffer (GstFdSocketSrc * src, GstBuffer ** outbuf)
         (GstVideoFormat) frame_pl->format, frame_pl->width,
         frame_pl->height, frame_pl->n_planes,
         frame_pl->offset, frame_pl->stride);
+
+      for (guint idx = 0; idx < pl_info.roi_meta_info->len; idx++) {
+        GstVideoRoiMetaPayload *roi_meta_pl =
+            (GstVideoRoiMetaPayload *) g_ptr_array_index (
+                pl_info.roi_meta_info, idx);
+
+        GstVideoRegionOfInterestMeta *roi_meta =
+            gst_buffer_add_video_region_of_interest_meta_id (
+                gstbuffer,
+                g_quark_from_string (roi_meta_pl->label),
+                roi_meta_pl->x,
+                roi_meta_pl->y,
+                roi_meta_pl->w,
+                roi_meta_pl->h);
+
+        roi_meta->id = roi_meta_pl->id;
+        roi_meta->parent_id = roi_meta_pl->parent_id;
+
+        if (roi_meta_pl->det_size) {
+          GstStructure *param =
+              gst_structure_from_string (roi_meta_pl->det_meta, NULL);
+          if (param) {
+            gst_video_region_of_interest_meta_add_param (roi_meta, param);
+          }
+          else {
+            GST_WARNING_OBJECT (src,
+                "Parsing detection meta from string failed!");
+          }
+        }
+
+        if (roi_meta_pl->xtraparams_size) {
+          GstStructure *param =
+              gst_structure_from_string (roi_meta_pl->xtraparams, NULL);
+          if (param) {
+            gst_video_region_of_interest_meta_add_param (roi_meta, param);
+          }
+          else {
+            GST_WARNING_OBJECT (src,
+                "Parsing detection xtraparams from string failed!");
+          }
+        }
+      }
+
+      for (guint idx = 0; idx < pl_info.class_meta_info->len; idx++) {
+        GstVideoClassMetaPayload *class_meta_pl =
+            (GstVideoClassMetaPayload *) g_ptr_array_index (
+                pl_info.class_meta_info, idx);
+        GstVideoClassificationMeta *class_meta = NULL;
+
+        GArray *labels = g_array_sized_new (FALSE, FALSE,
+            sizeof (GstClassLabel), class_meta_pl->size);
+        g_array_set_size (labels, class_meta_pl->size);
+
+        for (guint i = 0; i < class_meta_pl->size; i++) {
+          GstClassLabel *label = &(g_array_index (labels, GstClassLabel, i));
+          label->name = g_quark_from_string(class_meta_pl->labels[i].name);
+          label->confidence = class_meta_pl->labels[i].confidence;
+          label->color = class_meta_pl->labels[i].color;
+
+          if (class_meta_pl->labels[i].xtraparams_size) {
+            GstStructure *param =
+                gst_structure_from_string (
+                    class_meta_pl->labels[i].xtraparams, NULL);
+            if (param) {
+              label->xtraparams = param;
+            }
+            else {
+              GST_WARNING_OBJECT (src,
+                  "Parsing label xtraparams from string failed!");
+            }
+          }
+        }
+
+        class_meta =
+            gst_buffer_add_video_classification_meta (gstbuffer, labels);
+
+        class_meta->id = class_meta_pl->id;
+        class_meta->parent_id = class_meta_pl->parent_id;
+      }
+
+      for (guint idx = 0; idx < pl_info.lm_meta_info->len; idx++) {
+        GstVideoLmMetaPayload *lm_meta_pl =
+            (GstVideoLmMetaPayload *) g_ptr_array_index (
+                pl_info.lm_meta_info, idx);
+        GstVideoLandmarksMeta *lm_meta = NULL;
+
+        GArray *kps = g_array_sized_new (FALSE, FALSE,
+            sizeof (GstVideoKeypoint), lm_meta_pl->kps_size);
+
+        g_array_set_size (kps, lm_meta_pl->kps_size);
+
+        for (guint i = 0; i < lm_meta_pl->kps_size; i++) {
+          GstVideoKeypoint *kp = &(g_array_index (kps, GstVideoKeypoint, i));
+          kp->name = g_quark_from_string(lm_meta_pl->kps[i].name);
+          kp->confidence = lm_meta_pl->kps[i].confidence;
+          kp->color = lm_meta_pl->kps[i].color;
+          kp->x = lm_meta_pl->kps[i].x;
+          kp->y = lm_meta_pl->kps[i].y;
+        }
+
+        GArray *links = g_array_sized_new (FALSE, FALSE,
+            sizeof (GstVideoKeypointLink), lm_meta_pl->links_size);
+        g_array_set_size (links, lm_meta_pl->links_size);
+
+        for (guint i = 0; i < lm_meta_pl->links_size; i++) {
+          GstVideoKeypointLink *l =
+              &(g_array_index (links, GstVideoKeypointLink, i));
+          l->s_kp_idx = lm_meta_pl->links[i].s_kp_idx;
+          l->d_kp_idx = lm_meta_pl->links[i].d_kp_idx;
+        }
+
+        lm_meta =
+            gst_buffer_add_video_landmarks_meta (
+                gstbuffer,
+                lm_meta_pl->confidence,
+                kps,
+                links);
+
+        lm_meta->id = lm_meta_pl->id;
+        lm_meta->parent_id = lm_meta_pl->parent_id;
+
+        if (lm_meta_pl->xtraparams_size) {
+          GstStructure *param =
+              gst_structure_from_string (lm_meta_pl->xtraparams, NULL);
+          if (param) {
+            lm_meta->xtraparams = param;
+          }
+          else {
+            GST_WARNING_OBJECT (src,
+                "Parsing landmarks xtraparams from string failed!");
+          }
+        }
+      }
     }
 
     // Append the FD backed memory to the newly created GstBuffer.
@@ -739,6 +928,10 @@ gst_socket_src_change_state (GstElement * element, GstStateChange transition)
   GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
 
   switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_socket_src_flush_socket_queue (src);
+      gst_socket_src_socket_release (src);
+      break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       msg_info.message = &disc_msg;
       if (send_socket_message (src->client_sock, &msg_info) < 0) {
@@ -870,7 +1063,6 @@ gst_socket_src_class_init (GstFdSocketSrcClass * klass)
   gst_element_class_add_static_pad_template (gstelement, &socket_src_template);
 
   gstbasesrc->start = GST_DEBUG_FUNCPTR (gst_socket_src_start);
-  gstbasesrc->stop = GST_DEBUG_FUNCPTR (gst_socket_src_stop);
   gstbasesrc->query = GST_DEBUG_FUNCPTR (gst_socket_src_query);
   gstbasesrc->unlock = GST_DEBUG_FUNCPTR (gst_socket_src_unlock);
 

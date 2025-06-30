@@ -67,7 +67,6 @@
 
 #include "videocomposer.h"
 
-#include <gst/video/gstqtibufferpool.h>
 #include <gst/allocators/gstqtiallocator.h>
 #include <gst/video/video-utils.h>
 #include <gst/utils/common-utils.h>
@@ -84,8 +83,8 @@ static void gst_video_composer_child_proxy_init (gpointer g_iface, gpointer data
 
 #define gst_video_composer_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
-     GST_TYPE_AGGREGATOR, G_IMPLEMENT_INTERFACE (GST_TYPE_CHILD_PROXY,
-         gst_video_composer_child_proxy_init));
+    GST_TYPE_VIDEO_AGGREGATOR, G_IMPLEMENT_INTERFACE (GST_TYPE_CHILD_PROXY,
+        gst_video_composer_child_proxy_init));
 
 #define DEFAULT_VIDEO_WIDTH         640
 #define DEFAULT_VIDEO_HEIGHT        480
@@ -100,10 +99,6 @@ G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
 
 #define GST_VCOMPOSER_MAX_QUEUE_LEN 16
 
-#ifndef GST_CAPS_FEATURE_MEMORY_GBM
-#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
-#endif
-
 #undef GST_VIDEO_SIZE_RANGE
 #define GST_VIDEO_SIZE_RANGE "(int) [ 1, 32767 ]"
 
@@ -111,11 +106,7 @@ G_DEFINE_TYPE_WITH_CODE (GstVideoComposer, gst_video_composer,
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_VIDEO_FORMATS \
-  "{ NV12, NV21, UYVY, YUY2, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
-
-static GType gst_converter_request_get_type(void);
-#define GST_TYPE_CONVERTER_REQUEST  (gst_converter_request_get_type())
-#define GST_CONVERTER_REQUEST(obj) ((GstConverterRequest *) obj)
+  "{ NV12, NV21, UYVY, YUY2, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
 
 enum
 {
@@ -123,25 +114,6 @@ enum
   PROP_ENGINE_BACKEND,
   PROP_BACKGROUND,
 };
-
-typedef struct _GstConverterRequest GstConverterRequest;
-
-struct _GstConverterRequest {
-  GstMiniObject parent;
-
-  // Composition asynchronous fence object.
-  gpointer      fence;
-
-  // List with video frames for each valid input.
-  GArray        *inframes;
-  // Output frame submitted with provided ID.
-  GstVideoFrame *outframe;
-
-  // Time it took for this request to be processed.
-  GstClockTime  time;
-};
-
-GST_DEFINE_MINI_OBJECT_TYPE (GstConverterRequest, gst_converter_request);
 
 static GstCaps *
 gst_video_composer_sink_caps (void)
@@ -152,7 +124,7 @@ gst_video_composer_sink_caps (void)
   if (g_once_init_enter (&inited)) {
     caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
 
-    if (gst_is_gbm_supported ()) {
+    if (gst_gbm_qcom_backend_is_supported ()) {
       GstCaps *tmplcaps = gst_caps_from_string (
           GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
               GST_VIDEO_FORMATS));
@@ -175,7 +147,7 @@ gst_video_composer_src_caps (void)
   if (g_once_init_enter (&inited)) {
     caps = gst_caps_from_string (GST_VIDEO_CAPS_MAKE (GST_VIDEO_FORMATS));
 
-    if (gst_is_gbm_supported ()) {
+    if (gst_gbm_qcom_backend_is_supported ()) {
       GstCaps *tmplcaps = gst_caps_from_string (
           GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
               GST_VIDEO_FORMATS));
@@ -204,183 +176,8 @@ gst_video_composer_src_template (void)
 }
 
 static void
-gst_converter_request_free (GstConverterRequest * request)
-{
-  GstVideoFrame *frame = NULL;
-  GstBuffer *buffer = NULL;
-  guint idx = 0;
-
-  for (idx = 0; idx < request->inframes->len; idx++) {
-    frame = &(g_array_index (request->inframes, GstVideoFrame, idx));
-
-    if ((buffer = frame->buffer) != NULL) {
-      gst_video_frame_unmap (frame);
-      gst_buffer_unref (buffer);
-    }
-  }
-
-  if ((buffer = request->outframe->buffer) != NULL) {
-    if (gst_buffer_get_size (buffer) != 0)
-      gst_video_frame_unmap (request->outframe);
-
-    gst_buffer_unref (buffer);
-  }
-
-  g_slice_free (GstVideoFrame, request->outframe);
-  g_array_free (request->inframes, TRUE);
-  g_slice_free (GstConverterRequest, request);
-}
-
-static GstConverterRequest *
-gst_converter_request_new (guint n_inputs)
-{
-  GstConverterRequest *request = g_slice_new0 (GstConverterRequest);
-
-  gst_mini_object_init (GST_MINI_OBJECT (request), 0,
-      GST_TYPE_CONVERTER_REQUEST, NULL, NULL,
-      (GstMiniObjectFreeFunction) gst_converter_request_free);
-
-  request->inframes =
-      g_array_sized_new (FALSE, TRUE, sizeof (GstVideoFrame), n_inputs);
-  g_array_set_size (request->inframes, n_inputs);
-
-  request->outframe = g_slice_new0 (GstVideoFrame);
-  request->time = GST_CLOCK_TIME_NONE;
-
-  return request;
-}
-
-static inline void
-gst_converter_request_unref (GstConverterRequest * request)
-{
-  gst_mini_object_unref (GST_MINI_OBJECT_CAST (request));
-}
-
-static inline void
-gst_video_composition_cleanup (GstVideoComposition * composition)
-{
-  guint idx = 0;
-
-  // Free only source/destination rectangles, frames are owned by the request.
-  for (idx = 0; idx < composition->n_blits; idx++) {
-    g_slice_free (GstVideoRectangle, composition->blits[idx].sources);
-    g_slice_free (GstVideoRectangle, composition->blits[idx].destinations);
-  }
-
-  // Free only video blits, output frame is owned by the request.
-  g_free (composition->blits);
-}
-
-static inline void
-gst_data_queue_item_free (gpointer data)
-{
-  GstDataQueueItem *item = data;
-  gst_converter_request_unref (GST_CONVERTER_REQUEST (item->object));
-  g_slice_free (GstDataQueueItem, item);
-}
-
-static inline void
-gst_buffer_transfer_video_region_of_interest_meta (GstBuffer * buffer,
-    GstVideoRectangle * source, GstVideoRectangle * destination,
-    GstVideoRegionOfInterestMeta * roimeta)
-{
-  GstVideoRegionOfInterestMeta *newmeta = NULL;
-  GList *param = NULL;
-  gdouble w_scale = 0.0, h_scale = 0.0;
-  guint num = 0, x = 0, y = 0, width = 0, height = 0;
-
-  gst_util_fraction_to_double (destination->w, source->w, &w_scale);
-  gst_util_fraction_to_double (destination->h, source->h, &h_scale);
-
-  width = roimeta->w * w_scale;
-  height = roimeta->h * h_scale;
-  x = (roimeta->x * w_scale) + destination->x;
-  y = (roimeta->y * h_scale) + destination->y;
-
-  // Add ROI meta with the actual part of the buffer filled with image data.
-  newmeta = gst_buffer_add_video_region_of_interest_meta_id (buffer,
-      roimeta->roi_type, x, y, width, height);
-  newmeta->id = roimeta->id;
-
-  // Transfer all meta derived from the ROI meta.
-  for (param = roimeta->params; param != NULL; param = g_list_next (param)) {
-    GstStructure *structure = GST_STRUCTURE_CAST (param->data);
-    GQuark id = gst_structure_get_name_id (structure);
-
-    if (id == g_quark_from_static_string ("VideoLandmarks")) {
-      GArray *keypoints = NULL, *links = NULL;
-      const GValue *value = NULL;
-      gdouble confidence = 0.0;
-
-      gst_structure_get_double (structure, "confidence", &confidence);
-
-      value = gst_structure_get_value (structure, "keypoints");
-      keypoints = g_array_copy (g_value_get_boxed (value));
-
-      value = gst_structure_get_value (structure, "links");
-      links = g_array_copy (g_value_get_boxed (value));
-
-      // Correct the X and Y of each keypoint based on the regions.
-      for (num = 0; num < keypoints->len; num++) {
-        GstVideoKeypoint *kp =
-            &(g_array_index (keypoints, GstVideoKeypoint, num));
-
-        kp->x = kp->x * w_scale;
-        kp->y = kp->y * h_scale;
-      }
-
-      structure = gst_structure_new ("VideoLandmarks",
-          "keypoints", G_TYPE_ARRAY, keypoints, "links", G_TYPE_ARRAY, links,
-          "confidence", G_TYPE_DOUBLE, confidence, NULL);
-      gst_video_region_of_interest_meta_add_param (newmeta, structure);
-    } else if (id == g_quark_from_static_string ("ImageClassification")) {
-      structure = gst_structure_copy (structure);
-      gst_video_region_of_interest_meta_add_param (newmeta, structure);
-    } else if (id == g_quark_from_static_string ("ObjectDetection")) {
-      structure = gst_structure_copy (structure);
-      gst_video_region_of_interest_meta_add_param (newmeta, structure);
-    }
-  }
-}
-
-static inline void
-gst_buffer_transfer_video_landmarks_meta (GstBuffer * buffer,
-    GstVideoRectangle * source, GstVideoRectangle * destination,
-    GstVideoLandmarksMeta * lmkmeta)
-{
-  GArray *keypoints = NULL, *links = NULL;
-  gdouble w_scale = 0.0, h_scale = 0.0;
-  guint num = 0;
-
-  gst_util_fraction_to_double (destination->w, source->w, &w_scale);
-  gst_util_fraction_to_double (destination->h, source->h, &h_scale);
-
-  keypoints = g_array_copy (lmkmeta->keypoints);
-  links = g_array_copy (lmkmeta->links);
-
-  // Correct the X and Y of each keypoint bases on the regions.
-  for (num = 0; num < keypoints->len; num++) {
-    GstVideoKeypoint *kp = &(g_array_index (keypoints, GstVideoKeypoint, num));
-
-    kp->x = (kp->x * w_scale) + destination->x;
-    kp->y = (kp->y * h_scale) + destination->y;
-  }
-
-  gst_buffer_add_video_landmarks_meta (buffer, lmkmeta->confidence, keypoints,
-      links);
-}
-
-static inline void
-gst_buffer_transfer_video_classification_meta (GstBuffer * buffer,
-    GstVideoClassificationMeta * classmeta)
-{
-  GArray *labels = g_array_copy (classmeta->labels);
-
-  gst_buffer_add_video_classification_meta (buffer, labels);
-}
-
-static void
-gst_video_composition_populate_output_metas (GstVideoComposition * composition)
+gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
+    GstVideoComposition * composition)
 {
   GstBuffer *inbuffer = NULL, *outbuffer = NULL;
   GstVideoRectangle *source = NULL, *destination = NULL;
@@ -393,30 +190,44 @@ gst_video_composition_populate_output_metas (GstVideoComposition * composition)
   for (idx = 0; idx < composition->n_blits; idx++) {
     inbuffer = composition->blits[idx].frame->buffer;
 
-    source = &(composition->blits[idx].sources[0]);
-    destination = &(composition->blits[idx].destinations[0]);
+    source = &(composition->blits[idx].source);
+    destination = &(composition->blits[idx].destination);
 
     while ((meta = gst_buffer_iterate_meta (inbuffer, &state))) {
       if (meta->info->api == GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE) {
         GstVideoRegionOfInterestMeta *roimeta = GST_VIDEO_ROI_META_CAST (meta);
 
         // Skip if ROI is a ImageRegion with actual data (populated by vsplit).
-        // This is primery used for blitting only pixels with actual data.
+        // This is primarily used for blitting only pixels with actual data.
         if (roimeta->roi_type == g_quark_from_static_string ("ImageRegion"))
           continue;
 
-        gst_buffer_transfer_video_region_of_interest_meta (outbuffer, source,
-            destination, roimeta);
+        roimeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, roimeta);
+        gst_video_region_of_interest_coordinates_correction (roimeta, source,
+            destination);
+
+        GST_TRACE_OBJECT (vcomposer, "Transferred 'VideoRegionOfInterest' meta "
+            "with ID[0x%X] and parent ID[0x%X] to buffer %p", roimeta->id,
+            roimeta->parent_id, outbuffer);
       } else if (meta->info->api == GST_VIDEO_CLASSIFICATION_META_API_TYPE) {
         GstVideoClassificationMeta *classmeta =
             GST_VIDEO_CLASSIFICATION_META_CAST (meta);
 
-        gst_buffer_transfer_video_classification_meta (outbuffer, classmeta);
+        classmeta = gst_buffer_copy_video_classification_meta (outbuffer,
+            classmeta);
+
+        GST_TRACE_OBJECT (vcomposer, "Transferred 'ImageClassification' meta "
+            "with ID[0x%X] and parent ID[0x%X] to buffer %p", classmeta->id,
+            classmeta->parent_id, outbuffer);
       } else if (meta->info->api == GST_VIDEO_LANDMARKS_META_API_TYPE) {
         GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (meta);
 
-        gst_buffer_transfer_video_landmarks_meta (outbuffer, source,
-            destination, lmkmeta);
+        lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
+        gst_video_landmarks_coordinates_correction (lmkmeta, source, destination);
+
+        GST_TRACE_OBJECT (vcomposer, "Transferred 'VideoLandmarks' meta "
+            "with ID[0x%X] and parent ID[0x%X] to buffer %p", lmkmeta->id,
+            lmkmeta->parent_id, outbuffer);
       }
     }
   }
@@ -468,272 +279,61 @@ gst_video_composer_index_compare (const GstVideoComposerSinkPad * pad,
 }
 
 static GstBufferPool *
-gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps)
+gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps,
+    GstVideoAlignment * align, GstAllocationParams * params)
 {
   GstBufferPool *pool = NULL;
   GstStructure *config = NULL;
   GstAllocator *allocator = NULL;
-  GstVideoInfo info;
+  GstVideoInfo info = {0,};
 
   if (!gst_video_info_from_caps (&info, caps)) {
     GST_ERROR_OBJECT (vcomposer, "Invalid caps %" GST_PTR_FORMAT, caps);
     return NULL;
   }
 
-  if (gst_is_gbm_supported ()) {
-    if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-      GST_INFO_OBJECT (vcomposer, "Uses GBM memory");
-      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
-    } else {
-      GST_INFO_OBJECT (vcomposer, "Uses ION memory");
-      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
-    }
-
-    config = gst_buffer_pool_get_config (pool);
-    allocator = gst_fd_allocator_new ();
-
-    gst_buffer_pool_config_add_option (config,
-        GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
-
-  } else {
-    GstVideoFormat format;
-    GstVideoAlignment align;
-    gboolean success;
-    guint width, height;
-    gint stride, scanline;
-
-    width = GST_VIDEO_INFO_WIDTH (&info);
-    height = GST_VIDEO_INFO_HEIGHT (&info);
-    format = GST_VIDEO_INFO_FORMAT (&info);
-
-    success = gst_adreno_utils_compute_alignment (width, height, format,
-       &stride, &scanline);
-    if (!success) {
-      GST_ERROR_OBJECT(vcomposer,"Failed to get alignment");
-      return NULL;
-    }
-
-    pool = gst_qti_buffer_pool_new ();
-    config = gst_buffer_pool_get_config (pool);
-
-    gst_video_alignment_reset (&align);
-    align.padding_bottom = scanline - height;
-    align.padding_right = stride - width;
-    gst_video_info_align (&info, &align);
-
-    gst_buffer_pool_config_add_option (config,
-        GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
-    gst_buffer_pool_config_set_video_alignment (config, &align);
-
-    allocator = gst_qti_allocator_new ();
-    if (allocator == NULL) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to create QTI allocator");
-      gst_clear_object (&pool);
-      return NULL;
-    }
+  if ((pool = gst_image_buffer_pool_new ()) == NULL) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to create image pool!");
+    return NULL;
   }
+
+  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+    allocator = gst_fd_allocator_new ();
+    GST_INFO_OBJECT (vcomposer, "Buffer pool uses GBM memory");
+  } else {
+    allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+    GST_INFO_OBJECT (vcomposer, "Buffer pool uses DMA memory");
+  }
+
+  if (allocator == NULL) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to create allocator");
+    gst_clear_object (&pool);
+    return NULL;
+  }
+
+  config = gst_buffer_pool_get_config (pool);
+
+  gst_buffer_pool_config_set_allocator (config, allocator, params);
+  g_object_unref (allocator);
+
+  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
+  gst_buffer_pool_config_add_option (config,
+      GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
+
+  gst_buffer_pool_config_add_option (config,
+      GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+  gst_buffer_pool_config_set_video_alignment (config, align);
+  gst_video_info_align (&info, align);
 
   gst_buffer_pool_config_set_params (config, caps, info.size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
-  gst_buffer_pool_config_set_allocator (config, allocator, NULL);
-  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (vcomposer, "Failed to set pool configuration!");
     g_clear_object (&pool);
   }
 
-  g_object_unref (allocator);
-
   return pool;
-}
-
-static gboolean
-gst_video_composer_prepare_input_frame (GstVideoComposer * vcomposer,
-    GstVideoComposerSinkPad * sinkpad, GstVideoFrame * frame)
-{
-  GstBuffer *buffer = NULL;
-  GstSegment *segment = NULL;
-  GstClockTime timestamp, position;
-
-  buffer = gst_aggregator_pad_peek_buffer (GST_AGGREGATOR_PAD (sinkpad));
-
-  if (buffer == NULL) {
-    GST_TRACE_OBJECT (sinkpad, "No buffer available!");
-    return FALSE;
-  }
-
-  GST_TRACE_OBJECT (sinkpad, "Taking %" GST_PTR_FORMAT, buffer);
-
-  segment = &GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment;
-
-  // Check whether the buffer should be kept in the queue for future reuse.
-  timestamp = gst_segment_to_running_time (
-      &GST_AGGREGATOR_PAD (sinkpad)->segment, GST_FORMAT_TIME,
-      GST_BUFFER_PTS (buffer)) + GST_BUFFER_DURATION (buffer);
-  position = gst_segment_to_running_time (segment, GST_FORMAT_TIME,
-      segment->position) + vcomposer->duration;
-
-  if (timestamp > position)
-    GST_TRACE_OBJECT (sinkpad, "Keeping buffer at least until %"
-        GST_TIME_FORMAT, GST_TIME_ARGS (timestamp));
-  else
-    gst_aggregator_pad_drop_buffer (GST_AGGREGATOR_PAD (sinkpad));
-
-  // GAP buffer, nothing further to do.
-  if (gst_buffer_get_size (buffer) == 0 ||
-      GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_GAP)) {
-    gst_buffer_unref (buffer);
-    return TRUE;
-  }
-
-  if (!gst_video_frame_map (frame, sinkpad->info, buffer,
-          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (sinkpad, "Failed to map input buffer!");
-    gst_buffer_unref (buffer);
-    return FALSE;
-  }
-
-  return TRUE;
-}
-
-static gboolean
-gst_video_composer_prepare_output_frame (GstVideoComposer * vcomposer,
-    GstVideoFrame * frame, gboolean is_gap)
-{
-  GstBufferPool *pool = vcomposer->outpool;
-  GstBuffer *buffer = NULL;
-
-  if (!is_gap) {
-    if (!gst_buffer_pool_is_active (pool) &&
-        !gst_buffer_pool_set_active (pool, TRUE)) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to activate output video buffer pool!");
-      return FALSE;
-    }
-
-    if (gst_buffer_pool_acquire_buffer (pool, &buffer, NULL) != GST_FLOW_OK) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to create output video buffer!");
-      return FALSE;
-    }
-
-    if (!gst_video_frame_map (frame, vcomposer->outinfo, buffer,
-            GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to map output buffer!");
-      gst_buffer_unref (buffer);
-      return FALSE;
-    }
-  } else {
-    // Create an empty GAP buffer, which will be submitted downstream.
-    buffer = gst_buffer_new ();
-    GST_BUFFER_FLAG_SET (buffer, GST_BUFFER_FLAG_GAP);
-    frame->buffer = buffer;
-  }
-
-  GST_BUFFER_DURATION (buffer) = vcomposer->duration;
-
-  {
-    GstSegment *s = NULL;
-
-    GST_OBJECT_LOCK (vcomposer);
-    s = &GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment;
-
-    GST_BUFFER_TIMESTAMP (buffer) = (s->position == GST_CLOCK_TIME_NONE ||
-        s->position <= s->start) ? s->start : s->position;
-
-    s->position = GST_BUFFER_TIMESTAMP (buffer) + GST_BUFFER_DURATION (buffer);
-    GST_OBJECT_UNLOCK (vcomposer);
-  }
-
-  GST_TRACE_OBJECT (vcomposer, "Output %" GST_PTR_FORMAT, buffer);
-  return TRUE;
-}
-
-static gboolean
-gst_video_composer_populate_frames_and_composition (
-    GstVideoComposer * vcomposer, GArray * inframes, GstVideoFrame * outframe,
-    GstVideoComposition * composition)
-{
-  GList *list = NULL;
-  gboolean is_gap = FALSE;
-  guint idx = 0, num = 0;
-
-  GST_OBJECT_LOCK (vcomposer);
-
-  // Extrapolate the highest width, height and frame rate from the sink pads.
-  for (list = GST_ELEMENT (vcomposer)->sinkpads; list; list = list->next, idx++) {
-    GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (list->data);
-    GstVideoFrame *inframe = &(g_array_index (inframes, GstVideoFrame, idx));
-    GstVideoBlit *blit = NULL;
-
-    if (gst_aggregator_pad_is_eos (GST_AGGREGATOR_PAD (sinkpad)))
-      continue;
-
-    if (!gst_video_composer_prepare_input_frame (vcomposer, sinkpad, inframe)) {
-      GST_TRACE_OBJECT (vcomposer, "Failed to prepare input frame!");
-      GST_OBJECT_UNLOCK (vcomposer);
-      return FALSE;
-    }
-
-    // GAP input buffer, nothing to do.
-    if (inframe->buffer == NULL)
-      continue;
-
-    num = composition->n_blits++;
-
-    composition->blits =
-        g_renew (GstVideoBlit, composition->blits, composition->n_blits);
-
-    blit = &(composition->blits[num]);
-    blit->frame = inframe;
-
-    GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
-
-    blit->alpha = sinkpad->alpha * G_MAXUINT8;
-
-    blit->flip = gst_video_composer_translate_flip (sinkpad->flip_h, sinkpad->flip_v);
-    blit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
-
-    blit->sources = g_slice_dup (GstVideoRectangle, &(sinkpad->crop));
-    blit->destinations = g_slice_dup (GstVideoRectangle, &(sinkpad->destination));
-    blit->n_regions = 1;
-
-    if ((blit->sources[0].w == 0) && (blit->sources[0].h == 0)) {
-      blit->sources[0].w = GST_VIDEO_FRAME_WIDTH (blit->frame);
-      blit->sources[0].h = GST_VIDEO_FRAME_HEIGHT (blit->frame);
-    }
-
-    if ((blit->destinations[0].w == 0) && (blit->destinations[0].h == 0)) {
-      blit->destinations[0].w = GST_VIDEO_INFO_WIDTH (vcomposer->outinfo);
-      blit->destinations[0].h = GST_VIDEO_INFO_HEIGHT (vcomposer->outinfo);
-    }
-
-    GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
-  }
-
-  GST_OBJECT_UNLOCK (vcomposer);
-
-  // Whether to allocate a GAP output buffer.
-  is_gap = (composition->n_blits == 0) ? TRUE : FALSE;
-
-  if (!gst_video_composer_prepare_output_frame (vcomposer, outframe, is_gap)) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to prepae output frame!");
-    return FALSE;
-  }
-
-  composition->frame = outframe;
-  composition->bgfill = TRUE;
-  composition->flags = 0;
-
-  GST_VIDEO_COMPOSER_LOCK (vcomposer);
-
-  composition->bgcolor = vcomposer->background;
-
-  GST_VIDEO_COMPOSER_UNLOCK (vcomposer);
-
-  // Transfer metadata from the input buffers to the output buffer.
-  gst_video_composition_populate_output_metas (composition);
-
-  return TRUE;
 }
 
 static gboolean
@@ -741,11 +341,9 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
     GstAggregatorPad * pad, GstQuery * inquery, GstQuery * outquery)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
-
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstVideoInfo info;
-  guint size = 0;
   gboolean needpool = FALSE;
 
   GST_DEBUG_OBJECT (vcomposer, "Pad %s:%s", GST_DEBUG_PAD_NAME (pad));
@@ -763,18 +361,21 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
     return FALSE;
   }
 
-  // Get the size from video info.
-  size = GST_VIDEO_INFO_SIZE (&info);
-
   if (needpool) {
     GstStructure *structure = NULL;
     GstAllocator *allocator = NULL;
+    GstVideoAlignment align = { 0, };
 
-    pool = gst_video_composer_create_pool (vcomposer, caps);
+    if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+      GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
+      return FALSE;
+    }
+
+    pool = gst_video_composer_create_pool (vcomposer, caps, &align, NULL);
     structure = gst_buffer_pool_get_config (pool);
 
     // Set caps and size in query.
-    gst_buffer_pool_config_set_params (structure, caps, size, 0, 0);
+    gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
 
     gst_buffer_pool_config_get_allocator (structure, &allocator, NULL);
     gst_query_add_allocation_param (outquery, allocator, NULL);
@@ -787,7 +388,7 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
   }
 
   // If upstream does't have a pool requirement, set only size in query.
-  gst_query_add_allocation_pool (outquery, needpool ? pool : NULL, size, 0, 0);
+  gst_query_add_allocation_pool (outquery, pool, info.size, 0, 0);
 
   if (pool != NULL)
     gst_object_unref (pool);
@@ -802,8 +403,10 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
   GstCaps *caps = NULL;
+  GstVideoInfo info;
+  GstVideoAlignment align = { 0, }, ds_align = { 0, };
   GstBufferPool *pool = NULL;
-  guint size, minbuffers, maxbuffers;
+  guint size = 0, minbuffers = 0, maxbuffers = 0;
 
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps) {
@@ -814,17 +417,45 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
   // Invalidate the cached pool if there is an allocation_query.
   if (vcomposer->outpool) {
     gst_buffer_pool_set_active (vcomposer->outpool, FALSE);
-    gst_object_unref (vcomposer->outpool);
+    gst_clear_object (&vcomposer->outpool);
   }
 
-  // Create a new buffer pool.
-  pool = gst_video_composer_create_pool (vcomposer, caps);
-  vcomposer->outpool = pool;
+  if (!gst_video_info_from_caps (&info, caps)) {
+    GST_ERROR_OBJECT (vcomposer, "Invalid caps %" GST_PTR_FORMAT, caps);
+    return FALSE;
+  }
+
+  if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
+    return FALSE;
+  }
+
+  if (gst_query_get_video_alignment (query, &ds_align)) {
+    GST_DEBUG_OBJECT (vcomposer, "Downstream alignment: padding (top: %u bottom:"
+        " %u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
+        ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
+        ds_align.stride_align[0], ds_align.stride_align[1],
+        ds_align.stride_align[2], ds_align.stride_align[3]);
+
+    // Find the most the appropriate alignment between us and downstream.
+    align = gst_video_calculate_common_alignment (&align, &ds_align);
+
+    GST_DEBUG_OBJECT (vcomposer, "Common alignment: padding (top: %u bottom: "
+        "%u left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
+        align.padding_bottom, align.padding_left, align.padding_right,
+        align.stride_align[0], align.stride_align[1], align.stride_align[2],
+        align.stride_align[3]);
+  }
 
   {
     GstStructure *config = NULL;
     GstAllocator *allocator = NULL;
-    GstAllocationParams params;
+    GstAllocationParams params = {0,};
+
+    if (gst_query_get_n_allocation_params (query))
+      gst_query_parse_nth_allocation_param (query, 0, NULL, &params);
+
+    pool = gst_video_composer_create_pool (vcomposer, caps, &align, &params);
 
     // Get the configured pool properties in order to set in query.
     config = gst_buffer_pool_get_config (pool);
@@ -846,6 +477,11 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
         maxbuffers);
 
   gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+
+  vcomposer->outpool = pool;
+
+  GST_DEBUG_OBJECT (vcomposer, "Output pool: %" GST_PTR_FORMAT,
+      vcomposer->outpool);
 
   return TRUE;
 }
@@ -886,284 +522,87 @@ gst_video_composer_sink_query (GstAggregator * aggregator,
       break;
   }
 
-  return GST_AGGREGATOR_CLASS (parent_class)->sink_query (
-      aggregator, pad, query);
-}
-
-static gboolean
-gst_video_composer_sink_event (GstAggregator * aggregator,
-    GstAggregatorPad * pad, GstEvent * event)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  GST_TRACE_OBJECT (vcomposer, "Received %s event on pad %s:%s",
-      GST_EVENT_TYPE_NAME (event), GST_DEBUG_PAD_NAME (pad));
-
-  switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_CAPS:
-    {
-      GstCaps *caps = NULL;
-      gboolean success = FALSE;
-
-      gst_event_parse_caps (event, &caps);
-      success = gst_video_composer_sinkpad_setcaps (pad, aggregator, caps);
-
-      gst_event_unref (event);
-      return success;
-    }
-    default:
-      break;
-  }
-
-  return GST_AGGREGATOR_CLASS (parent_class)->sink_event (
-      aggregator, pad, event);
-}
-
-static gboolean
-gst_video_composer_src_query (GstAggregator * aggregator, GstQuery * query)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  GST_TRACE_OBJECT (vcomposer, "Received %s query on src pad",
-      GST_QUERY_TYPE_NAME (query));
-
-  switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_POSITION:
-    {
-      GstSegment *segment = &GST_AGGREGATOR_PAD (aggregator->srcpad)->segment;
-      GstFormat format = GST_FORMAT_UNDEFINED;
-
-      gst_query_parse_position (query, &format, NULL);
-
-      if (format != GST_FORMAT_TIME) {
-        GST_ERROR_OBJECT (vcomposer, "Unsupported POSITION format: %s!",
-            gst_format_get_name (format));
-        return FALSE;
-      }
-
-      gst_query_set_position (query, format,
-          gst_segment_to_stream_time (segment, format, segment->position));
-      return TRUE;
-    }
-    case GST_QUERY_DURATION:
-      // TODO
-      break;
-    default:
-      break;
-  }
-
-  return GST_AGGREGATOR_CLASS (parent_class)->src_query (aggregator, query);
-}
-
-static gboolean
-gst_video_composer_src_event (GstAggregator * aggregator, GstEvent * event)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  GST_TRACE_OBJECT (vcomposer, "Received %s event on src pad",
-      GST_EVENT_TYPE_NAME (event));
-
-  switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_QOS:
-      // TODO
-      break;
-    default:
-      break;
-  }
-
-  return GST_AGGREGATOR_CLASS (parent_class)->src_event (aggregator, event);
-}
-
-static GstFlowReturn
-gst_video_composer_update_src_caps (GstAggregator * aggregator,
-    GstCaps * caps, GstCaps ** othercaps)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-  gint outwidth = 0, outheight = 0, out_fps_n = 0, out_fps_d = 0;
-  guint idx = 0, length = 0;
-  gboolean configured = TRUE;
-
-
-  GST_DEBUG_OBJECT (vcomposer, "Update output caps based on caps %"
-      GST_PTR_FORMAT, caps);
-
-  {
-    GstVideoComposerSinkPad *sinkpad = NULL;
-    GList *list = NULL;
-
-    GST_OBJECT_LOCK (vcomposer);
-
-    // Extrapolate the highest width, height and frame rate from the sink pads.
-    for (list = GST_ELEMENT (vcomposer)->sinkpads; list; list = list->next) {
-      gint width, height, fps_n, fps_d;
-      gdouble fps = 0.0, outfps = 0;
-
-      sinkpad = GST_VIDEO_COMPOSER_SINKPAD_CAST (list->data);
-
-      if (NULL == sinkpad->info) {
-        GST_DEBUG_OBJECT (vcomposer, "%s caps not set!", GST_PAD_NAME (sinkpad));
-        configured = FALSE;
-        continue;
-      }
-
-      GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
-
-      width = (sinkpad->destination.w != 0) ?
-          sinkpad->destination.w : GST_VIDEO_INFO_WIDTH (sinkpad->info);
-      height = (sinkpad->destination.h != 0) ?
-          sinkpad->destination.h : GST_VIDEO_INFO_HEIGHT (sinkpad->info);
-
-      fps_n = GST_VIDEO_INFO_FPS_N (sinkpad->info);
-      fps_d = GST_VIDEO_INFO_FPS_D (sinkpad->info);
-
-      // Adjust the width & height to take into account the X & Y coordinates.
-      width += (width > 0) ? sinkpad->destination.x : 0;
-      height += (height > 0) ? sinkpad->destination.y : 0;
-
-      GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
-
-      if (width == 0 || height == 0)
-        continue;
-
-      // Take the greater dimensions.
-      outwidth = (width > outwidth) ? width : outwidth;
-      outheight = (height > outheight) ? height : outheight;
-
-      gst_util_fraction_to_double (fps_n, fps_d, &fps);
-
-      if (out_fps_d != 0)
-        gst_util_fraction_to_double (out_fps_n, out_fps_d, &outfps);
-
-      if (outfps < fps) {
-        out_fps_n = fps_n;
-        out_fps_d = fps_d;
-      }
-    }
-
-    GST_OBJECT_UNLOCK (vcomposer);
-  }
-
-  *othercaps = gst_caps_new_empty ();
-  length = gst_caps_get_size (caps);
-
-  for (idx = 0; idx < length; idx++) {
-    GstStructure *structure = gst_caps_get_structure (caps, idx);
-    GstCapsFeatures *features = gst_caps_get_features (caps, idx);
-    const GValue *framerate = NULL;
-    gint width = 0, height = 0;
-
-    // If this is already expressed by the existing caps skip this structure.
-    if (idx > 0 && gst_caps_is_subset_structure_full (*othercaps, structure, features))
-      continue;
-
-    // Make a copy that will be modified.
-    structure = gst_structure_copy (structure);
-
-    gst_structure_get_int (structure, "width", &width);
-    gst_structure_get_int (structure, "height", &height);
-    framerate = gst_structure_get_value (structure, "framerate");
-
-    if (!width && !outwidth) {
-      gst_structure_set (structure, "width", G_TYPE_INT,
-          DEFAULT_VIDEO_WIDTH, NULL);
-      GST_DEBUG_OBJECT (vcomposer, "Width not set, using default value: %d",
-          DEFAULT_VIDEO_WIDTH);
-    } else if (!width) {
-      gst_structure_set (structure, "width", G_TYPE_INT, outwidth, NULL);
-      GST_DEBUG_OBJECT (vcomposer, "Width not set, using extrapolated width "
-          "based on the sinkpads: %d", outwidth);
-    } else if (width < outwidth) {
-      GST_ERROR_OBJECT (vcomposer, "Set width (%u) is not compatible with the "
-          "extrapolated width (%d) from the sinkpads!", width, outwidth);
-      gst_structure_free (structure);
-      gst_caps_unref (*othercaps);
-      return GST_FLOW_NOT_SUPPORTED;
-    }
-
-    if (!height && !outheight) {
-      gst_structure_set (structure, "height", G_TYPE_INT,
-          DEFAULT_VIDEO_HEIGHT, NULL);
-      GST_DEBUG_OBJECT (vcomposer, "Height not set, using default value: %d",
-          DEFAULT_VIDEO_HEIGHT);
-    } else if (!height) {
-      gst_structure_set (structure, "height", G_TYPE_INT, outheight, NULL);
-      GST_DEBUG_OBJECT (vcomposer, "Height not set, using extrapolated height "
-          "based on the sinkpads: %d", outheight);
-    } else if (height < outheight) {
-      GST_ERROR_OBJECT (vcomposer, "Set height (%u) is not compatible with the "
-          "extrapolated height (%d) from the sinkpads!", height, outheight);
-      gst_structure_free (structure);
-      gst_caps_unref (*othercaps);
-      return GST_FLOW_NOT_SUPPORTED;
-    }
-
-    if (!gst_value_is_fixed (framerate) && (out_fps_n <= 0 || out_fps_d <= 0)) {
-      gst_structure_fixate_field_nearest_fraction (structure, "framerate",
-          DEFAULT_VIDEO_FPS_NUM, DEFAULT_VIDEO_FPS_DEN);
-      GST_DEBUG_OBJECT (vcomposer, "Frame rate not set, using default value: "
-          "%d/%d", DEFAULT_VIDEO_FPS_NUM, DEFAULT_VIDEO_FPS_DEN);
-    } else if (!gst_value_is_fixed (framerate)) {
-      gst_structure_fixate_field_nearest_fraction (structure, "framerate",
-          out_fps_n, out_fps_d);
-      GST_DEBUG_OBJECT (vcomposer, "Frame rate not set, using extrapolated "
-          "rate (%d/%d) from the sinkpads", out_fps_n, out_fps_d);
-    } else {
-      gint fps_n = gst_value_get_fraction_numerator (framerate);
-      gint fps_d = gst_value_get_fraction_denominator (framerate);
-      gdouble fps = 0.0, outfps = 0.0;
-
-      gst_util_fraction_to_double (fps_n, fps_d, &fps);
-      gst_util_fraction_to_double (out_fps_n, out_fps_d, &outfps);
-
-      if (fps != outfps) {
-        GST_ERROR_OBJECT (vcomposer, "Set framerate (%d/%d) is not compatible"
-            " with the extrapolated rate (%d/%d) from the sinkpads!", fps_n,
-            fps_d, out_fps_n, out_fps_d);
-        gst_structure_free (structure);
-        gst_caps_unref (*othercaps);
-        return GST_FLOW_NOT_SUPPORTED;
-      }
-    }
-
-    // TODO optimize that to take into account sink pads format.
-    // Fixate the format field in case it wasn't already fixated.
-    gst_structure_fixate_field (structure, "format");
-
-    framerate = gst_structure_get_value (structure, "framerate");
-    vcomposer->duration = gst_util_uint64_scale_int (GST_SECOND,
-        gst_value_get_fraction_denominator (framerate),
-        gst_value_get_fraction_numerator (framerate));
-
-    gst_caps_append_structure_full (*othercaps, structure,
-        gst_caps_features_copy (features));
-  }
-
-  GST_DEBUG_OBJECT (vcomposer, "Updated caps %" GST_PTR_FORMAT, *othercaps);
-
-  // Applicable for 1.20 version, since the GstAggregator base class is not
-  // marking src pad for reconfigure in case NEED_DATA is returned.
-  // On older versions, mark reconfigure is already happening but it won't
-  // cause any problem since it is just about setting the flag.
-  if (!configured)
-    gst_pad_mark_reconfigure (GST_AGGREGATOR_SRC_PAD (vcomposer));
-
-  return configured ? GST_FLOW_OK : GST_AGGREGATOR_FLOW_NEED_DATA;
+  return GST_AGGREGATOR_CLASS (parent_class)->sink_query (aggregator, pad, query);
 }
 
 static GstCaps *
 gst_video_composer_fixate_src_caps (GstAggregator * aggregator, GstCaps * caps)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-  guint idx = 0;
+  GList *list = NULL;
+  GstStructure *structure = NULL;
+  const GValue *value = NULL;
+  gint outwidth = 0, outheight = 0, out_fps_n = 0, out_fps_d = 0;
+  guint idx = 0, length = 0;
+
+  GST_DEBUG_OBJECT (vcomposer, "Update output caps based on caps %"
+      GST_PTR_FORMAT, caps);
+
+  GST_OBJECT_LOCK (vcomposer);
+
+  // Extrapolate the highest width, height and frame rate from the sink pads.
+  for (list = GST_ELEMENT (vcomposer)->sinkpads; list; list = list->next) {
+    GstVideoComposerSinkPad *sinkpad = NULL;
+    GstVideoInfo *info = NULL;
+    gint width = 0, height = 0, fps_n = 0, fps_d = 0;
+    gdouble fps = 0.0, outfps = 0;
+
+    sinkpad = GST_VIDEO_COMPOSER_SINKPAD_CAST (list->data);
+
+    if (NULL == GST_VIDEO_AGGREGATOR_PAD (sinkpad)->info.finfo) {
+      GST_DEBUG_OBJECT (vcomposer, "%s caps not set!", GST_PAD_NAME (sinkpad));
+      continue;
+    }
+
+    info = &(GST_VIDEO_AGGREGATOR_PAD (sinkpad)->info);
+
+    GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
+
+    width = (sinkpad->destination.w != 0) ?
+        sinkpad->destination.w : GST_VIDEO_INFO_WIDTH (info);
+    height = (sinkpad->destination.h != 0) ?
+        sinkpad->destination.h : GST_VIDEO_INFO_HEIGHT (info);
+
+    fps_n = GST_VIDEO_INFO_FPS_N (info);
+    fps_d = GST_VIDEO_INFO_FPS_D (info);
+
+    // Adjust the width & height to take into account the X & Y coordinates.
+    width += (width > 0) ? sinkpad->destination.x : 0;
+    height += (height > 0) ? sinkpad->destination.y : 0;
+
+    GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
+
+    if (width == 0 || height == 0)
+      continue;
+
+    // Take the greater dimensions.
+    outwidth = (width > outwidth) ? width : outwidth;
+    outheight = (height > outheight) ? height : outheight;
+
+    gst_util_fraction_to_double (fps_n, fps_d, &fps);
+
+    if (out_fps_d != 0)
+      gst_util_fraction_to_double (out_fps_n, out_fps_d, &outfps);
+
+    if (outfps < fps) {
+      out_fps_n = fps_n;
+      out_fps_d = fps_d;
+    }
+  }
+
+  GST_OBJECT_UNLOCK (vcomposer);
+
+  caps = gst_caps_make_writable (caps);
+  length = gst_caps_get_size (caps);
 
   // Check caps structures for memory:GBM feature.
-  for (idx = 0; idx < gst_caps_get_size (caps); idx++) {
+  for (idx = 0; idx < length; idx++) {
     GstCapsFeatures *features = gst_caps_get_features (caps, idx);
 
     if (!gst_caps_features_is_any (features) &&
         gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GBM)) {
       // Found caps structure with memory:GBM feature, remove all others.
-      GstStructure *structure = gst_caps_steal_structure (caps, idx);
+      structure = gst_caps_steal_structure (caps, idx);
 
       gst_caps_unref (caps);
       caps = gst_caps_new_empty ();
@@ -1172,6 +611,84 @@ gst_video_composer_fixate_src_caps (GstAggregator * aggregator, GstCaps * caps)
           gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL));
       break;
     }
+  }
+
+  // Truncate to only one set of caps.
+  if (gst_caps_get_size (caps) != 1)
+    caps = gst_caps_truncate (caps);
+
+  structure = gst_caps_get_structure (caps, 0);
+
+  value = gst_structure_get_value (structure, "width");
+
+  if (!gst_value_is_fixed (value) && !outwidth) {
+    gst_structure_fixate_field_nearest_int (structure, "width",
+        DEFAULT_VIDEO_WIDTH);
+    GST_DEBUG_OBJECT (vcomposer, "Width not set, using default value: %d",
+        DEFAULT_VIDEO_WIDTH);
+  } else if (!gst_value_is_fixed (value)) {
+    gst_structure_fixate_field_nearest_int (structure, "width", outwidth);
+    GST_DEBUG_OBJECT (vcomposer, "Width not set, using extrapolated width "
+        "based on the sinkpads: %d", outwidth);
+  } else if (g_value_get_int (value) < outwidth) {
+    GST_ERROR_OBJECT (vcomposer, "Set width (%u) is not compatible with the "
+        "extrapolated width (%d) from the sinkpads!", g_value_get_int (value),
+        outwidth);
+    return NULL;
+  }
+
+  value = gst_structure_get_value (structure, "height");
+
+  if (!gst_value_is_fixed (value) && !outheight) {
+    gst_structure_fixate_field_nearest_int (structure, "height",
+        DEFAULT_VIDEO_HEIGHT);
+    GST_DEBUG_OBJECT (vcomposer, "Height not set, using default value: %d",
+        DEFAULT_VIDEO_HEIGHT);
+  } else if (!gst_value_is_fixed (value)) {
+    gst_structure_fixate_field_nearest_int (structure, "height", outheight);
+    GST_DEBUG_OBJECT (vcomposer, "Height not set, using extrapolated height "
+        "based on the sinkpads: %d", outheight);
+  } else if (g_value_get_int (value) < outheight) {
+    GST_ERROR_OBJECT (vcomposer, "Set height (%u) is not compatible with the "
+        "extrapolated height (%d) from the sinkpads!", g_value_get_int (value),
+        outheight);
+    return NULL;
+  }
+
+  value = gst_structure_get_value (structure, "framerate");
+
+  if (!gst_value_is_fixed (value) && (out_fps_n <= 0 || out_fps_d <= 0)) {
+    gst_structure_fixate_field_nearest_fraction (structure, "framerate",
+        DEFAULT_VIDEO_FPS_NUM, DEFAULT_VIDEO_FPS_DEN);
+    GST_DEBUG_OBJECT (vcomposer, "Frame rate not set, using default value: "
+        "%d/%d", DEFAULT_VIDEO_FPS_NUM, DEFAULT_VIDEO_FPS_DEN);
+  } else if (!gst_value_is_fixed (value)) {
+    gst_structure_fixate_field_nearest_fraction (structure, "framerate",
+        out_fps_n, out_fps_d);
+    GST_DEBUG_OBJECT (vcomposer, "Frame rate not set, using extrapolated "
+        "rate (%d/%d) from the sinkpads", out_fps_n, out_fps_d);
+  } else {
+    gint fps_n = gst_value_get_fraction_numerator (value);
+    gint fps_d = gst_value_get_fraction_denominator (value);
+    gdouble fps = 0.0, outfps = 0.0;
+
+    gst_util_fraction_to_double (fps_n, fps_d, &fps);
+    gst_util_fraction_to_double (out_fps_n, out_fps_d, &outfps);
+
+    if (fps != outfps) {
+      GST_ERROR_OBJECT (vcomposer, "Set framerate (%d/%d) is not compatible"
+          " with the extrapolated rate (%d/%d) from the sinkpads!", fps_n,
+          fps_d, out_fps_n, out_fps_d);
+      return NULL;
+    }
+  }
+
+  if (gst_structure_has_field (structure, "pixel-aspect-ratio")) {
+    gst_structure_fixate_field_nearest_fraction (structure,
+        "pixel-aspect-ratio", 1, 1);
+  } else {
+    gst_structure_set (structure, "pixel-aspect-ratio", GST_TYPE_FRACTION,
+        1, 1, NULL);
   }
 
   caps = gst_caps_fixate (caps);
@@ -1185,109 +702,15 @@ gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
     GstCaps * caps)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-  GstVideoInfo info;
-  gint dar_n = 0, dar_d = 0;
 
   GST_DEBUG_OBJECT (vcomposer, "Negotiated caps %" GST_PTR_FORMAT, caps);
-
-  if (!gst_video_info_from_caps (&info, caps)) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to get video info from caps!");
-    return FALSE;
-  }
-
-  if (!gst_util_fraction_multiply (info.width, info.height,
-          info.par_n, info.par_d, &dar_n, &dar_d)) {
-    GST_WARNING_OBJECT (vcomposer, "Failed to calculate DAR!");
-    dar_n = dar_d = -1;
-  }
-
-  GST_DEBUG_OBJECT (vcomposer, "Output %dx%d (PAR: %d/%d, DAR: %d/%d), size"
-      " %" G_GSIZE_FORMAT, info.width, info.height, info.par_n, info.par_d,
-      dar_n, dar_d, info.size);
-
-  if (vcomposer->outinfo != NULL)
-    gst_video_info_free (vcomposer->outinfo);
-
-  vcomposer->outinfo = gst_video_info_copy (&info);
 
   if (vcomposer->converter != NULL)
     gst_video_converter_engine_free (vcomposer->converter);
 
   vcomposer->converter = gst_video_converter_engine_new (vcomposer->backend, NULL);
 
-  gst_aggregator_set_latency (aggregator, vcomposer->duration,
-      vcomposer->duration);
-
-  return TRUE;
-}
-
-static void
-gst_video_composer_task_loop (gpointer userdata)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (userdata);
-  GstDataQueueItem *item = NULL;
-
-  if (gst_data_queue_pop (vcomposer->requests, &item)) {
-    GstConverterRequest *request = NULL;
-    GstBuffer *buffer = NULL;
-    gboolean success = TRUE;
-
-    // Increase the request reference count to indicate that it is in use.
-    request = GST_CONVERTER_REQUEST (gst_mini_object_ref (item->object));
-    item->destroy (item);
-
-    if (request->fence != NULL) {
-      GST_TRACE_OBJECT (vcomposer, "Waiting request %p", request->fence);
-      success = gst_video_converter_engine_wait_fence (vcomposer->converter,
-          request->fence);
-    }
-
-    if (!success) {
-      GST_DEBUG_OBJECT (vcomposer, " Waiting request %p failed!", request->fence);
-      gst_converter_request_unref (request);
-      return;
-    }
-
-    // Get time difference between current time and start.
-    request->time = GST_CLOCK_DIFF (request->time, gst_util_get_timestamp ());
-
-    GST_LOG_OBJECT (vcomposer, "Request %p took %" G_GINT64_FORMAT ".%03"
-        G_GINT64_FORMAT " ms", request->fence, GST_TIME_AS_MSECONDS (request->time),
-        (GST_TIME_AS_USECONDS (request->time) % 1000));
-
-    // Increase the buffer reference count to indicate that it is in use.
-    buffer = gst_buffer_ref (request->outframe->buffer);
-    gst_converter_request_unref (request);
-
-    gst_aggregator_finish_buffer (GST_AGGREGATOR (vcomposer), buffer);
-  } else {
-    GST_DEBUG_OBJECT (vcomposer, "Paused worker thread");
-    gst_task_pause (vcomposer->worktask);
-  }
-}
-
-static gboolean
-gst_video_composer_start (GstAggregator * aggregator)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  if (vcomposer->worktask != NULL)
-    return TRUE;
-
-  vcomposer->worktask =
-      gst_task_new (gst_video_composer_task_loop, aggregator, NULL);
-  GST_INFO_OBJECT (vcomposer, "Created task %p", vcomposer->worktask);
-
-  gst_task_set_lock (vcomposer->worktask, &vcomposer->worklock);
-
-  if (!gst_task_start (vcomposer->worktask)) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to start worker task!");
-    return FALSE;
-  }
-
-  // Disable requests queue in flushing state to enable normal work.
-  gst_data_queue_set_flushing (vcomposer->requests, FALSE);
-  return TRUE;
+  return GST_AGGREGATOR_CLASS (parent_class)->negotiated_src_caps (aggregator, caps);
 }
 
 static gboolean
@@ -1295,128 +718,10 @@ gst_video_composer_stop (GstAggregator * aggregator)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
 
-  if (NULL == vcomposer->worktask)
-    return TRUE;
-
-  // Set the requests queue in flushing state.
-  gst_data_queue_set_flushing (vcomposer->requests, TRUE);
-
-  if (!gst_task_stop (vcomposer->worktask))
-    GST_WARNING_OBJECT (vcomposer, "Failed to stop worker task!");
-
-  // Make sure task is not running.
-  g_rec_mutex_lock (&vcomposer->worklock);
-  g_rec_mutex_unlock (&vcomposer->worklock);
-
-  if (!gst_task_join (vcomposer->worktask)) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to join worker task!");
-    return FALSE;
-  }
-
-  // Flush converter and requests queue.
+  GST_INFO_OBJECT (vcomposer, "Flushing video converter engine");
   gst_video_converter_engine_flush (vcomposer->converter);
-  gst_data_queue_flush (vcomposer->requests);
 
-  GST_INFO_OBJECT (vcomposer, "Removing task %p", vcomposer->worktask);
-
-  gst_object_unref (vcomposer->worktask);
-  vcomposer->worktask = NULL;
-
-  return TRUE;
-}
-
-static GstClockTime
-gst_video_composer_get_next_time (GstAggregator * aggregator)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-  GstSegment *segment = &GST_AGGREGATOR_PAD (aggregator->srcpad)->segment;
-  GstClockTime nexttime;
-
-  GST_OBJECT_LOCK (vcomposer);
-  nexttime = (segment->position == GST_CLOCK_TIME_NONE ||
-      segment->position < segment->start) ? segment->start : segment->position;
-
-  if (segment->stop != GST_CLOCK_TIME_NONE && nexttime > segment->stop)
-    nexttime = segment->stop;
-
-  nexttime = gst_segment_to_running_time (segment, GST_FORMAT_TIME, nexttime);
-  GST_OBJECT_UNLOCK (vcomposer);
-
-  return nexttime;
-}
-
-static gboolean
-gst_video_composer_is_eos (GstAggregator * aggregator)
-{
-  GList *list = NULL;
-  gboolean eos = TRUE;
-
-  GST_OBJECT_LOCK (aggregator);
-
-  // Iterate over every sink pad and check whether they reached EOS.
-  for (list = GST_ELEMENT (aggregator)->sinkpads; list; list = list->next)
-    eos &= gst_aggregator_pad_is_eos (GST_AGGREGATOR_PAD (list->data));
-
-  GST_OBJECT_UNLOCK (aggregator);
-
-  return eos;
-}
-
-static GstFlowReturn
-gst_video_composer_aggregate (GstAggregator * aggregator, gboolean timeout)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-  GstConverterRequest *request = NULL;
-  GstDataQueueItem *item = NULL;
-  GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
-  gboolean success = FALSE;
-
-  if (timeout && (NULL == vcomposer->outinfo))
-    return GST_AGGREGATOR_FLOW_NEED_DATA;
-
-  // Check whether all pads have reached EOS.
-  if (gst_video_composer_is_eos (aggregator))
-    return GST_FLOW_EOS;
-
-  request = gst_converter_request_new (vcomposer->n_inputs);
-
-  success = gst_video_composer_populate_frames_and_composition (vcomposer,
-      request->inframes, request->outframe, &composition);
-
-  if (!success) {
-    gst_video_composition_cleanup (&composition);
-    gst_converter_request_unref (request);
-    return GST_AGGREGATOR_FLOW_NEED_DATA;
-  }
-
-  // Get start time for performance measurements.
-  request->time = gst_util_get_timestamp ();
-
-  if ((composition.blits != NULL) && (composition.n_blits != 0)) {
-    success = gst_video_converter_engine_compose (vcomposer->converter,
-        &composition, 1, &(request->fence));
-    gst_video_composition_cleanup (&composition);
-  }
-
-  if (!success) {
-    GST_WARNING_OBJECT (vcomposer, "Failed to submit request to converter!");
-    gst_converter_request_unref (request);
-    return GST_FLOW_ERROR;
-  }
-
-  item = g_slice_new0 (GstDataQueueItem);
-  item->object = GST_MINI_OBJECT (request);
-  item->visible = TRUE;
-  item->destroy = gst_data_queue_item_free;
-
-  // Push the request into the queue or free it on failure.
-  if (!gst_data_queue_push (vcomposer->requests, item)) {
-    item->destroy (item);
-    return GST_FLOW_OK;
-  }
-
-  GST_TRACE_OBJECT (vcomposer, "Submitted request with ID: %p", request->fence);
-  return GST_FLOW_OK;
+  return GST_AGGREGATOR_CLASS (parent_class)->stop (aggregator);
 }
 
 static GstFlowReturn
@@ -1424,16 +729,159 @@ gst_video_composer_flush (GstAggregator * aggregator)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
 
-  GST_INFO_OBJECT (vcomposer, "Flushing request queue");
-
-  // Set the requests queue in flushing state.
-  gst_data_queue_set_flushing (vcomposer->requests, TRUE);
-
-  // Flush converter and requests queue.
+  GST_INFO_OBJECT (vcomposer, "Flushing video converter engine");
   gst_video_converter_engine_flush (vcomposer->converter);
-  gst_data_queue_flush (vcomposer->requests);
 
-  return GST_AGGREGATOR_CLASS (parent_class)->flush (aggregator);;
+  return GST_AGGREGATOR_CLASS (parent_class)->flush (aggregator);
+}
+
+static GstFlowReturn
+gst_video_composer_create_output_buffer (GstVideoAggregator * vaggregator,
+    GstBuffer ** outbuffer)
+{
+  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (vaggregator);
+  GstBufferPool *pool = vcomposer->outpool;
+
+  if (!gst_buffer_pool_is_active (pool) &&
+      !gst_buffer_pool_set_active (pool, TRUE)) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to activate output video buffer pool!");
+    return GST_FLOW_ERROR;
+  }
+
+  if (gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to create output video buffer!");
+    return GST_FLOW_ERROR;
+  }
+
+  GST_TRACE_OBJECT (vcomposer, "Providing %" GST_PTR_FORMAT, *outbuffer);
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
+    GstBuffer * outbuffer)
+{
+  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (vaggregator);
+  GList *list = NULL;
+  GstVideoFrame outframe = {0,};
+  GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
+  gboolean success = TRUE;
+  guint idx = 0, n_inputs = 0;
+
+  // Get start time for performance measurements.
+  time = gst_util_get_timestamp ();
+
+  GST_OBJECT_LOCK (vaggregator);
+
+  composition.n_blits = GST_ELEMENT (vcomposer)->numsinkpads;
+  composition.blits = g_new0 (GstVideoBlit, composition.n_blits);
+
+  for (list = GST_ELEMENT (vcomposer)->sinkpads; list != NULL; list = list->next) {
+    GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (list->data);
+    GstVideoFrame *inframe = NULL;
+    GstVideoBlit *vblit = NULL;
+
+#if GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
+    inframe = gst_video_aggregator_pad_get_prepared_frame (
+        GST_VIDEO_AGGREGATOR_PAD (sinkpad));
+#else
+    inframe = GST_VIDEO_AGGREGATOR_PAD (sinkpad)->aggregated_frame;
+#endif // GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
+
+    // GAP input buffer, nothing to do.
+    if (inframe == NULL || inframe->buffer == NULL)
+      continue;
+
+    // Index to the current blit object to be populated.
+    idx = n_inputs;
+
+    vblit = &(composition.blits[idx]);
+    vblit->frame = inframe;
+
+    GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
+
+    vblit->alpha = sinkpad->alpha * G_MAXUINT8;
+    vblit->flip = gst_video_composer_translate_flip (sinkpad->flip_h, sinkpad->flip_v);
+    vblit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
+    vblit->source = sinkpad->crop;
+    vblit->destination = sinkpad->destination;
+
+    GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
+
+    if ((vblit->source.w == 0) && (vblit->source.h == 0)) {
+      vblit->source.w = GST_VIDEO_FRAME_WIDTH (vblit->frame);
+      vblit->source.h = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
+    }
+
+    if ((vblit->destination.w == 0) && (vblit->destination.h == 0)) {
+      vblit->destination.w = GST_VIDEO_INFO_WIDTH (&(vaggregator->info));
+      vblit->destination.h = GST_VIDEO_INFO_HEIGHT (&(vaggregator->info));
+    }
+
+    // Increase the number of populated blit objects.
+    n_inputs++;
+
+    GST_TRACE_OBJECT (sinkpad, "Prepared %" GST_PTR_FORMAT, inframe->buffer);
+  }
+
+  GST_OBJECT_UNLOCK (vaggregator);
+
+  // Return a GAP buffer if there are no lit objects available.
+  if (n_inputs == 0) {
+    gst_buffer_set_size (outbuffer, 0);
+    GST_BUFFER_FLAG_SET (outbuffer, GST_BUFFER_FLAG_GAP);
+    goto cleanup;
+  }
+
+  // Resize the blits array as actual number is less then the maximum.
+  if (n_inputs < composition.n_blits)
+    composition.blits = g_renew (GstVideoBlit, composition.blits, n_inputs);
+
+  composition.n_blits = n_inputs;
+
+  success = gst_video_frame_map (&outframe, &(vaggregator->info), outbuffer,
+      GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+  if (!success) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to map output buffer!");
+    goto cleanup;
+  }
+
+  composition.frame = &outframe;
+  composition.bgfill = TRUE;
+  composition.flags = 0;
+
+  GST_VIDEO_COMPOSER_LOCK (vcomposer);
+  composition.bgcolor = vcomposer->background;
+  GST_VIDEO_COMPOSER_UNLOCK (vcomposer);
+
+  // Transfer metadata from the input buffers to the output buffer.
+  gst_video_composition_populate_output_metas (vcomposer, &composition);
+
+  success = gst_video_converter_engine_compose (vcomposer->converter,
+      &composition, 1, NULL);
+
+  if (!success) {
+    GST_WARNING_OBJECT (vcomposer, "Failed to submit request to converter!");
+    goto cleanup;
+  }
+
+  // Get time difference between current time and start.
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_LOG_OBJECT (vcomposer, "Composition took %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000));
+
+cleanup:
+  if (outframe.buffer != NULL)
+    gst_video_frame_unmap (&outframe);
+
+  if (composition.blits != NULL)
+    g_free (composition.blits);
+
+  return success ? GST_FLOW_OK : GST_FLOW_ERROR;
 }
 
 static GstPad*
@@ -1465,8 +913,6 @@ gst_video_composer_request_pad (GstElement * element, GstPadTemplate * templ,
   element->sinkpads = g_list_sort (element->sinkpads,
       (GCompareFunc) gst_video_composer_zorder_compare);
 
-  vcomposer->n_inputs = element->numsinkpads;
-
   GST_OBJECT_UNLOCK (vcomposer);
 
   GST_DEBUG_OBJECT (vcomposer, "Created pad: %s", GST_PAD_NAME (pad));
@@ -1481,14 +927,15 @@ static void
 gst_video_composer_release_pad (GstElement * element, GstPad * pad)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (element);
+  guint n_inputs = 0;
 
   GST_DEBUG_OBJECT (vcomposer, "Releasing pad: %s", GST_PAD_NAME (pad));
 
   GST_OBJECT_LOCK (vcomposer);
-  vcomposer->n_inputs = element->numsinkpads - 1;
+  n_inputs = element->numsinkpads - 1;
   GST_OBJECT_UNLOCK (vcomposer);
 
-  if (0 == vcomposer->n_inputs) {
+  if (0 == n_inputs) {
     GstSegment *segment =
         &GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment;
     segment->position = GST_CLOCK_TIME_NONE;
@@ -1556,31 +1003,14 @@ gst_video_composer_finalize (GObject * object)
   if (vcomposer->converter != NULL)
     gst_video_converter_engine_free (vcomposer->converter);
 
-  if (vcomposer->requests != NULL) {
-    gst_data_queue_set_flushing (vcomposer->requests, TRUE);
-    gst_data_queue_flush (vcomposer->requests);
-    gst_object_unref (GST_OBJECT_CAST(vcomposer->requests));
-  }
-
   if (vcomposer->outpool != NULL) {
     gst_buffer_pool_set_active (vcomposer->outpool, FALSE);
     gst_object_unref (vcomposer->outpool);
   }
 
-  if (vcomposer->outinfo != NULL)
-    gst_video_info_free (vcomposer->outinfo);
-
-  g_rec_mutex_clear (&vcomposer->worklock);
   g_mutex_clear (&vcomposer->lock);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (vcomposer));
-}
-
-static gboolean
-queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
-                  guint64 time, gpointer checkdata)
-{
-  return (visible >= GST_VCOMPOSER_MAX_QUEUE_LEN) ? TRUE : FALSE;
 }
 
 static void
@@ -1589,6 +1019,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
   GObjectClass *gobject = G_OBJECT_CLASS (klass);
   GstElementClass *element = GST_ELEMENT_CLASS (klass);
   GstAggregatorClass *aggregator = GST_AGGREGATOR_CLASS (klass);
+  GstVideoAggregatorClass *vaggregator = GST_VIDEO_AGGREGATOR_CLASS (klass);
 
   GST_DEBUG_CATEGORY_INIT (gst_video_composer_debug, "qtivcomposer", 0,
       "QTI video composer");
@@ -1625,39 +1056,31 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
   aggregator->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_video_composer_decide_allocation);
   aggregator->sink_query = GST_DEBUG_FUNCPTR (gst_video_composer_sink_query);
-  aggregator->sink_event = GST_DEBUG_FUNCPTR (gst_video_composer_sink_event);
-  aggregator->src_event = GST_DEBUG_FUNCPTR (gst_video_composer_src_event);
-  aggregator->src_query = GST_DEBUG_FUNCPTR (gst_video_composer_src_query);
-  aggregator->update_src_caps =
-      GST_DEBUG_FUNCPTR (gst_video_composer_update_src_caps);
   aggregator->fixate_src_caps =
       GST_DEBUG_FUNCPTR (gst_video_composer_fixate_src_caps);
   aggregator->negotiated_src_caps =
       GST_DEBUG_FUNCPTR (gst_video_composer_negotiated_src_caps);
-  aggregator->start = GST_DEBUG_FUNCPTR (gst_video_composer_start);
   aggregator->stop = GST_DEBUG_FUNCPTR (gst_video_composer_stop);
-  aggregator->get_next_time =
-      GST_DEBUG_FUNCPTR (gst_video_composer_get_next_time);
-  aggregator->aggregate = GST_DEBUG_FUNCPTR (gst_video_composer_aggregate);
   aggregator->flush = GST_DEBUG_FUNCPTR (gst_video_composer_flush);
+
+#if GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
+  vaggregator->create_output_buffer =
+      GST_DEBUG_FUNCPTR (gst_video_composer_create_output_buffer);
+#else
+  vaggregator->get_output_buffer =
+      GST_DEBUG_FUNCPTR (gst_video_composer_create_output_buffer);
+#endif // GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
+
+  vaggregator->aggregate_frames =
+      GST_DEBUG_FUNCPTR (gst_video_composer_aggregate_frames);
 }
 
 static void
 gst_video_composer_init (GstVideoComposer * vcomposer)
 {
   g_mutex_init (&vcomposer->lock);
-  g_rec_mutex_init (&vcomposer->worklock);
 
-  vcomposer->n_inputs = 0;
-
-  vcomposer->outinfo = NULL;
   vcomposer->outpool = NULL;
-
-  vcomposer->duration = GST_CLOCK_TIME_NONE;
-
-  vcomposer->worktask = NULL;
-  vcomposer->requests =
-      gst_data_queue_new (queue_is_full_cb, NULL, NULL, vcomposer);
 
   vcomposer->backend = DEFAULT_PROP_ENGINE_BACKEND;
   vcomposer->background = DEFAULT_PROP_BACKGROUND;

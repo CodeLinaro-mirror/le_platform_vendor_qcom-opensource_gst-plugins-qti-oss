@@ -40,9 +40,9 @@
   "\nOutput:\n" \
   "  Upon executing the application, with Display option user will observe " \
   "content displayed on the screen, \n" \
-  "with File option encoded stream will be stored at /opt/video_%d.mp4" \
+  "with File option encoded stream will be stored at /etc/media/video_%d.mp4" \
 
-#define DEFAULT_OUTPUT_PATH "/opt"
+#define DEFAULT_OUTPUT_PATH "/etc/media"
 
 #define STREAM_COUNT 3
 typedef struct _GstStreamInf GstStreamInf;
@@ -150,14 +150,6 @@ create_stream_display (GstCameraAppContext *appctx, gint x, gint y, gint w, gint
 
   g_object_set (G_OBJECT (stream->capsfilter), "caps", qmmf_caps, NULL);
   gst_caps_unref (qmmf_caps);
-
-  // Set waylandsink properties
-  g_object_set (G_OBJECT (stream->waylandsink), "x", x, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "y", y, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "width", 640, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "height", 480, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "async", TRUE, NULL);
-  g_object_set (G_OBJECT (stream->waylandsink), "enable-last-sample", FALSE, NULL);
 
   // Add the elements to the pipeline
   gst_bin_add_many (GST_BIN (appctx->pipeline), stream->capsfilter,
@@ -297,8 +289,8 @@ create_stream_encode (GstCameraAppContext *appctx, gint x, gint y, gint w, gint 
   gst_caps_unref (qmmf_caps);
 
   // Set encoder properties
-  g_object_set (G_OBJECT (stream->encoder), "capture-io-mode", GST_V4L2_IO_DMABUF, NULL);
-  g_object_set (G_OBJECT (stream->encoder), "output-io-mode", GST_V4L2_IO_DMABUF_IMPORT, NULL);
+  gst_element_set_enum_property (stream->encoder, "capture-io-mode", "dmabuf");
+  gst_element_set_enum_property (stream->encoder, "output-io-mode", "dmabuf-import");
 
   // Set mp4mux in robust mode
   g_object_set (G_OBJECT (stream->mp4mux), "reserved-moov-update-period", 1000000,
@@ -743,7 +735,7 @@ main (gint argc, gchar * argv[])
   }
   g_free (output);
 
-  // By default output files are stored in /opt
+  // By default output files are stored in /etc/media
   if (NULL == appctx.output_path) {
     appctx.output_path = DEFAULT_OUTPUT_PATH;
   }

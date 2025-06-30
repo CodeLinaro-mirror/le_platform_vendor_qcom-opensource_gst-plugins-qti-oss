@@ -1,5 +1,9 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#!/usr/bin/env python3
+
+################################################################################
+# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+################################################################################
 
 import os
 import sys
@@ -11,7 +15,21 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
-DESCRIPTION = """
+# Configurations for Detection
+DEFAULT_DETECTION_MODEL = "/etc/models/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE = "yolov8"
+DEFAULT_DETECTION_LABELS = "/etc/labels/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+# Configurations for Classification
+DEFAULT_CLASSIFICATION_MODEL = "/etc/models/Resnet101_Quantized.tflite"
+DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
+DEFAULT_CLASSIFICATION_LABELS = "/etc/labels/resnet101.labels"
+DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
+    q-scales=<0.21351955831050873>;"
+
+DESCRIPTION = f"""
 The application uses:
 - YOLOv8 TFLite model to identify the object in scene from camera stream and
 overlay the bounding boxes over the detected objects
@@ -20,28 +38,14 @@ classification labels on the top left corner.
 Then the results are shown side by side on the display.
 
 The default file paths in the python script are as follows:
-- Detection model: /opt/data/YoloV8N_Detection_Quantized.tflite
-- Detection labels: /opt/data/yolov8n.labels
-- Classification model: /opt/data/Resnet101_Quantized.tflite
-- Classification labels: /opt/data/resnet101.labels
+- Detection model:       {DEFAULT_DETECTION_MODEL}
+- Detection labels:      {DEFAULT_DETECTION_LABELS}
+- Classification model:  {DEFAULT_CLASSIFICATION_MODEL}
+- Classification labels: {DEFAULT_CLASSIFICATION_LABELS}
 
 To override the default settings,
 please configure the corresponding module and constants as well.
 """
-
-# Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
-DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
-DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-    q-scales=<3.093529462814331,0.00390625,1.0>;"
-
-# Configurations for Classification
-DEFAULT_CLASSIFICATION_MODEL = "/opt/data/Resnet101_Quantized.tflite"
-DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
-DEFAULT_CLASSIFICATION_LABELS = "/opt/data/resnet101.labels"
-DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
-    q-scales=<0.21351955831050873>;"
 
 eos_received = False
 def create_element(factory_name, name):
@@ -70,24 +74,14 @@ def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        add_help=False,
+        description=DESCRIPTION,
         formatter_class=type(
-            "CustomFormatter",
-            (
-                argparse.ArgumentDefaultsHelpFormatter,
-                argparse.RawTextHelpFormatter,
-            ),
-            {},
-        ),
+            'CustomFormatter',
+            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
+            {}
+        )
     )
 
-    parser.add_argument(
-        "-h",
-        "--help",
-        action="help",
-        default=argparse.SUPPRESS,
-        help=DESCRIPTION,
-    )
     parser.add_argument(
         "--detection_model", type=str, default=DEFAULT_DETECTION_MODEL,
         help="Path to TfLite Object Detection Model"
@@ -180,7 +174,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_0"],
         "caps",
-        "video/x-raw(memory:GBM),format=NV12,compression=ubwc,\
+        "video/x-raw,format=NV12_Q08C,\
         width=640,height=360,framerate=30/1",
     )
 
@@ -217,7 +211,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_2"],
         "caps",
-        "video/x-raw(memory:GBM),format=NV12,\
+        "video/x-raw,format=NV12,\
         width=640,height=360,framerate=30/1",
     )
 
@@ -349,11 +343,23 @@ def handle_interrupt_signal(pipe, loop):
         quit_mainloop(loop)
     return GLib.SOURCE_CONTINUE
 
+def is_linux():
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "Linux" in line:
+                    return True
+    except FileNotFoundError:
+        return False
+    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+
+    # Set the environment
+    if is_linux():
+        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     Gst.init(None)
 

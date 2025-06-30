@@ -90,19 +90,25 @@ typedef enum {
  * @name: Name of the prediction.
  * @confidence: Percentage certainty that the prediction is accurate.
  * @color: Possible color that is associated with this prediction.
+ * @xtraparams: Optional custom parameters. The names for the custom parameters
+ *          inside the #GstStructure must be lower case with dash ('-') for
+ *          whitepace e.g. "param-example-name". The following parameter names
+ *          are forbidden: 'name', 'confidence' and 'color'. The name given to
+ *          the structure on creation must be the reserved naming "ExtraParams".
+ *
  *
  * Information describing prediction result from image classification models.
  * All fields are mandatory and need to be filled by the submodule.
  */
 struct _GstMLClassEntry {
-  GQuark  name;
-  gfloat  confidence;
-  guint32 color;
+  GQuark       name;
+  gfloat       confidence;
+  guint32      color;
+  GstStructure *xtraparams;
 };
 
 /**
  * GstMLClassPrediction:
- * @batch_idx: Position of the entries in the batch.
  * @entries: GArray of #GstMLClassEntry.
  * @info: Additonal info structure, beloging to the batch #GstProtectionMeta
  *        in the ML tensor buffer from which the prediction result was produced.
@@ -112,10 +118,20 @@ struct _GstMLClassEntry {
  * All fields are mandatory and need to be filled by the submodule.
  */
 struct _GstMLClassPrediction {
-  guint8             batch_idx;
   GArray             *entries;
   const GstStructure *info;
 };
+
+/**
+ * gst_ml_class_entry_cleanup:
+ * @entry: Pointer to the ML class entry.
+ *
+ * Helper function for freeing any resources allocated owned by the entry.
+ *
+ * return: None
+ */
+GST_API void
+gst_ml_class_entry_cleanup (GstMLClassEntry * entry);
 
 /**
  * gst_ml_class_prediction_cleanup:

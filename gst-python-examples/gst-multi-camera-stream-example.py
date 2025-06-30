@@ -1,5 +1,9 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+#!/usr/bin/env python3
+
+################################################################################
+# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+################################################################################
 
 import os
 import sys
@@ -25,8 +29,8 @@ Help:
 python3 gst-multi-camera-stream-example.py --help
 """
 
-DEFAULT_OUTPUT_FILE_PRIMARY_CAMERA = "/opt/cam_0.mp4"
-DEFAULT_OUTPUT_FILE_SECONDARY_CAMERA = "/opt/cam_1.mp4"
+DEFAULT_OUTPUT_FILE_PRIMARY_CAMERA = "/etc/media/cam_0.mp4"
+DEFAULT_OUTPUT_FILE_SECONDARY_CAMERA = "/etc/media/cam_1.mp4"
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 720
 DEFAULT_PRIMARY_CAMERA_ID = 0
@@ -215,13 +219,13 @@ def create_pipeline(pipeline, cameraid):
         elements["encoder_0"].set_property("output-io-mode", GST_V4L2_IO_DMABUF_IMPORT)
         elements["mux_0"].set_property("reserved-moov-update-period", 1000000)
         elements["mux_0"].set_property("reserved-bytes-per-sec", 10000)
-        elements["mux_0"].set_property("reserved-max-duration", 1000000000)
+        elements["mux_0"].set_property("reserved-max-duration",  20000000000)
 
         elements["encoder_1"].set_property("capture-io-mode", GST_V4L2_IO_DMABUF)
         elements["encoder_1"].set_property("output-io-mode", GST_V4L2_IO_DMABUF_IMPORT)
         elements["mux_1"].set_property("reserved-moov-update-period", 1000000)
         elements["mux_1"].set_property("reserved-bytes-per-sec", 10000)
-        elements["mux_1"].set_property("reserved-max-duration", 1000000000)
+        elements["mux_1"].set_property("reserved-max-duration",  20000000000)
 
         # Add elements to the pipeline
         for element in elements.values():
@@ -240,13 +244,23 @@ def create_pipeline(pipeline, cameraid):
         print("Camera 0 Filesink output", args.output_of_primary_cam)
         print("Camera 0 Filesink output", args.output_of_secondary_cam)
 
+def is_linux():
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if "Linux" in line:
+                    return True
+    except FileNotFoundError:
+        return False
+    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
 
     # Set the environment
-    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+    if is_linux():
+        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     # Initialize GStreamer
     Gst.init(None)
