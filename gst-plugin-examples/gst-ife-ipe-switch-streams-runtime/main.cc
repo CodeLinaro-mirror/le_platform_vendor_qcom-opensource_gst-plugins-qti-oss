@@ -23,7 +23,7 @@
  *   - Interactive runtime mode switching via user input
  *
  * Usage:
- *   ./gst-ife-ipe-switch-streams-runtime-example
+ *   gst-ife-ipe-switch-streams-runtime-example
  *
  * **************************************************
  * Pipeline Overview:
@@ -117,6 +117,9 @@ gst_app_context_free (_GstBufferingEncodingAppContext * appctx)
     appctx->pipeline = NULL;
   }
 
+  g_mutex_clear (&appctx->lock);
+  g_cond_clear (&appctx->eos_signal);
+
   // Finally, free the application context itself
   if (appctx != NULL)
     g_free (appctx);
@@ -132,24 +135,6 @@ check_for_exit (_GstBufferingEncodingAppContext * appctx)
   }
   g_mutex_unlock (&appctx->lock);
   return FALSE;
-}
-
-static void
-print_current_state (_GstBufferingEncodingAppContext *appctx)
-{
-  GstState state, pending;
-  GstStateChangeReturn ret;
-
-  ret = gst_element_get_state (appctx->pipeline,
-      &state, &pending, GST_CLOCK_TIME_NONE);
-
-  if (ret == GST_STATE_CHANGE_SUCCESS || ret == GST_STATE_CHANGE_ASYNC) {
-    GST_DEBUG ("Current pipeline state: %s", gst_element_state_get_name (state));
-    GST_DEBUG ("Pending state: %s", gst_element_state_get_name (pending));
-  } else {
-    g_print ("Failed to get pipeline state.\n");
-  }
-  return;
 }
 
 // In case of ASYNC state change it will properly wait for state change
@@ -169,7 +154,6 @@ wait_for_state_change (_GstBufferingEncodingAppContext * appctx)
   return TRUE;
 }
 
-// Handles state change transitions
 static void
 state_change_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
@@ -183,7 +167,7 @@ state_change_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   gst_message_parse_state_changed (message, &old, &newstate, &pending);
   GST_DEBUG ("'%s' state changed from %s to %s, pending: %s\n",
   GST_ELEMENT_NAME (pipeline), gst_element_state_get_name (old),
-  gst_element_state_get_name (newstate), gst_element_state_get_name (pending));
+      gst_element_state_get_name (newstate), gst_element_state_get_name (pending));
 }
 
 static gboolean
@@ -193,6 +177,7 @@ wait_for_eos (_GstBufferingEncodingAppContext * appctx)
   gint64 wait_time = g_get_monotonic_time () + G_GINT64_CONSTANT (2000000);
   gboolean timeout = g_cond_wait_until (&appctx->eos_signal,
       &appctx->lock, wait_time);
+
   if (!timeout) {
     g_print ("Timeout on wait for eos\n");
     g_mutex_unlock (&appctx->lock);
@@ -202,7 +187,6 @@ wait_for_eos (_GstBufferingEncodingAppContext * appctx)
   return TRUE;
 }
 
-// Handles interrupt signals like Ctrl+C etc.
 gboolean
 handle_interrupt_signal (gpointer userdata)
 {
@@ -214,15 +198,20 @@ handle_interrupt_signal (gpointer userdata)
 
   if (!gst_element_get_state (
       appctx->pipeline, &state, &pending, GST_CLOCK_TIME_NONE)) {
-    gst_printerr ("ERROR: get current state!\n");
-    gst_element_send_event (appctx->pipeline, gst_event_new_eos ());
-    return TRUE;
+    g_printerr ("ERROR: Failed to get current state!\n");
   }
 
-  if (state == GST_STATE_PLAYING)
+  if (state == GST_STATE_PLAYING || state == GST_STATE_PAUSED) {
     gst_element_send_event (appctx->pipeline, gst_event_new_eos ());
-  else
-    g_main_loop_quit (appctx->mloop);
+
+    // Wait for EOS signal (with timeout)
+    if (!wait_for_eos(appctx))
+      g_printerr ("Timeout waiting for EOS. Forcing shutdown.\n");
+    else
+      g_print ("EOS received successfully.\n");
+  }
+
+  g_main_loop_quit (appctx->mloop);
 
   g_mutex_lock (&appctx->lock);
   appctx->exit = TRUE;
@@ -260,9 +249,8 @@ error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   g_main_loop_quit (mloop);
 }
 
-// Error callback function
 static void
-app_eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
+eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
   _GstBufferingEncodingAppContext *appctx =
       (_GstBufferingEncodingAppContext *) userdata;
@@ -426,7 +414,7 @@ cleanup:
 
 static gboolean
 create_dummy_stream (_GstBufferingEncodingAppContext * appctx,
-    _GstStreamInf * stream, GstElement *qtiqmmfsrc, gint stream_id)
+    _GstStreamInf * stream, gint stream_id)
 {
   gchar temp_str[100];
 
@@ -450,7 +438,7 @@ create_dummy_stream (_GstBufferingEncodingAppContext * appctx,
   gst_bin_add_many (GST_BIN (appctx->pipeline),
       capsfilter, fakesink, NULL);
 
-  // Sync the elements state to the curtent pipeline state
+  // Sync the elements state to the current pipeline state
   gst_element_sync_state_with_parent (capsfilter);
   gst_element_sync_state_with_parent (fakesink);
 
@@ -551,7 +539,6 @@ cleanup:
   return FALSE;
 }
 
-// Create stream info
 static _GstStreamInf*
 create_stream (GstElement *qtiqmmfsrc, gint w, gint h, gboolean display)
 {
@@ -692,7 +679,7 @@ release_display_stream (_GstBufferingEncodingAppContext * appctx,
   // Get qtiqmmfsrc instance
   GstElement *qtiqmmfsrc = gst_bin_get_by_name (GST_BIN (appctx->pipeline),
       "qtiqmmfsrc");
-  GstElement *capsfilter = gst_bin_get_by_name (GST_BIN (appctx->pipeline), 
+  GstElement *capsfilter = gst_bin_get_by_name (GST_BIN (appctx->pipeline),
       "capsfilter_2");
   GstElement *waylandsink = gst_bin_get_by_name (GST_BIN (appctx->pipeline),
       "waylandsink_2");
@@ -753,6 +740,7 @@ release_dummy_stream (_GstBufferingEncodingAppContext *appctx,
       gst_object_unref (elem);
     }
   }
+  gst_object_unref(capsfilter);
 }
 
 static void
@@ -822,30 +810,29 @@ handle_ife_stream (_GstBufferingEncodingAppContext *appctx, gboolean link,
   GstElement *qtiqmmfsrc = gst_bin_get_by_name (GST_BIN (appctx->pipeline),
       "qtiqmmfsrc");
   GstPad *sink_pad = gst_element_get_static_pad (capsfilter, "sink");
-  _GstStreamInf *stream = appctx->streams[1]; // IFE stream
+  _GstStreamInf *stream = appctx->streams[1];
 
-  if (link) {
-    if (gst_pad_is_linked (stream->qmmf_pad))
-      GST_DEBUG ("Pad %s is already linked. Skipping re-link.\n",
-          gst_pad_get_name (stream->qmmf_pad));
-    else {
-      if (gst_pad_link (stream->qmmf_pad, sink_pad) != GST_PAD_LINK_OK) {
-        g_printerr ("Failed to link IFE stream pad to capsfilter_1 sink pad\n");
-        gst_object_unref (sink_pad);
-        return FALSE;
-      }
-      GST_DEBUG ("Successfully linked pad %s to capsfilter_1.\n",
-          gst_pad_get_name (stream->qmmf_pad));
+  if (link && !gst_pad_is_linked (stream->qmmf_pad)) {
+    if (gst_pad_link (stream->qmmf_pad, sink_pad) != GST_PAD_LINK_OK) {
+      g_printerr ("Failed to link IFE stream pad to capsfilter_1 sink pad\n");
+      gst_object_unref (sink_pad);
+      gst_object_unref (capsfilter);
+      gst_object_unref (qtiqmmfsrc);
+      return FALSE;
     }
 
-  } else {
-    if (gst_pad_is_linked (stream->qmmf_pad)) {
-      if (use_probe)
-        safe_unlink_pads (appctx, stream->qmmf_pad, sink_pad);
-      else
-        gst_pad_unlink (stream->qmmf_pad, sink_pad);
-    }
+    GST_DEBUG ("Successfully linked pad %s to capsfilter_1.\n",
+        gst_pad_get_name (stream->qmmf_pad));
 
+  } else if (link && gst_pad_is_linked (stream->qmmf_pad)) {
+    GST_DEBUG ("Pad %s is already linked. Skipping re-link.\n",
+        gst_pad_get_name (stream->qmmf_pad));
+
+  } else if (!link && gst_pad_is_linked (stream->qmmf_pad)) {
+    if (use_probe)
+      safe_unlink_pads (appctx, stream->qmmf_pad, sink_pad);
+    else
+      gst_pad_unlink (stream->qmmf_pad, sink_pad);
   }
 
   gst_object_unref (sink_pad);
@@ -870,28 +857,30 @@ handle_ipe_streams (_GstBufferingEncodingAppContext *appctx, gboolean link,
 
   _GstStreamInf *stream = appctx->streams[0];
 
-  if (link) {
-      if (gst_pad_is_linked (stream->qmmf_pad))
-        GST_DEBUG ("Pad %s is already linked. Skipping re-link",
-            gst_pad_get_name (stream->qmmf_pad));
-      else {
-          if (gst_pad_link (stream->qmmf_pad, sink_pad) != GST_PAD_LINK_OK) {
-            g_printerr ("Failed to link IPE stream[%d] pad to %s sink pad\n",
-                0, capsfilter_name);
-            gst_object_unref (sink_pad);
-            return FALSE;
-          }
-          GST_DEBUG ("Successfully linked pad %s to %s",
-              gst_pad_get_name (stream->qmmf_pad), capsfilter_name);
-      }
-  } else {
-    if (gst_pad_is_linked (stream->qmmf_pad)) {
-      if (use_probe)
-        safe_unlink_pads (appctx, stream->qmmf_pad, sink_pad);
-      else
-        gst_pad_unlink (stream->qmmf_pad, sink_pad);
+  if (link && !gst_pad_is_linked (stream->qmmf_pad)) {
+    if (gst_pad_link (stream->qmmf_pad, sink_pad) != GST_PAD_LINK_OK) {
+      g_printerr ("Failed to link IPE stream[%d] pad to %s sink pad\n",
+          0, capsfilter_name);
+      gst_object_unref (sink_pad);
+      gst_object_unref (capsfilter);
+      gst_object_unref (qtiqmmfsrc);
+      return FALSE;
     }
+
+    GST_DEBUG ("Successfully linked pad %s to %s",
+        gst_pad_get_name (stream->qmmf_pad), capsfilter_name);
+
+  } else if (link && gst_pad_is_linked (stream->qmmf_pad)) {
+    GST_DEBUG ("Pad %s is already linked. Skipping re-link",
+        gst_pad_get_name (stream->qmmf_pad));
+
+  } else if (!link && gst_pad_is_linked (stream->qmmf_pad)) {
+    if (use_probe)
+      safe_unlink_pads (appctx, stream->qmmf_pad, sink_pad);
+    else
+      gst_pad_unlink (stream->qmmf_pad, sink_pad);
   }
+
   gst_object_unref (sink_pad);
   gst_object_unref (capsfilter);
   gst_object_unref (qtiqmmfsrc);
@@ -903,15 +892,15 @@ switch_to_stream (_GstBufferingEncodingAppContext *appctx, _StreamMode mode,
     gboolean use_probe)
 {
   gboolean success = FALSE;
-  GstElement *qtiqmmfsrc =
-      gst_bin_get_by_name (GST_BIN (appctx->pipeline), "qtiqmmfsrc");
 
   if ((mode == MODE_BUFFERING && appctx->current_mode == MODE_BUFFERING) ||
       (mode == MODE_ENCODING && appctx->current_mode == MODE_ENCODING)) {
     g_print ("Requested Mode is already active. No switch needed.\n");
-    gst_object_unref (qtiqmmfsrc);
     return;
   }
+
+  GstElement *qtiqmmfsrc =
+      gst_bin_get_by_name (GST_BIN (appctx->pipeline), "qtiqmmfsrc");
 
   if (mode == MODE_BUFFERING) {
 
@@ -920,6 +909,7 @@ switch_to_stream (_GstBufferingEncodingAppContext *appctx, _StreamMode mode,
     GST_DEBUG ("unlinked IPE stream");
     if (!success) {
       g_printerr ("Failed to unlink IPE streams.\n");
+      gst_object_unref (qtiqmmfsrc);
       return;
     }
 
@@ -927,6 +917,7 @@ switch_to_stream (_GstBufferingEncodingAppContext *appctx, _StreamMode mode,
     GST_DEBUG ("linked IFE stream");
     if (!success) {
       g_printerr ("Failed to link IFE streams.\n");
+      gst_object_unref (qtiqmmfsrc);
       return;
     }
 
@@ -949,6 +940,7 @@ switch_to_stream (_GstBufferingEncodingAppContext *appctx, _StreamMode mode,
     GST_DEBUG ("unlinked IFE stream");
     if (!success) {
       g_printerr ("Failed to unlink IFE streams.\n");
+      gst_object_unref (qtiqmmfsrc);
       return;
     }
 
@@ -956,6 +948,7 @@ switch_to_stream (_GstBufferingEncodingAppContext *appctx, _StreamMode mode,
     GST_DEBUG ("linked IPE stream");
     if (!success) {
       g_printerr ("Failed to link IPE streams.\n");
+      gst_object_unref (qtiqmmfsrc);
       return;
     }
 
@@ -1001,11 +994,9 @@ static void* user_input_thread (gpointer user_data)
     switch (choice) {
       case 1:
         switch_to_stream (appctx, MODE_BUFFERING, TRUE);
-        print_current_state (appctx);
         break;
       case 2:
         switch_to_stream (appctx, MODE_ENCODING, TRUE);
-        print_current_state (appctx);
         break;
       case 3:
         g_print ("Exiting application...\n");
@@ -1046,6 +1037,7 @@ main (gint argc, gchar *argv[])
 
   if (!appctx->pipeline || !qtiqmmfsrc) {
     g_printerr ("Failed to create pipeline or qtiqmmfsrc.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
@@ -1054,30 +1046,35 @@ main (gint argc, gchar *argv[])
   success = create_qmmf_streams (appctx);
   if (!success) {
     g_printerr ("Failed to create QMMF streams.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
-  success = create_dummy_stream (appctx, appctx->streams[0], qtiqmmfsrc, 0);
+  success = create_dummy_stream (appctx, appctx->streams[0], 0);
   if (!success) {
     g_printerr ("Failed to create dummy stream 0.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
   success = create_encoder_stream (appctx, appctx->streams[1], qtiqmmfsrc, 1);
   if (!success) {
     g_printerr ("Failed to create encoder stream 1.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
   success = create_display_stream (appctx, appctx->streams[2], qtiqmmfsrc, 2);
   if (!success) {
     g_printerr ("Failed to create display stream 2.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
   success = create_encoder_stream (appctx, appctx->streams[3], qtiqmmfsrc, 3);
   if (!success) {
     g_printerr ("Failed to create encoder stream 3.\n");
+    gst_app_context_free (appctx);
     return -1;
   }
 
@@ -1102,7 +1099,7 @@ main (gint argc, gchar *argv[])
   gst_bus_add_signal_watch (bus);
   g_signal_connect (bus, "message::state-changed",
       G_CALLBACK (state_change_cb), appctx->pipeline);
-  g_signal_connect (bus, "message::eos", G_CALLBACK (app_eos_cb), appctx);
+  g_signal_connect (bus, "message::eos", G_CALLBACK (eos_cb), appctx);
   g_signal_connect (bus, "message::warning", G_CALLBACK (warning_cb), NULL);
   g_signal_connect (bus, "message::error", G_CALLBACK (error_cb), mloop);
   gst_object_unref (bus);
@@ -1112,19 +1109,25 @@ main (gint argc, gchar *argv[])
       g_unix_signal_add (SIGINT, handle_interrupt_signal, appctx);
 
   if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_PAUSED))
-    wait_for_state_change (appctx);
+      gst_element_set_state (appctx->pipeline, GST_STATE_PAUSED)) {
+    if (!wait_for_state_change (appctx)) {
+      gst_app_context_free (appctx);
+      return -1;
+    }
+  }
 
   release_dummy_stream (appctx, appctx->streams[0]);
   switch_to_stream (appctx, MODE_BUFFERING, FALSE);
 
   if (GST_STATE_CHANGE_ASYNC ==
-      gst_element_set_state (appctx->pipeline, GST_STATE_PLAYING))
-    wait_for_state_change (appctx);
+      gst_element_set_state (appctx->pipeline, GST_STATE_PLAYING)) {
+    if (!wait_for_state_change (appctx)) {
+      gst_app_context_free (appctx);
+      return -1;
+    }
+  }
 
   g_print ("pipeline in PLAYING state\n");
-
-  print_current_state (appctx);
 
   pthread_t thread;
   pthread_create (&thread, NULL, user_input_thread, appctx);
@@ -1140,9 +1143,6 @@ main (gint argc, gchar *argv[])
 
   // Unlink all stream if any
   release_all_streams (appctx);
-
-  g_mutex_clear (&appctx->lock);
-  g_cond_clear (&appctx->eos_signal);
 
   // Free the application context
   g_print ("\n Free the Application context\n");
