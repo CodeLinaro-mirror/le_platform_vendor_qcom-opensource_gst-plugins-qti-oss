@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -111,6 +111,7 @@ struct _GstC2VEncoder {
   guint32              num_ltr_frames;
   gint32               priority;
   GstC2TemporalLayer   temp_layer;
+  gint32               vbv_delay;
 };
 
 struct _GstC2VEncoderClass {

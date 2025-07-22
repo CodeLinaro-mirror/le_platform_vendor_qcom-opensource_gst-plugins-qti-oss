@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -161,6 +161,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::C2StreamHierBPreconditions::output::PARAM_TYPE },
   { GST_C2_PARAM_SUPER_FRAME,
       qc2::C2VideoSuperFrameSetting::input::PARAM_TYPE },
+  { GST_C2_PARAM_VBV_DELAY,
+      qc2::C2VBVDelayTuning::input::PARAM_TYPE },
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -212,6 +214,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_DOWN_SCALAR, "DOWN_SCALAR" },
   { GST_C2_PARAM_HIER_BPRECONDITIONS, "HIER_BPREDCONDITIONS" },
   { GST_C2_PARAM_SUPER_FRAME, "SUPER_FRAME" },
+  { GST_C2_PARAM_VBV_DELAY, "VBV_DELAY"},
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -933,6 +936,13 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(n_super_frames);
       break;
     }
+    case GST_C2_PARAM_VBV_DELAY: {
+      qc2::C2VBVDelayTuning::input delay;
+
+      delay.value = *(reinterpret_cast<gint32*>(payload));
+      c2param = C2Param::Copy(delay);
+      break;
+    }
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -1330,6 +1340,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           reinterpret_cast<qc2::C2VideoSuperFrameSetting::input*>(c2param.get());
 
       *(reinterpret_cast<guint32*>(payload)) = n_super_frames->value;
+      break;
+    }
+    case GST_C2_PARAM_VBV_DELAY: {
+      auto delay =
+          reinterpret_cast<qc2::C2VBVDelayTuning::input*>(c2param.get());
+
+      *(reinterpret_cast<gint32*>(payload)) = delay->value;
       break;
     }
     default:
