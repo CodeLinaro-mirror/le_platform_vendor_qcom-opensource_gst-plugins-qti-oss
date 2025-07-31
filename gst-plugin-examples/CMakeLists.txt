@@ -51,6 +51,7 @@ if (ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE)
   add_subdirectory(gst-concurrent-cameras-example)
   add_subdirectory(gst-single-4k-example)
   add_subdirectory(gst-two-1080p-example)
+  add_subdirectory(gst-cameras-sensors-example)
 endif () # ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA AND ENABLE_DISPLAY)
