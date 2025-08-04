@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -8,7 +8,7 @@
 
 #include "suite-utils.h"
 
-#define CASE_DECODE_DISPLAT_FILE "/etc/media/Draw_1080p_180s_30FPS.mp4"
+#define CAMERA_FILE_PREFIX       "/etc/media"
 
 G_BEGIN_DECLS
 
@@ -62,7 +62,7 @@ camera_transform_display_pipeline (GstCapsParameters * params1,
 /**
  * camera_transform_display_pipeline:
  * @params1: Caps parameters for camera output.
- * @location: MP4 location for file source.
+ * @filename: File name, it should be Mp4 file.
  * @duration: The pipeline running time in seconds.
  *
  * Function for creating the camera and MP4 decode videos
@@ -72,10 +72,11 @@ camera_transform_display_pipeline (GstCapsParameters * params1,
  */
 void
 camera_composer_display_pipeline (GstCapsParameters * params1,
-    gchar *location, guint duration);
+    gchar *filename, guint duration);
 
 /**
  * camera_decoder_display_pipeline:
+ * @filename: File name, it should be Mp4 file.
  * @duration: The pipeline running time in seconds.
  *
  * Function for decode MP4 videos to display.
@@ -83,7 +84,7 @@ camera_composer_display_pipeline (GstCapsParameters * params1,
  * return: None
  */
 void
-camera_decoder_display_pipeline (guint duration);
+camera_decoder_display_pipeline (gchar *filename, guint duration);
 
 G_END_DECLS
 

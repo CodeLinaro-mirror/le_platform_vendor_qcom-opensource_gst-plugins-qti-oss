@@ -37,20 +37,6 @@
 GST_DEBUG_CATEGORY_EXTERN (gst_overlay_debug);
 #define GST_CAT_DEFAULT gst_overlay_debug
 
-#define GST_META_IS_OBJECT_DETECTION(meta) \
-    ((meta->info->api == GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE) && \
-     (GST_VIDEO_ROI_META_CAST (meta)->roi_type != \
-          g_quark_from_static_string ("ImageRegion")))
-
-#define GST_META_IS_IMAGE_CLASSIFICATION(meta) \
-    (meta->info->api == GST_VIDEO_CLASSIFICATION_META_API_TYPE)
-
-#define GST_META_IS_POSE_ESTIMATION(meta) \
-    (meta->info->api == GST_VIDEO_LANDMARKS_META_API_TYPE)
-
-#define GST_META_IS_CV_OPTCLFLOW(meta) \
-    (meta->info->api == GST_CV_OPTCLFLOW_META_API_TYPE)
-
 #define GST_OVERLAY_DEFAULT_X          0
 #define GST_OVERLAY_DEFAULT_Y          0
 #define GST_OVERLAY_DEFAULT_FONTSIZE   12
@@ -98,24 +84,6 @@ gst_overlay_image_free (GstOverlayImage * simage)
 {
   if (simage->path != NULL)
     g_free (simage->path);
-}
-
-guint
-gst_meta_overlay_type (GstMeta * meta)
-{
-  if (GST_META_IS_OBJECT_DETECTION (meta))
-    return GST_OVERLAY_TYPE_DETECTION;
-
-  if (GST_META_IS_IMAGE_CLASSIFICATION (meta))
-    return GST_OVERLAY_TYPE_CLASSIFICATION;
-
-  if (GST_META_IS_POSE_ESTIMATION (meta))
-    return GST_OVERLAY_TYPE_POSE_ESTIMATION;
-
-  if (GST_META_IS_CV_OPTCLFLOW (meta))
-    return GST_OVERLAY_TYPE_OPTCLFLOW;
-
-  return GST_OVERLAY_TYPE_MAX;
 }
 
 gboolean
@@ -444,8 +412,13 @@ gst_extract_strings (const GValue * value, GArray * strings)
     if (gst_structure_has_field (structure, "contents")) {
       const gchar *contents = gst_structure_get_string (structure, "contents");
 
-      g_free (string->contents);
-      string->contents = g_strdup (contents);
+      // Raise the flag for clearing cached blit if contents is different.
+      changed |= (g_strcmp0 (contents, string->contents) != 0);
+
+      if (changed) {
+        g_free (string->contents);
+        string->contents = g_strdup (contents);
+      }
     }
 
     if (gst_structure_has_field (structure, "position")) {
@@ -483,7 +456,7 @@ gst_extract_strings (const GValue * value, GArray * strings)
     if (gst_structure_has_field (structure, "fontsize")) {
       gst_structure_get_int (structure, "fontsize", &fontsize);
 
-      // Raise the flag for clearing cached blit if color is different.
+      // Raise the flag for clearing cached blit if fontsize is different.
       changed |= string->fontsize != fontsize;
 
       string->fontsize = fontsize;

@@ -15,9 +15,9 @@
  *
  * Usage:
  * For Transcoding AVC to HEVC:
- * gst-video-transcode-example -i /opt/avc.mp4 -c 1 -o /opt/hevc.mp4
+ * gst-video-transcode-example -i /etc/media/avc.mp4 -c 1 -o /etc/media/hevc.mp4
  * For Transcoding HEVC to AVC:
- * gst-video-transcode-example -i /opt/hevc.mp4 -c 2 -o /opt/avc.mp4
+ * gst-video-transcode-example -i /etc/media/hevc.mp4 -c 2 -o /etc/media/avc.mp4
  *
  * Help:
  * gst-video-transcode-example --help
@@ -45,7 +45,8 @@
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_FILENAME "/opt/transcoded_video.mp4"
+#define DEFAULT_INPUT_FILENAME "/etc/media/video.mp4"
+#define DEFAULT_OUTPUT_FILENAME "/etc/media/transcoded_video.mp4"
 
 #define GST_APP_SUMMARY "This application is designed to showcase video "\
   "transcoding capabilities. It can accept user input files encoded in" \
@@ -53,9 +54,9 @@
   "or AVC format.\n" \
   "\nCommand:\n" \
   "For AVC to HEVC transcode\n" \
-  "  gst-video-transcode-example -i /opt/avc.mp4 -c 1 -o /opt/hevc.mp4 \n" \
+  "  gst-video-transcode-example -i /etc/media/avc.mp4 -c 1 -o /etc/media/hevc.mp4 \n" \
   "For HEVC to AVC transcode\n" \
-  "  gst-video-transcode-example -i /opt/hevc.mp4 -c 2 -o /opt/avc.mp4 \n" \
+  "  gst-video-transcode-example -i /etc/media/hevc.mp4 -c 2 -o /etc/media/avc.mp4 \n" \
   "\nOutput:\n" \
   "  Upon execution, application will generates output mp4 file at given path"
 
@@ -87,9 +88,9 @@ gst_app_context_new ()
   ctx->pipeline = NULL;
   ctx->plugins = NULL;
   ctx->mloop = NULL;
-  ctx->input_file = NULL;
+  ctx->input_file = g_strdup (DEFAULT_INPUT_FILENAME);
   ctx->output_file = const_cast<gchar *> (DEFAULT_OUTPUT_FILENAME);
-  ctx->input_format = GST_VCODEC_NONE;
+  ctx->input_format = GST_VCODEC_AVC;
 
   return ctx;
 }
@@ -134,7 +135,7 @@ gst_app_context_free (GstTranscodeAppContext * appctx)
   }
 
   if (appctx->input_file != NULL)
-    g_free ((gpointer)appctx->input_file);
+    g_free (appctx->input_file);
 
   if (appctx->output_file != NULL &&
     appctx->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME))
@@ -293,12 +294,6 @@ main (gint argc, gchar *argv[])
   GstTranscodeAppContext *appctx = NULL;
   guint intrpt_watch_id = 0;
 
-  // if user gives only app name print the help option
-  if (argc < 2) {
-    g_print ("\n usage: gst-video-transcode-example --help \n");
-    return -1;
-  }
-
   // create the app context
   appctx = gst_app_context_new ();
   if (NULL == appctx) {
@@ -310,14 +305,14 @@ main (gint argc, gchar *argv[])
   GOptionEntry entries[] = {
     { "input_file", 'i', 0, G_OPTION_ARG_FILENAME, &appctx->input_file,
       "Input Filename - i/p AVC/HEVC mp4 file path and name",
-      "-i /opt/<h264_file/h265_file>.mp4" },
+      "-i /etc/media/<h264_file/h265_file>.mp4" },
     { "input_codec", 'c', 0, G_OPTION_ARG_INT, &appctx->input_format,
       "Input codec type - AVC/HEVC",
        "-c 1(AVC)/2(HEVC)" },
     { "output_file", 'o', 0, G_OPTION_ARG_FILENAME, &appctx->output_file,
       "Output Filename - o/p filename & path where user want to \
       store AVC/HEVC stream",
-      "-o /opt/<h264_file/h265_file>.mp4 " },
+      "-o /etc/media/<h264_file/h265_file>.mp4 " },
     { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 

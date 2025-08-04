@@ -84,7 +84,7 @@ namespace camera = qmmf;
 #define PLAYING_STATE_OPTION           "3"
 #define CHECK_METADATA_OPTION          "4"
 
-#define QMMFSRC_MODE_OPTION            "c"
+#define PLUGIN_MODE_OPTION             "p"
 #define QUIT_OPTION                    "q"
 #define MENU_BACK_OPTION               "b"
 
@@ -103,7 +103,7 @@ namespace camera = qmmf;
 #define PIPELINE_EOS_MESSAGE   "APP_PIPELINE_EOS_MSG"
 #define STDIN_MESSAGE          "APP_STDIN_MSG"
 
-#define GST_APP_CONTEXT_CAST(obj)           ((GstAppContext*)(obj))
+#define GST_APP_CONTEXT_CAST(obj)           ((GstAppContext*) (obj))
 
 typedef enum {
   VIDEO_METADATA_OPTION = 1,
@@ -193,6 +193,94 @@ gst_sample_release (GstSample * sample)
 #endif
 }
 
+static gboolean
+wait_stdin_message (GAsyncQueue * queue, gchar ** input)
+{
+  GstStructure *message = NULL;
+
+  // Clear input from previous use.
+  g_clear_pointer (input, g_free);
+
+  // Block the thread until there's no input from the user
+  // or eos/error msg occurs.
+  while ((message = (GstStructure *)g_async_queue_pop (queue)) != NULL) {
+    if (gst_structure_has_name (message, TERMINATE_MESSAGE)) {
+      gst_structure_free (message);
+      // Returning FALSE will cause menu thread to terminate.
+      return FALSE;
+    }
+
+    if (gst_structure_has_name (message, STDIN_MESSAGE))
+      *input = g_strdup (gst_structure_get_string (message, "input"));
+
+    if (*input != NULL)
+      break;
+
+    // Clear message to terminate the loop after having popped the data.
+    gst_structure_free (message);
+  }
+
+  gst_structure_free (message);
+  return TRUE;
+}
+
+static gint
+print_pipeline_elements (GstElement * pipeline, GstStructure * plugins,
+    const gchar * factory_name)
+{
+  GString *graph = g_string_new (NULL);
+  guint index = 0;
+
+  GstIterator *it = NULL;
+  GValue item = G_VALUE_INIT;
+  gboolean done = FALSE;
+
+  APPEND_SECTION_SEPARATOR (graph);
+
+  it = gst_bin_iterate_sorted (GST_BIN (pipeline));
+
+  while (!done) {
+    switch (gst_iterator_next (it, &item)) {
+      case GST_ITERATOR_OK: {
+        GstElement *element = GST_ELEMENT (g_value_get_object (&item));
+        gchar *name = gst_element_get_name (element);
+        gchar *field = g_strdup_printf ("%u", index);
+
+        if (gst_element_get_factory (element) ==
+            gst_element_factory_find (factory_name)) {
+          gst_structure_set (plugins, field, G_TYPE_STRING, name, NULL);
+          g_string_append_printf (graph, "   (%2u) %-25s\n", index, name);
+
+          g_free (field);
+          g_free (name);
+
+          g_value_reset (&item);
+          index++;
+        }
+
+        break;
+      }
+      case GST_ITERATOR_RESYNC:
+        gst_iterator_resync (it);
+        break;
+      case GST_ITERATOR_ERROR:
+      case GST_ITERATOR_DONE:
+        done = TRUE;
+        break;
+    }
+  }
+
+  APPEND_SECTION_SEPARATOR (graph);
+
+  g_value_unset (&item);
+  gst_iterator_free (it);
+
+  g_print ("%s", graph->str);
+  g_string_free (graph, TRUE);
+
+  return index;
+}
+
 static GstElement*
 get_element_from_pipeline (GstElement * pipeline, const gchar * factory_name)
 {
@@ -217,6 +305,90 @@ free:
   gst_iterator_free (it);
   gst_object_unref (elem_factory);
 
+  return element;
+}
+
+static GstElement*
+auto_select_qmmf_element_from_pipeline (GstAppContext * appctx, gchar * input)
+{
+  GstElement *element = NULL;
+  GstStructure *plugins = gst_structure_new_empty ("plugins");
+
+  gint index = print_pipeline_elements (appctx->pipeline, plugins, "qtiqmmfsrc");
+
+  g_print ("Auto choose Qmmfsrc index: %s\n", input);
+
+  // Choose index as last choice.
+  if (gst_structure_has_field (plugins, input)) {
+    const gchar *name = gst_structure_get_string (plugins, input);
+
+    if ((element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), name)) ==
+        NULL)
+      g_printerr ("Invalid plugin index!\n");
+
+  } else if (!g_str_equal (input, "")) {
+    if ((element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), input)) ==
+        NULL)
+      g_printerr ("Invalid plugin name!\n");
+  }
+
+  gst_structure_free (plugins);
+
+exit:
+  return element;
+}
+
+static GstElement*
+select_element_from_pipeline (GstAppContext * appctx,
+    const gchar * factory_name, gchar ** chosen_index)
+{
+  gchar *input = NULL;
+  GstElement *element = NULL;
+  GstStructure *plugins = gst_structure_new_empty ("plugins");
+
+  // Print a graph with all plugins in the pipeline.
+  gint index = print_pipeline_elements (appctx->pipeline, plugins, factory_name);
+
+  if (index == 1) {
+    g_print ("\nChoose the only one selection.\n");
+
+    const gchar *name = gst_structure_get_string (plugins, "0");
+
+    if ((element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), name)) ==
+        NULL)
+      g_printerr ("Invalid plugin index!\n");
+
+    *chosen_index = g_strdup("0");
+  } else {
+    // Choose a plugin to control.
+    g_print ("\nEnter plugin name or its index (or press Enter to return): ");
+
+    // If FALSE is returned termination signal has been issued.
+    if (!wait_stdin_message (appctx->messages, &input)) {
+      gst_structure_free (plugins);
+      goto exit;
+    }
+
+    if (gst_structure_has_field (plugins, input)) {
+      const gchar *name = gst_structure_get_string (plugins, input);
+
+      if ((element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), name)) ==
+          NULL)
+        g_printerr ("Invalid plugin index!\n");
+
+    } else if (!g_str_equal (input, "")) {
+      if ((element = gst_bin_get_by_name (GST_BIN (appctx->pipeline), input)) ==
+          NULL)
+        g_printerr ("Invalid plugin name!\n");
+    }
+
+    *chosen_index = g_strdup(input);
+  }
+
+  gst_structure_free (plugins);
+
+exit:
+  g_free (input);
   return element;
 }
 
@@ -268,8 +440,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
   static gboolean in_progress = FALSE, buffering = FALSE;
 
   switch (GST_MESSAGE_TYPE (message)) {
-    case GST_MESSAGE_ERROR:
-    {
+    case GST_MESSAGE_ERROR: {
       GError *error = NULL;
       gchar *debug = NULL;
 
@@ -288,8 +459,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
       g_main_loop_quit (appctx->mloop);
       break;
     }
-    case GST_MESSAGE_WARNING:
-    {
+    case GST_MESSAGE_WARNING: {
       GError *error = NULL;
       gchar *debug = NULL;
 
@@ -302,8 +472,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 
       break;
     }
-    case GST_MESSAGE_EOS:
-    {
+    case GST_MESSAGE_EOS: {
       g_print ("\nReceived End-of-Stream from '%s' ...\n",
           GST_MESSAGE_SRC_NAME (message));
 
@@ -312,8 +481,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 
       break;
     }
-    case GST_MESSAGE_REQUEST_STATE:
-    {
+    case GST_MESSAGE_REQUEST_STATE: {
       gchar *name = gst_object_get_path_string (GST_MESSAGE_SRC (message));
       GstState state;
 
@@ -328,8 +496,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 
       break;
     }
-    case GST_MESSAGE_STATE_CHANGED:
-    {
+    case GST_MESSAGE_STATE_CHANGED: {
       GstState oldstate, newstate, pending;
 
       // Handle state changes only for the pipeline.
@@ -348,8 +515,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 
       break;
     }
-    case GST_MESSAGE_BUFFERING:
-    {
+    case GST_MESSAGE_BUFFERING: {
       gint percent = 0;
 
       gst_message_parse_buffering (message, &percent);
@@ -379,8 +545,7 @@ handle_bus_message (GstBus * bus, GstMessage * message, gpointer userdata)
 
       break;
     }
-    case GST_MESSAGE_PROGRESS:
-    {
+    case GST_MESSAGE_PROGRESS: {
       GstProgressType type;
       gchar *code = NULL, *text = NULL;
 
@@ -448,37 +613,6 @@ handle_stdin_source (GIOChannel * source, GIOCondition condition,
       "input", G_TYPE_STRING, input, NULL));
   g_free (input);
 
-  return TRUE;
-}
-
-static gboolean
-wait_stdin_message (GAsyncQueue * queue, gchar ** input)
-{
-  GstStructure *message = NULL;
-
-  // Clear input from previous use.
-  g_clear_pointer (input, g_free);
-
-  // Block the thread until there's no input from the user
-  // or eos/error msg occurs.
-  while ((message = (GstStructure *)g_async_queue_pop (queue)) != NULL) {
-    if (gst_structure_has_name (message, TERMINATE_MESSAGE)) {
-      gst_structure_free (message);
-      // Returning FALSE will cause menu thread to terminate.
-      return FALSE;
-    }
-
-    if (gst_structure_has_name (message, STDIN_MESSAGE))
-      *input = g_strdup (gst_structure_get_string (message, "input"));
-
-    if (*input != NULL)
-      break;
-
-    // Clear message to terminate the loop after having popped the data.
-    gst_structure_free (message);
-  }
-
-  gst_structure_free (message);
   return TRUE;
 }
 
@@ -745,11 +879,8 @@ get_tag_typechar (const gchar * section_name, const gchar * tag_name,
       break;
   }
 
-  if (!meta->exists (*tag_id)) {
-    g_print ("Warning: Tag doesn't exist in the static-metadata.\n");
-  }
   if ((-1 == tag_type) || (-1 == *tag_id)) {
-    g_print ("Cannot find tag_type and tag_id.\n");
+    g_print ("Cannot find tag_type or tag_id.\n");
     *type = g_strdup ("null");
   }
 
@@ -761,6 +892,7 @@ get_tag (const gchar * section_name, const gchar * tag_name,
     ::camera::CameraMetadata * meta, gchar ** type)
 {
   gchar *tag_value = NULL;
+  GString *tag_value_gstr = g_string_new (NULL);
   status_t status = 0;
   guint32 tag_id = 0;
   gint tag_type = -1;
@@ -773,36 +905,96 @@ get_tag (const gchar * section_name, const gchar * tag_name,
     case TYPE_BYTE:
       *type = g_strdup ("Unsigned Int8");
       if (meta->exists (tag_id)) {
-        guint8 value = meta->find (tag_id).data.u8[0];
-        tag_value = g_strdup_printf ("%" G_GUINT16_FORMAT, value);
+        if (meta->find (tag_id).count == 1) {
+          guint8 value = meta->find (tag_id).data.u8[0];
+          tag_value = g_strdup_printf ("%" G_GUINT16_FORMAT, value);
+        } else {
+          tag_value_gstr = g_string_new ("<");
+          for (guint i = 0; i < meta->find (tag_id).count; i++) {
+            g_string_append_printf (tag_value_gstr, "%" G_GUINT16_FORMAT,
+                meta->find (tag_id).data.u8[i]);
+            if (i != meta->find (tag_id).count - 1)
+              g_string_append(tag_value_gstr, ",");
+          }
+          g_string_append(tag_value_gstr, ">");
+          tag_value = tag_value_gstr->str;
+        }
       }
       break;
     case TYPE_INT32:
       *type = g_strdup ("Int32");
       if (meta->exists (tag_id)) {
-        gint32 value = meta->find (tag_id).data.i32[0];
-        tag_value = g_strdup_printf ("%" G_GINT32_FORMAT, value);
+        if (meta->find (tag_id).count == 1) {
+          gint32 value = meta->find (tag_id).data.i32[0];
+          tag_value = g_strdup_printf ("%" G_GINT32_FORMAT, value);
+        } else {
+          tag_value_gstr = g_string_new ("<");
+          for (guint i = 0; i < meta->find (tag_id).count; i++) {
+            g_string_append_printf (tag_value_gstr, "%" G_GINT32_FORMAT,
+                meta->find (tag_id).data.i32[i]);
+            if (i != meta->find (tag_id).count - 1)
+              g_string_append(tag_value_gstr, ",");
+          }
+          g_string_append(tag_value_gstr, ">");
+          tag_value = tag_value_gstr->str;
+        }
       }
       break;
     case TYPE_FLOAT:
       *type = g_strdup ("Float");
       if (meta->exists (tag_id)) {
-        gfloat value = meta->find (tag_id).data.f[0];
-        tag_value = g_strdup_printf ("%f", value);
+        if (meta->find (tag_id).count == 1) {
+          gfloat value = meta->find (tag_id).data.f[0];
+          tag_value = g_strdup_printf ("%f", value);
+        } else {
+          tag_value_gstr = g_string_new ("<");
+          for (guint i = 0; i < meta->find (tag_id).count; i++) {
+            g_string_append_printf (tag_value_gstr, "%f",
+                meta->find (tag_id).data.f[i]);
+            if (i != meta->find (tag_id).count - 1)
+              g_string_append(tag_value_gstr, ",");
+          }
+          g_string_append(tag_value_gstr, ">");
+          tag_value = tag_value_gstr->str;
+        }
       }
       break;
     case TYPE_INT64:
       *type = g_strdup ("Int64");
       if (meta->exists (tag_id)) {
-        gint64 value = meta->find (tag_id).data.i64[0];
-        tag_value = g_strdup_printf ("%" G_GINT64_FORMAT, value);
+        if (meta->find (tag_id).count == 1) {
+          gint64 value = meta->find (tag_id).data.i64[0];
+          tag_value = g_strdup_printf ("%" G_GINT64_FORMAT, value);
+        } else {
+          tag_value_gstr = g_string_new ("<");
+          for (guint i = 0; i < meta->find (tag_id).count; i++) {
+            g_string_append_printf (tag_value_gstr, "%" G_GINT64_FORMAT,
+                meta->find (tag_id).data.i64[i]);
+            if (i != meta->find (tag_id).count - 1)
+              g_string_append(tag_value_gstr, ",");
+          }
+          g_string_append(tag_value_gstr, ">");
+          tag_value = tag_value_gstr->str;
+        }
       }
       break;
     case TYPE_DOUBLE:
       *type = g_strdup ("Double");
       if (meta->exists (tag_id)) {
-        gdouble value = meta->find (tag_id).data.d[0];
-        tag_value = g_strdup_printf ("%lf", value);
+        if (meta->find (tag_id).count == 1) {
+          gdouble value = meta->find (tag_id).data.d[0];
+          tag_value = g_strdup_printf ("%lf", value);
+        } else {
+          tag_value_gstr = g_string_new ("<");
+          for (guint i = 0; i < meta->find (tag_id).count; i++) {
+            g_string_append_printf (tag_value_gstr, "%lf",
+                meta->find (tag_id).data.d[i]);
+            if (i != meta->find (tag_id).count - 1)
+              g_string_append(tag_value_gstr, ",");
+          }
+          g_string_append(tag_value_gstr, ">");
+          tag_value = tag_value_gstr->str;
+        }
       }
       break;
     case TYPE_RATIONAL:
@@ -830,14 +1022,20 @@ get_tag (const gchar * section_name, const gchar * tag_name,
 }
 
 static gint
-set_tag (GstElement * pipeline, const gchar * section_name,
-    const gchar * tag_name, gchar * new_value)
+set_tag (GstAppContext * appctx, const gchar * section_name,
+    const gchar * tag_name, gchar * new_value, gchar * chosen_index)
 {
-  GstElement *camsrc = get_element_from_pipeline (pipeline, "qtiqmmfsrc");
+  GstElement *camsrc = auto_select_qmmf_element_from_pipeline (appctx,
+      chosen_index);
   ::camera::CameraMetadata *meta = nullptr;
   status_t status = -1;
   guint32 tag_id = 0;
   gint tag_type = -1;
+
+  if (NULL == camsrc || NULL == new_value) {
+    g_printerr ("ERROR: camsrc or input is NULL\n");
+    goto free;
+  }
 
   g_object_get (G_OBJECT (camsrc), "video-metadata", &meta, NULL);
 
@@ -846,73 +1044,232 @@ set_tag (GstElement * pipeline, const gchar * section_name,
     goto free;
 
   switch (tag_type) {
-    case TYPE_BYTE:
-    {
-      gchar *endptr;
-      const guint8 tag_value = g_ascii_strtoull ((const gchar *) new_value,
-          &endptr, 0);
+    case TYPE_BYTE: {
+      if (meta->find (tag_id).count == 1) {
+        gchar *endptr;
+        const guint8 tag_value = g_ascii_strtoull ((const gchar *) new_value,
+            &endptr, 0);
 
-      if (*endptr == '\0' && new_value != endptr)
-        status = meta->update (tag_id, &tag_value, 1);
-      else
-        g_print ("Invalid input!\n");
+        if (*endptr == '\0' && new_value != endptr)
+          status = meta->update (tag_id, &tag_value, 1);
+        else
+          g_print ("Invalid input!\n");
+      } else {
+        guint count = (guint) (meta->find (tag_id).count);
+        guint8 *result = g_new0 (guint8, count);
+        gchar *endptr, *trimmed;
+        gchar **split_input;
 
-      break;
-    }
-    case TYPE_INT32:
-    {
-      gchar *endptr;
-      const gint32 tag_value = g_ascii_strtoll ((const gchar *) new_value,
-          &endptr, 0);
+        if (strlen (new_value) < count * 2 + 1) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          break;
+        }
 
-      if (*endptr == '\0' && new_value != endptr)
-        status = meta->update (tag_id, &tag_value, 1);
-      else
-        g_print ("Invalid input!\n");
+        trimmed = g_strndup (new_value + 1, strlen (new_value) - 2);
+        split_input = g_strsplit (trimmed, ",", -1);
+        if (g_strv_length (split_input) != count) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          g_strfreev (split_input);
+          break;
+        }
 
-      break;
-    }
-    case TYPE_FLOAT:
-    {
-      gchar *endptr;
-      const gfloat tag_value = g_ascii_strtod ((const gchar *) new_value,
-          &endptr);
+        for (guint i = 0; i < count; i++) {
+          g_strstrip (split_input[i]);
+          result[i] = g_ascii_strtoll ((const gchar *) split_input[i], &endptr, 0);
 
-      if (*endptr == '\0' && new_value != endptr)
-        status = meta->update (tag_id, &tag_value, 1);
-      else
-        g_print ("Invalid input!\n");
-
-      break;
-    }
-    case TYPE_INT64:
-    {
-      gchar *endptr;
-      const gint64 tag_value = g_ascii_strtoll ((const gchar *) new_value,
-          &endptr, 0);
-
-      if (*endptr == '\0' && new_value != endptr)
-        status = meta->update (tag_id, &tag_value, 1);
-      else
-        g_print ("Invalid input!\n");
+          if (!(*endptr == '\0' && split_input[i] != endptr)) {
+            g_print ("Invalid input!\n");
+            g_strfreev (split_input);
+            break;
+          }
+        }
+        status = meta->update (tag_id, result, count);
+        g_strfreev (split_input);
+      }
 
       break;
     }
-    case TYPE_DOUBLE:
-    {
-      gchar *endptr;
-      const gdouble tag_value = g_ascii_strtod ((const gchar *) new_value,
-          &endptr);
+    case TYPE_INT32: {
+      if (meta->find (tag_id).count == 1) {
+        gchar *endptr;
+        const gint32 tag_value = g_ascii_strtoll ((const gchar *) new_value,
+            &endptr, 0);
 
-      if (*endptr == '\0' && new_value != endptr)
-        status = meta->update (tag_id, &tag_value, 1);
-      else
-        g_print ("Invalid input!\n");
+        if (*endptr == '\0' && new_value != endptr)
+          status = meta->update (tag_id, &tag_value, 1);
+        else
+          g_print ("Invalid input!\n");
+      } else {
+        guint count = (guint) (meta->find (tag_id).count);
+        gint32 *result = g_new0 (gint32, count);
+        gchar *endptr, *trimmed;
+        gchar **split_input;
+
+        if (strlen (new_value) < count * 2 + 1) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          break;
+        }
+
+        trimmed = g_strndup (new_value + 1, strlen (new_value) - 2);
+        split_input = g_strsplit (trimmed, ",", -1);
+        if (g_strv_length (split_input) != count) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          g_strfreev (split_input);
+          break;
+        }
+
+        for (guint i = 0; i < count; i++) {
+          g_strstrip (split_input[i]);
+          result[i] = g_ascii_strtoll ((const gchar *) split_input[i], &endptr, 0);
+
+          if (!(*endptr == '\0' && split_input[i] != endptr)) {
+            g_print ("Invalid input!\n");
+            g_strfreev (split_input);
+            break;
+          }
+        }
+        status = meta->update (tag_id, result, count);
+        g_strfreev (split_input);
+      }
 
       break;
     }
-    case TYPE_RATIONAL:
-    {
+    case TYPE_FLOAT: {
+      if (meta->find (tag_id).count == 1) {
+        gchar *endptr;
+        const gfloat tag_value = g_ascii_strtod ((const gchar *) new_value,
+            &endptr);
+
+        if (*endptr == '\0' && new_value != endptr)
+          status = meta->update (tag_id, &tag_value, 1);
+        else
+          g_print ("Invalid input!\n");
+      } else {
+        guint count = (guint) (meta->find (tag_id).count);
+        gfloat *result = g_new0 (gfloat, count);
+        gchar *endptr, *trimmed;
+        gchar **split_input;
+
+        if (strlen (new_value) < count * 2 + 1) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          break;
+        }
+
+        trimmed = g_strndup (new_value + 1, strlen (new_value) - 2);
+        split_input = g_strsplit (trimmed, ",", -1);
+        if (g_strv_length (split_input) != count) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          g_strfreev (split_input);
+          break;
+        }
+
+        for (guint i = 0; i < count; i++) {
+          g_strstrip (split_input[i]);
+          result[i] = g_ascii_strtoll ((const gchar *) split_input[i], &endptr, 0);
+
+          if (!(*endptr == '\0' && split_input[i] != endptr)) {
+            g_print ("Invalid input!\n");
+            g_strfreev (split_input);
+            break;
+          }
+        }
+        status = meta->update (tag_id, result, count);
+        g_strfreev (split_input);
+      }
+
+      break;
+    }
+    case TYPE_INT64: {
+      if (meta->find (tag_id).count == 1) {
+        gchar *endptr;
+        const gint64 tag_value = g_ascii_strtoll ((const gchar *) new_value,
+            &endptr, 0);
+
+        if (*endptr == '\0' && new_value != endptr)
+          status = meta->update (tag_id, &tag_value, 1);
+        else
+          g_print ("Invalid input!\n");
+      } else {
+        guint count = (guint) (meta->find (tag_id).count);
+        gint64 *result = g_new0 (gint64, count);
+        gchar *endptr, *trimmed;
+        gchar **split_input;
+
+        if (strlen (new_value) < count * 2 + 1) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          break;
+        }
+
+        trimmed = g_strndup (new_value + 1, strlen (new_value) - 2);
+        split_input = g_strsplit (trimmed, ",", -1);
+        if (g_strv_length (split_input) != count) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          g_strfreev (split_input);
+          break;
+        }
+
+        for (guint i = 0; i < count; i++) {
+          g_strstrip (split_input[i]);
+          result[i] = g_ascii_strtoll ((const gchar *) split_input[i], &endptr, 0);
+
+          if (!(*endptr == '\0' && split_input[i] != endptr)) {
+            g_print ("Invalid input!\n");
+            g_strfreev (split_input);
+            break;
+          }
+        }
+        status = meta->update (tag_id, result, count);
+        g_strfreev (split_input);
+      }
+
+      break;
+    }
+    case TYPE_DOUBLE: {
+      if (meta->find (tag_id).count == 1) {
+        gchar *endptr;
+        const gdouble tag_value = g_ascii_strtod ((const gchar *) new_value,
+            &endptr);
+
+        if (*endptr == '\0' && new_value != endptr)
+          status = meta->update (tag_id, &tag_value, 1);
+        else
+          g_print ("Invalid input!\n");
+      } else {
+        guint count = (guint) (meta->find (tag_id).count);
+        gdouble *result = g_new0 (gdouble, count);
+        gchar *endptr, *trimmed;
+        gchar **split_input;
+
+        if (strlen (new_value) < count * 2 + 1) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          break;
+        }
+
+        trimmed = g_strndup (new_value + 1, strlen (new_value) - 2);
+        split_input = g_strsplit (trimmed, ",", -1);
+        if (g_strv_length (split_input) != count) {
+          g_printerr ("Invalid input. Use format: '<num0,num1,...>' (without quotes)\n");
+          g_strfreev (split_input);
+          break;
+        }
+
+        for (guint i = 0; i < count; i++) {
+          g_strstrip (split_input[i]);
+          result[i] = g_ascii_strtoll ((const gchar *) split_input[i], &endptr, 0);
+
+          if (!(*endptr == '\0' && split_input[i] != endptr)) {
+            g_print ("Invalid input!\n");
+            g_strfreev (split_input);
+            break;
+          }
+        }
+        status = meta->update (tag_id, result, count);
+        g_strfreev (split_input);
+      }
+
+      break;
+    }
+    case TYPE_RATIONAL: {
       gchar *endptr1, *endptr2;
       gint32 tag_value_num, tag_value_den;
       gchar **split_input = g_strsplit (new_value, "/", -1);
@@ -980,8 +1337,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
   status_t status = -1;
 
   switch (tag_type) {
-    case TYPE_BYTE:
-    {
+    case TYPE_BYTE: {
       gchar *endptr;
       const guint8 tag_value = g_ascii_strtoull ((const gchar *) new_value,
           &endptr, 0);
@@ -995,8 +1351,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
 
       break;
     }
-    case TYPE_INT32:
-    {
+    case TYPE_INT32: {
       gchar *endptr;
       const gint32 tag_value = g_ascii_strtoll ((const gchar *) new_value,
           &endptr, 0);
@@ -1010,8 +1365,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
 
       break;
     }
-    case TYPE_FLOAT:
-    {
+    case TYPE_FLOAT: {
       gchar *endptr;
       const gfloat tag_value = g_ascii_strtod ((const gchar *) new_value,
           &endptr);
@@ -1025,8 +1379,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
 
       break;
     }
-    case TYPE_INT64:
-    {
+    case TYPE_INT64: {
       gchar *endptr;
       const gint64 tag_value = g_ascii_strtoll ((const gchar *) new_value,
           &endptr, 0);
@@ -1040,8 +1393,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
 
       break;
     }
-    case TYPE_DOUBLE:
-    {
+    case TYPE_DOUBLE: {
       gchar *endptr;
       const gdouble tag_value = g_ascii_strtod ((const gchar *) new_value,
           &endptr);
@@ -1055,8 +1407,7 @@ collect_tags (GstElement * pipeline, const gchar * section_name,
 
       break;
     }
-    case TYPE_RATIONAL:
-    {
+    case TYPE_RATIONAL: {
       gchar *endptr1, *endptr2;
       gint32 tag_value_num, tag_value_den;
       gchar **split_input = g_strsplit (new_value, "/", -1);
@@ -1113,10 +1464,19 @@ free:
   return 0;
 }
 
-static gint
-apply_tags (GstElement * pipeline, ::camera::CameraMetadata * meta_collect)
+static gboolean
+apply_tags (GstAppContext * appctx, ::camera::CameraMetadata * meta_collect)
 {
-  GstElement *camsrc = get_element_from_pipeline (pipeline, "qtiqmmfsrc");
+  g_print ("Setting session-metadata in which qtiqmmfsrc:\n");
+
+  gchar * chosen_index = NULL;
+
+  GstElement *camsrc = select_element_from_pipeline (appctx,
+      "qtiqmmfsrc", &chosen_index);
+
+  if (NULL == camsrc)
+    return FALSE;
+
   g_object_set (G_OBJECT (camsrc), "session-metadata", meta_collect, NULL);
 
   g_print ("Setting session-metadata is done.\n");
@@ -1128,7 +1488,7 @@ apply_tags (GstElement * pipeline, ::camera::CameraMetadata * meta_collect)
     meta_collect->clear ();
   }
 
-  return 0;
+  return TRUE;
 }
 
 static void
@@ -1468,7 +1828,7 @@ print_menu ()
 
 static gboolean
 handle_tag_menu (GstAppContext * appctx, gchar * prop,
-    GstMetadataMenuOption option)
+    GstMetadataMenuOption option, gchar * chosen_index)
 {
   gchar *str = NULL;
   gchar *section = NULL, *tag = NULL, *type = NULL, *value = NULL;
@@ -1491,8 +1851,12 @@ handle_tag_menu (GstAppContext * appctx, gchar * prop,
     if (!validate_input_tag (str, &section, &tag))
       continue;
 
-    camsrc = get_element_from_pipeline (appctx->pipeline,
-        "qtiqmmfsrc");
+    camsrc = auto_select_qmmf_element_from_pipeline (appctx, chosen_index);
+    if (NULL == camsrc) {
+      g_printerr ("ERROR: camsrc is NULL\n");
+      goto exit;
+    }
+
     g_object_get (G_OBJECT (camsrc), prop, &meta, NULL);
     gst_object_unref (camsrc);
 
@@ -1524,7 +1888,7 @@ handle_tag_menu (GstAppContext * appctx, gchar * prop,
         return FALSE;
 
       if (!g_str_equal (str, "\n"))
-        set_tag (appctx->pipeline, section, tag, str);
+        set_tag (appctx, section, tag, str, chosen_index);
     }
     g_free (section);
     g_free (tag);
@@ -1547,10 +1911,7 @@ collect_tags_menu_sessionmetadata (GstAppContext * appctx, gchar * prop,
   guint32 tag_id = 0;
   gboolean active = TRUE;
 
-  GstElement *camsrc = get_element_from_pipeline (appctx->pipeline,
-      "qtiqmmfsrc");
-  ::camera::CameraMetadata *meta_static = nullptr;
-  g_object_get (G_OBJECT (camsrc), "static-metadata", &meta_static, NULL);
+  ::camera::CameraMetadata meta;
 
   while (TRUE) {
     g_print ("Enter section name and tag name separated by space " \
@@ -1566,19 +1927,19 @@ collect_tags_menu_sessionmetadata (GstAppContext * appctx, gchar * prop,
     if (!validate_input_tag (str, &section, &tag))
       continue;
 
-    tag_type = get_tag_typechar (section, tag, meta_static, &type, &tag_id);
+    tag_type = get_tag_typechar (section, tag, &meta, &type, &tag_id);
     if (-1 == tag_type) {
-      g_printerr ("No Target Type in static-metadata.\n");
+      g_printerr ("No Target Type in metadata.\n");
       goto exit;
     }
-    g_print ("Target Type in static-metadata: %s\n", type);
+    g_print ("Target Type in session-metadata: %s\n", type);
     g_print ("Enter the new value: ");
 
     if (!wait_stdin_message (appctx->messages, &str))
       return FALSE;
 
     if (!g_str_equal (str, "\n"))
-      collect_tags (appctx->pipeline, section, tag, str, 
+      collect_tags (appctx->pipeline, section, tag, str,
           meta_collect, tag_type, tag_id);
 
     g_free (section);
@@ -1587,12 +1948,6 @@ collect_tags_menu_sessionmetadata (GstAppContext * appctx, gchar * prop,
   }
 
 exit:
-  if (meta_static != NULL) {
-    delete meta_static;
-    meta_static = NULL;
-  }
-  gst_object_unref (camsrc);
-
   g_free (str);
   return active;
 }
@@ -1606,6 +1961,7 @@ handle_metadata_menu (GstAppContext * appctx,
   gchar *str = NULL, *endptr = NULL;
   gboolean active = TRUE;
   gint input = 0;
+  gchar *chosen_index = NULL;
 
   print_metadata_menu (*prop);
 
@@ -1618,7 +1974,12 @@ handle_metadata_menu (GstAppContext * appctx,
   }
 
   if (!g_str_equal (*prop, "session-metadata")) {
-    camsrc = get_element_from_pipeline (appctx->pipeline, "qtiqmmfsrc");
+    camsrc = select_element_from_pipeline (appctx, "qtiqmmfsrc", &chosen_index);
+    if (NULL == camsrc) {
+      g_printerr ("ERROR: camsrc is NULL\n");
+      goto exit;
+    }
+
     g_object_get (G_OBJECT (camsrc), *prop, &meta, NULL);
     gst_object_unref (camsrc);
 
@@ -1648,11 +2009,11 @@ handle_metadata_menu (GstAppContext * appctx,
         }
         break;
       case GET_TAG:
-        active = handle_tag_menu (appctx, *prop, GET_TAG);
+        active = handle_tag_menu (appctx, *prop, GET_TAG, chosen_index);
         break;
       case SET_TAG:
         if (g_str_equal (*prop, "video-metadata"))
-          active = handle_tag_menu (appctx, *prop, SET_TAG);
+          active = handle_tag_menu (appctx, *prop, SET_TAG, chosen_index);
         break;
       default:
         break;
@@ -1664,8 +2025,7 @@ handle_metadata_menu (GstAppContext * appctx,
             meta_collect);
         break;
       case APPLY_TAGS:
-        if (0 == apply_tags (appctx->pipeline, meta_collect))
-          active = TRUE;
+        active = apply_tags (appctx, meta_collect);
         break;
       default:
         break;
@@ -1679,6 +2039,7 @@ exit:
   }
 
   g_free (str);
+  g_free (chosen_index);
   return active;
 }
 
@@ -1731,8 +2092,8 @@ print_pipeline_options (GstElement * pipeline)
   APPEND_OTHER_OPTS_SECTION (options);
   g_string_append_printf (options, "   (%s) %-25s: %s\n", CHECK_METADATA_OPTION,
       "META", "Check or set metadata in READY/PAUSED/PLAYING state");
-  g_string_append_printf (options, "   (%s) %-25s: %s\n", QMMFSRC_MODE_OPTION,
-      "Qmmfsrc Mode", "Choose an option in qmmfsrc to control");
+  g_string_append_printf (options, "   (%s) %-25s: %s\n", PLUGIN_MODE_OPTION,
+      "Plugin Mode", "Choose a plugin which to control");
   g_string_append_printf (options, "   (%s) %-25s: %s\n", QUIT_OPTION,
       "Quit", "Exit the application");
 
@@ -1800,14 +2161,42 @@ gst_pipeline_menu (GstAppContext *appctx, GstElement ** element, gchar ** prop)
       goto exit;
     }
 
-  } else if (g_str_equal (input, QMMFSRC_MODE_OPTION)) {
-    *element = get_element_from_pipeline (pipeline, "qtiqmmfsrc");
-    if (NULL == *element) {
-      g_printerr ("No qtiqmmfsrc found in pipeline.\n");
-      active = FALSE;
-      goto exit;
+  } else if (g_str_equal (input, PLUGIN_MODE_OPTION)) {
+    GstStructure *plugins = gst_structure_new_empty ("plugins");
+
+    // Print a graph with all plugins in the pipeline.
+    gint index = print_pipeline_elements (pipeline, plugins, "qtiqmmfsrc");
+
+    if (index == 1) {
+      g_print ("\nChoose the only one selection.\n");
+
+      const gchar *name = gst_structure_get_string (plugins, "0");
+
+      if ((*element = gst_bin_get_by_name (GST_BIN (pipeline), name)) == NULL)
+        g_printerr ("Invalid plugin index!\n");
+    } else {
+      // Choose a plugin to control.
+      g_print ("\nEnter plugin name or its index (or press Enter to return): ");
+
+      // If FALSE is returned termination signal has been issued.
+      if (!wait_stdin_message (messages, &input)) {
+        gst_structure_free (plugins);
+        goto exit;
+      }
+
+      if (gst_structure_has_field (plugins, input)) {
+        const gchar *name = gst_structure_get_string (plugins, input);
+
+        if ((*element = gst_bin_get_by_name (GST_BIN (pipeline), name)) == NULL)
+          g_printerr ("Invalid plugin index!\n");
+
+      } else if (!g_str_equal (input, "")) {
+        if ((*element = gst_bin_get_by_name (GST_BIN (pipeline), input)) == NULL)
+          g_printerr ("Invalid plugin name!\n");
+      }
     }
 
+    gst_structure_free (plugins);
   } else if (g_str_equal (input, QUIT_OPTION)) {
     g_print ("\nQuit pressed!!\n");
 
@@ -1959,8 +2348,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
   APPEND_SECTION_SEPARATOR (info);
 
   switch (G_PARAM_SPEC_VALUE_TYPE (propspecs)) {
-    case G_TYPE_UINT:
-    {
+    case G_TYPE_UINT: {
       guint value;
       GParamSpecUInt *range = G_PARAM_SPEC_UINT (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -1969,8 +2357,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_INT:
-    {
+    case G_TYPE_INT: {
       gint value;
       GParamSpecInt *range = G_PARAM_SPEC_INT (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -1979,8 +2366,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_ULONG:
-    {
+    case G_TYPE_ULONG: {
       gulong value;
       GParamSpecULong *range = G_PARAM_SPEC_ULONG (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -1989,8 +2375,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_LONG:
-    {
+    case G_TYPE_LONG: {
       glong value;
       GParamSpecLong *range = G_PARAM_SPEC_LONG (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -1999,8 +2384,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_UINT64:
-    {
+    case G_TYPE_UINT64: {
       guint64 value;
       GParamSpecUInt64 *range = G_PARAM_SPEC_UINT64 (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -2010,8 +2394,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_INT64:
-    {
+    case G_TYPE_INT64: {
       gint64 value;
       GParamSpecInt64 *range = G_PARAM_SPEC_INT64 (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -2021,8 +2404,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_FLOAT:
-    {
+    case G_TYPE_FLOAT: {
       gfloat value;
       GParamSpecFloat *range = G_PARAM_SPEC_FLOAT (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -2031,8 +2413,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           "Range: %15.7g - %15.7g\n", value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_DOUBLE:
-    {
+    case G_TYPE_DOUBLE: {
       gdouble value;
       GParamSpecDouble *range = G_PARAM_SPEC_DOUBLE (propspecs);
       g_object_get (object, propspecs->name, &value, NULL);
@@ -2041,8 +2422,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           "Range: %15.7g - %15.7g\n", value, range->minimum, range->maximum);
       break;
     }
-    case G_TYPE_BOOLEAN:
-    {
+    case G_TYPE_BOOLEAN: {
       gboolean value;
       g_object_get (object, propspecs->name, &value, NULL);
 
@@ -2050,8 +2430,7 @@ print_property_info (GObject * object, GParamSpec *propspecs)
           "0(false), 1(true)\n", value ? "true" : "false");
       break;
     }
-    case G_TYPE_STRING:
-    {
+    case G_TYPE_STRING: {
       gchar *value;
       g_object_get (object, propspecs->name, &value, NULL);
       g_string_append_printf (info, " Current value: %s\n", value);

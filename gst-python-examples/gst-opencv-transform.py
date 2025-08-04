@@ -15,6 +15,8 @@ gi.require_version('Gst', '1.0')
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
+DEFAULT_INPUT_FILESOURCE = "/etc/media/video.mp4"
+
 # Constants
 DESCRIPTION = """
 This app demonstrate video playback using opencv api's.
@@ -36,7 +38,7 @@ def read_file():
         )
     )
     parser.add_argument(
-        "--infile", type=str, required=True,
+        "--infile", type=str, default=DEFAULT_INPUT_FILESOURCE,
         help="Input file to stream"
     )
     args = parser.parse_args()
@@ -61,18 +63,23 @@ def read_file():
         if out.isOpened():
             print("videowriter open success")
 
-        while True:
-            ret_val, frame = cap.read()
-            if not ret_val:
-                break
-            out.write(frame)
-            cv2.waitKey(1)
+        try:
+            while True:
+                ret_val, frame = cap.read()
+                if not ret_val:
+                    break
+                out.write(frame)
+                cv2.waitKey(1)
+        except KeyboardInterrupt:
+            print("\nInterrupted by user. Exiting gracefully...")
+        finally:
+            cap.release()
+            out.release()
+            cv2.destroyAllWindows()
+
     else:
         print("Capture API failed")
 
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
 
 
 def main():

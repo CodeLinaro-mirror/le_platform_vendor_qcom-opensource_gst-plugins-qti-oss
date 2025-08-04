@@ -178,10 +178,14 @@ struct _GstFcvVideoConverter
       uint8_t *__restrict destination, uint32_t d_width, uint32_t d_height,
       uint32_t d_stride, uint8_t value1, uint8_t value2, uint8_t value3,
       const uint8_t *__restrict mask, uint32_t m_stride);
-  FASTCV_API void  (*SetElementsc4u8) (
+  FASTCV_API void (*SetElementsc4u8) (
       uint8_t *__restrict destination, uint32_t d_width, uint32_t d_height,
       uint32_t d_stride, uint8_t value1, uint8_t value2, uint8_t value3,
       uint8_t value4, const uint8_t *__restrict mask, uint32_t m_stride);
+  FASTCV_API void (*SetElementss32) (
+      int32_t *__restrict dst, uint32_t dstWidth, uint32_t dstHeight,
+      uint32_t dstStride, int32_t value, const uint8_t *__restrict mask,
+      uint32_t maskStride);
 
   FASTCV_API void (*Flipu8) (
       const uint8_t *source, uint32_t s_width, uint32_t s_height,
@@ -364,12 +368,12 @@ struct _GstFcvVideoConverter
       const uint8_t *__restrict source, uint32_t s_width, uint32_t s_height,
       uint32_t s_stride, uint8_t *__restrict destination, uint32_t d_stride);
 
-  FASTCV_API fcvStatus (*Addu8)(
+  FASTCV_API fcvStatus (*Addu8) (
       const uint8_t *src1, uint32_t width, uint32_t height,
       uint32_t src1Stride, const uint8_t *__restrict src2,
       uint32_t src2Stride, fcvConvertPolicy policy,
       uint8_t *dst, uint32_t dstStride);
-  FASTCV_API fcvStatus (*Adds16_v2)(
+  FASTCV_API fcvStatus (*Adds16_v2) (
       const int16_t* src1, uint32_t width, uint32_t height,
       uint32_t src1Stride, const int16_t *__restrict src2,
       uint32_t src2Stride, fcvConvertPolicy policy,
@@ -630,12 +634,16 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
+      // Update plane 0 offset.
+      object->planes[0].data =
+          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 0) +
+              (y * object->planes[0].stride) + x * 2);
       object->planes[1].stride = GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1);
       object->planes[1].width = GST_ROUND_UP_2 (width);
       object->planes[1].height = GST_ROUND_UP_2 (height) / 2;
       object->planes[1].data =
           (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 1) +
-              (y * object->planes[1].stride) + (x * 2));
+              ((GST_ROUND_UP_2 (y) / 2) * object->planes[1].stride) + (x * 2));
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
       break;
     default:
@@ -1837,6 +1845,7 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
 {
   guint8 red = 0x00, green = 0x00, blue = 0x00, alpha = 0x00;
   guint8 luma = 0x00, cb = 0x00, cr = 0x00;
+  guint32 luma10bit = 0x0, cbcr10bit = 0x0;
 
   red = EXTRACT_RED_VALUE (color);
   green = EXTRACT_GREEN_VALUE (color);
@@ -1852,6 +1861,16 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
         (green * (-(kg / (1.0 - kb)) / 2)) + (blue * 0.5);
     cr = 128 + (red * 0.5) + (green * (-(kg / (1.0 - kr)) / 2)) +
         (blue * (-(kb / (1.0 - kr)) / 2));
+  }
+
+  if (GST_VIDEO_FRAME_FORMAT (frame) == GST_VIDEO_FORMAT_P010_10LE) {
+    luma10bit = (guint32) (luma * (1023 / 255)) & 0x3FF;
+    // Two pixel luma data.
+    luma10bit = luma10bit << 16 | luma10bit;
+
+    // Cb/Cr data.
+    cbcr10bit = (((guint32) (cb * (1023 / 255))) << 16) |
+        ((guint32) (cr * (1023 / 255)));
   }
 
   GST_TRACE ("Fill buffer %p with 0x%X - %ux%u %s", frame->buffer, color,
@@ -1931,6 +1950,15 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
           GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), blue, green, red, alpha,
           NULL, 0);
       break;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      convert->SetElementss32 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
+          GST_VIDEO_FRAME_WIDTH (frame) / 2, GST_VIDEO_FRAME_HEIGHT (frame),
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), luma10bit, NULL, 0);
+      convert->SetElementss32 (GST_VIDEO_FRAME_PLANE_DATA (frame, 1),
+          GST_VIDEO_FRAME_WIDTH (frame) / 2,
+          GST_ROUND_UP_2 (GST_VIDEO_FRAME_HEIGHT (frame)) / 2,
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1), cbcr10bit, NULL, 0);
+        break;
     default:
       GST_ERROR ("Unsupported format %s!",
           gst_video_format_to_string (GST_VIDEO_FRAME_FORMAT (frame)));
@@ -1945,31 +1973,38 @@ gst_fcv_video_converter_add (GstFcvVideoConverter * convert,
     GstFcvObject * s_obj, GstFcvObject * d_obj)
 {
   GstFcvPlane *s_luma = NULL, *s_chroma = NULL;
+  GstFcvPlane *t_luma = NULL, *t_chroma = NULL;
   GstFcvPlane *d_luma = NULL, *d_chroma = NULL;
   GstFcvObject l_obj = { 0, };
 
+  /************************************************************
+   *   Matrix addition of two int16_t type matrices.
+   *                                    xxxxxxxxx
+   *        ****          ****          xxx****xx
+   *        ****     +    ****          xxx****xx
+   *        ****          ****          xxx****xx
+   *                                    xxxxxxxxx
+   *
+   ************************************************************/
+
   g_return_val_if_fail (!(s_obj->flags & GST_FCV_FLAG_RGB), FALSE);
 
-  // Use stage object if format or stride differs, or 90/270 rotation is pending.
-  //if ((s_obj->format != d_obj->format)) {
-    guint width = 0, height = 0;
-    gboolean success = FALSE;
+  // Use stage object.
+  guint width = s_obj->planes[0].width;
+  guint height = s_obj->planes[0].height;
+  gboolean success = FALSE;
 
-    width = s_obj->planes[0].width;
-    height = s_obj->planes[0].height;
+  // Init temp object with source object data.
+  success = gst_fcv_video_converter_stage_object_init (convert, &l_obj,
+      width, height, s_obj->format);
+  g_return_val_if_fail (success, FALSE);
 
-    // Temporary store the destination object data into local intermediary.
-    //gst_fcv_copy_object (d_obj, &l_obj);
-
-    // Override destination object with stage object data, revert it later.
-    success = gst_fcv_video_converter_stage_object_init (convert, &l_obj,
-        width, height, s_obj->format);
-    g_return_val_if_fail (success, FALSE);
-  //}
-
-  // Convenient local pointers to the source and destination planes.
+  // Convenient local pointers to the source/temp/destination planes.
   s_luma = &(s_obj->planes[0]);
   s_chroma = &(s_obj->planes[1]);
+
+  t_luma = &(l_obj.planes[0]);
+  t_chroma = &(l_obj.planes[1]);
 
   d_luma = &(d_obj->planes[0]);
   d_chroma = &(d_obj->planes[1]);
@@ -1979,28 +2014,20 @@ gst_fcv_video_converter_add (GstFcvVideoConverter * convert,
   GST_LOG ("Source %s Plane 1: %" GST_FCV_PLANE_FORMAT,
       gst_video_format_to_string (s_obj->format), GST_FCV_PLANE_ARGS (s_chroma));
 
-  GST_LOG ("Temp %s Plane 0: %ux%u Stride[%u] Data[%p]",
-      gst_video_format_to_string (s_obj->format),l_obj.planes[0].width,
-      l_obj.planes[0].height, l_obj.planes[0].stride, l_obj.planes[0].data);
-
-  GST_LOG ("Temp %s Plane 1: %ux%u Stride[%u] Data[%p]",
-      gst_video_format_to_string (s_obj->format), l_obj.planes[1].width,
-      l_obj.planes[1].height, l_obj.planes[1].stride, l_obj.planes[1].data);
-
   GST_LOG ("Destination %s Plane 0: %" GST_FCV_PLANE_FORMAT,
       gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_luma));
   GST_LOG ("Destination %s Plane 1: %" GST_FCV_PLANE_FORMAT,
       gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_chroma));
 
   convert->Adds16_v2 (s_luma->data, s_luma->width,
-      s_luma->height, s_luma->stride, l_obj.planes[0].data,
-      l_obj.planes[0].stride, 0, d_luma->data, d_luma->stride);
+      s_luma->height, s_luma->stride, t_luma->data,
+      t_luma->stride, 0, d_luma->data, d_luma->stride);
 
   convert->Adds16_v2 (s_chroma->data, s_chroma->width,
-      s_chroma->height, s_chroma->stride, l_obj.planes[1].data,
-      l_obj.planes[1].stride, 0, d_chroma->data, d_chroma->stride);
+      s_chroma->height, s_chroma->stride, t_chroma->data,
+      t_chroma->stride, 0, d_chroma->data, d_chroma->stride);
 
-  // If source is a stage object from previous operation, release stage buffers.
+  // No operations any more, release stage buffers.
   if (s_obj->flags & GST_FCV_FLAG_STAGED)
     gst_fcv_video_converter_stage_object_deinit (convert, s_obj);
 
@@ -2039,9 +2066,10 @@ gst_fcv_video_converter_process (GstFcvVideoConverter * convert,
     // Calculate the combined scale factor.
     scale = w_scale * h_scale;
 
-    add = ((w_scale == 1.0) && (h_scale == 1.0) &&
-        (rotate == 0) && (flip == 0) && (s_obj->format == d_obj->format) &&
-        (s_obj->format == GST_VIDEO_FORMAT_P010_10LE));
+    // For P010 compose, simple copy.
+    add = ((s_obj->format == GST_VIDEO_FORMAT_P010_10LE) &&
+        (s_obj->format == d_obj->format) && (w_scale == 1.0) &&
+        (h_scale == 1.0) && (rotate == 0) && (flip == 0));
 
     if (add)
       gst_fcv_video_converter_add(convert, s_obj, d_obj);
@@ -2227,6 +2255,7 @@ gst_fcv_video_converter_new (GstStructure * settings)
 
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc3u8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc4u8);
+  success &= LOAD_FCV_SYMBOL (convert, SetElementss32);
 
   success &= LOAD_FCV_SYMBOL (convert, Flipu8);
   success &= LOAD_FCV_SYMBOL (convert, Flipu16);

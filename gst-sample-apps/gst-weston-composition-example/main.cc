@@ -17,9 +17,9 @@
 *
 * Usage:
 * For qtivcomposer composing picture in picture:
-* gst-weston-composition-example -t 0 -i /opt/<h264_file>.mp4
+* gst-weston-composition-example -t 0 -i /etc/media/<h264_file>.mp4
 * For qtivcomposer composing side by side:
-* gst-weston-composition-example -t 1 -i /opt/<h264_file>.mp4
+* gst-weston-composition-example -t 1 -i /etc/media/<h264_file>.mp4
 *
 * ***********************************************************************
 *
@@ -38,6 +38,8 @@
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
+#define INPUT_FILE_PATH "/etc/media/video.mp4"
+
 #define GST_APP_SUMMARY                                                       \
   "This application showcases the composition of various sources,           " \
   "specifically live camera input and an offline file. \n  The composition " \
@@ -45,9 +47,9 @@
   "  The choice of composition is performed using qtivcomposer plugins  .\n" \
   "\nCommand:\n"                                                             \
   "\nFor qtivcomposer composing picture in picture:\n"                        \
-  "  gst-weston-composition-example -t 0 -i /opt/<h264_file>.mp4\n"           \
+  "  gst-weston-composition-example -t 0 -i /etc/media/<h264_file>.mp4\n"           \
   "\nFor qtivcomposer composing side by side:\n"                              \
-  "  gst-weston-composition-example -t 1 -i /opt/<h264_file>.mp4\n"           \
+  "  gst-weston-composition-example -t 1 -i /etc/media/<h264_file>.mp4\n"           \
   "\nOutput:\n"                                                               \
   "  Upon executing the application, the offline video and live camera "      \
   "composition can be observed on the display."
@@ -79,7 +81,7 @@ gst_app_context_new ()
   ctx->pipeline = NULL;
   ctx->mloop = NULL;
   ctx->plugins = NULL;
-  ctx->input_file = NULL;
+  ctx->input_file = g_strdup (INPUT_FILE_PATH);
   ctx->composition = GST_PIP_COMPOSE;
   return ctx;
 }
@@ -121,7 +123,7 @@ gst_app_context_free (GstComposeAppContext * appctx)
   }
 
   if (appctx->input_file != NULL)
-    g_free ((gpointer)appctx->input_file);
+    g_free (appctx->input_file);
 
   // Finally, free the application context itself
   if (appctx != NULL)
@@ -351,12 +353,6 @@ main (gint argc, gchar *argv[])
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
 
-  // If the user only provided the application name, print the help option
-  if (argc < 2) {
-    g_print ("\n usage: gst-weston-composition-example -h \n");
-    return -1;
-  }
-
   // Setting Display environment variables
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
@@ -378,7 +374,7 @@ main (gint argc, gchar *argv[])
     },
     { "input_file", 'i', 0, G_OPTION_ARG_FILENAME, &appctx->input_file,
       "input AVC mp4 Filename",
-      "  e.g. -i /opt/<h264_file>.mp4"
+      "  e.g. -i /etc/media/<h264_file>.mp4"
     },
     { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };

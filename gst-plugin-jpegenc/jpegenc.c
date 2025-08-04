@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -132,8 +132,10 @@ gst_jpeg_enc_create_pool (GstJPEGEncoder * jpegenc, GstCaps * caps)
     return NULL;
   }
 
-  GST_INFO_OBJECT (jpegenc, "Jpeg encoder uses ION memory");
-  pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
+  if ((pool = gst_image_buffer_pool_new ()) == NULL) {
+    GST_ERROR_OBJECT (jpegenc, "Failed to create image pool!");
+    return NULL;
+  }
 
   // Align size to 64 lines
   gint alignedw = (GST_VIDEO_INFO_WIDTH (&info) + 64-1) & ~(64-1);
@@ -144,16 +146,19 @@ gst_jpeg_enc_create_pool (GstJPEGEncoder * jpegenc, GstCaps * caps)
   gst_buffer_pool_config_set_params (config, caps, aligned_size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
-  gst_buffer_pool_config_set_allocator (config, allocator, NULL);
+  allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+  if (allocator == NULL) {
+    GST_ERROR_OBJECT (jpegenc, "Failed to create allocator");
+    gst_clear_object (&pool);
+    return NULL;
+  }
 
-  gst_buffer_pool_config_add_option (config,
-      GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
+  GST_INFO_OBJECT (jpegenc, "Buffer pool uses DMA memory");
+  gst_buffer_pool_config_set_allocator (config, allocator, NULL);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (jpegenc, "Failed to set pool configuration!");
-    g_object_unref (pool);
-    pool = NULL;
+    gst_clear_object (&pool);
   }
 
   g_object_unref (allocator);
@@ -220,6 +225,8 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   GstStructure *params = NULL;
   GstVideoCodecState *output_state = NULL;
   GstCaps *outcaps = NULL;
+  guint informat = GST_VIDEO_INFO_FORMAT (info);
+  guint outformat = GST_VIDEO_FORMAT_ENCODED;
 
   // Set output caps
   outcaps = gst_caps_new_simple ("image/jpeg",
@@ -250,10 +257,10 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   params = gst_structure_new ("qtijpegenc",
       GST_JPEG_ENC_INPUT_WIDTH, G_TYPE_UINT, GST_VIDEO_INFO_WIDTH (info),
       GST_JPEG_ENC_INPUT_HEIGHT, G_TYPE_UINT, GST_VIDEO_INFO_HEIGHT (info),
-      GST_JPEG_ENC_INPUT_FORMAT, G_TYPE_UINT, HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED,
+      GST_JPEG_ENC_INPUT_FORMAT, G_TYPE_UINT, informat,
       GST_JPEG_ENC_OUTPUT_WIDTH, G_TYPE_UINT, GST_VIDEO_INFO_WIDTH (info),
       GST_JPEG_ENC_OUTPUT_HEIGHT, G_TYPE_UINT, GST_VIDEO_INFO_HEIGHT (info),
-      GST_JPEG_ENC_OUTPUT_FORMAT, G_TYPE_UINT, HAL_PIXEL_FORMAT_BLOB,
+      GST_JPEG_ENC_OUTPUT_FORMAT, G_TYPE_UINT, outformat,
       GST_JPEG_ENC_QUALITY, G_TYPE_UINT, jpegenc->quality,
       GST_JPEG_ENC_ORIENTATION, GST_TYPE_JPEG_ENC_ORIENTATION,
           jpegenc->orientation,
