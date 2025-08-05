@@ -23,10 +23,12 @@
 #include <glib-unix.h>
 #include <glib/gstdio.h>
 #include <gst/gst.h>
+#include <gst/base/gstdataqueue.h>
 #include <gst/app/gstappsrc.h>
 
-#define DEFAULT_OUTPUT_WIDTH        1280
-#define DEFAULT_OUTPUT_HEIGHT       720
+#define S0_CAMERA_ID                0
+#define S1_CAMERA_ID                1
+#define LOGICAL_CAMERA_ID           4
 #define S0_HIGH_OUTPUT_WIDTH        1672
 #define S0_HIGH_OUTPUT_HEIGHT       1256
 #define S0_LOW_OUTPUT_WIDTH         640
@@ -40,7 +42,7 @@
 #define STITCHING_OUTPUT_WIDTH      640
 #define STITCHING_OUTPUT_HEIGHT     480
 #define AI_NODE_QUEUE_COUNT         15
-#define STITCHING_NODE_QUEUE_COUNT  19
+#define STITCHING_NODE_QUEUE_COUNT  20
 
 #define AI_NODE_DETECTION_MODEL               "/data/yolov8_det_quantized.tflite"
 #define AI_NODE_DETECTION_LABEL               "/data/yolov8.labels"
@@ -81,8 +83,7 @@ struct _GstAppContext
   gboolean   s0_jpeg;
   GstElement *s0_jpeg_appsrc;
 
-  GMutex     s2_jpeg_mutex;
-  gboolean   s2_jpeg;
+  GstDataQueue *sensor_bufqueue;
 };
 
 struct _GstSensorsData
@@ -102,10 +103,8 @@ gst_app_context_init ()
   appctx->sti_plugins = NULL;
   appctx->exit = FALSE;
   appctx->s0_jpeg = FALSE;
-  appctx->s2_jpeg = FALSE;
 
   g_mutex_init (&appctx->s0_jpeg_mutex);
-  g_mutex_init (&appctx->s2_jpeg_mutex);
   g_mutex_init (&appctx->mutex);
 
   return appctx;
@@ -115,7 +114,6 @@ static void
 gst_app_context_free (GstAppContext * appctx)
 {
   g_mutex_clear (&appctx->s0_jpeg_mutex);
-  g_mutex_clear (&appctx->s2_jpeg_mutex);
   g_mutex_clear (&appctx->mutex);
 
   if (appctx->mloop != NULL)
@@ -353,6 +351,50 @@ gst_sample_release (GstSample * sample)
 #endif
 }
 
+static void
+gst_free_queue_item (gpointer data)
+{
+  GstDataQueueItem *item = (GstDataQueueItem *) data;
+  gst_buffer_unref (GST_BUFFER (item->object));
+  g_slice_free (GstDataQueueItem, item);
+}
+
+static gboolean
+queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
+                  guint64 time, gpointer checkdata)
+{
+  // There won't be any condition limiting for the buffer queue size.
+  return FALSE;
+}
+
+static void
+sensor_buffers_task_func (gpointer userdata)
+{
+  GstAppContext *appctx = (GstAppContext *) userdata;
+  GstBuffer *buffer = NULL;
+  static GstClockTime timestamp = 0;
+  GstDataQueueItem *item = NULL;
+
+  if (!gst_data_queue_pop (appctx->sensor_bufqueue, &item)) {
+    g_print ("buffers_queue flushing\n");
+    return;
+  }
+
+  buffer = gst_buffer_ref (GST_BUFFER (item->object));
+  item->destroy (item);
+  g_mutex_lock (&appctx->mutex);
+
+  // Get timestamp
+  timestamp = GST_BUFFER_OFFSET (buffer);
+  //g_print ("Sensor timestamp: %" G_GUINT64_FORMAT "\n", timestamp);
+
+  // For now, just release the buffer.
+  gst_buffer_unref (buffer);
+  g_mutex_unlock (&appctx->mutex);
+
+  return;
+}
+
 static GstFlowReturn
 new_sample_sensor (GstElement * element, gpointer userdata)
 {
@@ -376,18 +418,28 @@ new_sample_sensor (GstElement * element, gpointer userdata)
     return GST_FLOW_ERROR;
   }
 
-  if (!gst_buffer_map (buffer, &memmap, GST_MAP_READ)) {
-    g_printerr ("ERROR: Failed to map the pulled buffer!\n");
+  if ((gst_buffer_get_size (buffer) == 0) &&
+      GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_GAP)) {
     gst_sample_release (sample);
-    return GST_FLOW_ERROR;
+    return GST_FLOW_OK;
   }
 
-  // Extract the original camera timestamp from GstBuffer OFFSET_END field
-  timestamp = GST_BUFFER_OFFSET_END (buffer);
-  g_print ("Camera timestamp: %" G_GUINT64_FORMAT "\n", timestamp);
-
-  gst_buffer_unmap (buffer, &memmap);
+  // Increase ref of the bufffer and release the sample
+  // Use the buffer for the next plugin
+  gst_buffer_ref (buffer);
   gst_sample_release (sample);
+
+  // Push the sample in the queue
+  GstDataQueueItem *item = NULL;
+  item = g_slice_new0 (GstDataQueueItem);
+  item->object = GST_MINI_OBJECT (buffer);
+  item->visible = TRUE;
+  item->destroy = gst_free_queue_item;
+  if (!gst_data_queue_push (ctx->sensor_bufqueue, item)) {
+    g_printerr ("ERROR: Cannot push data to the queue!\n");
+    item->destroy (item);
+    return GST_FLOW_ERROR;
+  }
 
   return GST_FLOW_OK;
 }
@@ -462,7 +514,7 @@ create_sensor_streams (GstAppContext *appctx)
 
   g_object_set (G_OBJECT (sensorsrc0),
       "sensor-name", "accel",
-      "channel-type", 1, "sample-rate", 50, NULL);
+      "sample-rate", 960, NULL);
 
   g_object_set (G_OBJECT (appsink),
       "sync", FALSE, "emit-signals", TRUE,
@@ -479,6 +531,9 @@ create_sensor_streams (GstAppContext *appctx)
     g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
     goto error;
   }
+
+  g_signal_connect (appsink, "new-sample",
+      G_CALLBACK (new_sample_sensor), appctx);
   g_print ("All elements are linked successfully\n");
 
   return TRUE;
@@ -492,7 +547,7 @@ error:
 
 // AI Node: Create all elements and link
 static gboolean
-create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
+create_camera_s0_s1_streams (GstAppContext *appctx)
 {
   GstElement *camsrc0, *capsfilter_high, *metamux, *overlay, *tee0,
       *appsink, *appsrc, *jpegenc_s0, *avimux, *filesink_jpeg,
@@ -591,12 +646,12 @@ create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
     return FALSE;
   }
 
-  g_object_set (G_OBJECT (camsrc0), "camera", 0, NULL);
+  g_object_set (G_OBJECT (camsrc0), "camera", S0_CAMERA_ID, NULL);
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, width,
-      "height", G_TYPE_INT, height,
+      "width", G_TYPE_INT, S0_HIGH_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, S0_HIGH_OUTPUT_HEIGHT,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
@@ -607,9 +662,9 @@ create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
  // Set appsrc properties.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, width,
-      "height", G_TYPE_INT, height,
-      "framerate", GST_TYPE_FRACTION, 30, 1,
+      "width", G_TYPE_INT, S0_HIGH_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, S0_HIGH_OUTPUT_HEIGHT,
+      "framerate", GST_TYPE_FRACTION, 1, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
       gst_caps_features_new ("memory:GBM", NULL));
@@ -625,8 +680,8 @@ create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, 640,
-      "height", G_TYPE_INT, 480,
+      "width", G_TYPE_INT, S0_LOW_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, S0_LOW_OUTPUT_HEIGHT,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
@@ -639,7 +694,7 @@ create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
   g_object_set (G_OBJECT (capsfilter_text), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
-  g_object_set (G_OBJECT (camsrc1), "camera", 1, NULL);
+  g_object_set (G_OBJECT (camsrc1), "camera", S1_CAMERA_ID, NULL);
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-bayer",
       "format", G_TYPE_STRING, "rggb",
@@ -761,7 +816,7 @@ create_camera_s0_s1_streams (GstAppContext *appctx, gint width, gint height)
     goto error;
   }
 
-  g_print ("All elements are linked successfully\n");
+  g_print ("AI node: all elements are linked successfully\n");
 
   return TRUE;
 
@@ -772,15 +827,16 @@ error:
 
 // 360 Node: Create all elements and link
 static gboolean
-create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
+create_logical_camera_streams (GstAppContext *appctx)
 {
-  GstElement *camsrc_logical, *capsfilter_s2, *tee2, *valve2,
-      *jpegenc_s2, *avimux_s2, *filesink_s2jpeg, *c2venc_s2,
-       *parser_s2, *mp4mux_s2, *filesink_s2avc;
-  GstElement *capsfilter_s3, *tee3, *videorate,
-      *capsfilter_s3_jpeg, *jpegenc_s3, *avimux_s3, *filesink_s3jpeg,
-      *c2venc_s3, *parser_s3, *mp4mux_s3, *filesink_s3avc;
-  GstElement *composer, *capsfilter, *c2venc, *parser, *mp4mux, *filesink;
+  GstElement *camsrc_logical, *capsfilter_s2, *tee2, *videorate2,
+      *capsfilter_s2_jpeg,*jpegenc_s2, *avimux_s2, *filesink_s2jpeg,
+      *c2venc_s2, *parser_s2, *mp4mux_s2, *filesink_s2avc;
+  GstElement *capsfilter_s3, *tee3, *videorate3, *capsfilter_s3_jpeg,
+      *jpegenc_s3, *avimux_s3, *filesink_s3jpeg, *c2venc_s3, *parser_s3,
+      *mp4mux_s3, *filesink_s3avc;
+  GstElement *stitch, *tcapsfilter, *vtrans, *composer, *capsfilter, *c2venc,
+      *parser, *mp4mux, *filesink;
   GstElement *queue[STITCHING_NODE_QUEUE_COUNT] = {NULL};
   GstPad *s2pad, *s3pad;
   GstCaps *filtercaps;
@@ -791,7 +847,8 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   camsrc_logical = gst_element_factory_make ("qtiqmmfsrc", "camsrc-logical");
   capsfilter_s2 = gst_element_factory_make ("capsfilter", "capsfilter-s2");
   tee2 = gst_element_factory_make ("tee", "tee2");
-  valve2 = gst_element_factory_make ("valve", "valve2");
+  videorate2 = gst_element_factory_make ("videorate", "videorate2");
+  capsfilter_s2_jpeg = gst_element_factory_make ("capsfilter", NULL);
   jpegenc_s2 = gst_element_factory_make ("qtijpegenc", "jpegenc-s2");
   avimux_s2 = gst_element_factory_make ("avimux", "avimux-s2");
   filesink_s2jpeg = gst_element_factory_make ("filesink", "filesink-s2jpeg");
@@ -803,8 +860,8 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   // Create S3 stream elements.
   capsfilter_s3 = gst_element_factory_make ("capsfilter", "capsfilter-s3");
   tee3 = gst_element_factory_make ("tee", "tee3");
-  videorate = gst_element_factory_make ("videorate", "videorate");
-  capsfilter_s3_jpeg = gst_element_factory_make ("capsfilter", "capsfilter-s3-jpeg");
+  videorate3 = gst_element_factory_make ("videorate", "videorate3");
+  capsfilter_s3_jpeg = gst_element_factory_make ("capsfilter", NULL);
   jpegenc_s3 = gst_element_factory_make ("qtijpegenc", "jpegenc-s3");
   avimux_s3 = gst_element_factory_make ("avimux", "avimux-s3");
   filesink_s3jpeg = gst_element_factory_make ("filesink", "filesink30");
@@ -814,7 +871,9 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   filesink_s3avc = gst_element_factory_make ("filesink", "filesink-s3avc");
 
   //Create stitching stream elements.
-  composer = gst_element_factory_make ("qtivcomposer", "composer");
+  stitch = gst_element_factory_make ("qtisamplestitching", "stitch");
+  tcapsfilter = gst_element_factory_make ("capsfilter", "stitch-capsfilter5");
+  vtrans = gst_element_factory_make ("qtivtransform", "vtransform");
   capsfilter = gst_element_factory_make ("capsfilter", "stitch-capsfilter4");
   c2venc = gst_element_factory_make ("qtic2venc", "c2venc");
   parser = gst_element_factory_make ("h264parse", "parser");
@@ -837,7 +896,8 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, camsrc_logical);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, capsfilter_s2);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, tee2);
-  appctx->sti_plugins = g_list_append (appctx->sti_plugins, valve2);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, videorate2);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, capsfilter_s2_jpeg);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, jpegenc_s2);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, filesink_s2jpeg);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, avimux_s2);
@@ -847,7 +907,7 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, filesink_s2avc);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, capsfilter_s3);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, tee3);
-  appctx->sti_plugins = g_list_append (appctx->sti_plugins, videorate);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, videorate3);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, capsfilter_s3_jpeg);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, jpegenc_s3);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, avimux_s3);
@@ -856,7 +916,9 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, parser_s3);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, mp4mux_s3);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, filesink_s3avc);
-  appctx->sti_plugins = g_list_append (appctx->sti_plugins, composer);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, stitch);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, tcapsfilter);
+  appctx->sti_plugins = g_list_append (appctx->sti_plugins, vtrans);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, capsfilter);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, c2venc);
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, parser);
@@ -864,25 +926,27 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   appctx->sti_plugins = g_list_append (appctx->sti_plugins, filesink);
 
   // Check if all elements are created successfully.
-  if (!camsrc_logical || !capsfilter_s2 || !tee2 || !valve2 || !jpegenc_s2 ||
-      !avimux_s2 || !filesink_s2jpeg || !c2venc_s2 || !parser_s2 ||
-      !mp4mux_s2 || !filesink_s2avc || !capsfilter_s3 || !tee3 || !videorate ||
-      !capsfilter_s3_jpeg || !jpegenc_s3 || !avimux_s3 || !filesink_s3jpeg ||
-      !c2venc_s3 || !parser_s3 || !mp4mux_s3 || !filesink_s3avc || !composer ||
-      !capsfilter || !c2venc || !parser || !mp4mux || !filesink) {
+  if (!camsrc_logical || !capsfilter_s2 || !tee2 || !videorate2 ||
+      !capsfilter_s2_jpeg  || !jpegenc_s2 || !avimux_s2 || !filesink_s2jpeg ||
+      !c2venc_s2 || !parser_s2 || !mp4mux_s2 || !filesink_s2avc ||
+      !capsfilter_s3 || !tee3 || !videorate3 || !capsfilter_s3_jpeg ||
+      !jpegenc_s3 || !avimux_s3 || !filesink_s3jpeg || !c2venc_s3 ||
+      !parser_s3 || !mp4mux_s3 || !filesink_s3avc || !stitch || !tcapsfilter ||
+      !vtrans || !capsfilter || !c2venc || !parser || !mp4mux || !filesink) {
     g_printerr ("One element could not be created. Exiting.\n");
     destroy_elements (&appctx->sti_plugins);
     return FALSE;
   }
 
   // Set logical camera id, it will collect images from sensor2 and sensor3.
-  g_object_set (G_OBJECT (camsrc_logical), "camera", 4, NULL);
+  g_object_set (G_OBJECT (camsrc_logical),
+      "camera", LOGICAL_CAMERA_ID, NULL);
 
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, width,
-      "height", G_TYPE_INT, height,
+      "width", G_TYPE_INT, S2_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, S2_OUTPUT_HEIGHT,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
@@ -893,13 +957,22 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, width,
-      "height", G_TYPE_INT, height,
+      "width", G_TYPE_INT, S3_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, S3_OUTPUT_HEIGHT,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
       gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter_s3), "caps", filtercaps, NULL);
+  gst_caps_unref (filtercaps);
+
+  // Configure caps for JPEG encode stream.
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+      "framerate", GST_TYPE_FRACTION, 1, 1,
+      NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
+  g_object_set (G_OBJECT (capsfilter_s2_jpeg), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
   // Configure caps for JPEG encode stream.
@@ -914,8 +987,20 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   // Configure the stream caps.
   filtercaps = gst_caps_new_simple ("video/x-raw",
       "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, 640,
-      "height", G_TYPE_INT, 480,
+      "width", G_TYPE_INT, S3_OUTPUT_WIDTH * 2,
+      "height", G_TYPE_INT, S3_OUTPUT_HEIGHT,
+      "framerate", GST_TYPE_FRACTION, 30, 1,
+      NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
+  g_object_set (G_OBJECT (tcapsfilter), "caps", filtercaps, NULL);
+  gst_caps_unref (filtercaps);
+
+  // Configure the stream caps.
+  filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12",
+      "width", G_TYPE_INT, STITCHING_OUTPUT_WIDTH,
+      "height", G_TYPE_INT, STITCHING_OUTPUT_HEIGHT,
       "framerate", GST_TYPE_FRACTION, 30, 1,
       NULL);
   gst_caps_set_features (filtercaps, 0,
@@ -923,8 +1008,8 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
-  // Set composer properties.
-  g_object_set (G_OBJECT (composer), "engine", 1, NULL);
+  // Set vtransform properties.
+  g_object_set (G_OBJECT (vtrans), "engine", 1, NULL);
 
    // Set encoder properties.
   g_object_set (G_OBJECT (c2venc_s2),
@@ -965,20 +1050,21 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
   // Add elements to the pipeline and link them
   g_print ("Adding all elements to the pipeline...\n");
   gst_bin_add_many (GST_BIN (appctx->pipeline),
-      camsrc_logical, capsfilter_s2, tee2, valve2, jpegenc_s2, avimux_s2,
-      filesink_s2jpeg, c2venc_s2, parser_s2, mp4mux_s2, filesink_s2avc,
-      capsfilter_s3, tee3, videorate, capsfilter_s3_jpeg, jpegenc_s3,
-      avimux_s3, filesink_s3jpeg, c2venc_s3, parser_s3, mp4mux_s3,
-      filesink_s3avc, composer, capsfilter, c2venc, parser, mp4mux,
-      filesink, NULL);
+      camsrc_logical, capsfilter_s2, tee2, videorate2, capsfilter_s2_jpeg,
+      jpegenc_s2, avimux_s2, filesink_s2jpeg, c2venc_s2, parser_s2,
+      mp4mux_s2, filesink_s2avc, capsfilter_s3, tee3, videorate3,
+      capsfilter_s3_jpeg, jpegenc_s3, avimux_s3, filesink_s3jpeg, c2venc_s3,
+      parser_s3, mp4mux_s3, filesink_s3avc, stitch,tcapsfilter, vtrans, capsfilter,
+      c2venc, parser, mp4mux, filesink, NULL);
 
   for (gint i = 0; i < STITCHING_NODE_QUEUE_COUNT; i++)
     gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
 
   g_print ("Linking S2 jpeg encoder elements...\n");
   ret = gst_element_link_many (
-      camsrc_logical, capsfilter_s2, queue[0], tee2, queue[1], valve2,
-      queue[2], jpegenc_s2, queue[3], avimux_s2, filesink_s2jpeg, NULL);
+      camsrc_logical, capsfilter_s2, queue[0], tee2, queue[1], videorate2,
+      capsfilter_s2_jpeg, queue[2], jpegenc_s2, queue[3], avimux_s2,
+      filesink_s2jpeg, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
     goto error;
@@ -1001,7 +1087,7 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
 
   g_print ("Linking S3 jpeg encoder elements...\n");
   ret = gst_element_link_many (
-      camsrc_logical, capsfilter_s3, queue[7], tee3, queue[8], videorate,
+      camsrc_logical, capsfilter_s3, queue[7], tee3, queue[8], videorate3,
       capsfilter_s3_jpeg, queue[9], jpegenc_s3, queue[10], avimux_s3,
       filesink_s3jpeg, NULL);
   if (!ret) {
@@ -1026,62 +1112,20 @@ create_logical_camera_streams (GstAppContext *appctx, gint width, gint height)
 
   g_print ("Linking S2/S3 stiching video encoder elements...\n");
   ret = gst_element_link_many (
-      tee2, queue[14], composer, capsfilter, queue[15], c2venc,
-      queue[16], parser, queue[17], mp4mux, filesink, NULL);
+      tee2, queue[14], stitch,tcapsfilter, queue[15], vtrans, capsfilter,
+      queue[16], c2venc, queue[17], parser, queue[18], mp4mux, filesink, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
     goto error;
   }
 
-  ret = gst_element_link_many (tee3, queue[18], composer, NULL);
+  ret = gst_element_link_many (tee3, queue[19], stitch, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked. Exiting.\n");
     goto error;
   }
 
-  g_print ("All elements are linked successfully\n");
-
-  {
-    // Set sinkpads' position & dimensions of composer.
-    GValue pos = G_VALUE_INIT, dim = G_VALUE_INIT;
-    gint pos1_vals[] = {0, 0};
-    gint dim1_vals[] = {640, 480};
-    gint pos2_vals[] = {200, 200};
-    gint dim2_vals[] = {320, 240};
-    GstPad *sink0 = gst_element_get_static_pad (composer, "sink_0");
-    GstPad *sink1 = gst_element_get_static_pad (composer, "sink_1");
-
-    if (sink0 == NULL || sink1 == NULL) {
-      g_printerr ("One or more sink pads are not ref'ed\n");
-
-      if (sink0)
-        gst_object_unref (sink0);
-      if (sink1)
-        gst_object_unref (sink1);
-      goto error;
-    }
-
-    g_value_init (&pos, GST_TYPE_ARRAY);
-    g_value_init (&dim, GST_TYPE_ARRAY);
-    build_pad_property (&pos, pos1_vals, 2);
-    build_pad_property (&dim, dim1_vals, 2);
-    g_object_set_property (G_OBJECT(sink0), "position", &pos);
-    g_object_set_property (G_OBJECT(sink0), "dimensions", &dim);
-    g_value_unset (&pos);
-    g_value_unset (&dim);
-
-    g_value_init (&pos, GST_TYPE_ARRAY);
-    g_value_init (&dim, GST_TYPE_ARRAY);
-    build_pad_property (&pos, pos2_vals, 2);
-    build_pad_property (&dim, dim2_vals, 2);
-    g_object_set_property (G_OBJECT(sink1), "position", &pos);
-    g_object_set_property (G_OBJECT(sink1), "dimensions", &dim);
-
-    gst_object_unref (sink0);
-    gst_object_unref (sink1);
-    g_value_unset (&pos);
-    g_value_unset (&dim);
-  }
+  g_print ("Stitching node: all elements are linked successfully\n");
 
   return TRUE;
 
@@ -1093,7 +1137,6 @@ error:
 gint
 main (gint argc, gchar * argv[])
 {
-  GOptionContext *ctx = NULL;
   GIOChannel *iostdin = NULL;
   GMainLoop *mloop = NULL;
   GstBus *bus = NULL;
@@ -1101,48 +1144,8 @@ main (gint argc, gchar * argv[])
   GstElement *pipeline = NULL;
   gboolean ret = FALSE;
   GstAppContext* appctx;
-  gint width = DEFAULT_OUTPUT_WIDTH;
-  gint height = DEFAULT_OUTPUT_HEIGHT;
-
-  // Configure input parameters
-  GOptionEntry entries[] = {
-    { "width", 'w', DEFAULT_OUTPUT_WIDTH, G_OPTION_ARG_INT,
-      &width,
-      "width",
-      "image width"
-    },
-    { "height", 'h', DEFAULT_OUTPUT_HEIGHT, G_OPTION_ARG_INT,
-      &height,
-      "height",
-      "image height"
-    },
-    { NULL }
-  };
-
-  // Parse command line entries.
-  if ((ctx = g_option_context_new ("DESCRIPTION")) != NULL) {
-    gboolean success = FALSE;
-    GError *error = NULL;
-
-    g_option_context_add_main_entries (ctx, entries, NULL);
-    g_option_context_add_group (ctx, gst_init_get_option_group ());
-
-    success = g_option_context_parse (ctx, &argc, &argv, &error);
-    g_option_context_free (ctx);
-
-    if (!success && (error != NULL)) {
-      g_printerr ("ERROR: Failed to parse command line options: %s!\n",
-           GST_STR_NULL (error->message));
-      g_clear_error (&error);
-      return -EFAULT;
-    } else if (!success && (NULL == error)) {
-      g_printerr ("ERROR: Initializing: Unknown error!\n");
-      return -EFAULT;
-    }
-  } else {
-    g_printerr ("ERROR: Failed to create options context!\n");
-    return -EFAULT;
-  }
+  GstTask *bufferstask = NULL;
+  GRecMutex bufferslock;
 
   appctx = gst_app_context_init ();
   g_return_val_if_fail (appctx != NULL, -1);
@@ -1159,15 +1162,21 @@ main (gint argc, gchar * argv[])
   appctx->pipeline = pipeline;
 
   // Build AI node pipeline.
-  ret = create_camera_s0_s1_streams (appctx, width, height);
+  ret = create_camera_s0_s1_streams (appctx);
   if (!ret) {
     g_printerr ("failed to create AI node streams.\n");
     goto cleanup;
   }
   // Build logical camera pipeline.
-  ret = create_logical_camera_streams (appctx, width, height);
+  ret = create_logical_camera_streams (appctx);
   if (!ret) {
     g_printerr ("failed to create logical camera streams.\n");
+    goto cleanup;
+  }
+  // Build sensor pipeline.
+  ret = create_sensor_streams (appctx);
+  if (!ret) {
+    g_printerr ("failed to create sensor streams.\n");
     goto cleanup;
   }
 
@@ -1208,6 +1217,20 @@ main (gint argc, gchar * argv[])
       GIOCondition (G_IO_IN | G_IO_PRI), handle_stdin_source, appctx);
   g_io_channel_unref (iostdin);
 
+  // Create sensor buffers queue
+  appctx->sensor_bufqueue =
+      gst_data_queue_new (queue_is_full_cb, NULL, NULL, mloop);
+  gst_data_queue_set_flushing (appctx->sensor_bufqueue, FALSE);
+
+  // Create sensor buffer queue task
+  g_rec_mutex_init (&bufferslock);
+  bufferstask =
+      gst_task_new (sensor_buffers_task_func, appctx, NULL);
+  gst_task_set_lock (bufferstask, &bufferslock);
+
+  // Start sensor buffer queue task
+  gst_task_start (bufferstask);
+
   g_print ("Setting pipeline to PAUSED state ...\n");
   switch (gst_element_set_state (pipeline, GST_STATE_PAUSED)) {
     case GST_STATE_CHANGE_FAILURE:
@@ -1227,6 +1250,20 @@ main (gint argc, gchar * argv[])
   g_print ("g_main_loop_run\n");
   g_main_loop_run (mloop);
   g_print ("g_main_loop_run ends\n");
+
+  // Disable sensor buffers queue
+  gst_data_queue_set_flushing (appctx->sensor_bufqueue, TRUE);
+
+  // Stop tasks
+  gst_task_stop (bufferstask);
+
+  // Make sure task is not running.
+  g_rec_mutex_lock (&bufferslock);
+  g_rec_mutex_unlock (&bufferslock);
+
+  gst_task_join (bufferstask);
+  g_rec_mutex_clear (&bufferslock);
+  gst_object_unref (bufferstask);
 
   g_source_remove (intrpt_watch_id);
   g_source_remove (stdin_watch_id);

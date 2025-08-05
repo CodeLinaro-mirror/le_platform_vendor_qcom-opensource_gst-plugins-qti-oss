@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.8.2)
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_BASE
+  REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 
 # GStreamer gst-cameras-sensors-example
 set(GST_EXAMPLE_BIN gst-cameras-sensors-example)
@@ -21,6 +23,7 @@ target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
 
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_LIBRARIES}
+  ${GST_BASE_LIBRARIES}
   gstapp-1.0
 )
 
