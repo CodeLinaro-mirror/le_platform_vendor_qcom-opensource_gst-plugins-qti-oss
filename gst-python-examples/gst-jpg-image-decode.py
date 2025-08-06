@@ -18,9 +18,9 @@ DESCRIPTION = """
 This app sets up GStreamer pipeline to read the jpg images and display.
 Usage:
 For Preview on Display:
-python3 /usr/bin/gst-jpg-image-decode.py -i /opt/media/frame%d.JPG
+python3 /usr/bin/gst-jpg-image-decode.py -i /etc/media/frame%d.JPG
 """
-DEFAULT_OUTPUT_FILE = "/opt/media/frame%d.JPG"
+DEFAULT_OUTPUT_FILE = "/etc/media/frame%d.JPG"
 
 waiting_for_eos = False
 eos_received = False
@@ -90,7 +90,7 @@ def parse_arguments():
 
     parser.add_argument(
         '-i', "--filepath", type=str, default=DEFAULT_OUTPUT_FILE,
-        help="Output File Path /opt/media/frame%d.JPG"
+        help="Output File Path /etc/media/frame%d.JPG"
     )
 
     return parser.parse_args()
@@ -103,7 +103,7 @@ def create_pipeline(pipeline, args):
         "caps": create_element("capsfilter", "caps"),
         "jpegdec": create_element("jpegdec", "jpegdec"),
         "videoconvert" : create_element("videoconvert", "videoconvert"),
-        "sink"   : create_element("autovideosink", "sink")
+        "sink"   : create_element("waylandsink", "sink")
     }
 
     # Set properties
@@ -116,6 +116,9 @@ def create_pipeline(pipeline, args):
             'image/jpeg,width=1280,height=720,framerate=2/1'
         )
     )
+
+    # Set sink properties
+    Gst.util_set_object_arg(elements["sink"], "fullscreen", "true")
 
     # Add elements to the pipeline
     for element in elements.values():

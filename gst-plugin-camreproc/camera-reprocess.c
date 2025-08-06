@@ -26,7 +26,7 @@ GST_DEBUG_CATEGORY_STATIC (camera_reprocess_debug);
 #define DEFAULT_PROP_EIS                   GST_CAMERA_REPROCESS_EIS_NONE
 
 // Pad Template
-#define GST_CAPS_FORMATS "{ NV12, NV12_Q08C }"
+#define GST_CAPS_FORMATS "{ NV12, NV12_Q08C, P010_10LE }"
 
 // GType
 #define GST_TYPE_CAMERA_REPROCESS_EIS (gst_camera_reprocess_eis_get_type())
@@ -63,13 +63,13 @@ gst_camera_reprocess_eis_get_type (void)
 {
   static GType gtype = 0;
   static const GEnumValue variants[] = {
+    { GST_CAMERA_REPROCESS_EIS_V3,
+      "Eis with version 3 which will consume future frames",
+      "v3"
+    },
     { GST_CAMERA_REPROCESS_EIS_V2,
         "Eis with version 2 which will consume previous frames",
         "v2"
-    },
-    { GST_CAMERA_REPROCESS_EIS_V3,
-        "Eis with version 3 which will consume future frames",
-        "v3"
     },
     { GST_CAMERA_REPROCESS_EIS_NONE,
         "None", "none"

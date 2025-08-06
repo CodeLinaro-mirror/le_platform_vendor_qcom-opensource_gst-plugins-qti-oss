@@ -1,35 +1,6 @@
 /*
- * Copyright (c) 2022,2025 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifdef HAVE_CONFIG_H
@@ -67,7 +38,7 @@ G_DEFINE_TYPE (GstVOverlay, gst_overlay, GST_TYPE_BASE_TRANSFORM);
 #define DEFAULT_MAX_BUFFERS         30
 
 #define MAX_LABEL_LENGTH            48
-#define LABEL_FONTSIZE              24
+#define LABEL_FONTSIZE              40
 
 enum
 {
@@ -576,13 +547,15 @@ gst_overlay_create_pool (GstVOverlay * overlay, GstCaps * caps)
 
 static gboolean
 gst_overlay_handle_classification_entry (GstVOverlay * overlay,
-   cairo_t * context, GstVideoBlit * blit, GstClassLabel * label)
+    cairo_t * context, GstVideoBlit * blit, GstClassLabel * label,
+    GstStructure * objparam)
 {
   gchar text[MAX_LABEL_LENGTH] = { 0, };
   GstVideoRectangle *source = NULL, *destination = NULL;
   gdouble x = 1.0, y = 1.0, fontsize = LABEL_FONTSIZE;
   guint length = 0, color = 0xFFFFFFFF;
   gboolean success = TRUE;
+  guint track_id = -1;
 
   source = &(blit->source);
   destination = &(blit->destination);
@@ -590,8 +563,15 @@ gst_overlay_handle_classification_entry (GstVOverlay * overlay,
   destination->w = source->w;
   destination->h = source->h;
 
-  length = g_snprintf (text, MAX_LABEL_LENGTH, "%s",
-      g_quark_to_string (label->name));
+  if (objparam != NULL &&
+      gst_structure_get_uint (objparam, "tracking-id", &track_id)) {
+    const gchar *name = g_quark_to_string (label->name);
+    length = g_snprintf (text, MAX_LABEL_LENGTH, "%s-%u", name, track_id);
+  } else {
+    length = g_snprintf (text, MAX_LABEL_LENGTH, "%s",
+       g_quark_to_string (label->name));
+  }
+
 
   color = label->color;
 
@@ -1266,7 +1246,7 @@ gst_overlay_draw_detection_entries (GstVOverlay * overlay,
         continue;
 
       success &= gst_overlay_handle_classification_entry (overlay, context,
-          blit, &(g_array_index (classmeta->labels, GstClassLabel, 0)));
+          blit, &(g_array_index (classmeta->labels, GstClassLabel, 0)), objparam);
 
       haslabel = TRUE;
       break;
@@ -1282,7 +1262,7 @@ gst_overlay_draw_detection_entries (GstVOverlay * overlay,
       gst_structure_get_double (objparam, "confidence", &(label.confidence));
 
       success &= gst_overlay_handle_classification_entry (overlay, context,
-          blit, &label);
+          blit, &label, objparam);
     }
 
     gst_cairo_draw_cleanup (blit->frame, surface, context);
@@ -1328,7 +1308,7 @@ gst_overlay_draw_classification_entries (GstVOverlay * overlay,
     classmeta = GST_VIDEO_CLASSIFICATION_META_CAST (meta);
 
     // Derived metas will be handled inside the detection entry function.
-    if (classmeta->parent_id != (-1))
+    if (gst_buffer_has_valid_parent_meta (outbuffer, classmeta->parent_id))
       continue;
 
     for (num = 0; num < classmeta->labels->len; num++) {
@@ -1346,7 +1326,7 @@ gst_overlay_draw_classification_entries (GstVOverlay * overlay,
       g_return_val_if_fail (success, FALSE);
 
       success &= gst_overlay_handle_classification_entry (overlay, context,
-          blit, label);
+          blit, label, NULL);
       gst_cairo_draw_cleanup (blit->frame, surface, context);
 
       // Increase the Y axis offset for the next label blit.
@@ -1384,7 +1364,7 @@ gst_overlay_draw_landmarks_entries (GstVOverlay * overlay,
     lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (meta);
 
     // Derived metas will be handled inside the detection entry function.
-    if (lmkmeta->parent_id != (-1))
+    if (gst_buffer_has_valid_parent_meta (outbuffer, lmkmeta->parent_id))
       continue;
 
     blit = &(composition->blits[*index]);

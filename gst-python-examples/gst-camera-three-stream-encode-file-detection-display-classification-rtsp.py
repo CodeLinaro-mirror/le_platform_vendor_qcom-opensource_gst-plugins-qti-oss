@@ -17,11 +17,11 @@ gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
 # Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/etc/models/YoloV8N_Detection_Quantized.tflite"
-DEFAULT_DETECTION_LABELS = "/etc/labels/yolov8n.labels"
+DEFAULT_DETECTION_MODEL = "/etc/models/yolox_quantized.tflite"
 DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-    q-scales=<3.093529462814331,0.00390625,1.0>;"
+DEFAULT_DETECTION_LABELS = "/etc/labels/yolox.labels"
+DEFAULT_DETECTION_CONSTANTS = "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
+    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
 
 # Configurations for Classification
 DEFAULT_CLASSIFICATION_MODEL = "/etc/models/Resnet101_Quantized.tflite"
@@ -37,10 +37,10 @@ DEFAULT_OUTPUT_FILE = "/etc/media/test.mp4"
 DESCRIPTION = f"""
 The application:
 - Encodes camera stream and dump the output.
-- Uses YOLOv8 TFLite model to identify the object in scene from camera stream
+- Uses a TFLite model to identify the object in scene from camera stream
 and overlay the bounding boxes over the detected objects. The results are shown
 on the display.
-- Uses Resnet101 TFLite model to classify scene from camera stream and overlay
+- Uses a TFLite model to classify scene from camera stream and overlay
 the classification labels on the top left corner. The results are streamed over
 RTSP.
 
@@ -178,37 +178,27 @@ def construct_pipeline(pipe):
         "qmmfsrc":           create_element("qtiqmmfsrc", "camsrc"),
         # Stream 0
         "capsfilter_0":      create_element("capsfilter", "camout0caps"),
-        "queue_0":           create_element("queue", "queue0"),
         "v4l2h264enc_0":     create_element("v4l2h264enc", "v4l2h264encoder0"),
         "h264parse_0":       create_element("h264parse", "h264parser0"),
         "mp4mux":            create_element("mp4mux", "mp4muxer"),
         "filesink":          create_element("filesink", "filesink"),
         # Stream 1
         "capsfilter_1":      create_element("capsfilter", "camout1caps"),
-        "queue_1":           create_element("queue", "queue1"),
         "tee_0":             create_element("tee", "split0"),
         "mlvconverter_0":    create_element("qtimlvconverter", "converter0"),
-        "queue_2":           create_element("queue", "queue2"),
         "mltflite_0":        create_element("qtimltflite", "inference0"),
-        "queue_3":           create_element("queue", "queue3"),
         "mlvdetection":      create_element("qtimlvdetection", "detection"),
         "capsfilter_2":      create_element("capsfilter", "metamux0metacaps"),
-        "queue_4":           create_element("queue", "queue4"),
         "metamux_0":         create_element("qtimetamux", "metamux0"),
         "overlay_0":         create_element("qtivoverlay", "overlay0"),
-        "queue_5":           create_element("queue", "queue5"),
         "display":           create_element("waylandsink", "display"),
         # Stream 2
         "capsfilter_3":      create_element("capsfilter", "camout3caps"),
-        "queue_6":           create_element("queue", "queue6"),
         "tee_1":             create_element("tee", "split1"),
         "mlvconverter_1":    create_element("qtimlvconverter", "converter1"),
-        "queue_7":           create_element("queue", "queue7"),
         "mltflite_1":        create_element("qtimltflite", "inference1"),
-        "queue_8":           create_element("queue", "queue8"),
         "mlvclassification": create_element("qtimlvclassification", "classification"),
         "capsfilter_4":      create_element("capsfilter", "metamux1metacaps"),
-        "queue_9":           create_element("queue", "queue9"),
         "metamux_1":         create_element("qtimetamux", "metamux1"),
         "overlay_1":         create_element("qtivoverlay", "overlay1"),
         "v4l2h264enc_1":     create_element("v4l2h264enc", "v4l2h264encoder1"),
@@ -216,6 +206,11 @@ def construct_pipeline(pipe):
         "rtspbin":           create_element("qtirtspbin", "rtspbin")
     }
     # fmt: on
+
+    queue_count = 14
+    for i in range(queue_count):
+        queue_name = f"queue_{i}"
+        elements[queue_name] = create_element("queue", queue_name)
 
     # Set element properties
     Gst.util_set_object_arg(elements["qmmfsrc"], "camera", "0")
@@ -225,7 +220,7 @@ def construct_pipeline(pipe):
         elements["capsfilter_0"],
         "caps",
         "video/x-raw,format=NV12_Q08C,\
-        width=1920,height=1080,framerate=30/1,colorimetry=bt709",
+        width=1280,height=720,framerate=30/1,colorimetry=bt709",
     )
 
     Gst.util_set_object_arg(elements["v4l2h264enc_0"], "capture-io-mode", "dmabuf")
@@ -342,20 +337,20 @@ def construct_pipeline(pipe):
             "h264parse_0", "mp4mux", "filesink"
         ],
         [
-            "qmmfsrc", "capsfilter_1", "queue_1", "tee_0", "metamux_0",
-            "overlay_0", "queue_5", "display"
+            "qmmfsrc", "capsfilter_1", "queue_1", "tee_0", "queue_2",
+            "metamux_0", "overlay_0", "queue_3", "display"
         ],
         [
-            "tee_0", "mlvconverter_0", "queue_2", "mltflite_0", "queue_3",
-            "mlvdetection", "capsfilter_2", "queue_4", "metamux_0"
+            "tee_0", "queue_4", "mlvconverter_0", "queue_5", "mltflite_0",
+            "queue_6", "mlvdetection", "capsfilter_2", "queue_7", "metamux_0"
         ],
         [
-            "qmmfsrc", "capsfilter_3", "queue_6", "tee_1", "metamux_1",
-            "overlay_1", "v4l2h264enc_1", "h264parse_1", "rtspbin"
+            "qmmfsrc", "capsfilter_3", "queue_8", "tee_1", "queue_9",
+            "metamux_1", "overlay_1", "v4l2h264enc_1", "h264parse_1", "rtspbin"
         ],
         [
-            "tee_1", "mlvconverter_1", "queue_7", "mltflite_1", "queue_8",
-            "mlvclassification", "capsfilter_4", "queue_9", "metamux_1"
+            "tee_1", "queue_10", "mlvconverter_1", "queue_11", "mltflite_1",
+            "queue_12", "mlvclassification", "capsfilter_4", "queue_13", "metamux_1"
         ]
     ]
     # fmt: on

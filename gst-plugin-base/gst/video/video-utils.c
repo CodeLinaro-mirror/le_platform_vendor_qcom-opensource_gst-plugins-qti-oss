@@ -26,8 +26,8 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
- * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
- * Copyright (c) 2022-2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -40,6 +40,8 @@
 #include <unistd.h>
 
 #include <gbm.h>
+
+#define GST_GPU_DEFAULT_ALIGNMENT    4
 
 // Function pointers for the Adreno Utils library.
 typedef unsigned int (*get_gpu_pixel_alignment)(void);
@@ -64,7 +66,7 @@ static gint
 gst_adreno_get_pixel_alignment ()
 {
   static GMutex mutex;
-  static gint alignment = 0;
+  static gint alignment = -1;
   void *handle = NULL;
   get_gpu_pixel_alignment GetGpuPixelAlignment = NULL;
   gboolean success = FALSE;
@@ -72,21 +74,21 @@ gst_adreno_get_pixel_alignment ()
   g_mutex_lock (&mutex);
 
   // Alignment has already been set, just return its value.
-  if (alignment != 0) {
-    g_mutex_unlock (&mutex);
-    return alignment;
-  }
+  if (alignment != -1)
+    goto cleanup;
 
   if ((handle = dlopen ("libadreno_utils.so", RTLD_NOW)) == NULL) {
-    GST_ERROR ("Failed to load Adreno utils lib, error: %s", dlerror());
-    return -1;
+    GST_WARNING ("Failed to load Adreno utils lib using default alignment,"
+        " error: %s", dlerror());
+    alignment = GST_GPU_DEFAULT_ALIGNMENT;
+    goto cleanup;
   }
 
   success = load_symbol ((gpointer*)&GetGpuPixelAlignment, handle,
       "get_gpu_pixel_alignment");
   if (success == FALSE) {
     dlclose (handle);
-    return -1;
+    goto cleanup;
   }
 
   // Fetch the GPU Pixel Alignment.
@@ -95,6 +97,7 @@ gst_adreno_get_pixel_alignment ()
   // Close the library as it is no longer needed.
   dlclose (handle);
 
+cleanup:
   g_mutex_unlock (&mutex);
   return alignment;
 }
@@ -169,9 +172,6 @@ gst_video_retrieve_gpu_alignment (GstVideoInfo * info, GstVideoAlignment * align
   for (num = 0; num < GST_VIDEO_INFO_N_PLANES (info); num++) {
     gint alignment = gst_adreno_get_pixel_alignment ();
     gint comp[GST_VIDEO_MAX_COMPONENTS] = { 0, };
-
-    if (alignment == -1)
-      return FALSE;
 
     gst_video_format_info_component (vfinfo, num, comp);
     alignment = GST_VIDEO_FORMAT_INFO_SCALE_WIDTH (vfinfo, comp[0], alignment);
@@ -297,4 +297,24 @@ gst_video_region_of_interest_coordinates_correction (
   roimeta->h = roimeta->h * h_scale;
   roimeta->x = ((roimeta->x - source->x) * w_scale) + destination->x;
   roimeta->y = ((roimeta->y - source->y) * h_scale) + destination->y;
+}
+
+gboolean
+gst_buffer_has_valid_parent_meta (GstBuffer * buffer, gint parent_id)
+{
+  GstVideoRegionOfInterestMeta *parent_meta = NULL;
+
+  if (parent_id == -1)
+    return FALSE;
+
+  parent_meta =
+      gst_buffer_get_video_region_of_interest_meta_id (buffer, parent_id);
+
+  if (parent_meta == NULL)
+    return FALSE;
+
+  if (parent_meta->roi_type == g_quark_from_static_string ("ImageRegion"))
+    return FALSE;
+
+  return TRUE;
 }
