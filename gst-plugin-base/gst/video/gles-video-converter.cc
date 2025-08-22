@@ -211,7 +211,7 @@ gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * directio
 
   try {
     surface_id = convert->engine->CreateSurface (surface, type);
-    GST_DEBUG ("Created %s surface with id %lx", direction, surface_id);
+    GST_DEBUG ("Created %s surface with id %llx", direction, (unsigned long long) surface_id);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to create %s surface, error: '%s'!", direction, e.what());
     return 0;
@@ -228,7 +228,7 @@ gst_gles_destroy_surface (gpointer key, gpointer value, gpointer userdata)
 
   try {
     convert->engine->DestroySurface(glsurface->id);
-    GST_DEBUG ("Destroying surface with id %lx", glsurface->id);
+    GST_DEBUG ("Destroying surface with id %llx", (unsigned long long) glsurface->id);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to destroy IB2C surface, error: '%s'!", e.what());
     return;
@@ -258,7 +258,7 @@ gst_gles_remove_input_surfaces (GstGlesVideoConverter * convert, GArray * fds)
       continue;
 
     try {
-      GST_DEBUG ("Destroying surface with id %lx", glsurface->id);
+      GST_DEBUG ("Destroying surface with id %llx", (unsigned long long) glsurface->id);
       convert->engine->DestroySurface(glsurface->id);
     } catch (std::exception& e) {
       GST_ERROR ("Failed to destroy IB2C surface, error: '%s'!", e.what());
@@ -288,7 +288,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
   object->mask = 0;
 
   object->alpha = vblit->alpha;
-  GST_TRACE ("Input surface %lx - Global alpha: %u", surface_id, object->alpha);
+  GST_TRACE ("Input surface %llx - Global alpha: %u", (unsigned long long) surface_id, object->alpha);
 
   // Setup the source rectangle.
   if ((vblit->source.w != 0) && (vblit->source.h != 0)) {
@@ -311,13 +311,13 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
   if ((vblit->flip == GST_VCE_FLIP_VERTICAL) ||
       (vblit->flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kVFlip;
-    GST_TRACE ("Input surface %lx - Flip Vertically", surface_id);
+    GST_TRACE ("Input surface %llx - Flip Vertically", (unsigned long long) surface_id);
   }
 
   if ((vblit->flip == GST_VCE_FLIP_HORIZONTAL) ||
       (vblit->flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kHFlip;
-    GST_TRACE ("Input surface %lx - Flip Horizontally", surface_id);
+    GST_TRACE ("Input surface %llx - Flip Horizontally", (unsigned long long) surface_id);
   }
 
   // Reset the local dimension variables.
@@ -348,7 +348,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
           &dar_n, &dar_d
       );
 
-      GST_TRACE ("Input surface %lx - rotate 90° clockwise", surface_id);
+      GST_TRACE ("Input surface %llx - rotate 90° clockwise", (unsigned long long) surface_id);
 
       // Adjust the target rectangle dimensions.
       width = (width != 0) ? width :
@@ -373,7 +373,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       break;
     }
     case GST_VCE_ROTATE_180:
-      GST_TRACE ("Input surface %lx - rotate 180°", surface_id);
+      GST_TRACE ("Input surface %llx - rotate 180°", (unsigned long long) surface_id);
 
       // Adjust the target rectangle dimensions.
       width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (outframe) : width;
@@ -396,7 +396,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
           &dar_n, &dar_d
       );
 
-      GST_TRACE ("Input surface %lx - rotate 90° counter-clockwise", surface_id);
+      GST_TRACE ("Input surface %llx - rotate 90° counter-clockwise", (unsigned long long) surface_id);
 
       // Adjust the target rectangle dimensions.
       width = (width != 0) ? width :
@@ -431,12 +431,12 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       break;
   }
 
-  GST_TRACE ("Input surface %lx - Source rectangle: x(%d) y(%d) w(%d) h(%d)",
-      surface_id, object->source.x, object->source.y,
+  GST_TRACE ("Input surface %llx - Source rectangle: x(%d) y(%d) w(%d) h(%d)",
+      (unsigned long long) surface_id, object->source.x, object->source.y,
       object->source.w, object->source.h);
 
-  GST_TRACE ("Input surface %lx - Target rectangle: x(%d) y(%d) w(%d) h(%d)",
-      surface_id, object->destination.x, object->destination.y,
+  GST_TRACE ("Input surface %llx - Target rectangle: x(%d) y(%d) w(%d) h(%d)",
+     (unsigned long long) surface_id, object->destination.x, object->destination.y,
       object->destination.w, object->destination.h);
 }
 

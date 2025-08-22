@@ -1217,8 +1217,8 @@ int32_t Overlay::ApplyOverlay_GLES (const OverlayTargetBuffer& buffer)
         object.destination.w = draw_infos[i].width;
         object.destination.h = draw_infos[i].height;
 
-        GST_LOG ("object[%u].surface_id=%lx", i,
-            object.id);
+        GST_LOG ("object[%u].surface_id=%llx", i,
+            (unsigned long long) object.id);
         GST_LOG ("object[%u].destination.x=%u", i,
             object.destination.x);
         GST_LOG ("object[%u].destination.y=%u", i,
