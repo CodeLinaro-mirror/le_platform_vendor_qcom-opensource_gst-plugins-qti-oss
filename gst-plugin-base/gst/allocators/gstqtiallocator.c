@@ -200,7 +200,7 @@ gst_qti_allocator_alloc (GstAllocator * allocator, gsize size,
   fd = alloc_data.fd;
 #endif // TARGET_ION_ABI_VERSION
 
-  memory = gst_fd_allocator_alloc (allocator, fd, size, priv->memflags);
+  memory = gst_fd_allocator_alloc (allocator, fd, maxsize, priv->memflags);
   GST_MINI_OBJECT_FLAG_SET (memory, params->flags);
 
   GST_DEBUG_OBJECT (qtiallocator, "Allocated memory %p of size %" G_GSIZE_FORMAT
@@ -334,6 +334,12 @@ gst_qti_allocator_new (GstFdMemoryFlags memflags)
 
   if (priv->devfd < 0) {
     GST_WARNING_OBJECT (allocator, "Failed to open /dev/dma_heap/qcom,system, "
+        "error: %s! Falling back to /dev/dma_heap/system", g_strerror (errno));
+    priv->devfd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
+  }
+
+  if (priv->devfd < 0) {
+    GST_WARNING_OBJECT (allocator, "Failed to open /dev/dma_heap/system, "
         "error: %s! Falling back to /dev/ion", g_strerror (errno));
     priv->devfd = open ("/dev/ion", O_RDONLY | O_CLOEXEC);
   }
