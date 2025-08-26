@@ -111,20 +111,15 @@ gst_samplemux_is_meta_available (GstSampleMux * muxer, GstClockTime timestamp)
     GstSampleMuxSecondaryPad *dpad = GST_SAMPLEMUX_SECONDARY_PAD (list->data);
     GstClockTimeDiff delta = GST_CLOCK_TIME_NONE;
 
-    GST_OBJECT_LOCK (dpad);
     skip = GST_PAD_IS_EOS (dpad) || GST_PAD_IS_FLUSHING (dpad);
 
     // Pads which are in EOS or FLUSHING state are not included in the checks.
-    if (skip && g_queue_is_empty (dpad->queue)) {
-      GST_OBJECT_UNLOCK (dpad);
+    if (skip && g_queue_is_empty (dpad->queue))
       continue;
-    }
-
-    GST_OBJECT_UNLOCK (dpad);
 
     // If there is no data available to at least one pad return immediately.
-    if (!(available &= !g_queue_is_empty (dpad->queue)))
-      break;
+    if (g_queue_is_empty (dpad->queue))
+      continue;
 
     // If timestamp is not valid, no timestamp matching will be performed.
     if (!GST_CLOCK_TIME_IS_VALID (timestamp))
@@ -150,10 +145,6 @@ gst_samplemux_is_meta_available (GstSampleMux * muxer, GstClockTime timestamp)
       // Drop this item as its timestamp is too old.
       gst_metadata_item_free (g_queue_pop_head (dpad->queue));
     }
-
-    // If there is no data left to this pad return immediately.
-    if (!(available &= !g_queue_is_empty (dpad->queue)))
-      break;
   }
 
   return available;
