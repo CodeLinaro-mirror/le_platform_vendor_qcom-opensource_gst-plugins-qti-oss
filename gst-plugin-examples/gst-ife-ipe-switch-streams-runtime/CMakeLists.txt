@@ -3,9 +3,13 @@ cmake_minimum_required(VERSION 3.8.2)
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
   REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_ALLOC
+  REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_VIDEO
+  REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 
-# GStreamer gst-fastswitch-example
-set(GST_EXAMPLE_BIN gst-fastswitch-example)
+# GStreamer gst-ife-ipe-switch-streams-runtime-example
+set(GST_EXAMPLE_BIN gst-ife-ipe-switch-streams-runtime-example)
 
 add_executable(${GST_EXAMPLE_BIN}
   main.cc
@@ -15,10 +19,15 @@ target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
 )
 
+target_compile_definitions(${GST_EXAMPLE_BIN} PRIVATE
+  $<$<BOOL:${CODEC2_ENCODE}>:CODEC2_ENCODE>
+)
+
 target_link_libraries(${GST_EXAMPLE_BIN} PRIVATE
+  pthread
   ${GST_LIBRARIES}
-  qmmf_camera_metadata
-  gstqtiutilsbase
+  ${GST_VIDEO_LIBRARIES}
+  ${GST_ALLOC_LIBRARIES}
 )
 
 install(
