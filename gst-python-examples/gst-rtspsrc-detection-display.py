@@ -18,21 +18,21 @@ from gi.repository import Gst, GLib
 DEFAULT_RTSP_SRC = "rtsp://127.0.0.1:8900/live"
 
 # Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/etc/models/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODEL = "/etc/models/yolox_quantized.tflite"
 DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_LABELS = "/etc/labels/yolov8n.labels"
-DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
-    q-scales=<3.093529462814331,0.00390625,1.0>;"
+DEFAULT_DETECTION_LABELS = "/etc/labels/yolox.labels"
+DEFAULT_DETECTION_CONSTANTS = "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
+    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
 
 DESCRIPTION = f"""
-The application receives an RTSP stream as source, decodes it, uses YOLOv8
-TFLite model to identify the object in scene from camera stream and overlay
+The application receives an RTSP stream as source, decodes it, uses a TFLite
+model to identify the object in scene from camera stream and overlay
 the bounding boxes over the detected objects. The results are shown on the
 display.
 
 The default file paths in the python script are as follows:
-- Detection model (YOLOv8): {DEFAULT_DETECTION_MODEL}
-- Detection labels:         {DEFAULT_DETECTION_LABELS}
+- Detection model:  {DEFAULT_DETECTION_MODEL}
+- Detection labels: {DEFAULT_DETECTION_LABELS}
 
 To override the default settings,
 please configure the corresponding module and constants as well.
@@ -122,18 +122,19 @@ def construct_pipeline(pipe):
         "deccaps":      create_element("capsfilter", "deccaps"),
         "tee":          create_element("tee", "split"),
         "mlvconverter": create_element("qtimlvconverter", "converter"),
-        "queue_0":      create_element("queue", "queue0"),
         "mltflite":     create_element("qtimltflite", "inference"),
-        "queue_1":      create_element("queue", "queue1"),
         "mlvdetection": create_element("qtimlvdetection", "detection"),
         "capsfilter_1": create_element("capsfilter", "metamuxmetacaps"),
-        "queue_2":      create_element("queue", "queue2"),
         "metamux":      create_element("qtimetamux", "metamux"),
         "overlay":      create_element("qtivoverlay", "overlay"),
-        "queue_4":      create_element("queue", "queue4"),
         "display":      create_element("waylandsink", "display")
     }
     # fmt: on
+
+    queue_count = 6
+    for i in range(queue_count):
+        queue_name = f"queue_{i}"
+        elements[queue_name] = create_element("queue", queue_name)
 
     # Set element properties
     Gst.util_set_object_arg(elements["rtspsrc"], "location", args.rtsp)
@@ -194,11 +195,11 @@ def construct_pipeline(pipe):
     link_orders = [
         [
             "rtph264depay", "capsfilter_0", "h264parse", "v4l2h264dec", "deccaps",
-            "tee", "metamux", "overlay", "queue_4", "display"
+            "tee", "queue_0", "metamux", "overlay", "queue_1", "display"
         ],
         [
-            "tee", "mlvconverter", "queue_0", "mltflite", "queue_1",
-            "mlvdetection", "capsfilter_1", "queue_2", "metamux"
+            "tee", "queue_2", "mlvconverter", "queue_3", "mltflite", "queue_4",
+            "mlvdetection", "capsfilter_1", "queue_5", "metamux"
         ]
     ]
     # fmt: on

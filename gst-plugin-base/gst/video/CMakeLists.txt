@@ -13,8 +13,8 @@ add_library(${TARGET_NAME} SHARED
   video-converter-engine.c
   video-utils.c
   $<$<BOOL:${HAVE_ADRENO_C2D2_H}>:c2d-video-converter.c>
-  $<$<BOOL:${HAVE_IOT_CORE_IB2C_H}>:gles-video-converter.cc>
-  $<$<BOOL:${FASTCV_FOUND}>:fcv-video-converter.c>
+  $<$<BOOL:${GLES_FOUND}>:gles-video-converter.cc>
+  $<$<BOOL:${HAVE_FASTCV_H}>:fcv-video-converter.c>
 )
 
 set(TARGET_HEADERS
@@ -31,15 +31,8 @@ set_target_properties(${TARGET_NAME} PROPERTIES
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
-if(FASTCV_FOUND)
+if (FASTCV_FOUND)
   string(REGEX MATCH "^[0-9]+" FASTCV_VERSION_MAJOR ${FASTCV_VERSION})
-endif()
-
-string(REGEX MATCH "^[0-9]+" GBM_VERSION_MAJOR ${GBM_VERSION})
-string(REGEX MATCH "^[0-9]+" ADRENO_UTILS_VERSION_MAJOR ${ADRENO_UTILS_VERSION})
-
-if(QCOM_IB2C_FOUND)
-  string(REGEX MATCH "^[0-9]+" QCOM_IB2C_VERSION_MAJOR ${QCOM_IB2C_VERSION})
 endif()
 
 target_compile_definitions(${TARGET_NAME} PRIVATE
@@ -47,13 +40,11 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
   $<$<BOOL:${HAVE_MSM_MEDIA_INFO_H}>:HAVE_MSM_MEDIA_INFO_H>
   $<$<BOOL:${HAVE_LINUX_DMA_HEAP_H}>:HAVE_LINUX_DMA_HEAP_H>
   $<$<BOOL:${HAVE_ADRENO_C2D2_H}>:HAVE_ADRENO_C2D2_H>
-  $<$<BOOL:${HAVE_IOT_CORE_IB2C_H}>:HAVE_IOT_CORE_IB2C_H>
-  $<$<BOOL:${FASTCV_FOUND}>:HAVE_FASTCV_H>
+  $<$<BOOL:${GLES_FOUND}>:HAVE_GLES2_H>
+  $<$<BOOL:${HAVE_FASTCV_H}>:HAVE_FASTCV_H>
+  $<$<BOOL:${FASTCV_FOUND}>:FASTCV_PKG_FOUND>
+  FASTCV_VERSION_MAJOR="${FASTCV_VERSION_MAJOR}"
   $<$<BOOL:${HAVE_GBM_PRIV_H}>:HAVE_GBM_PRIV_H>
-  FASTCV_VERSION="${FASTCV_VERSION_MAJOR}"
-  GBM_VERSION="${GBM_VERSION_MAJOR}"
-  ADRENO_UTILS_VERSION_MAJOR="${ADRENO_UTILS_VERSION_MAJOR}"
-  IB2C_VERSION="${QCOM_IB2C_VERSION_MAJOR}"
 )
 
 target_include_directories(${TARGET_NAME} PUBLIC
@@ -79,6 +70,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
   gstqtiallocatorsbase
+  gstqtigfxbase
 )
 
 install(

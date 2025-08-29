@@ -68,7 +68,10 @@
 #include <gst/allocators/allocators.h>
 #include <gst/ml/ml-info.h>
 #include <gst/ml/ml-frame.h>
+#include <gst/ml/gstmlmeta.h>
+#if defined(HAVE_TFLITE_VERSION_H)
 #include <tensorflow/lite/version.h>
+#endif //HAVE_TFLITE_VERSION_H
 
 G_BEGIN_DECLS
 
@@ -155,11 +158,11 @@ gst_ml_tflite_engine_new              (GstStructure * settings);
 GST_API void
 gst_ml_tflite_engine_free             (GstMLTFLiteEngine * engine);
 
-GST_API const GstMLInfo *
-gst_ml_tflite_engine_get_input_info   (GstMLTFLiteEngine * engine);
+GST_API GstCaps *
+gst_ml_tflite_engine_get_input_caps   (GstMLTFLiteEngine * engine);
 
-GST_API const GstMLInfo *
-gst_ml_tflite_engine_get_output_info  (GstMLTFLiteEngine * engine);
+GST_API GstCaps *
+gst_ml_tflite_engine_get_output_caps  (GstMLTFLiteEngine * engine);
 
 GST_API gboolean
 gst_ml_tflite_engine_execute          (GstMLTFLiteEngine * engine,

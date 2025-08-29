@@ -225,14 +225,11 @@ static gboolean
 gbm_device_open (GstImageBufferPool * vpool)
 {
   GstImageBufferPoolPrivate *priv = vpool->priv;
-  gchar libname[256];
   gboolean success = TRUE;
   guint32 dubplicate = 0;
 
-  g_snprintf (libname, sizeof (libname), "libgbm.so.%s", GBM_VERSION);
-
   // Load GBM library.
-  priv->gbmhandle = dlopen (libname, RTLD_NOW);
+  priv->gbmhandle = dlopen ("libgbm.so.1", RTLD_NOW);
   if (NULL == priv->gbmhandle) {
     GST_ERROR ("Failed to open GBM library, error: %s!", dlerror());
     return FALSE;
@@ -259,6 +256,12 @@ gbm_device_open (GstImageBufferPool * vpool)
 
   GST_INFO_OBJECT (vpool, "Open /dev/dma_heap/qcom,system");
   priv->gbmfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
+
+  if (priv->gbmfd < 0) {
+    GST_WARNING_OBJECT (vpool, "Failed to open /dev/dma_heap/qcom,system, "
+        "error: %s! Falling back to /dev/dma_heap/system", g_strerror (errno));
+    priv->gbmfd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
+  }
 
   if (priv->gbmfd < 0) {
     GST_WARNING_OBJECT (vpool, "Falling back to /dev/ion");

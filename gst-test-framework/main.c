@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -15,6 +15,7 @@ struct _GstAppContext
   gboolean          allsuites;
   gint              iteration;
   gint              duration;
+  gboolean          help;
 
   // Enabled suite names.
   GList*            enabledsuites;
@@ -58,7 +59,7 @@ static gboolean parse_option_snames (GstAppContext* appctx, gchar **snames)
 
   if (snames == NULL || *snames == NULL) {
     appctx->allsuites = TRUE;
-    GST_INFO ("All suites are enabled\n");
+    g_print ("All suites are enabled\n");
     return TRUE;
   }
 
@@ -72,12 +73,11 @@ static gboolean parse_option_snames (GstAppContext* appctx, gchar **snames)
     val = g_enum_get_value_by_nick (enumclass, s);
 
     if (val == NULL) {
-      GST_WARNING ("unsupported suite %s\n", s);
+      g_printerr ("unsupported suite %s\n", s);
       temps++;
       continue;
     }
-    GST_LOG ("%s suite(%d) is enabled\n", val->value_nick, val->value);
-    ///// TODO
+    g_print ("%s suite(%d) is enabled\n", val->value_nick, val->value);
     appctx->enabledsuites = g_list_append (appctx->enabledsuites,
         GINT_TO_POINTER (val->value));
     ret = TRUE;
@@ -88,7 +88,35 @@ static gboolean parse_option_snames (GstAppContext* appctx, gchar **snames)
   return ret;
 }
 
-static gboolean gst_plugin_get_suite (GstPluginSuite * psuite)
+static void gst_plugin_suite_help (GstPluginSuite *psuite)
+{
+  gint i = 0, length = 0;
+
+  if (psuite == NULL) {
+    g_printerr (
+        "Usage: %s -s [snames] -i [iteration] -d [duration] -h  ...",
+        "gst-test-framework");
+    gst_printerr ("\n");
+    gst_printerr (
+        "  -s: Suite names, could be camera/ml\n"
+        "  -i: Iteration times for each test, default is 1 time\n"
+        "  -d: Running time for each test in seconds, default is 10 seconds\n"
+        "  -h: Print available test case names when -s is configured");
+    gst_printerr ("\n\n");
+    return;
+  }
+
+  length = g_list_length (psuite->tcnames);
+  g_print ("%s suite contains %d cases:\n", psuite->name, length);
+
+  if (length == 0)
+    return;
+
+  for (i = 0; i < length; i++)
+    g_print ("Case%d: %s\n", i, (g_list_nth (psuite->tcnames, i)->data));
+}
+
+static gboolean gst_plugin_get_suite (GstPluginSuite *psuite)
 {
   gboolean ret = TRUE;
 
@@ -100,9 +128,12 @@ static gboolean gst_plugin_get_suite (GstPluginSuite * psuite)
     case GST_TEST_SUITE_CAMERA:
       GST_PLUGIN_GET_SUITE (camera, psuite);
       break;
+    case GST_TEST_SUITE_ML:
+      GST_PLUGIN_GET_SUITE (ml, psuite);
+      break;
     default:
       ret = FALSE;
-      GST_WARNING ("Unknown suite index %d.", psuite->idx);
+      gst_printerr ("Unknown suite index %d.", psuite->idx);
       break;
   }
 
@@ -121,10 +152,14 @@ static int gst_plugin_run_suites (GstAppContext* appctx)
     psuite.idx = GPOINTER_TO_INT (list->data);
     psuite.iteration = appctx->iteration;
     psuite.duration = appctx->duration;
+    psuite.tcnames = NULL;
 
     // Get the suite cases and run it.
     if (gst_plugin_get_suite (&psuite))
-      ret = gst_check_run_suite (psuite.suite, psuite.name, __FILE__);
+      if (appctx->help)
+        gst_plugin_suite_help (&psuite);
+      else
+        ret = gst_check_run_suite (psuite.suite, psuite.name, __FILE__);
   }
 
   return ret;
@@ -137,7 +172,8 @@ int main (int argc, char **argv)
   GError *error = NULL;
   gchar **snames = NULL;
   gint iteration = 1;
-  gint duration = 3;
+  gint duration = 10;
+  gboolean help = FALSE;
 
   g_set_prgname ("gst-test-framework");
 
@@ -147,7 +183,9 @@ int main (int argc, char **argv)
     {"iteration", 'i', 0, G_OPTION_ARG_INT, &iteration,
         "Iteration times for each test, default is 1 time", NULL},
     {"duration", 'd', 0, G_OPTION_ARG_INT, &duration,
-        "Running time for each test in seconds, default is 3 seconds", NULL},
+        "Running time for each test in seconds, default is 10 seconds", NULL},
+    {"help", 'h', 0, G_OPTION_ARG_NONE, &help,
+        "Print available test case names and exit", NULL},
     {NULL}
   };
 
@@ -166,6 +204,11 @@ int main (int argc, char **argv)
   }
   g_option_context_free (optctx);
 
+  if (snames == NULL) {
+    gst_plugin_suite_help (NULL);
+    return 0;
+  }
+
   // Initialize GST library.
   gst_init (&argc, &argv);
 
@@ -178,6 +221,7 @@ int main (int argc, char **argv)
 
   appctx.iteration = iteration;
   appctx.duration = duration;
+  appctx.help = help;
 
   // Run suites
   gst_plugin_run_suites (&appctx);

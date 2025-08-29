@@ -18,13 +18,6 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(OPENCL REQUIRED opencl)
-pkg_check_modules(QCOM_IB2C qcom-ib2c)
-
-if(NOT QCOM_IB2C_FOUND)
-  set(QCOM_IB2C_VERSION "1.0.0")
-  set(QCOM_IB2C_FOUND TRUE)
-endif()
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
@@ -39,7 +32,7 @@ check_include_file("adreno/c2d2.h" HAVE_C2D_H)
 
 # Check whether IB2C header is present.
 include(CheckIncludeFileCXX)
-check_include_file_cxx("iot-core-algs/ib2c.h" HAVE_GLES_H)
+check_include_file_cxx("gstreamer-1.0/gst/gfx/ib2c.h" HAVE_GLES_H)
 
 # Check whether CL EXT header is present.
 include(CheckIncludeFile)
@@ -80,7 +73,7 @@ target_include_directories(${GST_QTI_OVERLAY} PRIVATE
 
 target_compile_definitions(${GST_QTI_OVERLAY} PRIVATE
   $<$<BOOL:${HAVE_C2D_H}>:ENABLE_C2D>
-  $<$<BOOL:${QCOM_IB2C_FOUND}>:ENABLE_GLES>
+  $<$<BOOL:${HAVE_GLES_H}>:ENABLE_GLES>
 )
 
 target_link_libraries(${GST_QTI_OVERLAY} PRIVATE

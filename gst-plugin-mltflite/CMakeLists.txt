@@ -18,7 +18,6 @@ pkg_check_modules(GST_BASE REQUIRED
   gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED
   gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(TFLITE REQUIRED tensorflow-lite)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
@@ -30,6 +29,9 @@ check_include_file("tensorflow/lite/delegates/external/external_delegate.h" HAVE
 check_include_file("tensorflow/lite/core/shims/c/c_api_experimental.h" HAVE_CORE_SHIMS_C_API_H)
 check_include_file("tensorflow/lite/core/c/c_api_experimental.h" HAVE_CORE_C_API_H)
 check_include_file("tensorflow/lite/c/c_api.h" HAVE_C_API_H)
+
+# Version header not found only when building against TFLITE master branch headers
+check_include_file("tensorflow/lite/version.h" HAVE_TFLITE_VERSION_H)
 
 # Support for the External delegate appears after the tensorflow lite 2.10.0
 # the reason is to determine if we are on a new or old version of tflite
@@ -107,10 +109,7 @@ add_library(${GST_QTI_ML_TFLITE} SHARED
   ${GST_QTI_ML_TFLITE_SRC}
 )
 
-string(REGEX MATCH "^[0-9]+" TFLITE_VERSION_MAJOR ${TFLITE_VERSION})
-
 target_compile_definitions(${GST_QTI_ML_TFLITE} PRIVATE
-  TFLITE_VERSION="${TFLITE_VERSION_MAJOR}"
   $<$<BOOL:${HAVE_HEXAGON_DELEGATE_H}>:HAVE_HEXAGON_DELEGATE_H>
   $<$<BOOL:${HAVE_EXTERNAL_DELEGATE_H}>:HAVE_EXTERNAL_DELEGATE_H>
   ${TARGET_COMPILE_DEFINITIONS}

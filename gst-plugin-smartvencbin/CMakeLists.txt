@@ -21,12 +21,7 @@ pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_PBUTILS
   REQUIRED gstreamer-pbutils-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(QCOM_VIDEO_CTRL qcom-video-ctrl)
-
-if(NOT QCOM_VIDEO_CTRL_FOUND)
-  set(QCOM_VIDEO_CTRL_VERSION "1.0.0")
-  set(QCOM_VIDEO_CTRL_FOUND TRUE)
-endif()
+pkg_check_modules(QCOM_VIDEO_CTRL REQUIRED qcom-video-ctrl)
 
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
@@ -59,13 +54,11 @@ target_link_libraries(${GST_SMART_VENC_BIN} PRIVATE
   gstqtivideobase
 )
 
-if(QCOM_VIDEO_CTRL_FOUND)
-  string(REGEX MATCH "^[0-9]+" QCOM_VIDEO_CTRL_VERSION_MAJOR ${QCOM_VIDEO_CTRL_VERSION})
-endif()
+string(REGEX MATCH "^[0-9]+" QCOM_VIDEO_CTRL_VERSION_MAJOR ${QCOM_VIDEO_CTRL_VERSION})
 
 # Pass the VideoCtrl library version as a macro
 target_compile_definitions(${GST_SMART_VENC_BIN} PRIVATE
-  VIDEO_CTRL_VERSION="${QCOM_VIDEO_CTRL_VERSION_MAJOR}"
+  VIDEO_CTRL_VERSION_MAJOR="${QCOM_VIDEO_CTRL_VERSION_MAJOR}"
 )
 
 install(
