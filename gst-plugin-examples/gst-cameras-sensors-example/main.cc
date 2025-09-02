@@ -560,6 +560,12 @@ create_camera_s0_s1_streams (GstAppContext *appctx)
   gchar element_name[128];
   gboolean ret = FALSE;
 
+  if (!g_file_test (AI_NODE_DETECTION_MODEL, G_FILE_TEST_EXISTS) ||
+      !g_file_test (AI_NODE_DETECTION_LABEL, G_FILE_TEST_EXISTS)) {
+    g_printerr ("Could not find model or label file.\n");
+    goto error;
+  }
+
   // Create S0 streams elements.
   camsrc0 = gst_element_factory_make ("qtiqmmfsrc", "camsrc0");
   capsfilter_high = gst_element_factory_make ("capsfilter", "capsfilter-high");
@@ -1146,6 +1152,10 @@ main (gint argc, gchar * argv[])
   GstAppContext* appctx;
   GstTask *bufferstask = NULL;
   GRecMutex bufferslock;
+
+  // Set env for EGL.
+  g_setenv ("XDG_RUNTIME_DIR", "/run/user/root", FALSE);
+  g_setenv ("WAYLAND_DISPLAY", "wayland-1", FALSE);
 
   appctx = gst_app_context_init ();
   g_return_val_if_fail (appctx != NULL, -1);
