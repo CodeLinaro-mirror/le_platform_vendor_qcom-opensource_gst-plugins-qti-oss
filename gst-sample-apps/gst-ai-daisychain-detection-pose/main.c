@@ -24,6 +24,8 @@
  * 3. For RTSP source:
  * rtspsrc -> rtph264depay -> h264parse -> tee (2 SPLIT)
  *
+ * 4. For USB source:
+ * v4l2src   -> v4l2src_caps  -> tee
  * Pipeline after tee is common for all
  * sources (qtiqmmfsrc/filesrc/rtspsrc)
  *
@@ -42,6 +44,8 @@
 #include <stdio.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
 #include <gst/video/video.h>
 #include <glib.h>
 #include <json-glib/json-glib.h>
@@ -54,8 +58,11 @@
 #define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
 #define DEFAULT_TFLITE_POSE_MODEL \
     "/etc/models/hrnet_pose_quantized.tflite"
-#define DEFAULT_YOLOX_LABELS "/etc/labels/yolox.labels"
-#define DEFAULT_POSE_LABELS "/etc/labels/hrnet_pose.labels"
+#define DEFAULT_YOLOX_LABELS "/etc/labels/yolox.json"
+#define DEFAULT_POSE_LABELS "/etc/labels/hrnet_pose.json"
+#define DEFAULT_POSE_SETTINGS_PATH "/etc/labels/hrnet_settings.json"
+#define DEFAULT_IP "127.0.0.1"
+#define DEFAULT_PORT "8900"
 
 /**
  * Default path of config file
@@ -63,22 +70,17 @@
 #define DEFAULT_CONFIG_FILE "/etc/configs/config-daisychain-detection-pose.json"
 
 /**
- * Default Scale and Offset constants
- */
-#define DEFAULT_YOLOX_CONSTANT "YOLOX,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
-#define DEFAULT_HRNET_CONSTANT "hrnet,q-offsets=<8.0>,\
-    q-scales=<0.0040499246679246426>;"
-
-/**
  * Default settings of camera output resolution, Scaling of camera output
  * will be done in qtimlvconverter based on model input
  */
 #define DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH 1280
 #define DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT 720
+#define USB_CAMERA_OUTPUT_WIDTH 1280
+#define USB_CAMERA_OUTPUT_HEIGHT 720
 #define DEFAULT_CAMERA_FRAME_RATE 30
 #define DEFAULT_DAISYCHAIN_OUTPUT_WIDTH 240
 #define DEFAULT_DAISYCHAIN_OUTPUT_HEIGHT 480
+#define MAX_VID_DEV_CNT 64
 
 /**
  * Dimensions of output display/file
@@ -167,6 +169,8 @@ typedef struct {
   gboolean camera_source;
   gchar *input_file_path;
   gchar *output_file_path;
+  gchar *output_ip_address;
+  gchar *port_num;
   gchar *rtsp_ip_port;
   gchar *yolox_model_path;
   gchar *hrnet_model_path;
@@ -174,9 +178,23 @@ typedef struct {
   gchar *hrnet_labels_path;
   gchar *yolox_constants;
   gchar *hrnet_constants;
+  gchar *pose_settings_path;
+  gchar *enable_usb_camera;
+  gchar dev_video[16];
+  enum GstVideoFormat video_format;
   enum GstSinkType sink_type;
   GstStreamSourceType source_type;
   gboolean display;
+  gboolean pose_use_cpu;
+  gboolean pose_use_gpu;
+  gboolean pose_use_dsp;
+  gboolean detection_use_cpu;
+  gboolean detection_use_gpu;
+  gboolean detection_use_dsp;
+  gboolean use_usb;
+  gint width;
+  gint height;
+  gint framerate;
 } GstAppOptions;
 
 /**
@@ -198,6 +216,64 @@ build_pad_property (GValue * property, gint values[], gint num)
   }
 
   g_value_unset (&val);
+}
+
+/**
+ * Find USB camera node:
+ *
+ * @param appctx Application Context object
+ */
+static gboolean
+find_usb_camera_node (GstAppOptions * appctx)
+{
+  struct v4l2_capability v2cap;
+  gint idx = 0, ret = 0, mFd = -1;
+
+  while (idx < MAX_VID_DEV_CNT) {
+    memset (appctx->dev_video, 0, sizeof (appctx->dev_video));
+
+    ret = snprintf (appctx->dev_video, sizeof (appctx->dev_video), "/dev/video%d",
+        idx);
+    if (ret <= 0) {
+      return FALSE;
+    }
+
+    g_print ("open USB camera device: %s\n", appctx->dev_video);
+    mFd = open (appctx->dev_video, O_RDWR);
+    if (mFd < 0) {
+      mFd = -1;
+      g_printerr ("Failed to open USB camera device: %s (%s)\n",
+          appctx->dev_video, strerror (errno));
+      idx++;
+      continue;
+    }
+
+    if (ioctl (mFd, VIDIOC_QUERYCAP, &v2cap) == 0) {
+      g_print ("ID_V4L_CAPABILITIES=: %s", v2cap.driver);
+      if (strcmp ((const char *) v2cap.driver, "uvcvideo") != 0) {
+        idx++;
+        close (mFd);
+        continue;
+      }
+    } else {
+      g_printerr ("Failed to QUERYCAP device: %s (%s)\n", appctx->dev_video,
+          strerror (errno));
+      idx++;
+      close (mFd);
+      continue;
+    }
+    break;
+  }
+
+  if (idx >= MAX_VID_DEV_CNT || mFd < 0 || ret < 0) {
+    g_printerr ("Failed to open video device");
+    close (mFd);
+    return FALSE;
+  }
+
+  close (mFd);
+  g_print ("open %s successful \n", appctx->dev_video);
+  return TRUE;
 }
 
 /**
@@ -284,19 +360,24 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->hrnet_labels_path);
   }
 
-  if (options->yolox_constants != (gchar *)(&DEFAULT_YOLOX_CONSTANT) &&
-      options->yolox_constants != NULL) {
-    g_free ((gpointer)options->yolox_constants);
-  }
-
-  if (options->hrnet_constants != (gchar *)(&DEFAULT_HRNET_CONSTANT) &&
-      options->hrnet_constants != NULL) {
-    g_free ((gpointer)options->hrnet_constants);
+  if (options->pose_settings_path != (gchar *)(&DEFAULT_POSE_SETTINGS_PATH) &&
+      options->pose_settings_path != NULL) {
+    g_free ((gpointer)options->pose_settings_path);
   }
 
   if (options->output_file_path != NULL) {
     g_free (options->output_file_path);
     options->output_file_path = NULL;
+  }
+
+  if (options->output_ip_address != (gchar *)(&DEFAULT_IP) &&
+      options->output_ip_address != NULL) {
+    g_free ((gpointer)options->output_ip_address);
+  }
+
+  if (options->port_num != (gchar *)(&DEFAULT_PORT) &&
+      options->port_num != NULL) {
+    g_free ((gpointer)options->port_num);
   }
 
   if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
@@ -339,10 +420,15 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   GstElement *v4l2h264dec_caps = NULL;
   GstElement *v4l2h264enc = NULL, *mp4mux = NULL, *filesink = NULL;
   GstElement *h264parse_encode = NULL, *sink_filter = NULL;
+  GstElement *v4l2src = NULL, *v4l2src_caps = NULL, *qtivtransform = NULL;
+  GstElement *qtivtransform_capsfilter = NULL;
+  GstElement *videoconvert = NULL, *jpegdec = NULL;
+  GstElement *v4l2h264enc_rtsp = NULL, *h264parse_enc_rtsp = NULL;
+  GstElement *qtirtspbin = NULL;
   GstCaps *pad_filter = NULL, *filtercaps = NULL;
   GstStructure *delegate_options = NULL;
   gboolean ret = FALSE;
-  gchar element_name[128];
+  gchar element_name[128], settings[128];
   gint daisychain_width = DEFAULT_DAISYCHAIN_OUTPUT_WIDTH;
   gint daisychain_height = DEFAULT_DAISYCHAIN_OUTPUT_HEIGHT;
   gint preview_width = DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH;
@@ -437,6 +523,47 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
       g_printerr ("Failed to create v4l2h264dec_caps\n");
       goto error_clean_elements;
     }
+  } else if (options->source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    // 1. Create v4l2src plugin
+    v4l2src = gst_element_factory_make ("v4l2src", "v4l2src");
+    if (!v4l2src) {
+      g_printerr ("Failed to create v4l2src\n");
+      goto error_clean_elements;
+    }
+    // Use capsfilter to define the camera output settings
+    v4l2src_caps = gst_element_factory_make ("capsfilter", "v4l2src_caps");
+    if (!v4l2src_caps) {
+      g_printerr ("Failed to create v4l2src_caps\n");
+      goto error_clean_elements;
+    }
+    if (options->video_format == GST_MJPEG_VIDEO_FORMAT) {
+      // 1. Create qtivtransform plugin
+      qtivtransform = gst_element_factory_make ("qtivtransform", "qtivtransform");
+      if (!qtivtransform) {
+        g_printerr ("Failed to create qtivtransform\n");
+        goto error_clean_elements;
+      }
+      //transform filter caps
+      qtivtransform_capsfilter = gst_element_factory_make ("capsfilter",
+          "qtivtransform_capsfilter");
+      if (!qtivtransform_capsfilter) {
+        g_printerr ("Failed to create qtivtransform_capsfilter\n");
+        goto error_clean_elements;
+      }
+      videoconvert = gst_element_factory_make ("videoconvert", "videoconvert");
+      if (!videoconvert) {
+        g_printerr ("Failed to create videoconvert\n");
+        goto error_clean_elements;
+      }
+      jpegdec = gst_element_factory_make ("jpegdec", "jpegdec");
+      if (!jpegdec) {
+        g_printerr ("Failed to create jpegdec\n");
+        goto error_clean_elements;
+      }
+    }
+  } else {
+    g_printerr ("Invalid source type\n");
+    goto error_clean_elements;
   }
 
   // Create qtimetamux element to attach postprocessing string results
@@ -520,7 +647,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   for (gint i = 0; i < DETECTION_COUNT; i++) {
     snprintf (element_name, 127, "qtimlvdetection-%d", i);
     qtimlvdetection[i] =
-        gst_element_factory_make ("qtimlvdetection", element_name);
+        gst_element_factory_make ("qtimlpostprocess", element_name);
     if (!qtimlvdetection[i]) {
       g_printerr ("Failed to create qtimlvdetection %d\n", i);
       goto error_clean_elements;
@@ -542,7 +669,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   for (gint i = 0; i < POSE_COUNT; i++) {
     snprintf (element_name, 127, "qtimlvpose-%d", i);
     qtimlvpose[i] =
-        gst_element_factory_make ("qtimlvpose", element_name);
+        gst_element_factory_make ("qtimlpostprocess", element_name);
     if (!qtimlvpose[i]) {
       g_printerr ("Failed to create qtimlvpose %d\n", i);
       goto error_clean_elements;
@@ -592,19 +719,41 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
       g_printerr ("Failed to create v4l2h264enc\n");
       goto error_clean_elements;
     }
-
     mp4mux = gst_element_factory_make ("mp4mux", "mp4mux");
     if (!mp4mux) {
       g_printerr ("Failed to create mp4mux\n");
       goto error_clean_elements;
     }
-
     // Generic filesink plugin to write file on disk
     filesink = gst_element_factory_make ("filesink", "filesink");
     if (!filesink) {
       g_printerr ("Failed to create filesink\n");
       goto error_clean_elements;
     }
+  } else if (options->sink_type == GST_RTSP_STREAMING) {
+    // Create Encoder plugin
+    v4l2h264enc_rtsp = gst_element_factory_make ("v4l2h264enc",
+        "v4l2h264enc_rtsp");
+    if (!v4l2h264enc_rtsp) {
+      g_printerr ("Failed to create v4l2h264enc_rtsp\n");
+      goto error_clean_elements;
+    }
+    // Create frame parser plugin
+    h264parse_enc_rtsp = gst_element_factory_make ("h264parse",
+        "h264parse_enc_rtsp");
+    if (!h264parse_enc_rtsp) {
+      g_printerr ("Failed to create h264parse_enc_rtsp\n");
+      goto error_clean_elements;
+    }
+    // Generic qtirtspbin plugin for streaming
+    qtirtspbin = gst_element_factory_make ("qtirtspbin", "qtirtspbin");
+    if (!qtirtspbin) {
+      g_printerr ("Failed to create qtirtspbin\n");
+      goto error_clean_elements;
+    }
+  } else {
+    g_printerr ("Invalid output Sink Type\n");
+    goto error_clean_elements;
   }
 
   // 2. Set properties for all GST plugin elements
@@ -635,6 +784,43 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
         "format", G_TYPE_STRING, "NV12", NULL);
     g_object_set (G_OBJECT (v4l2h264dec_caps), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
+  } else if (options->source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    g_object_set (G_OBJECT (v4l2src), "io-mode", "dmabuf", NULL);
+    g_object_set (G_OBJECT (v4l2src), "device", options->dev_video, NULL);
+
+    // 2.4 Set the capabilities of USB camera plugin output for inference
+    if (options->video_format == GST_NV12_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "NV12",
+          "width", G_TYPE_INT, options->width,
+          "height", G_TYPE_INT, options->height,
+          "framerate", GST_TYPE_FRACTION, options->framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    }
+    else if (options->video_format == GST_MJPEG_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("image/jpeg",
+          "width", G_TYPE_INT, options->width,
+          "height", G_TYPE_INT, options->height,
+          "framerate", GST_TYPE_FRACTION, options->framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING, "NV12", NULL);
+      g_object_set (G_OBJECT (qtivtransform_capsfilter), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    } else if (options->video_format == GST_YUV2_VIDEO_FORMAT) {
+      filtercaps = gst_caps_new_simple ("video/x-raw",
+          "format", G_TYPE_STRING, "YUY2",
+          "width", G_TYPE_INT, options->width,
+          "height", G_TYPE_INT, options->height,
+          "framerate", GST_TYPE_FRACTION, options->framerate, 1, NULL);
+      g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+      gst_caps_unref (filtercaps);
+    }
+  } else {
+    g_printerr ("Invalid source type\n");
+    goto error_clean_elements;
   }
 
   // 2.4 Set the properties of pad_filter for pose
@@ -655,26 +841,73 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   gst_caps_unref (pad_filter);
 
   // 2.6 Select the HW to DSP for model inferencing using delegate property
+  GstMLTFLiteDelegate tflite_delegate;
   for (gint i = 0; i < TFLITE_ELEMENT_COUNT; i++) {
     if (i == GST_DETECTION_TYPE_YOLO)
     {
       g_object_set (G_OBJECT (qtimlelement[i]),
-          "model", options->yolox_model_path,
-          "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
-    }
-    else
-    {
+          "model", options->yolox_model_path, NULL);
+    } else {
       g_object_set (G_OBJECT (qtimlelement[i]),
-          "model", options->hrnet_model_path,
-          "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+          "model", options->hrnet_model_path, NULL);
     }
-    delegate_options = gst_structure_from_string (
-        "QNNExternalDelegate,backend_type=htp,htp_device_id=(string)0,\
-        htp_performance_mode=(string)2;", NULL);
-    g_object_set (G_OBJECT (qtimlelement[i]),
-        "external-delegate-path", "libQnnTFLiteDelegate.so", NULL);
-    g_object_set (G_OBJECT (qtimlelement[i]),
-        "external-delegate-options", delegate_options, NULL);
+  }
+  if (options->detection_use_cpu) {
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
+    g_print ("Using CPU Delegate for Detection\n");
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]), "delegate",
+        tflite_delegate, NULL);
+  }
+  if (options->pose_use_cpu) {
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
+    g_print ("Using CPU Delegate for Pose\n");
+    g_object_set (G_OBJECT (qtimlelement[GST_POSE_TYPE_HRNET]),
+        "delegate", tflite_delegate, NULL);
+  }
+  if (options->pose_use_gpu) {
+    g_print ("Using GPU delegate for Pose\n");
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
+    g_object_set (G_OBJECT (qtimlelement[GST_POSE_TYPE_HRNET]),
+        "delegate", tflite_delegate, NULL);
+  }
+  if (options->detection_use_gpu) {
+    g_print ("Using GPU delegate for Detection\n");
+    tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "delegate", tflite_delegate, NULL);
+  }
+  if (options->pose_use_dsp) {
+    g_print ("Using DSP delegate with TFLITE for Pose\n");
+    delegate_options =
+        gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
+        NULL);
+    if (!delegate_options) {
+      g_printerr ("Failed to create delegate options structure\n");
+      goto error_clean_elements;
+    }
+    g_object_set (G_OBJECT (qtimlelement[GST_POSE_TYPE_HRNET]),
+        "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_POSE_TYPE_HRNET]),
+        "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_POSE_TYPE_HRNET]),
+        "external_delegate_options", delegate_options, NULL);
+    gst_structure_free (delegate_options);
+  }
+  if (options->detection_use_dsp) {
+    g_print ("Using DSP delegate with TFLITE for Detection\n");
+    delegate_options =
+        gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
+        NULL);
+    if (!delegate_options) {
+      g_printerr ("Failed to create delegate options structure\n");
+      goto error_clean_elements;
+    }
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]), "delegate",
+        GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
+    g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
+        "external_delegate_options", delegate_options, NULL);
     gst_structure_free (delegate_options);
   }
 
@@ -703,11 +936,10 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   for (gint i = 0; i < DETECTION_COUNT; i++) {
     module_id = get_enum_value (qtimlvdetection[i], "module", "yolov8");
     if (module_id != -1) {
+      snprintf (settings, 127, "{\"confidence\": %.1f}", 75.0);
       g_object_set (G_OBJECT (qtimlvdetection[i]),
-          "threshold", 75.0, "results", 4,
-          "module", module_id, "labels", options->yolox_labels_path,
-          "constants", options->yolox_constants,
-          NULL);
+          "results", 4, "module", module_id, "labels", options->yolox_labels_path,
+          "settings", settings, NULL);
       }
     else {
       g_printerr ("Module yolov8 is not available in qtimlvdetection.\n");
@@ -720,11 +952,10 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   for (gint i = 0; i < POSE_COUNT; i++) {
     module_id = get_enum_value (qtimlvpose[i], "module", "hrnet");
     if (module_id != -1) {
+      snprintf (settings, 127, "%s", options->pose_settings_path);
       g_object_set (G_OBJECT (qtimlvpose[i]),
-          "threshold", 51.0, "results", 1,
-          "module", module_id, "labels", options->hrnet_labels_path,
-          "constants", options->hrnet_constants,
-          NULL);
+          "results", 1, "module", module_id, "labels",
+          options->hrnet_labels_path, "settings", settings, NULL);
       }
     else {
       g_printerr ("Module hrnet is not available in qtimlvpose.\n");
@@ -768,6 +999,16 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
 
     g_object_set (G_OBJECT (filesink), "location", options->output_file_path,
         NULL);
+  } else if (options->sink_type == GST_RTSP_STREAMING) {
+    gst_element_set_enum_property (v4l2h264enc_rtsp, "capture-io-mode", "dmabuf");
+    gst_element_set_enum_property (v4l2h264enc_rtsp, "output-io-mode",
+        "dmabuf-import");
+    g_object_set (G_OBJECT (h264parse_enc_rtsp), "config-interval", 1, NULL);
+    g_object_set (G_OBJECT (qtirtspbin), "address", options->output_ip_address,
+        "port", options->port_num, NULL);
+  } else {
+    g_printerr ("Incorrect output sink type\n");
+    goto error_clean_elements;
   }
 
   // 3. Setup pipeline
@@ -784,6 +1025,13 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
     gst_bin_add_many (GST_BIN (appctx->pipeline),
         rtspsrc, rtph264depay, h264parse_decode,
         v4l2h264dec, v4l2h264dec_caps, NULL);
+  } else if (options->source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2src, v4l2src_caps,
+        NULL);
+    if (options->video_format == GST_MJPEG_VIDEO_FORMAT) {
+      gst_bin_add_many (GST_BIN (appctx->pipeline), qtivtransform,
+          qtivtransform_capsfilter, videoconvert, jpegdec, NULL);
+    }
   }
 
   gst_bin_add_many (GST_BIN (appctx->pipeline),
@@ -794,6 +1042,12 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   } else if (options->sink_type == GST_VIDEO_ENCODE) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), sink_filter,
         v4l2h264enc, h264parse_encode, mp4mux, filesink, NULL);
+  } else if (options->sink_type == GST_RTSP_STREAMING) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2h264enc_rtsp,
+        h264parse_enc_rtsp, qtirtspbin, NULL);
+  } else {
+    g_printerr ("Incorrect output sink type\n");
+    goto error_clean_elements;
   }
 
   for (gint i = 0; i < QUEUE_COUNT; i++) {
@@ -880,6 +1134,40 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
           "Exiting.\n");
       goto error_clean_pipeline;
     }
+  } else if (options->source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    if (options->video_format == GST_YUV2_VIDEO_FORMAT ||
+        options->video_format == GST_NV12_VIDEO_FORMAT) {
+      ret = gst_element_link_many (v4l2src, v4l2src_caps, queue[0],
+          tee[0], NULL);
+      if (!ret) {
+        g_printerr ("\n pipeline elements v4l2src -> v4l2src_caps"
+            "cannot be linked. Exiting.\n");
+        goto error_clean_pipeline;
+      }
+      ret = gst_element_link_many (tee[0], queue[1], qtimetamux[0], NULL);
+      if (!ret) {
+        g_printerr ("\n pipeline elements tee and qtimetamux cannot be linked."
+            "Exiting.\n");
+        goto error_clean_pipeline;
+      }
+    } else if (options->video_format == GST_MJPEG_VIDEO_FORMAT) {
+      ret = gst_element_link_many (v4l2src, v4l2src_caps, jpegdec, videoconvert,
+          qtivtransform_capsfilter, qtivtransform, queue[0], tee[0], NULL);
+      if (!ret) {
+        g_printerr ("Pipeline elements cannot be linked for"
+            " v4l2src->v4l2src_caps->qtivtransform->tee\n");
+        goto error_clean_pipeline;
+      }
+      ret = gst_element_link_many (tee[0], queue[2], qtimetamux[0], NULL);
+      if (!ret) {
+        g_printerr ("\n pipeline elements tee and queue cannot be linked."
+            "Exiting.\n");
+        goto error_clean_pipeline;
+      }
+    }
+  } else {
+      g_printerr ("Invalid Input Source");
+      goto error_clean_pipeline;
   }
 
   ret = gst_element_link_many (tee[0], queue[3], qtimlvconverter[0], queue[4],
@@ -962,6 +1250,17 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
           " ->filesink cannot be linked. Exiting.\n");
       goto error_clean_pipeline;
     }
+  } else if (options->sink_type == GST_RTSP_STREAMING) {
+    ret = gst_element_link_many (qtivcomposer, queue[18],
+        qtivoverlay, v4l2h264enc_rtsp, h264parse_enc_rtsp, qtirtspbin, NULL);
+    if (!ret) {
+      g_printerr ("Pipeline elements cannot be linked for"
+          " qtivcomposer->qtirtspbin\n");
+      goto error_clean_pipeline;
+    }
+  } else {
+      g_printerr ("Invalid output sink type\n");
+      goto error_clean_pipeline;
   }
 
   g_print ("All elements are linked successfully\n");
@@ -1049,6 +1348,12 @@ error_clean_elements:
   } else if (options->source_type == GST_STREAM_TYPE_RTSP) {
     cleanup_gst (&rtspsrc, &rtph264depay, &h264parse_decode,
     &v4l2h264dec, &v4l2h264dec_caps, NULL);
+  } else if (options->source_type == GST_STREAM_TYPE_USB_CAMERA) {
+    cleanup_gst (&v4l2src, &v4l2src_caps, NULL);
+    if (options->video_format == GST_MJPEG_VIDEO_FORMAT) {
+    cleanup_gst (&qtivtransform, &qtivtransform_capsfilter,
+        &videoconvert, &jpegdec);
+    }
   }
 
   if (options->sink_type == GST_WAYLANDSINK) {
@@ -1056,8 +1361,9 @@ error_clean_elements:
   } else if (options->sink_type == GST_VIDEO_ENCODE) {
     cleanup_gst (&sink_filter, &v4l2h264enc, &h264parse_encode, &mp4mux,
         &filesink, NULL);
+  } else if (options->sink_type == GST_RTSP_STREAMING) {
+    cleanup_gst (&v4l2h264enc_rtsp, &h264parse_enc_rtsp, &qtirtspbin, NULL);
   }
-
   cleanup_gst (&qtivsplit, &qtivcomposer, NULL);
 
   for (gint i = 0; i < SPLIT_COUNT; i++) {
@@ -1158,11 +1464,27 @@ parse_json (gchar * config_file, GstAppOptions * options)
         g_strdup (json_object_get_string_member (root_obj, "rtsp-ip-port"));
   }
 
+  if (json_object_has_member (root_obj, "enable-usb-camera")) {
+    options->enable_usb_camera =
+        g_strdup (json_object_get_string_member (root_obj, "enable-usb-camera"));
+    if (g_strcmp0 (options->enable_usb_camera, "TRUE") == 0) {
+      options->use_usb = TRUE;
+    } else if (g_strcmp0 (options->enable_usb_camera, "FALSE") == 0) {
+      options->use_usb = FALSE;
+    } else {
+      gst_printerr ("enable-usb-camera can only be one of "
+          "\"TRUE\", \"FALSE\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+  }
+
   gboolean camera_is_available = is_camera_available ();
 
   if (camera_is_available) {
     if ((!json_object_has_member (root_obj, "rtsp-ip-port")) &&
-        (!json_object_has_member (root_obj, "input-file")))
+        (!json_object_has_member (root_obj, "input-file")) &&
+        (options->use_usb == FALSE))
       options->camera_source = TRUE;
   }
 
@@ -1188,22 +1510,87 @@ parse_json (gchar * config_file, GstAppOptions * options)
             "pose-labels"));
   }
 
-  if (json_object_has_member (root_obj, "detection-constants")) {
-    options->yolox_constants =
-        g_strdup (json_object_get_string_member (root_obj,
-            "detection-constants"));
-  }
-
-  if (json_object_has_member (root_obj, "pose-constants")) {
-    options->hrnet_constants =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-constants"));
-  }
-
   if (json_object_has_member (root_obj, "output-file")) {
     options->output_file_path =
         g_strdup (json_object_get_string_member (root_obj,
             "output-file"));
+  }
+
+  if (json_object_has_member (root_obj, "output-ip-address")) {
+    options->output_ip_address =
+        g_strdup (json_object_get_string_member (root_obj, "output-ip-address"));
+    g_print ("Output Ip Address : %s\n", options->output_ip_address);
+  }
+
+  if (json_object_has_member (root_obj, "port")) {
+    options->port_num =
+        g_strdup (json_object_get_string_member (root_obj, "port"));
+    g_print ("Port Number : %s\n", options->port_num);
+  }
+
+  if (json_object_has_member (root_obj, "video-format")) {
+    const gchar *video_format_type =
+        json_object_get_string_member (root_obj, "video-format");
+    if (g_strcmp0 (video_format_type, "nv12") == 0) {
+      options->video_format = GST_NV12_VIDEO_FORMAT;
+      g_print ("Selected Video Format : NV12 \n");
+    } else if (g_strcmp0 (video_format_type, "yuy2") == 0) {
+      options->video_format = GST_YUV2_VIDEO_FORMAT;
+      g_print ("Selected Video Format : YUY2\n");
+    } else if (g_strcmp0 (video_format_type, "mjpeg") == 0) {
+      options->video_format = GST_MJPEG_VIDEO_FORMAT;
+      g_print ("Selected Video Format : MJPEG\n");
+    } else {
+      gst_printerr ("video-format can only be one of "
+          "\"nv12\", \"yuy2\" or \"mjpeg\"\n");
+      g_object_unref (parser);
+      return -1;
+    }
+  }
+
+  if (json_object_has_member (root_obj, "width")) {
+    options->width = json_object_get_int_member (root_obj, "width");
+    g_print ("Width : %d\n", options->width);
+  }
+
+  if (json_object_has_member (root_obj, "height")) {
+    options->height = json_object_get_int_member (root_obj, "height");
+    g_print ("Height : %d\n", options->height);
+  }
+
+  if (json_object_has_member (root_obj, "framerate")) {
+    options->framerate = json_object_get_int_member (root_obj, "framerate");
+    g_print ("Frame Rate : %d\n", options->framerate);
+  }
+
+  if (json_object_has_member (root_obj, "detection-runtime")) {
+    const gchar *delegate = json_object_get_string_member (root_obj,
+        "detection-runtime");
+    if (g_strcmp0 (delegate, "cpu") == 0)
+      options->detection_use_cpu = TRUE;
+    else if (g_strcmp0 (delegate, "dsp") == 0)
+      options->detection_use_dsp = TRUE;
+    else if (g_strcmp0 (delegate, "gpu") == 0)
+      options->detection_use_gpu = TRUE;
+    else {
+      gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+    }
+    g_print ("Detection delegate : %s\n", delegate);
+  }
+
+  if (json_object_has_member (root_obj, "pose-runtime")) {
+    const gchar *delegate = json_object_get_string_member (root_obj,
+        "pose-runtime");
+    if (g_strcmp0 (delegate, "cpu") == 0)
+      options->pose_use_cpu = TRUE;
+    else if (g_strcmp0 (delegate, "dsp") == 0)
+      options->pose_use_dsp = TRUE;
+    else if (g_strcmp0 (delegate, "gpu") == 0)
+      options->pose_use_gpu = TRUE;
+    else {
+      gst_printerr ("Runtime can only be one of \"cpu\", \"dsp\" and \"gpu\"\n");
+    }
+    g_print ("Classification delegate : %s\n", delegate);
   }
 
   g_object_unref (parser);
@@ -1222,7 +1609,7 @@ main (gint argc, gchar * argv[])
   GstAppOptions options = {};
   GstAppContext appctx = {};
   gboolean ret = FALSE;
-  gchar help_description[2048];
+  gchar help_description[4096];
   guint intrpt_watch_id = 0;
 
   options.input_file_path = NULL;
@@ -1232,10 +1619,20 @@ main (gint argc, gchar * argv[])
   options.hrnet_model_path = DEFAULT_TFLITE_POSE_MODEL;
   options.yolox_labels_path = DEFAULT_YOLOX_LABELS;
   options.hrnet_labels_path = DEFAULT_POSE_LABELS;
-  options.yolox_constants = DEFAULT_YOLOX_CONSTANT;
-  options.hrnet_constants = DEFAULT_HRNET_CONSTANT;
+  options.pose_settings_path = DEFAULT_POSE_SETTINGS_PATH;
   options.camera_source = FALSE;
   options.display = FALSE;
+  options.use_usb = FALSE;
+  options.detection_use_cpu = FALSE, options.detection_use_gpu = FALSE;
+  options.detection_use_dsp = FALSE;
+  options.pose_use_cpu = FALSE, options.pose_use_gpu = FALSE;
+  options.pose_use_dsp = FALSE;
+  options.width = USB_CAMERA_OUTPUT_WIDTH;
+  options.height = USB_CAMERA_OUTPUT_HEIGHT;
+  options.video_format = GST_NV12_VIDEO_FORMAT;
+  options.framerate = DEFAULT_CAMERA_FRAME_RATE;
+  options.output_ip_address = NULL;
+  options.port_num = NULL;
 
   // Set Display environment variables
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
@@ -1263,7 +1660,7 @@ main (gint argc, gchar * argv[])
         "then camera input will be selected\n\n");
   }
 
-  snprintf (help_description, 2047, "\nExample:\n"
+  snprintf (help_description, 4095, "\nExample:\n"
     "  %s --config-file=%s\n"
     "\nThis Sample App demonstrates Daisy chain of Object Detection and Pose\n"
     "\nConfig file Fields:\n"
@@ -1292,17 +1689,23 @@ main (gint argc, gchar * argv[])
     " for Pose Detection labels\n"
     "      Default path for Pose Detection labels: "
     DEFAULT_POSE_LABELS"\n"
-    "  detection-constants: \"CONSTANTS\"\n"
-    "      Constants, offsets and coefficients for YOLOX TFLITE model \n"
-    "      Default constants for YOLOX: "DEFAULT_YOLOX_CONSTANT"\n"
-    "  pose-constants: \"CONSTANTS\"\n"
-    "      Constants, offsets and coefficients for HRNET TFLITE model \n"
-    "      Default constants for HRNET: "DEFAULT_HRNET_CONSTANT"\n"
     "  output-file: \"/PATH\"\n"
     "      Output file path\n"
-    "      If this field is not filled, then display output is selected\n",
+    "      If this field is not filled, then display output is selected\n"
+    "  enable-usb-camera: Use this Parameter to enable-usb-camera. It takes\n"
+    "      TRUE or FALSE as input\n"
+    "  width: USB Camera Resolution width\n"
+    "  height: USB Camera Resolution Height\n"
+    "  framerate: USB Camera Frame Rate\n"
+    "  video-format: USB Video Format format can be nv12, yuy2 or mjpeg\n"
+    "  output-ip-address: Use this parameter to provide the rtsp output address.\n"
+    "      eg: 127.0.0.1\n"
+    "  port: Use this parameter to provide the rtsp output port.\n"
+    "      eg: 8900\n"
+    "  pose-runtime: It can take cpu, gpu, dsp as input.\n"
+    "  detection-runtime: It can take cpu, gpu, dsp as input.\n",
     app_name, DEFAULT_CONFIG_FILE, camera_description);
-  help_description[2047] = '\0';
+  help_description[4095] = '\0';
 
   // Parse command line entries.
   if ((ctx = g_option_context_new (help_description)) != NULL) {
@@ -1348,9 +1751,10 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
-  if (options.display && options.output_file_path) {
-    g_printerr ("Both Display and Output file are provided as input! - "
-        "Select either Display or Output file\n");
+  if ((options.display && options.output_file_path && options.output_ip_address) ||
+      (options.display && options.output_file_path) || (options.output_file_path &&
+      options.output_ip_address) || (options.display && options.output_ip_address)) {
+    g_printerr ("Multiple sinks are selected, please select one.\n");
     gst_app_context_free (&appctx, &options, config_file);
     return -EINVAL;
   } else if (options.display) {
@@ -1360,6 +1764,10 @@ main (gint argc, gchar * argv[])
     options.sink_type = GST_VIDEO_ENCODE;
     g_print ("Selected sink type as Output file with path = %s\n",
         options.output_file_path);
+  } else if (options.output_ip_address) {
+    options.sink_type = GST_RTSP_STREAMING;
+    g_print ("Selected sink type as RTSP adn ip-address = %s\n",
+        options.output_ip_address);
   } else {
     options.sink_type = GST_WAYLANDSINK;
     g_print ("Using Wayland Display as Default\n");
@@ -1367,7 +1775,10 @@ main (gint argc, gchar * argv[])
 
   if ((options.camera_source && options.input_file_path) ||
       (options.camera_source && options.rtsp_ip_port) ||
-      (options.input_file_path && options.rtsp_ip_port))
+      (options.input_file_path && options.rtsp_ip_port) ||
+      (options.use_usb == TRUE && options.rtsp_ip_port != NULL) ||
+      (options.use_usb == TRUE && options.input_file_path != NULL) ||
+      (options.use_usb == TRUE && options.camera_source == TRUE))
   {
     g_printerr ("Multiple sources are provided as input.\n");
 
@@ -1387,6 +1798,9 @@ main (gint argc, gchar * argv[])
   } else if (options.rtsp_ip_port) {
     g_print ("RTSP source is selected.\n");
     options.source_type = GST_STREAM_TYPE_RTSP;
+  } else if (options.use_usb) {
+    g_print ("USB source is selected.\n");
+    options.source_type = GST_STREAM_TYPE_USB_CAMERA;
   } else {
     if (camera_is_available) {
       g_print ("No source is selected."
@@ -1435,6 +1849,12 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
+  if (!file_exists (options.pose_settings_path)) {
+    g_print ("Invalid pose settings path: %s\n", options.pose_settings_path);
+    gst_app_context_free (&appctx, &options, config_file);
+    return -EINVAL;
+  }
+
   if (options.output_file_path &&
       !file_location_exists (options.output_file_path)) {
     g_printerr ("Invalid output file location: %s\n",
@@ -1461,6 +1881,14 @@ main (gint argc, gchar * argv[])
   }
 
   appctx.pipeline = pipeline;
+  if(options.use_usb == TRUE) {
+    ret = find_usb_camera_node (&options);
+    if (!ret) {
+      g_printerr ("\n Failed to find the USB camera.\n");
+      gst_app_context_free (&appctx, &options, config_file);
+      return -1;
+    }
+  }
 
   // Build the pipeline, link all elements in the pipeline
   ret = create_pipe (&appctx, &options);

@@ -126,6 +126,8 @@ struct _GstMLSnpeEngine
   // List with SNPE User Buffers.
   std::map<std::string, std::unique_ptr<zdl::DlSystem::IUserBuffer>> usrbuffers;
 
+  // List of output tensor names.
+  zdl::DlSystem::Optional <zdl::DlSystem::StringList> outoptnames;
   // Map between SNPE input tensor names and corresponding User Buffer.
   zdl::DlSystem::UserBufferMap inputs;
   // Map between SNPE output tensor names and corresponding User Buffer.
@@ -278,20 +280,29 @@ static GstMLType
 snpe_to_ml_type (zdl::DlSystem::UserBufferEncoding::ElementType_t type)
 {
   switch (type) {
-    case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT16:
-      return GST_ML_TYPE_FLOAT16;
-    case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT:
-      return GST_ML_TYPE_FLOAT32;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT8:
       return GST_ML_TYPE_INT8;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::UNSIGNED8BIT:
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::TF8:
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::UINT8:
       return GST_ML_TYPE_UINT8;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT16:
+      return GST_ML_TYPE_INT16;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::TF16:
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::UINT16:
+      return GST_ML_TYPE_UINT16;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT32:
       return GST_ML_TYPE_INT32;
     case zdl::DlSystem::UserBufferEncoding::ElementType_t::UINT32:
       return GST_ML_TYPE_UINT32;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::INT64:
+      return GST_ML_TYPE_INT64;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::UINT64:
+      return GST_ML_TYPE_UINT64;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT16:
+      return GST_ML_TYPE_FLOAT16;
+    case zdl::DlSystem::UserBufferEncoding::ElementType_t::FLOAT:
+      return GST_ML_TYPE_FLOAT32;
     default:
       GST_ERROR ("Unsupported format %x!", static_cast<uint32_t>(type));
       break;
@@ -304,7 +315,7 @@ GstMLSnpeEngine *
 gst_ml_snpe_engine_new (GstMLSnpeSettings * settings)
 {
   GstMLSnpeEngine *engine = NULL;
-  gint idx = 0, num = 0;
+  guint idx = 0, num = 0, n_tensors = 0;
 
   engine = new GstMLSnpeEngine;
   g_return_val_if_fail (engine != NULL, NULL);
@@ -457,14 +468,16 @@ gst_ml_snpe_engine_new (GstMLSnpeSettings * settings)
   GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (optnames, NULL,
       gst_ml_snpe_engine_free (engine), "Failed to retrieve input tensors!");
 
-  for (idx = 0; idx < (*optnames).size(); idx++) {
+  n_tensors = (*optnames).size();
+
+  for (idx = 0; idx < n_tensors; idx++) {
     zdl::DlSystem::Optional<zdl::DlSystem::IBufferAttributes*> optattributes;
     const char *name = (*optnames).at(idx);
     GST_DEBUG ("Input tensor[%u] name: %s", idx, name);
 
     optattributes = engine->interpreter->getInputOutputBufferAttributes(name);
     GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (optattributes, NULL,
-        gst_ml_snpe_engine_free (engine), "Failed to get trensor attributes!");
+        gst_ml_snpe_engine_free (engine), "Failed to get tensor attributes!");
 
     GST_ML_INFO_TYPE (engine->ininfo) =
         snpe_to_ml_type ((*optattributes)->getEncodingType());
@@ -508,18 +521,23 @@ gst_ml_snpe_engine_new (GstMLSnpeSettings * settings)
       gst_ml_type_to_string (GST_ML_INFO_TYPE (engine->ininfo)));
 
   // Fill output ML info.
-  optnames = engine->interpreter->getOutputTensorNames();
-  GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (optnames, NULL,
+  if (settings->is_tensor)
+    engine->outoptnames = outputs;
+  else
+    engine->outoptnames = engine->interpreter->getOutputTensorNames();
+  GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (engine->outoptnames, NULL,
       gst_ml_snpe_engine_free (engine), "Failed to retrieve output tensors!");
 
-  for (idx = 0; idx < (*optnames).size(); idx++) {
+  n_tensors = (*engine->outoptnames).size();
+
+  for (idx = 0; idx < n_tensors; idx++) {
     zdl::DlSystem::Optional<zdl::DlSystem::IBufferAttributes*> optattributes;
-    const char *name = (*optnames).at(idx);
+    const char *name = (*engine->outoptnames).at(idx);
     GST_DEBUG ("Output tensor[%u] name: %s", idx, name);
 
     optattributes = engine->interpreter->getInputOutputBufferAttributes(name);
     GST_ML_RETURN_VAL_IF_FAIL_WITH_CLEAN (optattributes, NULL,
-        gst_ml_snpe_engine_free (engine), "Failed to get trensor attributes!");
+        gst_ml_snpe_engine_free (engine), "Failed to get tensor attributes!");
 
     GST_ML_INFO_TYPE (engine->outinfo) =
         snpe_to_ml_type ((*optattributes)->getEncodingType());
@@ -546,10 +564,9 @@ gst_ml_snpe_engine_new (GstMLSnpeSettings * settings)
     for (num = (shape.rank() - 1); num > 0; num--)
       strides[num - 1] = dimensions[num] * strides[num];
 
-    zdl::DlSystem::UserBufferEncoding *encoding = (*optattributes)->getEncoding();
     size_t size = gst_ml_info_tensor_size (engine->outinfo, idx);
 
-    GST_DEBUG ("Output tensor[%u] size: %u", idx, size);
+    GST_DEBUG ("Output tensor[%u] size: %lu", idx, size);
   }
 
   GST_DEBUG ("Number of output tensors: %u",
@@ -595,7 +612,6 @@ gst_ml_snpe_engine_get_output_caps  (GstMLSnpeEngine * engine)
 {
   GstCaps *caps = NULL;
   GValue list = G_VALUE_INIT, value = G_VALUE_INIT;
-  guint idx = 0, num = 0;
 
   if (engine == NULL)
     return NULL;
@@ -629,7 +645,7 @@ gboolean
 gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps)
 {
   GstMLInfo info;
-  gint idx = 0, num = 0;
+  guint idx = 0, num = 0, n_tensors = 0;
 
   g_return_val_if_fail (engine != NULL, FALSE);
 
@@ -643,23 +659,20 @@ gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps)
   zdl::DlSystem::IUserBufferFactory& factory =
       zdl::SNPE::SNPEFactory::getUserBufferFactory();
 
-  zdl::DlSystem::Optional <zdl::DlSystem::StringList> optnames =
-      engine->interpreter->getOutputTensorNames();
-  GST_ML_RETURN_VAL_IF_FAIL (optnames, FALSE,
-      "Failed to retrieve output tensor names!");
-
   // Updated number of tensors must be the same.
-  GST_ML_RETURN_VAL_IF_FAIL ((*optnames).size() == GST_ML_INFO_N_TENSORS (&info),
+  GST_ML_RETURN_VAL_IF_FAIL ((*engine->outoptnames).size() == GST_ML_INFO_N_TENSORS (&info),
       FALSE, "Updated info has invalid number of tensors!");
 
-  for (idx = 0; idx < (*optnames).size(); idx++) {
+  n_tensors = (*engine->outoptnames).size();
+
+  for (idx = 0; idx < n_tensors; idx++) {
     zdl::DlSystem::Optional<zdl::DlSystem::IBufferAttributes*> optattributes;
-    const char *name = (*optnames).at(idx);
+    const char *name = (*engine->outoptnames).at(idx);
     GST_DEBUG ("Output tensor[%u] name: %s", idx, name);
 
     optattributes = engine->interpreter->getInputOutputBufferAttributes(name);
     GST_ML_RETURN_VAL_IF_FAIL (optattributes, FALSE,
-        "Failed to get trensor attributes!");
+        "Failed to get tensor attributes!");
 
     const zdl::DlSystem::TensorShape& shape = (*optattributes)->getDims();
     const zdl::DlSystem::Dimension *dimensions = shape.getDimensions();
@@ -683,7 +696,7 @@ gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps)
 
     std::vector<zdl::DlSystem::Dimension> strides(shape.rank());
 
-    // Use the updated tensor type for teh stride calculations.
+    // Use the updated tensor type for the stride calculations.
     strides[shape.rank() - 1] = gst_ml_type_get_size (GST_ML_INFO_TYPE (&info));
 
     // Total number of bytes between elements in each dimension.
@@ -705,7 +718,7 @@ gst_ml_snpe_engine_update_output_caps (GstMLSnpeEngine * engine, GstCaps * caps)
 
     size_t size = gst_ml_info_tensor_size (&info, idx);
 
-    GST_DEBUG ("Output tensor[%u] size: %u", idx, size);
+    GST_DEBUG ("Output tensor[%u] size: %lu", idx, size);
 
     // Empty User Buffer which will later be set via setBufferAddress API.
     std::unique_ptr<zdl::DlSystem::IUserBuffer> usrbuffer =
@@ -731,6 +744,7 @@ gboolean
 gst_ml_snpe_engine_execute (GstMLSnpeEngine * engine,
     GstMLFrame * inframe, GstMLFrame * outframe)
 {
+  GstMLTensorMeta *mlmeta = NULL;
   gboolean success = FALSE;
   guint idx = 0;
 
@@ -752,18 +766,23 @@ gst_ml_snpe_engine_execute (GstMLSnpeEngine * engine,
       engine->interpreter->getInputTensorNames();
 
   for (idx = 0; idx < engine->ininfo->n_tensors; ++idx) {
+    const char *name = inoptnames.at(idx);
     zdl::DlSystem::IUserBuffer *usrbuffer =
         engine->usrbuffers[(*inoptnames).at(idx)].get();
     usrbuffer->setBufferAddress(GST_ML_FRAME_BLOCK_DATA (inframe, idx));
+
+    mlmeta = gst_buffer_get_ml_tensor_meta_id (inframe->buffer, idx);
+    mlmeta->name = g_quark_from_string (name);
   }
 
-  const zdl::DlSystem::Optional <zdl::DlSystem::StringList> outoptnames =
-      engine->interpreter->getOutputTensorNames();
-
   for (idx = 0; idx < engine->outinfo->n_tensors; ++idx) {
+    const char *name = (*engine->outoptnames).at(idx);
     zdl::DlSystem::IUserBuffer *usrbuffer =
-        engine->usrbuffers[(*outoptnames).at(idx)].get();
+        engine->usrbuffers[name].get();
     usrbuffer->setBufferAddress(GST_ML_FRAME_BLOCK_DATA (outframe, idx));
+
+    mlmeta = gst_buffer_get_ml_tensor_meta_id (outframe->buffer, idx);
+    mlmeta->name = g_quark_from_string (name);
   }
 
   if (!(success = engine->interpreter->execute(engine->inputs, engine->outputs)))
