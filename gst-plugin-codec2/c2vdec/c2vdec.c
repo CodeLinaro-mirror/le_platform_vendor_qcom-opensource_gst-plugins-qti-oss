@@ -71,7 +71,6 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         "alignment = (string) { au };"
         "video/mpeg,"
         "mpegversion = (int)2;"
-        "video/x-vp8;"
         "video/x-vp9")
 );
 
@@ -100,8 +99,7 @@ gst_c2_vdec_get_output_format (GstC2VDecoder * c2vdec,
       bit_depth_luma = 10;
       bit_depth_chroma = 10;
       chroma_format = "4:2:0";
-    } else if (gst_structure_has_name (structure, "video/x-vp9") ||
-        gst_structure_has_name (structure, "video/x-vp8")) {
+    } else if (gst_structure_has_name (structure, "video/x-vp9")) {
       //vp8 and vp9 caps does not have chroma-format, bit-depth fields
       bit_depth_luma = 8;
       bit_depth_chroma = 8;
@@ -488,8 +486,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     name = "c2.qti.avc.decoder";
   else if (gst_structure_has_name (structure, "video/x-h265"))
     name = "c2.qti.hevc.decoder";
-  else if (gst_structure_has_name (structure, "video/x-vp8"))
-    name = "c2.qti.vp8.decoder";
   else if (gst_structure_has_name (structure, "video/x-vp9"))
     name = "c2.qti.vp9.decoder";
   else if (gst_structure_has_name (structure, "video/mpeg"))
@@ -644,8 +640,8 @@ gst_c2_vdec_class_init (GstC2VDecoderClass * klass)
   gobject->get_property = GST_DEBUG_FUNCPTR (gst_c2_vdec_get_property);
 
   gst_element_class_set_static_metadata (element,
-      "Codec2 H.264/H.265/VP8/VP9/MPEG Video Decoder", "Codec/Decoder/Video",
-      "Decode H.264/H.265/VP8/VP9/MPEG video streams", "QTI");
+      "Codec2 H.264/H.265/VP9/MPEG Video Decoder", "Codec/Decoder/Video",
+      "Decode H.264/H.265/VP9/MPEG video streams", "QTI");
 
   gst_element_class_add_static_pad_template (element,
       &gst_c2_vdec_sink_pad_template);
