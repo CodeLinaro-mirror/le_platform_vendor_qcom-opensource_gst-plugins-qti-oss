@@ -40,11 +40,7 @@
 #include <unistd.h>
 
 #include <gbm.h>
-
-#define GST_GPU_DEFAULT_ALIGNMENT    4
-
-// Function pointers for the Adreno Utils library.
-typedef unsigned int (*get_gpu_pixel_alignment)(void);
+#include <gst/gfx/gfx-utils.h>
 
 // Function pointers for the GBM library.
 typedef struct gbm_device* (*gbm_create_device_func)(int fd);
@@ -60,46 +56,6 @@ load_symbol (gpointer* method, gpointer handle, const gchar* name)
     return FALSE;
   }
   return TRUE;
-}
-
-static gint
-gst_adreno_get_pixel_alignment ()
-{
-  static GMutex mutex;
-  static gint alignment = -1;
-  void *handle = NULL;
-  get_gpu_pixel_alignment GetGpuPixelAlignment = NULL;
-  gboolean success = FALSE;
-
-  g_mutex_lock (&mutex);
-
-  // Alignment has already been set, just return its value.
-  if (alignment != -1)
-    goto cleanup;
-
-  if ((handle = dlopen ("libadreno_utils.so", RTLD_NOW)) == NULL) {
-    GST_WARNING ("Failed to load Adreno utils lib using default alignment,"
-        " error: %s", dlerror());
-    alignment = GST_GPU_DEFAULT_ALIGNMENT;
-    goto cleanup;
-  }
-
-  success = load_symbol ((gpointer*)&GetGpuPixelAlignment, handle,
-      "get_gpu_pixel_alignment");
-  if (success == FALSE) {
-    dlclose (handle);
-    goto cleanup;
-  }
-
-  // Fetch the GPU Pixel Alignment.
-  alignment = GetGpuPixelAlignment();
-
-  // Close the library as it is no longer needed.
-  dlclose (handle);
-
-cleanup:
-  g_mutex_unlock (&mutex);
-  return alignment;
 }
 
 gboolean
@@ -118,7 +74,7 @@ gst_gbm_qcom_backend_is_supported (void)
     gint fd = -1;
 
     // Load GBM library and symbols.
-    libhandle = dlopen ("libgbm.so", RTLD_NOW);
+    libhandle = dlopen ("libgbm.so.1", RTLD_NOW);
     if (libhandle != NULL) {
       success = load_symbol ((gpointer*)&gbm_create_device, libhandle,
           "gbm_create_device");
@@ -130,6 +86,10 @@ gst_gbm_qcom_backend_is_supported (void)
 
     if (success) {
       fd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
+
+      // Fallback to /dev/dma_heap/system
+      if (fd < 0)
+        fd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
 
       // Fallback to ION
       if (fd < 0)
@@ -167,16 +127,25 @@ gboolean
 gst_video_retrieve_gpu_alignment (GstVideoInfo * info, GstVideoAlignment * align)
 {
   const GstVideoFormatInfo *vfinfo = info->finfo;
+  const GstVideoFormat format = GST_VIDEO_INFO_FORMAT(info);
   guint num = 0;
 
   for (num = 0; num < GST_VIDEO_INFO_N_PLANES (info); num++) {
-    gint alignment = gst_adreno_get_pixel_alignment ();
+    gint alignment = gst_gfx_adreno_get_alignment ();
     gint comp[GST_VIDEO_MAX_COMPONENTS] = { 0, };
 
     gst_video_format_info_component (vfinfo, num, comp);
     alignment = GST_VIDEO_FORMAT_INFO_SCALE_WIDTH (vfinfo, comp[0], alignment);
 
     align->stride_align[num] = alignment - 1;
+  }
+
+  // Adreno GPUs require 24bpp formats (e.g., RGB, BGR) to be aligned as 32bpp.
+  // Each pixel is 3 bytes, but the GPU expects 4-byte alignment for efficiency.
+  // To simulate 32bpp layout, we add (width / 3) pixels of padding to each row.
+  // This adds 'width' bytes, improving memory access and bandwidth usage.
+  if (format == GST_VIDEO_FORMAT_RGB || format == GST_VIDEO_FORMAT_BGR) {
+    align->padding_right = info->width / 3;
   }
 
   return gst_video_info_align (info, align);

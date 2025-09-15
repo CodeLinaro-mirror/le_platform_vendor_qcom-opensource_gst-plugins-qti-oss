@@ -49,6 +49,9 @@ typedef struct _GstMLTensorMeta GstMLTensorMeta;
  * @type: Tensor type
  * @n_dimensions: Number of tensor dimensions
  * @dimensions: Tensor dimensions values
+ * @name: Tensor name
+ * @qscale: Dequantization scale
+ * @qoffset: Dequantization offset
  *
  * Extra buffer metadata describing ML tensor properties
  */
@@ -61,6 +64,11 @@ struct _GstMLTensorMeta {
   GstMLType type;
   guint     n_dimensions;
   guint     dimensions[GST_ML_TENSOR_MAX_DIMS];
+  GQuark    name;
+
+  // Dequantization parameters.
+  gfloat    qscale;
+  gfloat    qoffset;
 };
 
 GST_API
