@@ -138,6 +138,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
 #if defined(CODEC2_CONFIG_VERSION_2_0)
   { GST_C2_PARAM_REPORT_AVG_QP,
       C2AndroidStreamAverageBlockQuantizationInfo::output::PARAM_TYPE },
+  { GST_C2_PARAM_VUI_TIMING_INFO,
+      qc2::C2VuiTimingInfo::output::PARAM_TYPE },
 #endif // CODEC2_CONFIG_VERSION_2_0
   { GST_C2_PARAM_IN_SAMPLE_RATE,
       C2StreamSampleRateInfo::input::PARAM_TYPE },
@@ -198,9 +200,9 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_QP_RANGES, "QP_RANGES" },
   { GST_C2_PARAM_ROI_ENCODE, "ROI_ENCODE" },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
-  { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING"},
-  { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
-  { GST_C2_PARAM_PRIORITY, "PRIORITY"},
+  { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING" },
+  { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING" },
+  { GST_C2_PARAM_PRIORITY, "PRIORITY" },
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
@@ -220,7 +222,8 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_SUPER_FRAME, "SUPER_FRAME" },
   { GST_C2_PARAM_LTR_USE, "LTR_USE" },
   { GST_C2_PARAM_FLIP, "FLIP" },
-  { GST_C2_PARAM_VBV_DELAY, "VBV_DELAY"},
+  { GST_C2_PARAM_VBV_DELAY, "VBV_DELAY" },
+  { GST_C2_PARAM_VUI_TIMING_INFO, "VUI_TIMING_INFO" },
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -466,7 +469,21 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
     guint32 n_subframes) {
 
   if (format == GST_VIDEO_FORMAT_NV12) {
-    return C2PixelFormat::kNV12;
+    switch (n_subframes) {
+      case 0:
+        return C2PixelFormat::kNV12;
+      case 2:
+        return C2PixelFormat::kNV12_FLEX_2_BATCH;
+      case 4:
+        return C2PixelFormat::kNV12_FLEX_4_BATCH;
+      case 8:
+        return C2PixelFormat::kNV12_FLEX_8_BATCH;
+      case 16:
+        return C2PixelFormat::kNV12_FLEX;
+      default:
+        GST_ERROR ("Unsupported batch number: %u!", n_subframes);
+        return C2PixelFormat::kUnknown;
+    }
   } else if (format == GST_VIDEO_FORMAT_NV12_Q08C) {
     switch (n_subframes) {
       case 0:
@@ -477,6 +494,8 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
         return C2PixelFormat::kNV12UBWC_FLEX_4_BATCH;
       case 8:
         return C2PixelFormat::kNV12UBWC_FLEX_8_BATCH;
+      case 16:
+        return C2PixelFormat::kNV12UBWC_FLEX;
       default:
         GST_ERROR ("Unsupported batch number: %u!", n_subframes);
         return C2PixelFormat::kUnknown;
@@ -484,9 +503,37 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
   } else if (format == GST_VIDEO_FORMAT_YV12) {
     return C2PixelFormat::kYV12;
   } else if (format == GST_VIDEO_FORMAT_P010_10LE) {
-    return C2PixelFormat::kP010;
+    switch (n_subframes) {
+      case 0:
+        return C2PixelFormat::kP010;
+      case 2:
+        return C2PixelFormat::kP010_FLEX_2_BATCH;
+      case 4:
+        return C2PixelFormat::kP010_FLEX_4_BATCH;
+      case 8:
+        return C2PixelFormat::kP010_FLEX_8_BATCH;
+      case 16:
+        return C2PixelFormat::kP010_FLEX;
+      default:
+        GST_ERROR ("Unsupported batch number: %u!", n_subframes);
+        return C2PixelFormat::kUnknown;
+    }
   } else if (format == GST_VIDEO_FORMAT_NV12_Q10LE32C) {
-    return C2PixelFormat::kTP10UBWC;
+    switch (n_subframes) {
+      case 0:
+        return C2PixelFormat::kTP10UBWC;
+      case 2:
+        return C2PixelFormat::kTP10UBWC_FLEX_2_BATCH;
+      case 4:
+        return C2PixelFormat::kTP10UBWC_FLEX_4_BATCH;
+      case 8:
+        return C2PixelFormat::kTP10UBWC_FLEX_8_BATCH;
+      case 16:
+        return C2PixelFormat::kTP10UBWC_FLEX;
+      default:
+        GST_ERROR ("Unsupported batch number: %u!", n_subframes);
+        return C2PixelFormat::kUnknown;
+    }
   } else {
     GST_ERROR ("Unsupported format: %s!", gst_video_format_to_string (format));
   }
@@ -496,28 +543,53 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
 
 std::tuple<GstVideoFormat, uint32_t> GstC2Utils::VideoFormat(
     C2PixelFormat format) {
-
-  if (format == C2PixelFormat::kNV12UBWC) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 0);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_2_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 2);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_4_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 4);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_8_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 8);
-  } else if (format == C2PixelFormat::kNV12) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12, 0);
-  } else if (format == C2PixelFormat::kYV12) {
-    return std::make_tuple(GST_VIDEO_FORMAT_YV12, 0);
-  } else if (format == C2PixelFormat::kP010) {
-    return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 0);
-  } else if (format == C2PixelFormat::kTP10UBWC) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 0);
-  } else {
-    GST_ERROR ("Unsupported format: %u!", format);
+  switch (format) {
+    case C2PixelFormat::kNV12UBWC:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 0);
+    case C2PixelFormat::kNV12UBWC_FLEX_2_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 2);
+    case C2PixelFormat::kNV12UBWC_FLEX_4_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 4);
+    case C2PixelFormat::kNV12UBWC_FLEX_8_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 8);
+    case C2PixelFormat::kNV12UBWC_FLEX:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 16);
+    case C2PixelFormat::kNV12:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12, 0);
+    case C2PixelFormat::kNV12_FLEX_2_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12, 2);
+    case C2PixelFormat::kNV12_FLEX_4_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12, 4);
+    case C2PixelFormat::kNV12_FLEX_8_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12, 8);
+    case C2PixelFormat::kNV12_FLEX:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12, 16);
+    case C2PixelFormat::kYV12:
+      return std::make_tuple(GST_VIDEO_FORMAT_YV12, 0);
+    case C2PixelFormat::kP010:
+      return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 0);
+    case C2PixelFormat::kP010_FLEX_2_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 2);
+    case C2PixelFormat::kP010_FLEX_4_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 4);
+    case C2PixelFormat::kP010_FLEX_8_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 8);
+    case C2PixelFormat::kP010_FLEX:
+      return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 16);
+    case C2PixelFormat::kTP10UBWC:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 0);
+    case C2PixelFormat::kTP10UBWC_FLEX_2_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 2);
+    case C2PixelFormat::kTP10UBWC_FLEX_4_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 4);
+    case C2PixelFormat::kTP10UBWC_FLEX_8_BATCH:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 8);
+    case C2PixelFormat::kTP10UBWC_FLEX:
+      return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 16);
+    default:
+      GST_ERROR ("Unsupported format: %u!", format);
+      return std::make_tuple(GST_VIDEO_FORMAT_UNKNOWN, 0);
   }
-
-  return std::make_tuple(GST_VIDEO_FORMAT_UNKNOWN, 0);
 }
 
 bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
@@ -651,12 +723,18 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_TEMPORAL_LAYERING: {
       GstC2TemporalLayer *templayer = reinterpret_cast<GstC2TemporalLayer*>(payload);
+      uint32_t ratiosize = templayer->bitrate_ratios->len;
 
       auto c2templayer =
-          C2StreamTemporalLayeringTuning::output::AllocUnique(2);
+          C2StreamTemporalLayeringTuning::output::AllocUnique(ratiosize);
 
       c2templayer->m.layerCount = templayer->n_layers;
       c2templayer->m.bLayerCount = templayer->n_blayers;
+
+      for (uint32_t i = 0; i < ratiosize; i++) {
+        c2templayer->m.bitrateRatios[i] =
+            g_array_index (templayer->bitrate_ratios, gfloat, i);
+      }
 
       c2param = C2Param::Copy(*c2templayer);
       break;
@@ -883,6 +961,12 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       C2AndroidStreamAverageBlockQuantizationInfo::output avg_qp;
       avg_qp.value = *(reinterpret_cast<int32_t*>(payload));
       c2param = C2Param::Copy(avg_qp);
+      break;
+    }
+    case GST_C2_PARAM_VUI_TIMING_INFO: {
+      qc2::C2VuiTimingInfo::output timing;
+      timing.value = *(reinterpret_cast<gboolean*>(payload));
+      c2param = C2Param::Copy(timing);
       break;
     }
 #endif // CODEC2_CONFIG_VERSION_2_0
@@ -1144,6 +1228,18 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           c2templayer->m.layerCount;
       reinterpret_cast<GstC2TemporalLayer*>(payload)->n_blayers =
           c2templayer->m.bLayerCount;
+
+      float ratio = 0;
+      uint32_t ratiosize = c2templayer->flexCount();
+
+      if (reinterpret_cast<GstC2TemporalLayer*>(payload)->bitrate_ratios != NULL) {
+        GArray* temp =
+            reinterpret_cast<GstC2TemporalLayer*>(payload)->bitrate_ratios;
+        for (uint32_t i = 0; i < ratiosize; i++) {
+          ratio = c2templayer->m.bitrateRatios[i];
+          g_array_append_val (temp, ratio);
+        }
+      }
       break;
     }
     case GST_C2_PARAM_ENTROPY_MODE: {
@@ -1290,6 +1386,12 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       auto avg_qp = reinterpret_cast<
           C2AndroidStreamAverageBlockQuantizationInfo::output*>(c2param.get());
       *(reinterpret_cast<guint32*>(payload)) = avg_qp->value;
+      break;
+    }
+    case GST_C2_PARAM_VUI_TIMING_INFO: {
+      auto timing = reinterpret_cast<
+          qc2::C2VuiTimingInfo::output*>(c2param.get());
+      *(reinterpret_cast<gboolean*>(payload)) = timing->value;
       break;
     }
 #endif // CODEC2_CONFIG_VERSION_2_0
@@ -1451,31 +1553,143 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
             MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
       }
       break;
+#ifdef GBM_FORMAT_NV12_FLEX
+    case C2PixelFormat::kNV12_FLEX:
+      handle->mInts.format = GBM_FORMAT_NV12_FLEX;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      break;
+#endif // GBM_FORMAT_NV12_FLEX
+#ifdef GBM_FORMAT_NV12_FLEX_2_BATCH
+    case C2PixelFormat::kNV12_FLEX_2_BATCH:
+      handle->mInts.format = GBM_FORMAT_NV12_FLEX_2_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      break;
+#endif // GBM_FORMAT_NV12_FLEX_2_BATCH
+#ifdef GBM_FORMAT_NV12_FLEX_4_BATCH
+    case C2PixelFormat::kNV12_FLEX_4_BATCH:
+      handle->mInts.format = GBM_FORMAT_NV12_FLEX_4_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      break;
+#endif // GBM_FORMAT_NV12_FLEX_4_BATCH
+#ifdef GBM_FORMAT_NV12_FLEX_8_BATCH
+    case C2PixelFormat::kNV12_FLEX_8_BATCH:
+      handle->mInts.format = GBM_FORMAT_NV12_FLEX_8_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12, height);
+      break;
+#endif // GBM_FORMAT_NV12_FLEX_8_BATCH
     case C2PixelFormat::kNV12UBWC:
       handle->mInts.format = GBM_FORMAT_NV12;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
       break;
+#ifdef GBM_FORMAT_NV12_UBWC_FLEX_2_BATCH
     case C2PixelFormat::kNV12UBWC_FLEX_2_BATCH:
-    case C2PixelFormat::kNV12UBWC_FLEX_4_BATCH:
-    case C2PixelFormat::kNV12UBWC_FLEX_8_BATCH:
-      handle->mInts.format = GBM_FORMAT_NV12;
+      handle->mInts.format = GBM_FORMAT_NV12_UBWC_FLEX_2_BATCH;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
       break;
+#endif // GBM_FORMAT_NV12_UBWC_FLEX_2_BATCH
+#ifdef GBM_FORMAT_NV12_UBWC_FLEX_4_BATCH
+    case C2PixelFormat::kNV12UBWC_FLEX_4_BATCH:
+      handle->mInts.format = GBM_FORMAT_NV12_UBWC_FLEX_4_BATCH;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
+      break;
+#endif // GBM_FORMAT_NV12_UBWC_FLEX_4_BATCH
+#ifdef GBM_FORMAT_NV12_UBWC_FLEX_8_BATCH
+    case C2PixelFormat::kNV12UBWC_FLEX_8_BATCH:
+      handle->mInts.format = GBM_FORMAT_NV12_UBWC_FLEX_8_BATCH;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
+      break;
+#endif // GBM_FORMAT_NV12_UBWC_FLEX_8_BATCH
+#ifdef GBM_FORMAT_NV12_UBWC_FLEX
+    case C2PixelFormat::kNV12UBWC_FLEX:
+      handle->mInts.format = GBM_FORMAT_NV12_UBWC_FLEX;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
+      break;
+#endif // GBM_FORMAT_NV12_UBWC_FLEX
     case C2PixelFormat::kP010:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_VENUS;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
       break;
+#ifdef GBM_FORMAT_YCbCr_420_P010_FLEX
+    case C2PixelFormat::kP010_FLEX:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_FLEX;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_P010_FLEX
+#ifdef GBM_FORMAT_YCbCr_420_P010_FLEX_2_BATCH
+    case C2PixelFormat::kP010_FLEX_2_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_FLEX_2_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_P010_FLEX_2_BATCH
+#ifdef GBM_FORMAT_YCbCr_420_P010_FLEX_4_BATCH
+    case C2PixelFormat::kP010_FLEX_4_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_FLEX_4_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_P010_FLEX_4_BATCH
+#ifdef GBM_FORMAT_YCbCr_420_P010_FLEX_8_BATCH
+    case C2PixelFormat::kP010_FLEX_8_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_P010_FLEX_8_BATCH;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_P010, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_P010_FLEX_8_BATCH
     case C2PixelFormat::kTP10UBWC:
       handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       handle->mInts.slice_height =
           MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
       break;
+#ifdef GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX
+    case C2PixelFormat::kTP10UBWC_FLEX:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX
+#ifdef GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_2_BATCH
+    case C2PixelFormat::kTP10UBWC_FLEX_2_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_2_BATCH;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_2_BATCH
+#ifdef GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_4_BATCH
+    case C2PixelFormat::kTP10UBWC_FLEX_4_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_4_BATCH;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_4_BATCH
+#ifdef GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_8_BATCH
+    case C2PixelFormat::kTP10UBWC_FLEX_8_BATCH:
+      handle->mInts.format = GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_8_BATCH;
+      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      handle->mInts.slice_height =
+          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_BPP10_UBWC, height);
+      break;
+#endif // GBM_FORMAT_YCbCr_420_TP10_UBWC_FLEX_8_BATCH
     default:
       GST_ERROR ("Unsupported format: %d !", format);
       return false;
