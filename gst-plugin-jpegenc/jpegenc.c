@@ -61,6 +61,11 @@ G_DEFINE_TYPE (GstJPEGEncoder, gst_jpeg_enc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_MIN_BUFFERS    2
 #define DEFAULT_PROP_MAX_BUFFERS    10
 
+#define SMALLSIZE_RESOLUTION_WIDTH      640
+#define SMALLSIZE_RESOLUTION_HEIGHT     480
+// Buffer size multiplier for small resolution images
+#define SMALLSIZE_BUFFER_MULTIPLIER     5
+
 // Caps formats.
 #define GST_VIDEO_FORMATS "{ NV12, NV21 }"
 
@@ -143,6 +148,15 @@ gst_jpeg_enc_create_pool (GstJPEGEncoder * jpegenc, GstCaps * caps)
   gint alignedw = (GST_VIDEO_INFO_WIDTH (&info) + 64-1) & ~(64-1);
   gint alignedh = (GST_VIDEO_INFO_HEIGHT (&info) + 64-1) & ~(64-1);
   gsize aligned_size = alignedw * alignedh * 4;
+
+  // JpegBufferSize needs more space to storage extended message. Smallest
+  // 160*90 requests 283638 for buffer size, which is 20x of alignedw * alignedh
+  // here. According to camxstaticcaps.cpp and camximageformatutils.cpp,
+  // extended message will exceed space and cause mmap() failed!
+  if (alignedw < SMALLSIZE_RESOLUTION_WIDTH ||
+      alignedh < SMALLSIZE_RESOLUTION_HEIGHT) {
+    aligned_size = aligned_size * SMALLSIZE_BUFFER_MULTIPLIER;
+  }
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, aligned_size,
