@@ -2,11 +2,21 @@
 set(GST_QTI_MEMORY_BASE gstqtimemorybase)
 
 add_library(${GST_QTI_MEMORY_BASE} SHARED
-  gstionpool.c
+  #gstionpool.c
+  gstmempool.c
 )
 
+include(CheckIncludeFileCXX)
+check_include_file_cxx("linux/dma-heap.h" HAVE_DMA_HEAP)
+# message(FATAL_ERROR "HAVE_DMA_HEAP = ${HAVE_DMA_HEAP}")
+
+if (HAVE_DMA_HEAP)
+  add_definitions(-DHAVE_LINUX_DMA_HEAP_H)
+endif()
+
 set_target_properties(${GST_QTI_MEMORY_BASE} PROPERTIES PUBLIC_HEADER
-  gstionpool.h
+  #gstionpool.h
+  gstmempool.h
 )
 
 target_include_directories(${GST_QTI_MEMORY_BASE} PUBLIC
