@@ -110,6 +110,14 @@ typedef enum {
   GST_ML_VIDEO_PIXEL_LAYOUT_REVERSE,
 } GstVideoPixelLayout;
 
+typedef struct {
+  gint n;
+  gint d;
+  gint h;
+  gint w;
+  gint c;
+} GstTensorLayout;
+
 struct _GstMLVideoConverter {
   GstBaseTransform     parent;
 
@@ -140,10 +148,16 @@ struct _GstMLVideoConverter {
   /// Tracker for the current batch position to be filled in the tensor.
   guint                batch_idx;
 
+  /// Tracker for the current depth position to be filled in the tensor.
+  guint                depth_idx;
+
   /// The next image block in the queued muxed stream buffer to be processed.
   gint                 next_mem_idx;
   /// The ID of next ROI meta in the queued buffer to be processed.
   gint                 next_roi_id;
+
+  // Tensor layout configured
+  GstTensorLayout      tensorlayout;
 
   /// Video converter engine.
   GstVideoConvEngine   *converter;

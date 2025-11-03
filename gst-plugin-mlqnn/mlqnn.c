@@ -33,7 +33,7 @@ G_DEFINE_TYPE (GstMLQnn, gst_ml_qnn, GST_TYPE_BASE_TRANSFORM);
 
 #define MAX_NUM_CDSP_BACKENDS 16
 
-#define GST_ML_QNN_TENSOR_TYPES "{ INT8, UINT8, INT32, UINT32, FLOAT16, FLOAT32 }"
+#define GST_ML_QNN_TENSOR_TYPES "{ INT8, UINT8, INT16, UINT16, INT32, UINT32, INT64, UINT64, FLOAT16, FLOAT32 }"
 
 #define GST_ML_QNN_CAPS                           \
     "neural-network/tensors, "                    \
@@ -473,6 +473,7 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   const GstMLInfo *info = NULL;
   GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
   GstClockTimeDiff tsdelta = GST_CLOCK_STIME_NONE;
+  gboolean success = FALSE;
 
   GST_DEBUG_OBJECT (mlqnn, "Transform Inbuf %ld  Outbuf %ld",
       gst_buffer_get_size (inbuffer), gst_buffer_get_size (outbuffer));
@@ -501,18 +502,23 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 
   ts_begin = gst_util_get_timestamp ();
 
-  gst_ml_qnn_engine_execute (mlqnn->engine, &inframe, &outframe);
+  success = gst_ml_qnn_engine_execute (mlqnn->engine, &inframe, &outframe);
 
   ts_end = gst_util_get_timestamp ();
+
+  gst_ml_frame_unmap (&outframe);
+  gst_ml_frame_unmap (&inframe);
+
+  if (!success) {
+    GST_ERROR_OBJECT (mlqnn, "Failed to execute!");
+    return GST_FLOW_ERROR;
+  }
 
   tsdelta = GST_CLOCK_DIFF (ts_begin, ts_end);
 
   GST_LOG_OBJECT (mlqnn, "Execute took %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT
       " ms", GST_TIME_AS_MSECONDS (tsdelta),
       (GST_TIME_AS_USECONDS (tsdelta) % 1000));
-
-  gst_ml_frame_unmap (&outframe);
-  gst_ml_frame_unmap (&inframe);
 
   return GST_FLOW_OK;
 }

@@ -490,22 +490,27 @@ video_pad_set_super_buffer_mode (GstPad * pad, GstStructure *structure)
   vpad->duration = gst_util_uint64_scale_int (GST_SECOND, fps_d, fps_n);
   fps = 1 / GST_TIME_AS_SECONDS (gst_guint64_to_gdouble (vpad->duration));
 
-  if (vpad->super_buffer_mode == TRUE &&
-      !((fps == 120) || (fps == 240) || (fps == 480))) {
-    GST_ERROR_OBJECT(pad, "Don't support super buffer mode for this framerate");
-    return FALSE;
-  }
-
   if (vpad->super_buffer_mode == TRUE) {
     const gchar *viewmode;
-    guint super_frames;
+    guint batch = 0;
 
-    super_frames = fps / vpad->superframerate;
-    viewmode = gst_video_multiview_mode_to_caps_string (
-        GST_VIDEO_MULTIVIEW_MODE_MONO);
-      gst_structure_set (structure,
-          "multiview-mode", G_TYPE_STRING, viewmode,
-              "views", G_TYPE_INT, super_frames, NULL);
+    if (vpad->superframerate <= 0) {
+      GST_ERROR_OBJECT (pad, "Invalid HFR platform capability: %d",
+          vpad->superframerate);
+      return FALSE;
+    }
+
+    batch = fps / vpad->superframerate;
+    if (!((batch == 2) || (batch == 4) || (batch == 8) || (batch == 16))) {
+      GST_ERROR_OBJECT (pad, "Don't support super buffer with batch %u.", batch);
+      return FALSE;
+    }
+
+    viewmode =
+      gst_video_multiview_mode_to_caps_string (GST_VIDEO_MULTIVIEW_MODE_MONO);
+    gst_structure_set (structure,
+        "multiview-mode", G_TYPE_STRING, viewmode,
+        "views", G_TYPE_INT, batch, NULL);
   }
 
   return TRUE;
@@ -872,6 +877,8 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
 #endif // GST_VIDEO_TYPE_SUPPORT
+#endif // ENABLE_RUNTIME_PARSER
+
 #ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
   g_object_class_install_property (gobject, PROP_VIDEO_LOGICAL_STREAM_TYPE,
       g_param_spec_enum ("logical-stream-type", "Stream type for logical camera",
@@ -881,7 +888,6 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PAUSED));
 #endif // FEATURE_LOGICAL_CAMERA_SUPPORT
-#endif // ENABLE_RUNTIME_PARSER
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
