@@ -51,9 +51,15 @@ static gboolean
 queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
     guint64 time, gpointer checkdata)
 {
-  GstBatchSrcPad *srcpad = GST_BATCH_SRC_PAD_CAST (checkdata);
+  GstPad *pad = GST_PAD (checkdata);
 
-  GST_BATCH_PAD_SIGNAL_IDLE (srcpad, FALSE);
+  if (GST_IS_BATCH_SRC_PAD (pad)) {
+    GstBatchSrcPad *srcpad = GST_BATCH_SRC_PAD_CAST (pad);
+    GST_BATCH_PAD_SIGNAL_IDLE (srcpad, FALSE);
+  } else if (GST_IS_BATCH_SINK_PAD (pad)) {
+    GstBatchSinkPad *sinkpad = GST_BATCH_SINK_PAD_CAST (pad);
+    GST_BATCH_PAD_SIGNAL_IDLE (sinkpad, FALSE);
+  }
 
   // There won't be any condition limiting for the buffer queue size.
   return FALSE;
@@ -62,8 +68,15 @@ queue_is_full_cb (GstDataQueue * queue, guint visible, guint bytes,
 static void
 queue_empty_cb (GstDataQueue * queue, gpointer checkdata)
 {
-  GstBatchSrcPad *srcpad = GST_BATCH_SRC_PAD_CAST (checkdata);
-  GST_BATCH_PAD_SIGNAL_IDLE (srcpad, TRUE);
+  GstPad *pad = GST_PAD (checkdata);
+
+  if (GST_IS_BATCH_SRC_PAD (pad)) {
+    GstBatchSrcPad *srcpad = GST_BATCH_SRC_PAD_CAST (pad);
+    GST_BATCH_PAD_SIGNAL_IDLE (srcpad, TRUE);
+  } else if (GST_IS_BATCH_SINK_PAD (pad)) {
+    GstBatchSinkPad *sinkpad = GST_BATCH_SINK_PAD_CAST (pad);
+    GST_BATCH_PAD_SIGNAL_IDLE (sinkpad, TRUE);
+  }
 }
 
 static void
@@ -71,7 +84,12 @@ gst_batch_sink_pad_finalize (GObject * object)
 {
   GstBatchSinkPad *pad = GST_BATCH_SINK_PAD (object);
 
-  g_queue_free_full (pad->buffers, (GDestroyNotify) gst_buffer_unref);
+  gst_data_queue_set_flushing (pad->buffers, TRUE);
+  gst_data_queue_flush (pad->buffers);
+  gst_object_unref (GST_OBJECT_CAST (pad->buffers));
+
+  g_cond_clear (&pad->drained);
+  g_mutex_clear (&pad->lock);
 
   G_OBJECT_CLASS (gst_batch_sink_pad_parent_class)->finalize(object);
 }
@@ -87,10 +105,13 @@ gst_batch_sink_pad_class_init (GstBatchSinkPadClass * klass)
 void
 gst_batch_sink_pad_init (GstBatchSinkPad * pad)
 {
+  g_mutex_init (&pad->lock);
+  g_cond_init (&pad->drained);
+
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
 
+  pad->buffers = gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
   pad->is_idle = TRUE;
-  pad->buffers = g_queue_new ();
 }
 
 static void
@@ -106,7 +127,7 @@ gst_batch_src_pad_worker_task (gpointer userdata)
     buffer = GST_BUFFER (item->object);
     item->object = NULL;
 
-    GST_TRACE_OBJECT (srcpad, "Pushing buffer %p of size %" G_GSIZE_FORMAT
+    GST_TRACE_OBJECT (srcpad, "Submitting buffer %p of size %" G_GSIZE_FORMAT
         " with %u memory blocks, channels mask " GST_BINARY_8BIT_FORMAT
         ", timestamp %" GST_TIME_FORMAT ", duration %" GST_TIME_FORMAT
         " flags 0x%X", buffer, gst_buffer_get_size (buffer),
@@ -150,15 +171,15 @@ gst_batch_src_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
       GstCaps *caps = NULL, *filter = NULL;
 
       caps = gst_pad_get_pad_template_caps (pad);
-      GST_DEBUG_OBJECT (srcpad, "Template caps: %" GST_PTR_FORMAT, caps);
+
+      GST_DEBUG_OBJECT (srcpad, "Current caps: %" GST_PTR_FORMAT, caps);
 
       gst_query_parse_caps (query, &filter);
-      GST_DEBUG_OBJECT (srcpad, "Filter caps: %" GST_PTR_FORMAT, filter);
+      GST_DEBUG_OBJECT (srcpad, "Filter caps: %" GST_PTR_FORMAT, caps);
 
       if (filter != NULL) {
-        GstCaps *intersection =
+        GstCaps *intersection  =
             gst_caps_intersect_full (filter, caps, GST_CAPS_INTERSECT_FIRST);
-
         gst_caps_unref (caps);
         caps = intersection;
       }
@@ -213,6 +234,13 @@ gst_batch_src_pad_activate_mode (GstPad * pad, GstObject * parent,
         gst_data_queue_flush (srcpad->buffers);
 
         success = gst_pad_stop_task (GST_PAD (srcpad));
+
+        GST_BATCH_SRC_LOCK (srcpad);
+
+        gst_segment_init (&(srcpad)->segment, GST_FORMAT_UNDEFINED);
+        srcpad->basetime = -1;
+
+        GST_BATCH_SRC_UNLOCK (srcpad);
       }
 
       GST_DEBUG_OBJECT (srcpad, "Task %s", active ? "activated" : "deactivated");
@@ -262,6 +290,9 @@ gst_batch_src_pad_init (GstBatchSrcPad * pad)
 
   gst_segment_init (&pad->segment, GST_FORMAT_UNDEFINED);
   pad->stmstart = FALSE;
+
+  pad->duration = GST_CLOCK_TIME_NONE;
+  pad->basetime = -1;
 
   pad->buffers = gst_data_queue_new (queue_is_full_cb, NULL, queue_empty_cb, pad);
   pad->is_idle = TRUE;

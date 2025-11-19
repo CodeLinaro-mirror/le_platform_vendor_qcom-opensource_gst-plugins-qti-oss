@@ -192,7 +192,6 @@ struct _GstMLLabel {
 
 /**
  * gst_ml_module_new:
- * @type: Prefix used to identify the modules type.
  * @name: Name of the module.
  *
  * Allocate an instance of ML post-processing module.
@@ -201,7 +200,7 @@ struct _GstMLLabel {
  * return: Pointer to ML post-processing module on success or NULL on failure
  */
 GST_API GstMLModule *
-gst_ml_module_new      (const gchar * type, const gchar * name);
+gst_ml_module_new      (const gchar * name);
 
 /**
  * gst_ml_module_free:

@@ -189,7 +189,6 @@ gst_jpeg_enc_context_create (GstJPEGEncoderContext * context,
 {
   gboolean ret = TRUE;
   qmmf::OfflineJpegCreateParams jpeg_params;
-  guint format = GST_VIDEO_FORMAT_UNKNOWN;
 
   if (context == NULL || params == NULL) {
     GST_ERROR ("NULL pointers!");
@@ -202,29 +201,14 @@ gst_jpeg_enc_context_create (GstJPEGEncoderContext * context,
   gst_structure_get_uint (
       params, GST_JPEG_ENC_INPUT_HEIGHT, &jpeg_params.in_buffer.height);
   gst_structure_get_uint (
-      params, GST_JPEG_ENC_INPUT_FORMAT, &format);
-
-  if (format != GST_VIDEO_FORMAT_NV12) {
-    GST_ERROR ("Unsupported input format %d", format);
-    return FALSE;
-  }
-
-  jpeg_params.in_buffer.format = ::qmmf::recorder::VideoFormat::kNV12;
+      params, GST_JPEG_ENC_INPUT_FORMAT, &jpeg_params.in_buffer.format);
 
   gst_structure_get_uint (
       params, GST_JPEG_ENC_OUTPUT_WIDTH, &jpeg_params.out_buffer.width);
   gst_structure_get_uint (
       params, GST_JPEG_ENC_OUTPUT_HEIGHT, &jpeg_params.out_buffer.height);
   gst_structure_get_uint (
-      params, GST_JPEG_ENC_OUTPUT_FORMAT, &format);
-
-  if (format != GST_VIDEO_FORMAT_ENCODED) {
-    GST_ERROR ("Unsupported output format %d", format);
-    return FALSE;
-  }
-
-  jpeg_params.out_buffer.format = ::qmmf::recorder::VideoFormat::kJPEG;
-
+      params, GST_JPEG_ENC_OUTPUT_FORMAT, &jpeg_params.out_buffer.format);
   gst_structure_free (params);
   qmmf::recorder::OfflineJpegCb callback =
       [&, context] (guint buf_fd, guint encoded_size)

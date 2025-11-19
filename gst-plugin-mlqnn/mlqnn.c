@@ -9,9 +9,6 @@
 
 #include "mlqnn.h"
 
-#include <unistd.h>
-#include <stdio.h>
-
 #include <gst/ml/gstmlmeta.h>
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/ml-frame.h>
@@ -31,9 +28,7 @@ G_DEFINE_TYPE (GstMLQnn, gst_ml_qnn, GST_TYPE_BASE_TRANSFORM);
 #define DEFAULT_PROP_MIN_BUFFERS  2
 #define DEFAULT_PROP_MAX_BUFFERS  10
 
-#define MAX_NUM_CDSP_BACKENDS 16
-
-#define GST_ML_QNN_TENSOR_TYPES "{ INT8, UINT8, INT16, UINT16, INT32, UINT32, INT64, UINT64, FLOAT16, FLOAT32 }"
+#define GST_ML_QNN_TENSOR_TYPES "{ INT8, UINT8, INT32, UINT32, FLOAT16, FLOAT32 }"
 
 #define GST_ML_QNN_CAPS                           \
     "neural-network/tensors, "                    \
@@ -91,27 +86,6 @@ gst_ml_qnn_sink_template (void)
 {
   return gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
       gst_ml_qnn_sink_caps ());
-}
-
-static guint32
-gst_ml_qnn_get_num_cdsp_backends ()
-{
-  gchar dsp_check_filename[32];
-  guint32 num_cdsp_backends = 0;
-
-  if (access ("/dev/fastrpc-cdsp", F_OK) == 0)
-    num_cdsp_backends ++;
-
-  for (guint32 i = 1; i < MAX_NUM_CDSP_BACKENDS; i++) {
-    snprintf (dsp_check_filename, sizeof (dsp_check_filename),
-        "/dev/fastrpc-cdsp%u", i);
-    if (access (dsp_check_filename, F_OK) != 0)
-      break;
-
-    num_cdsp_backends ++;
-  }
-
-  return num_cdsp_backends;
 }
 
 static GstCaps *
@@ -651,8 +625,7 @@ gst_ml_qnn_class_init (GstMLQnnClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_BACKEND_DEVICE_ID,
       g_param_spec_uint ("backend-device-id", "Backend Device ID",
-          "Backend Device ID", 0, (gst_ml_qnn_get_num_cdsp_backends() - 1),
-          PROP_BACKEND_DEVICE_ID_DEFAULT,
+          "Backend Device ID", 0, G_MAXUINT, PROP_BACKEND_DEVICE_ID_DEFAULT,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_TENSORS,
       gst_param_spec_array ("tensors", "Tensors", "List of output tensors.",

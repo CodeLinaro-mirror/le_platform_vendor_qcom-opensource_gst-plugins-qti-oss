@@ -13,9 +13,9 @@
  *
  * Usage:
  * For AVC:Audio Video Encode:
- * gst-audio-video-encode -w 1920 -h 1080 -c 1 -o /etc/media/audiovideo.mp4
+ * gst-audio-video-encode -w 1920 -h 1080 -c 1 -o /opt/audiovideo.mp4
  * For HEVC:Audio Video Encode:
- * gst-audio-video-encode -w 1920 -h 1080 -c 2 -o /etc/media/audiovideo.mp4
+ * gst-audio-video-encode -w 1920 -h 1080 -c 2 -o /opt/audiovideo.mp4
  *
  * Help:
  * gst-audio-video-encode --help
@@ -40,8 +40,7 @@
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
-#define DEFAULT_OUTPUT_AVC_FILENAME "/etc/media/output-video-AVC.mp4"
-#define DEFAULT_OUTPUT_HEVC_FILENAME "/etc/media/output-video-HEVC.mp4"
+#define DEFAULT_OUTPUT_FILENAME "/opt/audiovideo.mp4"
 #define DEFAULT_OUTPUT_WIDTH 1280
 #define DEFAULT_OUTPUT_HEIGHT 720
 
@@ -51,7 +50,7 @@
   muxer. pulsesrc do-timestamp=true provide-clock=false volume=10 ! \
   audio/x-raw,format=S16LE,channels=1,rate=48000 ! audioconvert ! queue ! \
   lamemp3enc ! muxer. mp4mux name=muxer ! queue ! filesink name=mp4sink \
-  location=DEFAULT_OUTPUT_AVC_FILENAME"
+  location=DEFAULT_OUTPUT_FILENAME"
 
 #define GST_PIPELINE_AUDIO_VIDEO_HEVC \
   "qtiqmmfsrc name=qmmf ! capsfilter name=caps ! \
@@ -59,15 +58,15 @@
   muxer. pulsesrc do-timestamp=true provide-clock=false volume=10 ! \
   audio/x-raw,format=S16LE,channels=1,rate=48000 ! audioconvert ! queue ! \
   lamemp3enc ! muxer. mp4mux name=muxer ! queue ! filesink name=mp4sink \
-  location=DEFAULT_OUTPUT_HEVC_FILENAME"
+  location=DEFAULT_OUTPUT_FILENAME"
 
 #define GST_APP_SUMMARY \
   "This Application will execute the usecase of AudioVideo Encode"     \
   "\nCommand:" \
   "\nFor AVC: Audio Video Encode:\n"                                   \
-  "gst-audio-video-encode -w 1920 -h 1080 -c 1 -o /etc/media/audiovideo.mp4" \
+  "gst-audio-video-encode -w 1920 -h 1080 -c 1 -o /opt/audiovideo.mp4" \
   "\nFor HEVC: Audio Video Encode:\n"                                  \
-  "gst-audio-video-encode -w 1920 -h 1080 -c 2 -o /etc/media/audiovideo.mp4" \
+  "gst-audio-video-encode -w 1920 -h 1080 -c 2 -o /opt/audiovideo.mp4" \
   "\nOutput\n:" \
   "Upon executing the application user finds encoded file in output location" \
 
@@ -101,7 +100,7 @@ gst_app_context_new ()
   ctx->width = DEFAULT_OUTPUT_WIDTH;
   ctx->height = DEFAULT_OUTPUT_HEIGHT;
   ctx->input_format = GST_VCODEC_AVC;
-  ctx->output_file = const_cast<gchar *> (DEFAULT_OUTPUT_AVC_FILENAME);
+  ctx->output_file = const_cast<gchar *> (DEFAULT_OUTPUT_FILENAME);
 
   return ctx;
 }
@@ -126,7 +125,7 @@ gst_app_context_free (GstAudioVideoAppContext * ctx)
   }
 
   if (ctx->output_file != NULL &&
-    ctx->output_file != (gchar *)(&DEFAULT_OUTPUT_AVC_FILENAME))
+    ctx->output_file != (gchar *)(&DEFAULT_OUTPUT_FILENAME))
     g_free ((gpointer)ctx->output_file);
 
   g_free ((gpointer)ctx);
@@ -230,7 +229,7 @@ main (gint argc, gchar *argv[])
       "-c 1(AVC)/2(HEVC)" },
     { "output_file", 'o', 0, G_OPTION_ARG_STRING, &appctx->output_file,
       "output filename",
-      "e.g. -o /etc/media/output-video-AVC.mp4" },
+      "e.g. -o /opt/audiovideo.mp4" },
     { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
     };
 

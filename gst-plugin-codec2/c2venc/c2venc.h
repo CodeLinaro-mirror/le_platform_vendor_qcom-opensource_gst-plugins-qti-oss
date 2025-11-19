@@ -66,6 +66,8 @@ struct _GstC2VEncoder {
 
   /// Negotiated input resolution, format, etc.
   GstVideoCodecState   *instate;
+  /// TRUE if the negotiated input format is UBWC.
+  gboolean             isubwc;
   /// TRUE if the negotiated input subformat is heif.
   gboolean             isheif;
   /// TRUE if the negotiated input feature is GBM.
@@ -82,16 +84,15 @@ struct _GstC2VEncoder {
   /// List of incomplete buffers.
   GstBufferList        *incomplete_buffers;
 
-  /// Number of subframes contained in one buffer.
-  guint32              n_subframes;
+  /// Number of subframes contained in one superframe.
+  guint32              n_super_frames;
 
   /// Properties
   GstC2VideoRotate     rotate;
-  GstC2VideoFlip       flip;
   GstC2RateControl     control_rate;
   guint32              target_bitrate;
 
-  gint                 idr_interval;
+  guint32              idr_interval;
   GstC2IntraRefresh    intra_refresh;
   guint32              bframes;
 

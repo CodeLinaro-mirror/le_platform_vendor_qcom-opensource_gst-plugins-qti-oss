@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-
-################################################################################
-# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
-################################################################################
 
 import os
 import sys
@@ -185,15 +181,11 @@ def create_source_elements(args):
             "filesrc": create_element("filesrc", "src"),
             "demux": create_element("qtdemux", "demux"),
             "parse": create_element("h264parse", "parse"),
-            "decoder": create_element("v4l2h264dec", "decoder"),
-            "deccaps": create_element("capsfilter", "deccaps")
+            "decoder": create_element("v4l2h264dec", "decoder")
         }
         source_elements["filesrc"].set_property("location", args.file_path)
-        source_elements["decoder"].set_property("capture-io-mode", "dmabuf")
-        source_elements["decoder"].set_property("output-io-mode", "dmabuf")
-        source_elements["deccaps"].set_property(
-            "caps", Gst.Caps.from_string("video/x-raw,format=NV12")
-        )
+        source_elements["decoder"].set_property("capture-io-mode", 5)
+        source_elements["decoder"].set_property("output-io-mode", 5)
     else:
         source_elements = {
             "camsrc": create_element("qtiqmmfsrc", "camsrc"),
@@ -202,9 +194,9 @@ def create_source_elements(args):
         source_elements["camsrc"].set_property("camera", args.camera)
         source_elements["camcaps"].set_property(
             "caps", Gst.Caps.from_string(
-                "video/x-raw,format=NV12_Q08C,"
+                "video/x-raw(memory:GBM),format=NV12,"
                 f"width={args.width},height={args.height},"
-                f"framerate={args.framerate}"
+                f"framerate={args.framerate},compression=ubwc"
             )
         )
     return source_elements
@@ -218,8 +210,8 @@ def create_sink_elements(args):
             "mux": create_element("mp4mux", "mux"),
             "sink": create_element("filesink", "sink")
         }
-        sink_elements["encoder"].set_property("capture-io-mode", "dmabuf")
-        sink_elements["encoder"].set_property("output-io-mode", "dmabuf-import")
+        sink_elements["encoder"].set_property("capture-io-mode", 5)
+        sink_elements["encoder"].set_property("output-io-mode", 5)
         sink_elements["sink"].set_property("location", args.output)
     else:
         sink_elements = {
@@ -272,7 +264,7 @@ def create_link_orders(args):
     ]
 
     if args.file_path:
-        link_orders.append(["filesrc", "demux", "parse", "decoder", "deccaps", "queue0", "split"])
+        link_orders.append(["filesrc", "demux", "parse", "decoder", "queue0", "split"])
     else:
         link_orders.append(["camsrc", "camcaps", "queue0", "split"])
 
@@ -297,7 +289,7 @@ def create_pipeline(pipeline, args):
     elements = {
         "split"     : create_element("tee", "split"),
         "metamux"   : create_element("qtimetamux", "metamux"),
-        "overlay"   : create_element("qtivoverlay", "overlay"),
+        "overlay"   : create_element("qtioverlay", "overlay"),
         "converter" : create_element("qtimlvconverter", "converter"),
         "ml"        : create_element(ML_PLUGINS.get(args.ml_framework), "ml"),
         "detection" : create_element("qtimlvdetection", "detection"),
@@ -341,23 +333,12 @@ def create_pipeline(pipeline, args):
 
     link_elements(link_orders, elements)
 
-def is_linux():
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if "Linux" in line:
-                    return True
-    except FileNotFoundError:
-        return False
-    return False
-
 def main():
     """Main function to set up and run the GStreamer pipeline."""
 
     # Set the environment
-    if is_linux():
-        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     # Initialize GStreamer
     Gst.init(None)

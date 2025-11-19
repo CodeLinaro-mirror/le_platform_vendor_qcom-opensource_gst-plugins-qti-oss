@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
  *
- * Copyright (c) 2021-2022, 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -74,6 +74,7 @@
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/gstmlmeta.h>
 #include <gst/ml/ml-module-utils.h>
+#include <gst/video/gstqtibufferpool.h>
 #include <gst/allocators/gstqtiallocator.h>
 #include <gst/video/video-utils.h>
 #include <gst/video/gstimagepool.h>
@@ -94,7 +95,10 @@ G_DEFINE_TYPE (GstMLVideoPose, gst_ml_video_pose,
     GST_TYPE_BASE_TRANSFORM);
 
 #define GST_TYPE_ML_MODULES (gst_ml_modules_get_type())
-#define GST_ML_MODULES_PREFIX "ml-vpose-"
+
+#ifndef GST_CAPS_FEATURE_MEMORY_GBM
+#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
+#endif
 
 #define GST_ML_VIDEO_POSE_VIDEO_FORMATS \
     "{ BGRA, BGRx, BGR16 }"
@@ -119,6 +123,7 @@ G_DEFINE_TYPE (GstMLVideoPose, gst_ml_video_pose,
 
 #define DEFAULT_MIN_BUFFERS      2
 #define DEFAULT_MAX_BUFFERS      10
+#define DEFAULT_TEXT_BUFFER_SIZE 102400
 #define DEFAULT_VIDEO_WIDTH      320
 #define DEFAULT_VIDEO_HEIGHT     240
 
@@ -163,7 +168,7 @@ gst_ml_video_pose_src_caps (void)
   if (g_once_init_enter (&inited)) {
     caps = gst_caps_from_string (GST_ML_VIDEO_POSE_SRC_CAPS);
 
-    if (gst_gbm_qcom_backend_is_supported ()) {
+    if (gst_is_gbm_supported ()) {
       GstCaps *tmplcaps = gst_caps_from_string (
           GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
               GST_ML_VIDEO_POSE_VIDEO_FORMATS));
@@ -199,7 +204,7 @@ gst_ml_modules_get_type (void)
   if (gtype)
     return gtype;
 
-  variants = gst_ml_enumarate_modules (GST_ML_MODULES_PREFIX);
+  variants = gst_ml_enumarate_modules ("ml-vpose-");
   gtype = g_enum_register_static ("GstMLVideoPoseModules", variants);
 
   return gtype;
@@ -211,59 +216,97 @@ gst_ml_video_pose_create_pool (GstMLVideoPose * vpose, GstCaps * caps)
   GstStructure *structure = gst_caps_get_structure (caps, 0);
   GstBufferPool *pool = NULL;
   GstAllocator *allocator = NULL;
-  GstVideoInfo info = {0,};
-  GstVideoAlignment align = {0,};
 
-  if (!gst_video_info_from_caps (&info, caps)) {
-    GST_ERROR_OBJECT (vpose, "Invalid caps %" GST_PTR_FORMAT, caps);
-    return NULL;
-  }
+  if (gst_structure_has_name (structure, "video/x-raw")) {
+    GstVideoInfo info;
 
-  if ((pool = gst_image_buffer_pool_new ()) == NULL) {
-    GST_ERROR_OBJECT (vpose, "Failed to create image pool!");
-    return NULL;
-  }
+    if (!gst_video_info_from_caps (&info, caps)) {
+      GST_ERROR_OBJECT (vpose, "Invalid caps %" GST_PTR_FORMAT, caps);
+      return NULL;
+    }
 
-  if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-    allocator = gst_fd_allocator_new ();
-    GST_INFO_OBJECT (vpose, "Buffer pool uses GBM memory");
-  } else {
-    allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
-    GST_INFO_OBJECT (vpose, "Buffer pool uses DMA memory");
-  }
+    if (gst_is_gbm_supported ()) {
+      // If downstream allocation query supports GBM, allocate gbm memory.
+      if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
+        GST_INFO_OBJECT (vpose, "Uses GBM memory");
+        pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
+      } else {
+        GST_INFO_OBJECT (vpose, "Uses ION memory");
+        pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
+      }
 
-  if (allocator == NULL) {
-    GST_ERROR_OBJECT (vpose, "Failed to create allocator");
-    gst_clear_object (&pool);
-    return NULL;
-  }
+      if (NULL == pool) {
+        GST_ERROR_OBJECT (vpose, "Failed to create buffer pool!");
+        return NULL;
+      }
 
-  structure = gst_buffer_pool_get_config (pool);
+      structure = gst_buffer_pool_get_config (pool);
+      allocator = gst_fd_allocator_new ();
 
-  gst_buffer_pool_config_set_allocator (structure, allocator, NULL);
-  g_object_unref (allocator);
+      gst_buffer_pool_config_add_option (structure,
+          GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
+    } else {
+      GstVideoFormat format;
+      GstVideoAlignment align;
+      gboolean success;
+      guint width, height;
+      gint stride, scanline;
 
-  gst_buffer_pool_config_add_option (structure,
-      GST_BUFFER_POOL_OPTION_VIDEO_META);
-  gst_buffer_pool_config_add_option (structure,
-      GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
+      width = GST_VIDEO_INFO_WIDTH (&info);
+      height = GST_VIDEO_INFO_HEIGHT (&info);
+      format = GST_VIDEO_INFO_FORMAT (&info);
 
-  if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
-    GST_ERROR_OBJECT (vpose, "Failed to get alignment!");
-    gst_clear_object (&pool);
-    return NULL;
-  }
+      success = gst_adreno_utils_compute_alignment (width, height, format,
+          &stride, &scanline);
+      if (!success) {
+        GST_ERROR_OBJECT(vpose,"Failed to get alignment");
+        return NULL;
+      }
 
-  gst_buffer_pool_config_add_option (structure,
-      GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
-  gst_buffer_pool_config_set_video_alignment (structure, &align);
+      pool = gst_qti_buffer_pool_new ();
+      structure = gst_buffer_pool_get_config (pool);
 
-  gst_buffer_pool_config_set_params (structure, caps, info.size,
+      gst_video_alignment_reset (&align);
+      align.padding_bottom = scanline - height;
+      align.padding_right = stride - width;
+      gst_video_info_align (&info, &align);
+
+      gst_buffer_pool_config_add_option (structure,
+          GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
+      gst_buffer_pool_config_set_video_alignment (structure, &align);
+
+      allocator = gst_qti_allocator_new ();
+      if (allocator == NULL) {
+        GST_ERROR_OBJECT (vpose, "Failed to create QTI allocator");
+        gst_clear_object (&pool);
+        return NULL;
+      }
+    }
+
+    gst_buffer_pool_config_set_params (structure, caps, info.size,
       DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
+    gst_buffer_pool_config_add_option (structure,
+        GST_BUFFER_POOL_OPTION_VIDEO_META);
+    gst_buffer_pool_config_set_allocator (structure, allocator, NULL);
+    g_object_unref (allocator);
+
+  } else if (gst_structure_has_name (structure, "text/x-raw")) {
+    GST_INFO_OBJECT (vpose, "Uses SYSTEM memory");
+
+    if (NULL == (pool = gst_buffer_pool_new ())) {
+      GST_ERROR_OBJECT (vpose, "Failed to create buffer pool!");
+      return NULL;
+    }
+
+    structure = gst_buffer_pool_get_config (pool);
+    gst_buffer_pool_config_set_params (structure, caps, DEFAULT_TEXT_BUFFER_SIZE,
+        DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
+  }
 
   if (!gst_buffer_pool_set_config (pool, structure)) {
     GST_WARNING_OBJECT (vpose, "Failed to set pool configuration!");
-    gst_clear_object (&pool);
+    g_object_unref (pool);
+    pool = NULL;
   }
 
   return pool;
@@ -385,8 +428,8 @@ gst_ml_video_pose_fill_video_output (GstMLVideoPose * vpose, GstBuffer * buffer)
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLPoseEntry, num));
 
-      GST_TRACE_OBJECT (vpose, "Batch: %u, confidence: %.2f", idx,
-          entry->confidence);
+      GST_TRACE_OBJECT (vpose, "Batch: %u, confidence: %.2f",
+          prediction->batch_idx, entry->confidence);
 
       // Draw pose keypoints.
       for (m = 0; m < entry->keypoints->len; ++m) {
@@ -464,8 +507,8 @@ static gboolean
 gst_ml_video_pose_fill_text_output (GstMLVideoPose * vpose, GstBuffer * buffer)
 {
   GstStructure *structure = NULL;
-  GstMemory *mem = NULL;
   gchar *string = NULL, *name = NULL;
+  GstMapInfo memmap = {};
   GValue list = G_VALUE_INIT, poses = G_VALUE_INIT, value = G_VALUE_INIT;
   GValue keypoints = G_VALUE_INIT, links = G_VALUE_INIT, link = G_VALUE_INIT;
   guint idx = 0, num = 0, seqnum = 0, n_entries = 0, sequence_idx = 0, id = 0;
@@ -554,8 +597,8 @@ gst_ml_video_pose_fill_text_output (GstMLVideoPose * vpose, GstBuffer * buffer)
       structure = gst_structure_new ("pose", "id", G_TYPE_UINT, id,
           "confidence", G_TYPE_DOUBLE, entry->confidence, NULL);
 
-      GST_TRACE_OBJECT (vpose, "Batch: %u, ID: %X, Confidence: %.1f%%", idx,
-          id, entry->confidence);
+      GST_TRACE_OBJECT (vpose, "Batch: %u, ID: %X, Confidence: %.1f%%",
+          prediction->batch_idx, id, entry->confidence);
 
       gst_structure_set_value (structure, "keypoints", &keypoints);
       gst_structure_set_value (structure, "connections", &links);
@@ -566,21 +609,13 @@ gst_ml_video_pose_fill_text_output (GstMLVideoPose * vpose, GstBuffer * buffer)
       g_value_unset (&value);
       g_value_init (&value, GST_TYPE_STRUCTURE);
 
-      if (entry->xtraparams != NULL) {
-        GstStructure *xtraparams = g_steal_pointer (&(entry->xtraparams));
-
-        g_value_take_boxed (&value, xtraparams);
-        gst_structure_set_value (structure, "xtraparams", &value);
-
-        g_value_reset (&value);
-      }
-
       g_value_take_boxed (&value, structure);
       gst_value_array_append_value (&poses, &value);
       g_value_unset (&value);
     }
 
-    structure = gst_structure_new_empty ("PoseEstimation");
+    structure = gst_structure_new ("PoseEstimation",
+        "batch-index", G_TYPE_UINT, prediction->batch_idx, NULL);
 
     gst_structure_set_value (structure, "poses", &poses);
     g_value_reset (&poses);
@@ -600,8 +635,8 @@ gst_ml_video_pose_fill_text_output (GstMLVideoPose * vpose, GstBuffer * buffer)
     if ((val = gst_structure_get_value (prediction->info, "stream-timestamp")))
       gst_structure_set_value (structure, "stream-timestamp", val);
 
-    if ((val = gst_structure_get_value (prediction->info, "parent-id")))
-      gst_structure_set_value (structure, "parent-id", val);
+    if ((val = gst_structure_get_value (prediction->info, "source-region-id")))
+      gst_structure_set_value (structure, "source-region-id", val);
 
     g_value_init (&value, GST_TYPE_STRUCTURE);
     g_value_take_boxed (&value, structure);
@@ -615,20 +650,41 @@ gst_ml_video_pose_fill_text_output (GstMLVideoPose * vpose, GstBuffer * buffer)
   g_value_unset (&keypoints);
   g_value_unset (&poses);
 
+  // Map buffer memory blocks.
+  if (!gst_buffer_map_range (buffer, 0, 1, &memmap, GST_MAP_READWRITE)) {
+    GST_ERROR_OBJECT (vpose, "Failed to map buffer memory block!");
+    return FALSE;
+  }
+
   // Serialize the predictions list into string format.
   string = gst_value_serialize (&list);
   g_value_unset (&list);
 
   if (string == NULL) {
     GST_ERROR_OBJECT (vpose, "Failed serialize predictions structure!");
+    gst_buffer_unmap (buffer, &memmap);
     return FALSE;
   }
 
   // Increase the length by 1 byte for the '\0' character.
   length = strlen (string) + 1;
 
-  mem = gst_memory_new_wrapped (0, string, length, 0, length, string, g_free);
-  gst_buffer_append_memory (buffer, mem);
+  // Check whether the length +1 byte for the additional '\n' is within maxsize.
+  if ((length + 1) > memmap.maxsize) {
+    GST_ERROR_OBJECT (vpose, "String size exceeds max buffer size!");
+
+    gst_buffer_unmap (buffer, &memmap);
+    g_free (string);
+
+    return FALSE;
+  }
+
+  // Copy the serialized GValue into the output buffer with '\n' termination.
+  length = g_snprintf ((gchar *) memmap.data, (length + 1), "%s\n", string);
+  g_free (string);
+
+  gst_buffer_unmap (buffer, &memmap);
+  gst_buffer_resize (buffer, 0, length);
 
   return TRUE;
 }
@@ -638,6 +694,7 @@ gst_ml_video_pose_decide_allocation (GstBaseTransform * base,
     GstQuery * query)
 {
   GstMLVideoPose *vpose = GST_ML_VIDEO_POSE (base);
+
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstStructure *config = NULL;
@@ -645,16 +702,14 @@ gst_ml_video_pose_decide_allocation (GstBaseTransform * base,
   guint size, minbuffers, maxbuffers;
   GstAllocationParams params;
 
-  gst_clear_object (&(vpose->outpool));
-
-  if (vpose->mode != OUTPUT_MODE_VIDEO)
-    return TRUE;
-
   gst_query_parse_allocation (query, &caps, NULL);
   if (!caps) {
     GST_ERROR_OBJECT (vpose, "Failed to parse the allocation caps!");
     return FALSE;
   }
+  // Invalidate the cached pool if there is an allocation_query.
+  if (vpose->outpool)
+    gst_object_unref (vpose->outpool);
 
   // Create a new buffer pool.
   if ((pool = gst_ml_video_pose_create_pool (vpose, caps)) == NULL) {
@@ -779,27 +834,26 @@ gst_ml_video_pose_prepare_output_buffer (GstBaseTransform * base,
     return GST_FLOW_OK;
   }
 
-  if (vpose->mode == OUTPUT_MODE_VIDEO) {
-    if (!gst_buffer_pool_is_active (pool) &&
-        !gst_buffer_pool_set_active (pool, TRUE)) {
-      GST_ERROR_OBJECT (vpose, "Failed to activate output buffer pool!");
-      return GST_FLOW_ERROR;
-    }
+  g_return_val_if_fail (pool != NULL, GST_FLOW_ERROR);
 
-    // Input is marked as GAP, nothing to process. Create a GAP output buffer.
-    if ((gst_buffer_get_size (inbuffer) == 0) &&
-        GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP)) {
-      *outbuffer = gst_buffer_new ();
-      GST_BUFFER_FLAG_SET (*outbuffer, GST_BUFFER_FLAG_GAP);
-    }
+  if (!gst_buffer_pool_is_active (pool) &&
+      !gst_buffer_pool_set_active (pool, TRUE)) {
+    GST_ERROR_OBJECT (vpose, "Failed to activate output buffer pool!");
+    return GST_FLOW_ERROR;
+  }
 
-    if ((*outbuffer == NULL) &&
-        gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
-      GST_ERROR_OBJECT (vpose, "Failed to create output buffer!");
-      return GST_FLOW_ERROR;
-    }
-  } else {
+  // Input is marked as GAP, nothing to process. Create a GAP output buffer.
+  if ((vpose->mode == OUTPUT_MODE_VIDEO) &&
+      (gst_buffer_get_size (inbuffer) == 0) &&
+      GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP)) {
     *outbuffer = gst_buffer_new ();
+    GST_BUFFER_FLAG_SET (*outbuffer, GST_BUFFER_FLAG_GAP);
+  }
+
+  if ((*outbuffer == NULL) &&
+      gst_buffer_pool_acquire_buffer (pool, outbuffer, NULL) != GST_FLOW_OK) {
+    GST_ERROR_OBJECT (vpose, "Failed to create output buffer!");
+    return GST_FLOW_ERROR;
   }
 
   // Copy the flags and timestamps from the input buffer.
@@ -813,7 +867,7 @@ gst_ml_video_pose_transform_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter)
 {
   GstMLVideoPose *vpose = GST_ML_VIDEO_POSE (base);
-  GstCaps *tmplcaps = NULL, *result = NULL;
+  GstCaps *result = NULL;
   const GValue *value = NULL;
 
   GST_DEBUG_OBJECT (vpose, "Transforming caps: %" GST_PTR_FORMAT
@@ -821,19 +875,12 @@ gst_ml_video_pose_transform_caps (GstBaseTransform * base,
   GST_DEBUG_OBJECT (vpose, "Filter caps: %" GST_PTR_FORMAT, filter);
 
   if (direction == GST_PAD_SRC) {
-    if (NULL == vpose->module) {
-      GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-      tmplcaps = gst_pad_get_pad_template_caps (pad);
-    } else {
-      tmplcaps = gst_ml_module_get_caps (vpose->module);
-    }
+    GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
+    result = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
-    tmplcaps = gst_pad_get_pad_template_caps (pad);
+    result = gst_pad_get_pad_template_caps (pad);
   }
-
-  result = gst_caps_copy (tmplcaps);
-
   // Extract the rate and propagate it to result caps.
   value = gst_structure_get_value (gst_caps_get_structure (caps, 0),
       (direction == GST_PAD_SRC) ? "framerate" : "rate");
@@ -948,8 +995,32 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstCaps *modulecaps = NULL;
   GstQuery *query = NULL;
   GstStructure *structure = NULL;
+  GEnumClass *eclass = NULL;
+  GEnumValue *evalue = NULL;
   GstMLInfo ininfo;
   guint idx = 0;
+
+  if (NULL == vpose->labels) {
+    GST_ELEMENT_ERROR (vpose, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels file not set!"));
+    return FALSE;
+  } else if (DEFAULT_PROP_MODULE == vpose->mdlenum) {
+    GST_ELEMENT_ERROR (vpose, RESOURCE, NOT_FOUND, (NULL),
+        ("Module name not set, automatic module pick up not supported!"));
+    return FALSE;
+  }
+
+  eclass = G_ENUM_CLASS (g_type_class_peek (GST_TYPE_ML_MODULES));
+  evalue = g_enum_get_value (eclass, vpose->mdlenum);
+
+  gst_ml_module_free (vpose->module);
+  vpose->module = gst_ml_module_new (evalue->value_name);
+
+  if (NULL == vpose->module) {
+    GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
+        ("Module creation failed!"));
+    return FALSE;
+  }
 
   modulecaps = gst_ml_module_get_caps (vpose->module);
 
@@ -957,6 +1028,12 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
     GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
         ("Module caps %" GST_PTR_FORMAT " do not intersect with the "
          "negotiated caps %" GST_PTR_FORMAT "!", modulecaps, incaps));
+    return FALSE;
+  }
+
+  if (!gst_ml_module_init (vpose->module)) {
+    GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
+        ("Module initialization failed!"));
     return FALSE;
   }
 
@@ -1027,8 +1104,10 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
         &(g_array_index (vpose->predictions, GstMLPosePrediction, idx));
 
     prediction->entries = g_array_new (FALSE, TRUE, sizeof (GstMLPoseEntry));
-    g_array_set_clear_func (prediction->entries,
-        (GDestroyNotify) gst_ml_pose_entry_cleanup);
+    g_array_set_clear_func (
+        prediction->entries, (GDestroyNotify) gst_ml_pose_entry_cleanup);
+
+    prediction->batch_idx = idx;
   }
 
   GST_DEBUG_OBJECT (vpose, "Input caps: %" GST_PTR_FORMAT, incaps);
@@ -1036,71 +1115,6 @@ gst_ml_video_pose_set_caps (GstBaseTransform * base, GstCaps * incaps,
 
   gst_base_transform_set_passthrough (base, FALSE);
   return TRUE;
-}
-
-static GstStateChangeReturn
-gst_ml_video_pose_change_state (GstElement * element, GstStateChange transition)
-{
-  GstMLVideoPose *vpose = GST_ML_VIDEO_POSE (element);
-  GEnumClass *eclass = NULL;
-  GEnumValue *evalue = NULL;
-  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-
-  switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-    {
-      if (NULL == vpose->labels) {
-        GST_ELEMENT_ERROR (vpose, RESOURCE, NOT_FOUND, (NULL),
-            ("Labels file not set!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      if (DEFAULT_PROP_MODULE == vpose->mdlenum) {
-        GST_ELEMENT_ERROR (vpose, RESOURCE, NOT_FOUND, (NULL),
-            ("Module name not set, automatic module pick up not supported!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      eclass = G_ENUM_CLASS (g_type_class_peek (GST_TYPE_ML_MODULES));
-      evalue = g_enum_get_value (eclass, vpose->mdlenum);
-
-      vpose->module =
-          gst_ml_module_new (GST_ML_MODULES_PREFIX, evalue->value_nick);
-
-      if (NULL == vpose->module) {
-        GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
-            ("Module creation failed!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      if (!gst_ml_module_init (vpose->module)) {
-        GST_ELEMENT_ERROR (vpose, RESOURCE, FAILED, (NULL),
-            ("Module initialization failed!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      break;
-    }
-    default:
-      break;
-  }
-
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret != GST_STATE_CHANGE_SUCCESS) {
-    GST_ERROR_OBJECT (vpose, "Failure");
-    return ret;
-  }
-
-  switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_ml_module_free (vpose->module);
-      vpose->module = NULL;
-      break;
-    default:
-      break;
-  }
-
-  return ret;
 }
 
 static GstFlowReturn
@@ -1282,9 +1296,6 @@ gst_ml_video_pose_class_init (GstMLVideoPoseClass * klass)
   gst_element_class_add_pad_template (element,
       gst_ml_video_pose_src_template ());
 
-  element->change_state =
-      GST_DEBUG_FUNCPTR (gst_ml_video_pose_change_state);
-
   base->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_ml_video_pose_decide_allocation);
   base->submit_input_buffer =
@@ -1310,7 +1321,7 @@ gst_ml_video_pose_init (GstMLVideoPose * vpose)
 
   vpose->stage_id = 0;
 
-  vpose->predictions = g_array_new (FALSE, TRUE, sizeof (GstMLPosePrediction));
+  vpose->predictions = g_array_new (FALSE, FALSE, sizeof (GstMLPosePrediction));
   g_return_if_fail (vpose->predictions != NULL);
 
   g_array_set_clear_func (vpose->predictions,

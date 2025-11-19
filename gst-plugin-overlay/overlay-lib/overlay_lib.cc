@@ -26,9 +26,10 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ * Changes from Qualcomm Innovation Center, Inc. are provided under the
+ *     following license:
  *
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -752,8 +753,21 @@ int32_t Overlay::Init (OverlayBlitType blit_type)
 #endif // ENABLE_C2D
   } else if (blit_type_ == OverlayBlitType::kGLES) {
 #ifdef ENABLE_GLES
+    void* handle = dlopen("libIB2C.so", RTLD_NOW);
+    if (!handle || dlerror()) {
+      GST_ERROR ("dlopen failed: '%s'", dlerror());
+      return -1;
+    }
+
+    ::ib2c::NewIEngine NewEngine =
+        (::ib2c::NewIEngine) dlsym(handle, IB2C_ENGINE_NEW_FUNC);
+    if (dlerror()) {
+      GST_ERROR ("dlsym failed: '%s'", dlerror());
+      return -1;
+    }
+
     ib2c_engine_ = std::shared_ptr<::ib2c::IEngine>(
-        ::ib2c::NewGlEngine(), [](::ib2c::IEngine* e) { delete e; }
+        NewEngine(), [handle](::ib2c::IEngine* e) { delete e; dlclose(handle); }
     );
 #else
     GST_ERROR ("GLES converter is not supported!");

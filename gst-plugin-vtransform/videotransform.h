@@ -112,6 +112,10 @@ struct _GstVideoTransform {
   GQuark                  infeature;
   GQuark                  outfeature;
 
+  // Whether input and output caps have UBWC compression.
+  gboolean                inubwc;
+  gboolean                outubwc;
+
   // Output buffer pool
   GstBufferPool           *outpool;
 

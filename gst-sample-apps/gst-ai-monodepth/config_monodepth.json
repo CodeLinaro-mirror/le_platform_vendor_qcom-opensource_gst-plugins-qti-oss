@@ -3,6 +3,6 @@
   "ml-framework": "tflite",
   "model": "/etc/models/midas_quantized.tflite",
   "labels": "/etc/labels/monodepth.labels",
-  "constants": "Midas,q-offsets=<0.0>,q-scales=<6.846843242645264>;",
+  "constants": "Midas,q-offsets=<0.0>,q-scales=<4.716535568237305>;",
   "runtime": "dsp"
 }

@@ -35,8 +35,8 @@ enum {
 };
 
 typedef enum {
-  GST_CAMERA_REPROCESS_EIS_V3 = 0,
-  GST_CAMERA_REPROCESS_EIS_V2 = 1,
+  GST_CAMERA_REPROCESS_EIS_V2,
+  GST_CAMERA_REPROCESS_EIS_V3,
   GST_CAMERA_REPROCESS_EIS_NONE,
 } GstCameraReprocessEis;
 
@@ -45,6 +45,7 @@ struct _GstCameraReprocessBufferParams {
   gint           width;
   gint           height;
   GstVideoFormat format;
+  gboolean       isubwc;
 };
 
 /**

@@ -36,8 +36,6 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
-#include <glib.h>
-#include <json-glib/json-glib.h>
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
@@ -62,11 +60,6 @@
  * Scale and Offset value for post processing
  */
 #define DEFAULT_CONSTANTS "srnet,q-offsets=<0.0>,q-scales=<1.0>;"
-
-/**
- * Default path of config file
- */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-superresolution.json"
 
 /**
  * Output dimensions of output stream
@@ -101,7 +94,7 @@ static GstVideoRectangle composer_sink_position[COMPOSER_SINK_COUNT] = {
  * @param options GstAppOptions object
  */
 static void
-gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
 {
   if (appctx->mloop != NULL) {
     g_main_loop_unref (appctx->mloop);
@@ -129,12 +122,6 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
       options->input_file_path != NULL) {
     g_free ((gpointer)options->input_file_path);
     options->input_file_path = NULL;
-  }
-
-  if (config_file != NULL &&
-      config_file != (gchar *)(&DEFAULT_CONFIG_FILE)) {
-    g_free ((gpointer)config_file);
-    config_file = NULL;
   }
 
   if (options->output_file_path != NULL) {
@@ -449,7 +436,8 @@ create_pipe (GstAppContext * appctx, const GstAppOptions options)
       filter, qtivcomposer, NULL);
 
   if (options.sink_type == GST_WAYLANDSINK) {
-    gst_bin_add_many (GST_BIN (appctx->pipeline), fpsdisplaysink, NULL);
+    gst_bin_add_many (GST_BIN (appctx->pipeline), fpsdisplaysink,
+        waylandsink, NULL);
   } else if (options.sink_type == GST_VIDEO_ENCODE) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), sink_filter,
         v4l2h264enc, h264parse_encode, mp4mux, filesink, NULL);
@@ -564,64 +552,6 @@ error_clean_elements:
   return FALSE;
 }
 
-/**
- * Parse JSON file to read input parameters
- *
- * @param config_file Path to config file
- * @param options Application specific options
- */
-gint
-parse_json(gchar * config_file, GstAppOptions * options)
-{
-  JsonParser *parser = NULL;
-  JsonNode *root = NULL;
-  JsonObject *root_obj = NULL;
-  GError *error = NULL;
-
-  parser = json_parser_new ();
-
-  // Load the JSON file
-  if (!json_parser_load_from_file (parser, config_file, &error)) {
-    g_printerr ("Unable to parse JSON file: %s\n", error->message);
-    g_error_free (error);
-    g_object_unref (parser);
-    return -1;
-  }
-
-  // Get the root object
-  root = json_parser_get_root (parser);
-  if (!JSON_NODE_HOLDS_OBJECT (root)) {
-    gst_printerr ("Failed to load json object\n");
-    g_object_unref (parser);
-    return -1;
-  }
-
-  root_obj = json_node_get_object (root);
-
-  if (json_object_has_member (root_obj, "input-file-path")) {
-    options->input_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "input-file-path"));
-  }
-
-  if (json_object_has_member (root_obj, "model")) {
-    options->model_path =
-        g_strdup (json_object_get_string_member (root_obj, "model"));
-  }
-
-  if (json_object_has_member (root_obj, "constants")) {
-    options->constants =
-        g_strdup (json_object_get_string_member (root_obj, "constants"));
-  }
-
-  if (json_object_has_member (root_obj, "output-file-path")) {
-    options->output_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "output-file-path"));
-  }
-
-  g_object_unref (parser);
-  return 0;
-}
-
 gint
 main (gint argc, gchar * argv[])
 {
@@ -630,7 +560,6 @@ main (gint argc, gchar * argv[])
   GstElement *pipeline = NULL;
   GOptionContext *ctx = NULL;
   const gchar *app_name = NULL;
-  gchar *config_file = NULL;
   GstAppOptions options = {};
   GstAppContext appctx = {};
   gboolean ret = FALSE;
@@ -649,10 +578,34 @@ main (gint argc, gchar * argv[])
 
   // Structure to define the user options selection
   GOptionEntry entries[] = {
-    { "config-file", 0, 0, G_OPTION_ARG_STRING,
-      &config_file,
-      "Path to config file\n",
-      NULL
+    { "input-file", 's', 0, G_OPTION_ARG_STRING,
+      &options.input_file_path,
+      "Input file source path\n"
+      "      Default input file path: " DEFAULT_INPUT_FILE_PATH,
+      "/PATH"
+    },
+    { "model", 'm', 0, G_OPTION_ARG_STRING,
+      &options.model_path,
+      "This is an optional parameter and overrides default path\n"
+      "      Default model path for TFlite Model: "
+      DEFAULT_TFLITE_MODEL,
+      "/PATH"
+    },
+    { "constants", 'k', 0, G_OPTION_ARG_STRING,
+      &options.constants,
+      "Constants, offsets and scale used for post-processing.\n"
+      "      Default constants: \"" DEFAULT_CONSTANTS "\"",
+      "/CONSTANTS"
+    },
+    { "display", 'd', 0, G_OPTION_ARG_NONE,
+      &options.display,
+      "Display stream on wayland (Default).",
+      "enable flag"
+    },
+    { "output-file", 'o', 0, G_OPTION_ARG_STRING,
+      &options.output_file_path,
+      "Output file path.\n",
+      "/PATH"
     },
     { NULL }
   };
@@ -660,23 +613,15 @@ main (gint argc, gchar * argv[])
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
 
   snprintf (help_description, 1023, "\nExample:\n"
-    "  %s --config-file=%s\n"
-    "\nThis Sample App demonstrates super resolution on video stream\n"
-    "\nConfig file Fields:\n"
-    "  input-file-path: \"/PATH\"\n"
-    "      File source path\n"
-    "      Default file source path: " DEFAULT_INPUT_FILE_PATH "\n"
-    "  model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path\n"
-    "      Default model path: " DEFAULT_TFLITE_MODEL"\n"
-    "  constants: CONSTANTS\n"
-    "      Constants, offsets and coefficients used by the chosen module \n"
-    "      for post-processing of incoming tensors.\n"
-    "      Default constants: \"" DEFAULT_CONSTANTS"\"\n"
-    "  output-file-path: \"/PATH\"\n"
-    "      Output file path. If not set, then display output is selected\n",
-    app_name, DEFAULT_CONFIG_FILE);
-help_description[1023] = '\0';
+      "  %s --input-file=/etc/media/video.mp4\n"
+      "  %s --input-file=/etc/media/video.mp4 --display\n"
+      "  %s --input-file=/etc/media/video.mp4 --output-file=/etc/media/out.mp4\n"
+      "  %s --input-file=/etc/media/video.mp4 --model=%s\n"
+      "  %s --input-file=/etc/media/video.mp4 --model=%s --constants=\"%s\"\n"
+      "\nThis Sample App demonstrates super resolution \n", app_name, app_name,
+      app_name, app_name, DEFAULT_TFLITE_MODEL,
+      app_name, DEFAULT_TFLITE_MODEL, DEFAULT_CONSTANTS);
+  help_description[1023] = '\0';
 
   // Parse command line entries.
   if ((ctx = g_option_context_new (help_description)) != NULL) {
@@ -693,39 +638,23 @@ help_description[1023] = '\0';
       g_printerr ("Failed to parse command line options: %s!\n",
           GST_STR_NULL (error->message));
       g_clear_error (&error);
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EFAULT;
     } else if (!success && (NULL == error)) {
       g_printerr ("Initializing: Unknown error!\n");
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EFAULT;
     }
   } else {
     g_printerr ("Failed to create options context!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EFAULT;
-  }
-
-  // Choose default config file if config file not provided
-  if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
-  }
-
-  if (!file_exists (config_file)) {
-    g_printerr ("Invalid config file path: %s\n", config_file);
-    gst_app_context_free (&appctx, &options, config_file);
-    return -EINVAL;
-  }
-
-  if (parse_json (config_file, &options) != 0) {
-    gst_app_context_free (&appctx, &options, config_file);
-    return -EINVAL;
   }
 
   if (options.display && options.output_file_path) {
     g_printerr ("Both Display and Output file are provided as input! - "
         "Select either Display or Output file\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   } else if (options.display) {
     options.sink_type = GST_WAYLANDSINK;
@@ -757,13 +686,13 @@ help_description[1023] = '\0';
   if (!file_exists (options.input_file_path)) {
     g_printerr ("Invalid video file source path: %s\n",
         options.input_file_path);
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
   if (!file_exists (options.model_path)) {
     g_printerr ("Invalid model file path: %s\n", options.model_path);
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
@@ -771,7 +700,7 @@ help_description[1023] = '\0';
       !file_location_exists (options.output_file_path)) {
     g_printerr ("Invalid output file location: %s\n",
         options.output_file_path);
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
@@ -784,7 +713,7 @@ help_description[1023] = '\0';
   pipeline = gst_pipeline_new (app_name);
   if (!pipeline) {
     g_printerr ("ERROR: failed to create pipeline.\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
@@ -794,14 +723,14 @@ help_description[1023] = '\0';
   ret = create_pipe (&appctx, options);
   if (!ret) {
     g_printerr ("ERROR: failed to create GST pipe.\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
   // Initialize main loop.
   if ((mloop = g_main_loop_new (NULL, FALSE)) == NULL) {
     g_printerr ("ERROR: Failed to create Main loop!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
   appctx.mloop = mloop;
@@ -810,7 +739,7 @@ help_description[1023] = '\0';
   // Bus is message queue for getting callback from gstreamer pipeline
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
@@ -857,7 +786,7 @@ error:
 
   g_print ("Set pipeline to NULL state ...\n");
   gst_element_set_state (pipeline, GST_STATE_NULL);
-  gst_app_context_free (&appctx, &options, config_file);
+  gst_app_context_free (&appctx, &options);
 
   g_print ("gst_deinit\n");
   gst_deinit ();

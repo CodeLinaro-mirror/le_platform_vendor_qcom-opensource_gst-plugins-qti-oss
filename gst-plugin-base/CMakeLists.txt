@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8.2)
-project(gstreamer-qcom-oss-base-1.0 LANGUAGES C CXX)
+project(GST_PLUGINS_QTI_OSS_BASE LANGUAGES C CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -9,11 +9,12 @@ link_directories(${SYSROOT_LIBDIR})
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
-pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(EGL egl)
-pkg_check_modules(GLES glesv2)
+pkg_check_modules(GST
+  REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_ALLOC
+  REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_VIDEO
+  REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
@@ -38,6 +39,9 @@ check_include_file("linux/dma-heap.h" HAVE_LINUX_DMA_HEAP_H)
 # Check whether Adreno C2D header is present.
 check_include_file("adreno/c2d2.h" HAVE_ADRENO_C2D2_H)
 
+# Check whether IOT CORE IB2C header is present.
+check_include_file_cxx("iot-core-algs/ib2c.h" HAVE_IOT_CORE_IB2C_H)
+
 # Check whether FastCV header is present.
 check_include_file("fastcv/fastcv.h" HAVE_FASTCV_H)
 
@@ -49,7 +53,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
 # Common CXX compiler flags.
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter")
 
@@ -58,7 +62,6 @@ include_directories(
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
 )
 
-add_subdirectory(gst/gfx)
 add_subdirectory(gst/utils)
 add_subdirectory(gst/video)
 add_subdirectory(gst/memory)
