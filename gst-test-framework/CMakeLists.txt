@@ -17,18 +17,13 @@ pkg_check_modules(GST_CHECK
   REQUIRED gstreamer-check-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_PBUTILS
-  REQUIRED gstreamer-pbutils-1.0>=${GST_VERSION_REQUIRED})
 
-include_directories(utils)
+include_directories(inc)
 
 add_executable(${GST_TEST_FRAMEWORK}
   main.c
-  utils/suite-utils.c
   suite-camera/suite-camera-case.c
   suite-camera/suite-camera-pipeline.c
-  suite-ML/suite-ml-case.c
-  suite-ML/suite-ml-pipeline.c
 )
 
 target_include_directories(${GST_TEST_FRAMEWORK} PRIVATE
@@ -39,8 +34,6 @@ target_include_directories(${GST_TEST_FRAMEWORK} PRIVATE
 target_link_libraries(${GST_TEST_FRAMEWORK} PRIVATE
   ${GST_LIBRARIES}
   ${GST_CHECK_LIBRARIES}
-  ${GST_PBUTILS_LIBRARIES}
-  ${GST_VIDEO_LIBRARIES}
 )
 
 install(

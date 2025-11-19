@@ -17,7 +17,6 @@
 #include <gst/ml/gstmlpool.h>
 #include <gst/ml/gstmlmeta.h>
 #include <gst/video/gstimagepool.h>
-#include <gst/video/video-utils.h>
 #include <gst/memory/gstmempool.h>
 #include <gst/utils/common-utils.h>
 #include <gst/utils/batch-utils.h>
@@ -36,7 +35,10 @@ G_DEFINE_TYPE (GstMLAudioClassification, gst_ml_audio_classification,
     GST_TYPE_BASE_TRANSFORM);
 
 #define GST_TYPE_ML_MODULES (gst_ml_modules_get_type())
-#define GST_ML_MODULES_PREFIX "ml-aclassification-"
+
+#ifndef GST_CAPS_FEATURE_MEMORY_GBM
+#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
+#endif
 
 #define GST_ML_AUDIO_CLASSIFICATION_VIDEO_FORMATS \
     "{ BGRA, BGRx, BGR16 }"
@@ -136,7 +138,7 @@ gst_ml_modules_get_type (void)
   if (gtype)
     return gtype;
 
-  variants = gst_ml_enumarate_modules (GST_ML_MODULES_PREFIX);
+  variants = gst_ml_enumarate_modules ("ml-aclassification-");
   gtype = g_enum_register_static ("GstMLAudioClassificationModules", variants);
 
   return gtype;
@@ -148,7 +150,6 @@ gst_ml_audio_classification_create_pool (
 {
   GstStructure *structure = gst_caps_get_structure (caps, 0);
   GstBufferPool *pool = NULL;
-  GstAllocator *allocator = NULL;
   guint size = 0;
 
   if (gst_structure_has_name (structure, "video/x-raw")) {
@@ -159,22 +160,17 @@ gst_ml_audio_classification_create_pool (
       return NULL;
     }
 
-    if ((pool = gst_image_buffer_pool_new ()) == NULL) {
-      GST_ERROR_OBJECT (classification, "Failed to create image pool!");
-      return NULL;
-    }
-
+    // If downstream allocation query supports GBM, allocate gbm memory.
     if (gst_caps_has_feature (caps, GST_CAPS_FEATURE_MEMORY_GBM)) {
-      allocator = gst_fd_allocator_new ();
-      GST_INFO_OBJECT (classification, "Buffer pool uses GBM memory");
+      GST_INFO_OBJECT (classification, "Uses GBM memory");
+      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_GBM);
     } else {
-      allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
-      GST_INFO_OBJECT (classification, "Buffer pool uses DMA memory");
+      GST_INFO_OBJECT (classification, "Uses ION memory");
+      pool = gst_image_buffer_pool_new (GST_IMAGE_BUFFER_POOL_TYPE_ION);
     }
 
-    if (allocator == NULL) {
-      GST_ERROR_OBJECT (classification, "Failed to create allocator");
-      gst_clear_object (&pool);
+    if (NULL == pool) {
+      GST_ERROR_OBJECT (classification, "Failed to create buffer pool!");
       return NULL;
     }
 
@@ -195,7 +191,9 @@ gst_ml_audio_classification_create_pool (
   gst_buffer_pool_config_set_params (structure, caps, size,
       DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
 
-  if (allocator != NULL) {
+  if (GST_IS_IMAGE_BUFFER_POOL (pool)) {
+    GstAllocator *allocator = gst_fd_allocator_new ();
+
     gst_buffer_pool_config_set_allocator (structure, allocator, NULL);
     g_object_unref (allocator);
 
@@ -205,7 +203,8 @@ gst_ml_audio_classification_create_pool (
 
   if (!gst_buffer_pool_set_config (pool, structure)) {
     GST_WARNING_OBJECT (classification, "Failed to set pool configuration!");
-    gst_clear_object (&pool);
+    g_object_unref (pool);
+    pool = NULL;
   }
 
   return pool;
@@ -219,7 +218,6 @@ gst_ml_audio_classification_fill_video_output (
   GstMapInfo memmap;
   guint idx = 0, num = 0, n_entries = 0;
   gdouble fontsize = 0.0;
-  gboolean success = TRUE;
 
   cairo_format_t format;
   cairo_surface_t* surface = NULL;
@@ -259,29 +257,17 @@ gst_ml_audio_classification_fill_video_output (
 
     bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
 
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0) {
-      GST_ERROR_OBJECT (classification, "DMA IOCTL SYNC START failed!");
-      gst_buffer_unmap (buffer, &memmap);
-      return FALSE;
-    }
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (classification, "DMA IOCTL SYNC START failed!");
   }
 #endif // HAVE_LINUX_DMA_BUF_H
 
   surface = cairo_image_surface_create_for_data (memmap.data, format,
       vmeta->width, vmeta->height, vmeta->stride[0]);
-
-  if (!surface) {
-    gst_buffer_unmap (buffer, &memmap);
-    return FALSE;
-  }
+  g_return_val_if_fail (surface, FALSE);
 
   context = cairo_create (surface);
-
-  if (!context) {
-    cairo_surface_destroy (surface);
-    gst_buffer_unmap (buffer, &memmap);
-    return FALSE;
-  }
+  g_return_val_if_fail (context, FALSE);
 
   // Clear any leftovers from previous operations.
   cairo_set_operator (context, CAIRO_OPERATOR_CLEAR);
@@ -337,7 +323,8 @@ gst_ml_audio_classification_fill_video_output (
             g_quark_to_string (entry->name), entry->confidence);
 
       GST_TRACE_OBJECT (classification, "Batch: %u, label: %s, confidence: "
-            "%.1f%%", idx, g_quark_to_string (entry->name), entry->confidence);
+            "%.1f%%", prediction->batch_idx, g_quark_to_string (entry->name),
+            entry->confidence);
 
       // Set text color.
       cairo_set_source_rgba (context,
@@ -368,17 +355,15 @@ gst_ml_audio_classification_fill_video_output (
 
     bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
 
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0) {
-      GST_ERROR_OBJECT (classification, "DMA IOCTL SYNC END failed!");
-      success = FALSE;
-    }
+    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
+      GST_WARNING_OBJECT (classification, "DMA IOCTL SYNC END failed!");
   }
 #endif // HAVE_LINUX_DMA_BUF_H
 
   // Unmap buffer memory blocks.
   gst_buffer_unmap (buffer, &memmap);
 
-  return success;
+  return TRUE;
 }
 
 static gboolean
@@ -389,7 +374,7 @@ gst_ml_audio_classification_fill_text_output (
   gchar *string = NULL, *name = NULL;
   GstMapInfo memmap = {};
   GValue list = G_VALUE_INIT, labels = G_VALUE_INIT, value = G_VALUE_INIT;
-  guint idx = 0, num = 0, sequence_idx = 0, n_entries = 0, id=0;
+  guint idx = 0, num = 0, n_entries = 0;
   gsize length = 0;
 
   g_value_init (&list, GST_TYPE_LIST);
@@ -399,7 +384,6 @@ gst_ml_audio_classification_fill_text_output (
   for (idx = 0; idx < classification->predictions->len; idx++) {
     GstMLClassPrediction *prediction = NULL;
     GstMLClassEntry *entry = NULL;
-    const GValue *val = NULL;
 
     prediction =
         &(g_array_index (classification->predictions, GstMLClassPrediction, idx));
@@ -410,16 +394,15 @@ gst_ml_audio_classification_fill_text_output (
     for (num = 0; num < n_entries; num++) {
       entry = &(g_array_index (prediction->entries, GstMLClassEntry, num));
 
-      id = GST_META_ID (classification->stage_id, sequence_idx, num);
-
-      GST_TRACE_OBJECT (classification, "ID: %u, label: %s, confidence: %.1f%%",
-          id, g_quark_to_string (entry->name), entry->confidence);
+      GST_TRACE_OBJECT (classification, "Batch: %u, label: %s, confidence: "
+            "%.1f%%", prediction->batch_idx, g_quark_to_string (entry->name),
+            entry->confidence);
 
       // Replace empty spaces otherwise subsequent stream parse call will fail.
       name = g_strdup (g_quark_to_string (entry->name));
       name = g_strdelimit (name, " ", '.');
 
-      structure = gst_structure_new (name, "id", G_TYPE_UINT, id,
+      structure = gst_structure_new (name, "id", G_TYPE_UINT, num,
           "confidence", G_TYPE_DOUBLE,  entry->confidence, "color", G_TYPE_UINT,
           entry->color, NULL);
       g_free (name);
@@ -429,16 +412,9 @@ gst_ml_audio_classification_fill_text_output (
       g_value_reset (&value);
     }
 
-    structure = gst_structure_new_empty ("AudioClassification");
-
-    val = gst_structure_get_value (prediction->info, "timestamp");
-    gst_structure_set_value (structure, "timestamp", val);
-
-    val = gst_structure_get_value (prediction->info, "sequence-index");
-    gst_structure_set_value (structure, "sequence-index", val);
-
-    val = gst_structure_get_value (prediction->info, "sequence-num-entries");
-    gst_structure_set_value (structure, "sequence-num-entries", val);
+    structure = gst_structure_new ("AudioClassification",
+        "batch-index", G_TYPE_UINT, prediction->batch_idx,
+        "timestamp", G_TYPE_UINT64, GST_BUFFER_TIMESTAMP (buffer), NULL);
 
     gst_structure_set_value (structure, "labels", &labels);
     g_value_reset (&labels);
@@ -571,18 +547,13 @@ gst_ml_audio_classification_submit_input_buffer (GstBaseTransform * base,
   // GAP input buffer, cleanup the entries and set the protection meta info.
   if (gst_buffer_get_size (buffer) == 0 &&
       GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_GAP)) {
-    GstProtectionMeta *pmeta = NULL;
     GstMLClassPrediction *prediction = NULL;
 
     for (idx = 0; idx < classification->predictions->len; ++idx) {
       prediction =
           &(g_array_index (classification->predictions, GstMLClassPrediction, idx));
 
-      pmeta = gst_buffer_get_protection_meta_id (buffer,
-          gst_batch_channel_name (idx));
-
       g_array_remove_range (prediction->entries, 0, prediction->entries->len);
-      prediction->info = pmeta->info;
     }
 
     return GST_FLOW_OK;
@@ -679,12 +650,8 @@ gst_ml_audio_classification_transform_caps (GstBaseTransform * base,
   GST_DEBUG_OBJECT (classification, "Filter caps: %" GST_PTR_FORMAT, filter);
 
   if (direction == GST_PAD_SRC) {
-    if (NULL == classification->module) {
-      GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
-      tmplcaps = gst_pad_get_pad_template_caps (pad);
-    } else {
-      tmplcaps = gst_ml_module_get_caps (classification->module);
-    }
+    GstPad *pad = GST_BASE_TRANSFORM_SINK_PAD (base);
+    tmplcaps = gst_pad_get_pad_template_caps (pad);
   } else if (direction == GST_PAD_SINK) {
     GstPad *pad = GST_BASE_TRANSFORM_SRC_PAD (base);
     tmplcaps = gst_pad_get_pad_template_caps (pad);
@@ -821,8 +788,32 @@ gst_ml_audio_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstMLAudioClassification *classification = GST_ML_AUDIO_CLASSIFICATION (base);
   GstCaps *modulecaps = NULL;
   GstStructure *structure = NULL;
+  GEnumClass *eclass = NULL;
+  GEnumValue *evalue = NULL;
   GstMLInfo ininfo;
   guint idx = 0;
+
+  if (NULL == classification->labels) {
+    GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
+        ("Labels not set!"));
+    return FALSE;
+  } else if (DEFAULT_PROP_MODULE == classification->mdlenum) {
+    GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
+        ("Module name not set, automatic module pick up not supported!"));
+    return FALSE;
+  }
+
+  eclass = G_ENUM_CLASS (g_type_class_peek (GST_TYPE_ML_MODULES));
+  evalue = g_enum_get_value (eclass, classification->mdlenum);
+
+  gst_ml_module_free (classification->module);
+  classification->module = gst_ml_module_new (evalue->value_name);
+
+  if (NULL == classification->module) {
+    GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
+        ("Module creation failed!"));
+    return FALSE;
+  }
 
   modulecaps = gst_ml_module_get_caps (classification->module);
 
@@ -830,6 +821,12 @@ gst_ml_audio_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
     GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
         ("Module caps %" GST_PTR_FORMAT " do not intersect with the "
          "negotiated caps %" GST_PTR_FORMAT "!", modulecaps, incaps));
+    return FALSE;
+  }
+
+  if (!gst_ml_module_init (classification->module)) {
+    GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
+        ("Module initialization failed!"));
     return FALSE;
   }
 
@@ -880,6 +877,7 @@ gst_ml_audio_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
         &(g_array_index (classification->predictions, GstMLClassPrediction, idx));
 
     prediction->entries = g_array_new (FALSE, FALSE, sizeof (GstMLClassEntry));
+    prediction->batch_idx = idx;
   }
 
   GST_DEBUG_OBJECT (classification, "Input caps: %" GST_PTR_FORMAT, incaps);
@@ -887,73 +885,6 @@ gst_ml_audio_classification_set_caps (GstBaseTransform * base, GstCaps * incaps,
 
   gst_base_transform_set_passthrough (base, FALSE);
   return TRUE;
-}
-
-static GstStateChangeReturn
-gst_ml_audio_classification_change_state (GstElement * element,
-    GstStateChange transition)
-{
-  GstMLAudioClassification *classification =
-      GST_ML_AUDIO_CLASSIFICATION (element);
-  GEnumClass *eclass = NULL;
-  GEnumValue *evalue = NULL;
-  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-
-  switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-    {
-      if (NULL == classification->labels) {
-        GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
-            ("Labels file not set!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      if (DEFAULT_PROP_MODULE == classification->mdlenum) {
-        GST_ELEMENT_ERROR (classification, RESOURCE, NOT_FOUND, (NULL),
-            ("Module name not set, automatic module pick up not supported!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      eclass = G_ENUM_CLASS (g_type_class_peek (GST_TYPE_ML_MODULES));
-      evalue = g_enum_get_value (eclass, classification->mdlenum);
-
-      classification->module =
-          gst_ml_module_new (GST_ML_MODULES_PREFIX, evalue->value_nick);
-
-      if (NULL == classification->module) {
-        GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
-            ("Module creation failed!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      if (!gst_ml_module_init (classification->module)) {
-        GST_ELEMENT_ERROR (classification, RESOURCE, FAILED, (NULL),
-            ("Module initialization failed!"));
-        return GST_STATE_CHANGE_FAILURE;
-      }
-
-      break;
-    }
-    default:
-      break;
-  }
-
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret != GST_STATE_CHANGE_SUCCESS) {
-    GST_ERROR_OBJECT (classification, "Failure");
-    return ret;
-  }
-
-  switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_ml_module_free (classification->module);
-      classification->module = NULL;
-      break;
-    default:
-      break;
-  }
-
-  return ret;
 }
 
 static GstFlowReturn
@@ -973,13 +904,13 @@ gst_ml_audio_classification_transform (GstBaseTransform * base,
 
   time = gst_util_get_timestamp ();
 
-  if (classification->mode == OUTPUT_MODE_VIDEO)
+  if (classification->mode == OUTPUT_MODE_VIDEO) {
     success = gst_ml_audio_classification_fill_video_output (classification,
         outbuffer);
-  else if (classification->mode == OUTPUT_MODE_TEXT)
+  } else if (classification->mode == OUTPUT_MODE_TEXT) {
     success = gst_ml_audio_classification_fill_text_output (classification,
         outbuffer);
-
+  }
 
   if (!success) {
     GST_ERROR_OBJECT (classification, "Failed to fill output buffer!");
@@ -1104,9 +1035,6 @@ gst_ml_audio_classification_class_init (GstMLAudioClassificationClass * klass)
       gst_ml_audio_classification_sink_template ());
   gst_element_class_add_pad_template (element,
       gst_ml_audio_classification_src_template ());
-
-  element->change_state =
-      GST_DEBUG_FUNCPTR (gst_ml_audio_classification_change_state);
 
   base->decide_allocation =
       GST_DEBUG_FUNCPTR (gst_ml_audio_classification_decide_allocation);

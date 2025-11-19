@@ -57,10 +57,7 @@
     "dimensions = (int) < <1, 120, 160, 1>, <1, 120, 160, 10>, <1, 120, 160, 4> >; " \
     "neural-network/tensors, " \
     "type = (string) { FLOAT32 }, " \
-    "dimensions = (int) < < 1, 60, 80, 4 >, < 1, 60, 80, 10 >, < 1, 60, 80, 1 > >;" \
-    "neural-network/tensors, " \
-    "type = (string) { FLOAT32 }, " \
-    "dimensions = (int) < < 1, 60, 80, 1 >, < 1, 60, 80, 4 >, < 1, 60, 80, 10 > >;"
+    "dimensions = (int) < < 1, 60, 80, 4 >, < 1, 60, 80, 10 >, < 1, 60, 80, 1 > >;"
 
 // Module caps instance
 static GstStaticCaps modulecaps = GST_STATIC_CAPS (GST_ML_MODULE_CAPS);
@@ -202,7 +199,6 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   guint idx = 0, num = 0, id = 0, class_idx = 0, size = 0.0;
   guint n_classes = 0, n_landmarks = 0, n_paxels = 0, paxelsize = 0;
   gint nms = -1, cx = 0, cy = 0;
-  guint scores_idx = 0, bboxes_idx = 0, landmarks_idx = 0;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
@@ -225,45 +221,43 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
   if (GST_ML_FRAME_N_TENSORS (mlframe) == 4) {
     // First tensor represents confidence scores.
-    scores_idx = 0;
+    scores = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
     // TODO: Second tensor represents some kind of confidence scores.
     hm_pool = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 1));
     // Third tensor represents the landmarks (left eye, right ear, etc.).
-    landmarks_idx = 2;
+    landmarks = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 2));
     // Fourh tensor represents the coordinates of the bounding boxes.
-    bboxes_idx = 3;
+    bboxes = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 3));
+
+    // The 4th tensor dimension represents the number of detection classes.
+    n_classes = GST_ML_FRAME_DIM (mlframe, 0, 3);
+    // The 4th tensor dimension represents the number of landmark X & Y pairs.
+    n_landmarks = GST_ML_FRAME_DIM (mlframe, 2, 3) / 2;
   } else if (GST_ML_FRAME_N_TENSORS (mlframe) == 3) {
     // Check whether the first tensor contains the bounding boxes.
     if (GST_ML_FRAME_DIM (mlframe, 0, 3) == 4) {
-      // Third tensor represents confidence scores.
-      scores_idx = 2;
+      // Thrid tensor represents confidence scores.
+      scores = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 2));
       // First tensor represents the coordinates of the bounding boxes.
-      bboxes_idx = 0;
-      // Second tensor represents the landmarks (left eye, right ear, etc.).
-      landmarks_idx = 1;
-    } else if (GST_ML_FRAME_DIM (mlframe, 1, 3) == 4) {
-      // First tensor represents confidence scores.
-      scores_idx = 0;
-      // 2nd tensor represents the coordinates of the bounding boxes.
-      bboxes_idx = 1;
-      // third tensor represents the landmarks (left eye, right ear, etc.).
-      landmarks_idx = 2;
+      bboxes = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+
+      // The 4th tensor dimension represents the number of detection classes.
+      n_classes = GST_ML_FRAME_DIM (mlframe, 2, 3);
     } else {
       // First tensor represents confidence scores.
-      scores_idx = 0;
-      // Third tensor represents the coordinates of the bounding boxes.
-      bboxes_idx = 2;
-      // Second tensor represents the landmarks (left eye, right ear, etc.).
-      landmarks_idx = 1;
+      scores = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+      // Thrid tensor represents the coordinates of the bounding boxes.
+      bboxes = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 2));
+
+      // The 4th tensor dimension represents the number of detection classes.
+      n_classes = GST_ML_FRAME_DIM (mlframe, 0, 3);
     }
+
+    // Second tensor represents the landmarks (left eye, right ear, etc.).
+    landmarks = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 1));
+    // The 4th tensor dimension represents the number of landmark X & Y pairs.
+    n_landmarks = GST_ML_FRAME_DIM (mlframe, 1, 3) / 2;
   }
-
-  scores = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, scores_idx));
-  landmarks = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, landmarks_idx));
-  bboxes = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, bboxes_idx));
-
-  n_classes = GST_ML_FRAME_DIM (mlframe, scores_idx, 3);
-  n_landmarks = GST_ML_FRAME_DIM (mlframe, landmarks_idx, 3) / 2;
 
   // Calculate the number of macroblocks (paxels).
   n_paxels = GST_ML_FRAME_DIM (mlframe, 0, 1) * GST_ML_FRAME_DIM (mlframe, 0, 2);
@@ -276,37 +270,26 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     GstMLBoxEntry entry = { 0, };
     gfloat left = G_MAXFLOAT, right = 0.0, top = G_MAXFLOAT, bottom = 0.0;
     gfloat x = 0.0, y = 0.0, tx = 0.0, ty = 0.0, width = 0.0, height = 0.0;
-    gfloat bbox_x = 0.0, bbox_y = 0.0, bbox_w = 0.0, bbox_h = 0.0;
 
-    confidence = scores[idx];
-
-    if (hm_pool != NULL) {
-      gfloat score = hm_pool[idx];
-
-      // Discard invalid results.
-      if (confidence != score)
-        continue;
-    }
+    // Discard invalid results.
+    if ((hm_pool != NULL) && scores[idx] != hm_pool[idx])
+      continue;
 
     // Discard results below the minimum score threshold.
-    if (confidence < submodule->threshold)
+    if (scores[idx] < submodule->threshold)
       continue;
 
     class_idx = idx % n_classes;
+    confidence = scores[idx];
 
     // Calculate the centre coordinates.
     cx = (idx / n_classes) % GST_ML_FRAME_DIM (mlframe, 0, 2);
     cy = (idx / n_classes) / GST_ML_FRAME_DIM (mlframe, 0, 2);
 
-    bbox_x = bboxes[idx * 4];
-    bbox_y = bboxes[idx * 4 + 1];
-    bbox_w = bboxes[idx * 4 + 2];
-    bbox_h = bboxes[idx * 4 + 3];
-
-    entry.left = (cx - bbox_x) * paxelsize;
-    entry.top = (cy - bbox_y) * paxelsize;
-    entry.right = (cx + bbox_w) * paxelsize;
-    entry.bottom = (cy + bbox_h) * paxelsize;
+    entry.left = (cx - bboxes[(idx * 4)]) * paxelsize;
+    entry.top = (cy - bboxes[(idx * 4) + 1]) * paxelsize;
+    entry.right = (cx + bboxes[(idx * 4) + 2]) * paxelsize;
+    entry.bottom = (cy + bboxes[(idx * 4) + 3]) * paxelsize;
 
     size = (entry.right - entry.left) * (entry.bottom - entry.top);
 
@@ -315,15 +298,10 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
       continue;
 
     for (num = 0; num < n_landmarks; ++num) {
-      gfloat ld_x = 0, ld_y = 0;
-
       id = (idx / n_classes) * (n_landmarks * 2) + num;
 
-      ld_x = landmarks[id];
-      ld_y = landmarks[id + n_landmarks];
-
-      x = (cx + ld_x) * paxelsize;
-      y = (cy + ld_y) * paxelsize;
+      x = (cx + landmarks[id]) * paxelsize;
+      y = (cy + landmarks[id + n_landmarks]) * paxelsize;
 
       // Normalize landmark X and Y within bbox coordinates
       x -= region.x + entry.left;

@@ -43,30 +43,23 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
-#include <glib.h>
-#include <json-glib/json-glib.h>
 
 #include <gst/sampleapps/gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
  */
-#define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
+#define DEFAULT_TFLITE_YOLOV8_MODEL "/etc/models/yolov8_det_quantized.tflite"
 #define DEFAULT_TFLITE_POSE_MODEL \
     "/etc/models/hrnet_pose_quantized.tflite"
-#define DEFAULT_YOLOX_LABELS "/etc/labels/yolox.labels"
+#define DEFAULT_YOLOV8_LABELS "/etc/labels/yolov8.labels"
 #define DEFAULT_POSE_LABELS "/etc/labels/hrnet_pose.labels"
-
-/**
- * Default path of config file
- */
-#define DEFAULT_CONFIG_FILE "/etc/configs/config-daisychain-detection-pose.json"
 
 /**
  * Default Scale and Offset constants
  */
-#define DEFAULT_YOLOX_CONSTANT "YOLOX,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
+#define DEFAULT_YOLOV8_CONSTANT "YoloV8,q-offsets=<21.0, 0.0, 0.0>,\
+    q-scales=<3.093529462814331, 0.00390625, 1.0>"
 #define DEFAULT_HRNET_CONSTANT "hrnet,q-offsets=<8.0>,\
     q-scales=<0.0040499246679246426>;"
 
@@ -74,8 +67,8 @@
  * Default settings of camera output resolution, Scaling of camera output
  * will be done in qtimlvconverter based on model input
  */
-#define DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH 1280
-#define DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT 720
+#define DEFAULT_CAMERA_PREVIEW_OUTPUT_WIDTH 1920
+#define DEFAULT_CAMERA_PREVIEW_OUTPUT_HEIGHT 1080
 #define DEFAULT_CAMERA_FRAME_RATE 30
 #define DEFAULT_DAISYCHAIN_OUTPUT_WIDTH 240
 #define DEFAULT_DAISYCHAIN_OUTPUT_HEIGHT 480
@@ -131,6 +124,24 @@ typedef enum {
 } GstConversionMode;
 
 /**
+ * GstVideoDisposition:
+ * @TOP_LEFT : Preserve the source Aspect Ratio during scaledown and
+ *     place it in the top-left corner of the output tensor.
+ * @CENTRE   : Preserve the source Aspect Ratio during scaledown and
+ *     place it in the centre of the output tensor.
+ * @STRETCH  :  Ignore the source image Aspect Ratio and if required
+ *     stretch its Aspect Ratio in order to fit completely inside the
+ *     output tensor
+ *
+ * Type of Video Disposition.
+ */
+typedef enum {
+  TOP_LEFT,
+  CENTRE,
+  STRETCH
+} GstVideoDisposition;
+
+/**
  * GstVideoSplitMode:
  * @NONE            : Buffer is rescaled and color conversion.
  * @FORCE_TRANSFORM : Buffer is rescaled and color conversion.
@@ -168,11 +179,11 @@ typedef struct {
   gchar *input_file_path;
   gchar *output_file_path;
   gchar *rtsp_ip_port;
-  gchar *yolox_model_path;
+  gchar *yolov8_model_path;
   gchar *hrnet_model_path;
-  gchar *yolox_labels_path;
+  gchar *yolov8_labels_path;
   gchar *hrnet_labels_path;
-  gchar *yolox_constants;
+  gchar *yolov8_constants;
   gchar *hrnet_constants;
   enum GstSinkType sink_type;
   GstStreamSourceType source_type;
@@ -246,7 +257,7 @@ on_pad_added (GstElement * element, GstPad * pad, gpointer data)
  * @param appctx Application Context object
  */
 static void
-gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * config_file)
+gst_app_context_free (GstAppContext * appctx, GstAppOptions * options)
 {
   // If specific pointer is not NULL, unref it
   if (appctx->mloop != NULL) {
@@ -264,9 +275,9 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     options->rtsp_ip_port = NULL;
   }
 
-  if (options->yolox_model_path != (gchar *)(&DEFAULT_TFLITE_YOLOX_MODEL) &&
-      options->yolox_model_path != NULL) {
-    g_free ((gpointer)options->yolox_model_path);
+  if (options->yolov8_model_path != (gchar *)(&DEFAULT_TFLITE_YOLOV8_MODEL) &&
+      options->yolov8_model_path != NULL) {
+    g_free ((gpointer)options->yolov8_model_path);
   }
 
   if (options->hrnet_model_path != (gchar *)(&DEFAULT_TFLITE_POSE_MODEL) &&
@@ -274,9 +285,9 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->hrnet_model_path);
   }
 
-  if (options->yolox_labels_path != (gchar *)(&DEFAULT_YOLOX_LABELS) &&
-      options->yolox_labels_path != NULL) {
-    g_free ((gpointer)options->yolox_labels_path);
+  if (options->yolov8_labels_path != (gchar *)(&DEFAULT_YOLOV8_LABELS) &&
+      options->yolov8_labels_path != NULL) {
+    g_free ((gpointer)options->yolov8_labels_path);
   }
 
   if (options->hrnet_labels_path != (gchar *)(&DEFAULT_POSE_LABELS) &&
@@ -284,9 +295,9 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
     g_free ((gpointer)options->hrnet_labels_path);
   }
 
-  if (options->yolox_constants != (gchar *)(&DEFAULT_YOLOX_CONSTANT) &&
-      options->yolox_constants != NULL) {
-    g_free ((gpointer)options->yolox_constants);
+  if (options->yolov8_constants != (gchar *)(&DEFAULT_YOLOV8_CONSTANT) &&
+      options->yolov8_constants != NULL) {
+    g_free ((gpointer)options->yolov8_constants);
   }
 
   if (options->hrnet_constants != (gchar *)(&DEFAULT_HRNET_CONSTANT) &&
@@ -297,11 +308,6 @@ gst_app_context_free (GstAppContext * appctx, GstAppOptions * options, gchar * c
   if (options->output_file_path != NULL) {
     g_free (options->output_file_path);
     options->output_file_path = NULL;
-  }
-
-  if (config_file != NULL && config_file != (gchar *) (&DEFAULT_CONFIG_FILE)) {
-    g_free ((gpointer) config_file);
-    config_file = NULL;
   }
 
   if (appctx->pipeline != NULL) {
@@ -659,7 +665,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
     if (i == GST_DETECTION_TYPE_YOLO)
     {
       g_object_set (G_OBJECT (qtimlelement[i]),
-          "model", options->yolox_model_path,
+          "model", options->yolov8_model_path,
           "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
     }
     else
@@ -669,8 +675,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
           "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
     }
     delegate_options = gst_structure_from_string (
-        "QNNExternalDelegate,backend_type=htp,htp_device_id=(string)0,\
-        htp_performance_mode=(string)2;", NULL);
+        "QNNExternalDelegate,backend_type=htp;", NULL);
     g_object_set (G_OBJECT (qtimlelement[i]),
         "external-delegate-path", "libQnnTFLiteDelegate.so", NULL);
     g_object_set (G_OBJECT (qtimlelement[i]),
@@ -693,7 +698,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
   g_value_unset (&value);
 
   g_value_init (&value, G_TYPE_INT);
-  g_value_set_int (&value, GST_ML_VIDEO_DISPOSITION_CENTRE);
+  g_value_set_int (&value, CENTRE);
   g_object_set_property (G_OBJECT (qtimlvconverter[GST_POSE_TYPE_HRNET]),
       "image-disposition", &value);
   g_value_unset (&value);
@@ -704,9 +709,9 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
     module_id = get_enum_value (qtimlvdetection[i], "module", "yolov8");
     if (module_id != -1) {
       g_object_set (G_OBJECT (qtimlvdetection[i]),
-          "threshold", 75.0, "results", 4,
-          "module", module_id, "labels", options->yolox_labels_path,
-          "constants", options->yolox_constants,
+          "threshold", 40.0, "results", 4,
+          "module", module_id, "labels", options->yolov8_labels_path,
+          "constants", options->yolov8_constants,
           NULL);
       }
     else {
@@ -790,7 +795,8 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
       qtivsplit, qtivoverlay, qtivcomposer, NULL);
 
   if (options->sink_type == GST_WAYLANDSINK) {
-    gst_bin_add_many (GST_BIN (appctx->pipeline), fpsdisplaysink, NULL);
+    gst_bin_add_many (GST_BIN (appctx->pipeline), fpsdisplaysink,
+        waylandsink, NULL);
   } else if (options->sink_type == GST_VIDEO_ENCODE) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), sink_filter,
         v4l2h264enc, h264parse_encode, mp4mux, filesink, NULL);
@@ -1114,102 +1120,6 @@ error_clean_elements:
   return FALSE;
 }
 
-/**
- * Parse JSON file to read input parameters
- *
- * @param config_file Path to config file
- * @param options Application specific options
- */
-gint
-parse_json (gchar * config_file, GstAppOptions * options)
-{
-  JsonParser *parser = NULL;
-  JsonNode *root = NULL;
-  JsonObject *root_obj = NULL;
-  GError *error = NULL;
-
-  parser = json_parser_new ();
-
-  // Load the JSON file
-  if (!json_parser_load_from_file (parser, config_file, &error)) {
-    g_printerr ("Unable to parse JSON file: %s\n", error->message);
-    g_error_free (error);
-    g_object_unref (parser);
-    return -1;
-  }
-
-  // Get the root object
-  root = json_parser_get_root (parser);
-  if (!JSON_NODE_HOLDS_OBJECT (root)) {
-    gst_printerr ("Failed to load json object\n");
-    g_object_unref (parser);
-    return -1;
-  }
-
-  root_obj = json_node_get_object (root);
-
-  if (json_object_has_member (root_obj, "input-file")) {
-    options->input_file_path =
-        g_strdup (json_object_get_string_member (root_obj, "input-file"));
-  }
-
-  if (json_object_has_member (root_obj, "rtsp-ip-port")) {
-    options->rtsp_ip_port =
-        g_strdup (json_object_get_string_member (root_obj, "rtsp-ip-port"));
-  }
-
-  gboolean camera_is_available = is_camera_available ();
-
-  if (camera_is_available) {
-    if ((!json_object_has_member (root_obj, "rtsp-ip-port")) &&
-        (!json_object_has_member (root_obj, "input-file")))
-      options->camera_source = TRUE;
-  }
-
-  if (json_object_has_member (root_obj, "detection-model")) {
-    options->yolox_model_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-model"));
-  }
-
-  if (json_object_has_member (root_obj, "detection-labels")) {
-    options->yolox_labels_path =
-        g_strdup (json_object_get_string_member (root_obj, "detection-labels"));
-  }
-
-  if (json_object_has_member (root_obj, "pose-model")) {
-    options->hrnet_model_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-model"));
-  }
-
-  if (json_object_has_member (root_obj, "pose-labels")) {
-    options->hrnet_labels_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-labels"));
-  }
-
-  if (json_object_has_member (root_obj, "detection-constants")) {
-    options->yolox_constants =
-        g_strdup (json_object_get_string_member (root_obj,
-            "detection-constants"));
-  }
-
-  if (json_object_has_member (root_obj, "pose-constants")) {
-    options->hrnet_constants =
-        g_strdup (json_object_get_string_member (root_obj,
-            "pose-constants"));
-  }
-
-  if (json_object_has_member (root_obj, "output-file")) {
-    options->output_file_path =
-        g_strdup (json_object_get_string_member (root_obj,
-            "output-file"));
-  }
-
-  g_object_unref (parser);
-  return 0;
-}
-
 gint
 main (gint argc, gchar * argv[])
 {
@@ -1218,21 +1128,20 @@ main (gint argc, gchar * argv[])
   GstElement *pipeline = NULL;
   GOptionContext *ctx = NULL;
   const gchar *app_name = NULL;
-  gchar *config_file = NULL;
   GstAppOptions options = {};
   GstAppContext appctx = {};
   gboolean ret = FALSE;
-  gchar help_description[2048];
+  gchar help_description[1024];
   guint intrpt_watch_id = 0;
 
   options.input_file_path = NULL;
   options.output_file_path = NULL;
   options.rtsp_ip_port = NULL;
-  options.yolox_model_path = DEFAULT_TFLITE_YOLOX_MODEL;
+  options.yolov8_model_path = DEFAULT_TFLITE_YOLOV8_MODEL;
   options.hrnet_model_path = DEFAULT_TFLITE_POSE_MODEL;
-  options.yolox_labels_path = DEFAULT_YOLOX_LABELS;
+  options.yolov8_labels_path = DEFAULT_YOLOV8_LABELS;
   options.hrnet_labels_path = DEFAULT_POSE_LABELS;
-  options.yolox_constants = DEFAULT_YOLOX_CONSTANT;
+  options.yolov8_constants = DEFAULT_YOLOV8_CONSTANT;
   options.hrnet_constants = DEFAULT_HRNET_CONSTANT;
   options.camera_source = FALSE;
   options.display = FALSE;
@@ -1241,16 +1150,93 @@ main (gint argc, gchar * argv[])
   setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
   setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
+  GOptionEntry camera_entry = {};
+
   gboolean camera_is_available = is_camera_available ();
+
+  if (camera_is_available) {
+    GOptionEntry temp_camera_entry = {
+      "camera", 'c', 0, G_OPTION_ARG_NONE,
+      &options.camera_source,
+      "Camera source (Default)",
+      NULL
+    };
+
+    camera_entry = temp_camera_entry;
+  } else {
+    GOptionEntry temp_camera_entry = { NULL };
+
+    camera_entry = temp_camera_entry;
+  }
 
   // Structure to define the user options selection
   GOptionEntry entries[] = {
-    { "config-file", 0, 0, G_OPTION_ARG_STRING,
-      &config_file,
-      "Path to config file\n",
-      NULL
+    { "input-file", 's', 0, G_OPTION_ARG_STRING,
+      &options.input_file_path,
+      "File source path",
+      "/PATH"
     },
-    { NULL }
+    { "rtsp-ip-port", 0, 0, G_OPTION_ARG_STRING,
+      &options.rtsp_ip_port,
+      "Use this parameter to provide the rtsp input.\n"
+      "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
+      "      eg: rtsp://192.168.1.110:8554/live.mkv",
+      "rtsp://<ip>:<port>/<stream>"
+    },
+    { "object-detection-model", 0, 0, G_OPTION_ARG_STRING,
+      &options.yolov8_model_path,
+      "This is an optional parameter and overrides default path\n"
+      "      Default model path for Object detection TFLITE Model: "
+      DEFAULT_TFLITE_YOLOV8_MODEL,
+      "/PATH"
+    },
+    { "pose-detection-model", 0, 0, G_OPTION_ARG_STRING,
+      &options.hrnet_model_path,
+      "This is an optional parameter and overrides default path\n"
+      "      Default model path for Pose detection TFLITE Model: "
+      DEFAULT_TFLITE_POSE_MODEL,
+      "/PATH"
+    },
+    { "object-detection-labels", 0, 0, G_OPTION_ARG_STRING,
+      &options.yolov8_labels_path,
+      "This is an optional parameter and overrides default path\n"
+      "      Default Object detection labels path: "
+      DEFAULT_YOLOV8_LABELS,
+      "/PATH"
+    },
+    { "pose-detection-labels", 0, 0, G_OPTION_ARG_STRING,
+      &options.hrnet_labels_path,
+      "This is an optional parameter and overrides default path\n"
+      "      Default Pose detection labels path: "
+      DEFAULT_POSE_LABELS,
+      "/PATH"
+    },
+    { "object-detection-constants", 0, 0, G_OPTION_ARG_STRING,
+      &options.yolov8_constants,
+      "Constants, offsets and coefficients used by detection module \n"
+      "      for post-processing of incoming tensors.\n"
+      "      Default constants: \"" DEFAULT_YOLOV8_CONSTANT "\"",
+      "/CONSTANTS"
+    },
+    { "pose-detection-constants", 0, 0, G_OPTION_ARG_STRING,
+      &options.hrnet_constants,
+      "Constants, offsets and coefficients used pose module \n"
+      "      for post-processing of incoming tensors.\n"
+      "      Default constants: \"" DEFAULT_HRNET_CONSTANT "\"",
+      "/CONSTANTS"
+    },
+    { "display", 'd', 0, G_OPTION_ARG_NONE,
+      &options.display,
+      "Display stream on wayland (Default).",
+      "enable flag"
+    },
+    { "output-file", 'o', 0, G_OPTION_ARG_STRING,
+      &options.output_file_path,
+      "Output file path.\n",
+      "/PATH"
+    },
+    camera_entry,
+    { NULL, 0, 0, (GOptionArg)0, NULL, NULL, NULL }
   };
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
@@ -1259,50 +1245,30 @@ main (gint argc, gchar * argv[])
 
   if (camera_is_available) {
     snprintf (camera_description, sizeof (camera_description),
-        "If neither input-file nor rtsp-ip-port are provided, "
-        "then camera input will be selected\n\n");
+      "  %s \n"
+      "  %s --camera --display\n"
+      "  %s --camera --output-file=/etc/media/out.mp4\n",
+      app_name, app_name, app_name);
   }
 
-  snprintf (help_description, 2047, "\nExample:\n"
-    "  %s --config-file=%s\n"
-    "\nThis Sample App demonstrates Daisy chain of Object Detection and Pose\n"
-    "\nConfig file Fields:\n"
-    "  input-file: \"/PATH\"\n"
-    "      Input File path\n"
-    "  rtsp-ip-port: \"rtsp://<ip>:<port>/<stream>\"\n"
-    "      Use this parameter to provide the rtsp input.\n"
-    "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
-    "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
-    "  %s"
-    "  detection-model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    "for YOLOX detection model\n"
-    "      Default path for YOLOX model: "DEFAULT_TFLITE_YOLOX_MODEL"\n"
-    "  detection-labels: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    " for YOLOX labels\n"
-    "      Default path for YOLOX labels: "DEFAULT_YOLOX_LABELS"\n"
-    "  pose-model: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    "for Pose Detection model\n"
-    "      Default path for Pose Detection model: "
-    DEFAULT_TFLITE_POSE_MODEL"\n"
-    "  pose-labels: \"/PATH\"\n"
-    "      This is an optional parameter and overrides default path "
-    " for Pose Detection labels\n"
-    "      Default path for Pose Detection labels: "
-    DEFAULT_POSE_LABELS"\n"
-    "  detection-constants: \"CONSTANTS\"\n"
-    "      Constants, offsets and coefficients for YOLOX TFLITE model \n"
-    "      Default constants for YOLOX: "DEFAULT_YOLOX_CONSTANT"\n"
-    "  pose-constants: \"CONSTANTS\"\n"
-    "      Constants, offsets and coefficients for HRNET TFLITE model \n"
-    "      Default constants for HRNET: "DEFAULT_HRNET_CONSTANT"\n"
-    "  output-file: \"/PATH\"\n"
-    "      Output file path\n"
-    "      If this field is not filled, then display output is selected\n",
-    app_name, DEFAULT_CONFIG_FILE, camera_description);
-  help_description[2047] = '\0';
+  snprintf (help_description, 1023, "\nExample:\n"
+      "  %s\n"
+      "  %s --input-file=/etc/media/video.mp4 --display\n"
+      "  %s --input-file=/etc/media/video.mp4 --output-file=/etc/media/out.mp4\n"
+      "  %s --rtsp-ip-port=\"rtsp://<ip>:port/<stream>\" --display\n"
+      "  %s --rtsp-ip-port=\"rtsp://<ip>:port/<stream>\""
+      " --output-file=/etc/media/out.mp4\n"
+      "\nThis Sample App demonstrates Daisy chain of "
+      "Object Detection and Pose\n"
+      "\nDefault Path for model and labels used are as below:\n"
+      "Object detection:  %-32s  %-32s\n"
+      "Pose  :  %-32s  %-32s\n"
+      "\nTo use your own model and labels replace at the default paths\n",
+      camera_description,
+      app_name, app_name, app_name, app_name,
+      DEFAULT_TFLITE_YOLOV8_MODEL, DEFAULT_YOLOV8_LABELS,
+      DEFAULT_TFLITE_POSE_MODEL, DEFAULT_POSE_LABELS);
+  help_description[1023] = '\0';
 
   // Parse command line entries.
   if ((ctx = g_option_context_new (help_description)) != NULL) {
@@ -1319,39 +1285,23 @@ main (gint argc, gchar * argv[])
       g_printerr ("Failed to parse command line options: %s!\n",
           GST_STR_NULL (error->message));
       g_clear_error (&error);
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EFAULT;
     } else if (!success && (NULL == error)) {
       g_printerr ("Initializing: Unknown error!\n");
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EFAULT;
     }
   } else {
     g_printerr ("Failed to create options context!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EFAULT;
-  }
-
-  // Choose default config file if config file not provided
-  if (config_file == NULL) {
-    config_file = DEFAULT_CONFIG_FILE;
-  }
-
-  if (!file_exists (config_file)) {
-    g_printerr ("Invalid config file path: %s\n", config_file);
-    gst_app_context_free (&appctx, &options, config_file);
-    return -EINVAL;
-  }
-
-  if (parse_json (config_file, &options) != 0) {
-    gst_app_context_free (&appctx, &options, config_file);
-    return -EINVAL;
   }
 
   if (options.display && options.output_file_path) {
     g_printerr ("Both Display and Output file are provided as input! - "
         "Select either Display or Output file\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   } else if (options.display) {
     options.sink_type = GST_WAYLANDSINK;
@@ -1376,7 +1326,7 @@ main (gint argc, gchar * argv[])
     } else {
       g_printerr ("Select either File or RTSP source\n");
     }
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   } else if (camera_is_available && options.camera_source) {
     g_print ("Camera source is selected.\n");
@@ -1394,7 +1344,7 @@ main (gint argc, gchar * argv[])
       options.source_type = GST_STREAM_TYPE_CAMERA;
     } else {
       g_printerr ("Select File or RTSP source\n");
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EINVAL;
     }
   }
@@ -1403,15 +1353,15 @@ main (gint argc, gchar * argv[])
     if (!file_exists (options.input_file_path)) {
       g_printerr ("Invalid video file source path: %s\n",
           options.input_file_path);
-      gst_app_context_free (&appctx, &options, config_file);
+      gst_app_context_free (&appctx, &options);
       return -EINVAL;
     }
   }
 
-  if (!file_exists (options.yolox_model_path)) {
+  if (!file_exists (options.yolov8_model_path)) {
     g_printerr ("Invalid detection model file path: %s\n",
-        options.yolox_model_path);
-    gst_app_context_free (&appctx, &options, config_file);
+        options.yolov8_model_path);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
@@ -1421,17 +1371,17 @@ main (gint argc, gchar * argv[])
     return -EINVAL;
   }
 
-  if (!file_exists (options.yolox_labels_path)) {
+  if (!file_exists (options.yolov8_labels_path)) {
     g_printerr ("Invalid detection labels file path: %s\n",
-        options.yolox_labels_path);
-    gst_app_context_free (&appctx, &options, config_file);
+        options.yolov8_labels_path);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
   if (!file_exists (options.hrnet_labels_path)) {
     g_printerr ("Invalid pose labels file path: %s\n",
         options.hrnet_labels_path);
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
@@ -1439,14 +1389,14 @@ main (gint argc, gchar * argv[])
       !file_location_exists (options.output_file_path)) {
     g_printerr ("Invalid output file location: %s\n",
         options.output_file_path);
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -EINVAL;
   }
 
   g_print ("Running app with\n"
       "For Detection model: %s labels: %s\n"
       "For Pose model: %s labels: %s\n",
-      options.yolox_model_path, options.yolox_labels_path,
+      options.yolov8_model_path, options.yolov8_labels_path,
       options.hrnet_model_path, options.hrnet_labels_path);
 
   // Initialize GST library.
@@ -1456,7 +1406,7 @@ main (gint argc, gchar * argv[])
   pipeline = gst_pipeline_new (app_name);
   if (!pipeline) {
     g_printerr ("ERROR: failed to create pipeline.\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
@@ -1466,14 +1416,14 @@ main (gint argc, gchar * argv[])
   ret = create_pipe (&appctx, &options);
   if (!ret) {
     g_printerr ("ERROR: failed to create GST pipe.\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
   // Initialize main loop.
   if ((mloop = g_main_loop_new (NULL, FALSE)) == NULL) {
     g_printerr ("ERROR: Failed to create Main loop!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
   appctx.mloop = mloop;
@@ -1482,7 +1432,7 @@ main (gint argc, gchar * argv[])
   // Bus is message queue for getting callback from gstreamer pipeline
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline))) == NULL) {
     g_printerr ("ERROR: Failed to retrieve pipeline bus!\n");
-    gst_app_context_free (&appctx, &options, config_file);
+    gst_app_context_free (&appctx, &options);
     return -1;
   }
 
@@ -1533,7 +1483,7 @@ error:
   gst_element_set_state (pipeline, GST_STATE_NULL);
 
   g_print ("Destroy pipeline\n");
-  gst_app_context_free (&appctx, &options, config_file);
+  gst_app_context_free (&appctx, &options);
 
   g_print ("gst_deinit\n");
   gst_deinit ();

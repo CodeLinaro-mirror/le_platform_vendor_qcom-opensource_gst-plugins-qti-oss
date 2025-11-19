@@ -120,12 +120,6 @@ open_ion_device (GstMemBufferPool * mempool, gboolean secure)
   } else {
     GST_INFO_OBJECT (mempool, "Open /dev/dma_heap/qcom,system");
     priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
-
-    if (priv->devfd < 0) {
-      GST_WARNING_OBJECT (mempool, "Failed to open /dev/dma_heap/qcom,system, "
-          "error: %s! Falling back to /dev/dma_heap/system", g_strerror (errno));
-      priv->devfd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
-    }
   }
 
   if (priv->devfd < 0) {
@@ -383,7 +377,7 @@ gst_mem_buffer_pool_reset (GstBufferPool * pool, GstBuffer * buffer)
   length = gst_buffer_n_memory (buffer);
 
   // Sanity check.
-  g_return_if_fail (length <= g_list_length (priv->memsizes));
+  g_return_if_fail (length == g_list_length (priv->memsizes));
 
   // Resize the buffer to the original size otherwise it will be discarded
   // due to the mismatch during the default implementation of release_buffer.

@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-
-################################################################################
-# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
-################################################################################
 
 import os
 import sys
@@ -15,29 +11,29 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
-# Configurations for Detection
-DEFAULT_DETECTION_MODEL = "/etc/models/yolox_quantized.tflite"
-DEFAULT_DETECTION_MODULE = "yolov8"
-DEFAULT_DETECTION_LABELS = "/etc/labels/yolox.labels"
-DEFAULT_DETECTION_CONSTANTS = "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
-
-DEFAULT_OUTPUT_FILE = "/etc/media/test.mp4"
-
-DESCRIPTION = f"""
+DESCRIPTION = """
 The application:
 - Encodes camera stream and dump the output.
-- Uses a TFLite model to identify the object in scene from camera stream
+- Uses YOLOv8 TFLite model to identify the object in scene from camera stream
 and overlay the bounding boxes over the detected objects. The results are shown
 on the display.
 
 The default file paths in the python script are as follows:
-- Detection model:  {DEFAULT_DETECTION_MODEL}
-- Detection labels: {DEFAULT_DETECTION_LABELS}
+- Detection model (YOLOv8): /opt/data/YoloV8N_Detection_Quantized.tflite
+- Detection labels: /opt/data/yolov8n.labels
 
 To override the default settings,
 please configure the corresponding module and constants as well.
 """
+
+# Configurations for Detection
+DEFAULT_DETECTION_MODEL = "/opt/data/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE = "yolov8"
+DEFAULT_DETECTION_LABELS = "/opt/data/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+DEFAULT_OUTPUT_FILE = "/opt/data/test.mp4"
 
 eos_received = False
 def create_element(factory_name, name):
@@ -66,14 +62,24 @@ def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        description=DESCRIPTION,
+        add_help=False,
         formatter_class=type(
-            'CustomFormatter',
-            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
-            {}
-        )
+            "CustomFormatter",
+            (
+                argparse.ArgumentDefaultsHelpFormatter,
+                argparse.RawTextHelpFormatter,
+            ),
+            {},
+        ),
     )
 
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help=DESCRIPTION,
+    )
     parser.add_argument(
         "--output_path",
         type=str,
@@ -112,27 +118,28 @@ def construct_pipeline(pipe):
         "qmmfsrc":      create_element("qtiqmmfsrc", "camsrc"),
         # Stream 0
         "capsfilter_0": create_element("capsfilter", "camout0caps"),
+        "queue_0":      create_element("queue", "queue0"),
         "v4l2h264enc":  create_element("v4l2h264enc", "v4l2h264encoder"),
         "h264parse":    create_element("h264parse", "h264parser"),
         "mp4mux":       create_element("mp4mux", "mp4muxer"),
         "filesink":     create_element("filesink", "filesink"),
         # Stream 1
         "capsfilter_1": create_element("capsfilter", "camout1caps"),
+        "queue_1":      create_element("queue", "queue1"),
         "tee":          create_element("tee", "split"),
         "mlvconverter": create_element("qtimlvconverter", "converter"),
+        "queue_2":      create_element("queue", "queue2"),
         "mltflite":     create_element("qtimltflite", "inference"),
+        "queue_3":      create_element("queue", "queue3"),
         "mlvdetection": create_element("qtimlvdetection", "detection"),
         "capsfilter_2": create_element("capsfilter", "metamuxmetacaps"),
+        "queue_4":      create_element("queue", "queue4"),
         "metamux":      create_element("qtimetamux", "metamux"),
         "overlay":      create_element("qtivoverlay", "overlay"),
+        "queue_5":      create_element("queue", "queue5"),
         "display":      create_element("waylandsink", "display")
     }
     # fmt: on
-
-    queue_count = 8
-    for i in range(queue_count):
-        queue_name = f"queue_{i}"
-        elements[queue_name] = create_element("queue", queue_name)
 
     # Set element properties
     Gst.util_set_object_arg(elements["qmmfsrc"], "camera", "0")
@@ -141,12 +148,12 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_0"],
         "caps",
-        "video/x-raw,format=NV12_Q08C,\
-        width=1280,height=720,framerate=30/1,colorimetry=bt709",
+        "video/x-raw(memory:GBM),format=NV12,compression=ubwc,\
+        width=1920,height=1080,framerate=30/1,colorimetry=bt709",
     )
 
-    Gst.util_set_object_arg(elements["v4l2h264enc"], "capture-io-mode", "dmabuf")
-    Gst.util_set_object_arg(elements["v4l2h264enc"], "output-io-mode", "dmabuf-import")
+    Gst.util_set_object_arg(elements["v4l2h264enc"], "capture-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264enc"], "output-io-mode", "5")
 
     Gst.util_set_object_arg(elements["h264parse"], "config-interval", "1")
 
@@ -156,7 +163,7 @@ def construct_pipeline(pipe):
     Gst.util_set_object_arg(
         elements["capsfilter_1"],
         "caps",
-        "video/x-raw,format=NV12,\
+        "video/x-raw\(memory:GBM\),format=NV12,\
         width=640,height=360,framerate=30/1",
     )
 
@@ -177,7 +184,7 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["mlvdetection"], "threshold", "75.0")
     Gst.util_set_object_arg(elements["mlvdetection"], "results", "4")
-    Gst.util_set_object_arg(elements["mlvdetection"], "module", detection["module"])
+    Gst.util_set_object_arg(elements["mlvdetection"], "module", "yolov8")
     Gst.util_set_object_arg(
         elements["mlvdetection"], "constants", detection["constants"],
     )
@@ -204,12 +211,12 @@ def construct_pipeline(pipe):
             "mp4mux", "filesink"
         ],
         [
-            "qmmfsrc", "capsfilter_1", "queue_1", "tee", "queue_2", "metamux",
-            "overlay", "queue_3", "display"
+            "qmmfsrc", "capsfilter_1", "queue_1", "tee", "metamux", "overlay",
+            "queue_5", "display"
         ],
         [
-            "tee", "queue_4", "mlvconverter", "queue_5", "mltflite", "queue_6",
-            "mlvdetection", "capsfilter_2", "queue_7", "metamux"
+            "tee", "mlvconverter", "queue_2", "mltflite", "queue_3",
+            "mlvdetection", "capsfilter_2", "queue_4", "metamux"
         ]
     ]
     # fmt: on
@@ -266,23 +273,11 @@ def handle_interrupt_signal(pipe, loop):
         quit_mainloop(loop)
     return GLib.SOURCE_CONTINUE
 
-def is_linux():
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if "Linux" in line:
-                    return True
-    except FileNotFoundError:
-        return False
-    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-
-    # Set the environment
-    if is_linux():
-        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     Gst.init(None)
 

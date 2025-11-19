@@ -38,9 +38,6 @@ struct _GstMLAudioClassification {
   // Output mode (video or text)
   guint             mode;
 
-  /// The ID of this stage of ML inference.
-  guint             stage_id;
-
   /// Buffer pools.
   GstBufferPool     *outpool;
 

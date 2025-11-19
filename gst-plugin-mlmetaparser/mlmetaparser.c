@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -20,6 +20,10 @@ GST_DEBUG_CATEGORY_STATIC (gst_ml_meta_parser_debug);
 
 #define gst_ml_meta_parser_parent_class parent_class
 G_DEFINE_TYPE (GstMlMetaParser, gst_ml_meta_parser, GST_TYPE_BASE_TRANSFORM);
+
+#define DEFAULT_MIN_BUFFERS      2
+#define DEFAULT_MAX_BUFFERS      10
+#define DEFAULT_TEXT_BUFFER_SIZE 24576
 
 #define DEFAULT_PROP_MODULE 0
 
@@ -58,47 +62,10 @@ gst_ml_meta_parser_modules_get_type (void)
   if (gtype)
     return gtype;
 
-  variants = gst_parser_enumarate_modules ("ml-meta-parser-");
+  variants = gst_ml_enumarate_modules ("ml-meta-parser-");
   gtype = g_enum_register_static ("GstMLParserModules", variants);
 
   return gtype;
-}
-
-static gboolean
-gst_ml_meta_parser_propose_allocation (GstBaseTransform * base,
-    GstQuery * inquery, GstQuery * outquery)
-{
-  GstMlMetaParser *mlmetaparser = GST_ML_META_PARSER (base);
-  GstCaps *caps = NULL;
-  GstStructure *structure = NULL;
-
-  if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (
-      base, inquery, outquery))
-    return FALSE;
-
-  // No input query, nothing to do.
-  if (NULL == inquery)
-    return TRUE;
-
-  // Extract caps from the query.
-  gst_query_parse_allocation (outquery, &caps, NULL);
-
-  if (NULL == caps) {
-    GST_ERROR_OBJECT (mlmetaparser, "Failed to extract caps from query!");
-    return FALSE;
-  }
-
-  structure = gst_caps_get_structure (caps, 0);
-  if (NULL == structure) {
-    GST_ERROR_OBJECT (mlmetaparser, "Failed to get structure from caps!");
-    return FALSE;
-  }
-
-  // Request video meta from the upstream
-  if (gst_structure_has_name (structure, "video/x-raw"))
-    gst_query_add_allocation_meta (outquery, GST_VIDEO_META_API_TYPE, NULL);
-
-  return TRUE;
 }
 
 static GstFlowReturn
@@ -107,17 +74,17 @@ gst_ml_meta_parser_prepare_output_buffer (GstBaseTransform * base,
 {
   GstMlMetaParser *mlmetaparser = GST_ML_META_PARSER (base);
 
+  if (gst_base_transform_is_passthrough (base)) {
+    GST_DEBUG_OBJECT (mlmetaparser, "Passthrough, no need to do anything");
+    *outbuffer = inbuffer;
+    return GST_FLOW_OK;
+  }
+
   *outbuffer = gst_buffer_new ();
 
   // Copy the timestamps from the input buffer.
   gst_buffer_copy_into (*outbuffer, inbuffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
 
-  // GAP buffer, set the GAP buffer flag in the output buffer.
-  if (gst_buffer_get_size (inbuffer) == 0 &&
-      GST_BUFFER_FLAG_IS_SET (inbuffer, GST_BUFFER_FLAG_GAP))
-    GST_BUFFER_FLAG_SET (*outbuffer, GST_BUFFER_FLAG_GAP);
-
-  GST_TRACE_OBJECT (mlmetaparser, "Prepared %" GST_PTR_FORMAT, *outbuffer);
   return GST_FLOW_OK;
 }
 
@@ -164,9 +131,11 @@ gst_ml_meta_parser_accept_caps (GstBaseTransform * base,
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
 
   if (direction == GST_PAD_SINK)
-    tmplcaps = gst_pad_get_pad_template_caps (GST_BASE_TRANSFORM_SINK_PAD (base));
+    tmplcaps = gst_pad_get_pad_template_caps (
+        GST_BASE_TRANSFORM_SINK_PAD (base));
   else if (direction == GST_PAD_SRC)
-    tmplcaps = gst_pad_get_pad_template_caps (GST_BASE_TRANSFORM_SRC_PAD (base));
+    tmplcaps = gst_pad_get_pad_template_caps (
+        GST_BASE_TRANSFORM_SRC_PAD (base));
 
   GST_DEBUG_OBJECT (mlmetaparser, "Template caps: %" GST_PTR_FORMAT, tmplcaps);
 
@@ -186,9 +155,8 @@ gst_ml_meta_parser_set_caps (GstBaseTransform * base, GstCaps * incaps,
   GstMlMetaParser *mlmetaparser = GST_ML_META_PARSER (base);
   GEnumClass *eclass = NULL;
   GEnumValue *evalue = NULL;
-  GstStructure *structure = NULL;
+  GstStructure *structure;
   gboolean success = FALSE;
-  GstDataType datatype = GST_DATA_TYPE_NONE;
 
   // TODO Could be used for some initialization of a core component.
   // If not used should be removed.
@@ -203,24 +171,12 @@ gst_ml_meta_parser_set_caps (GstBaseTransform * base, GstCaps * incaps,
   if (!gst_parser_module_init (mlmetaparser->module)) {
     GST_ELEMENT_ERROR (mlmetaparser, RESOURCE, FAILED, (NULL),
         ("Module initialization failed!"));
-
     return FALSE;
   }
 
-  structure = gst_caps_get_structure (incaps, 0);
-
-  if (gst_structure_has_name (structure, "text/x-raw")) {
-    datatype = GST_DATA_TYPE_TEXT;
-  } else if (gst_structure_has_name (structure, "video/x-raw")) {
-    datatype = GST_DATA_TYPE_VIDEO;
-  } else {
-    GST_ELEMENT_ERROR (mlmetaparser, RESOURCE, FAILED, (NULL),
-        ("Unsupported data type!"));
-    return FALSE;
-  }
-
-  structure = gst_structure_new ("options", GST_PARSER_MODULE_OPT_DATA_TYPE,
-      G_TYPE_ENUM, datatype, NULL);
+  structure = gst_structure_new ("options",
+      GST_PARSER_MODULE_OPT_CAPS, GST_TYPE_CAPS, incaps,
+      NULL);
 
   success = gst_parser_module_set_opts (mlmetaparser->module, structure);
   gst_structure_free (structure);
@@ -231,7 +187,6 @@ gst_ml_meta_parser_set_caps (GstBaseTransform * base, GstCaps * incaps,
     return FALSE;
   }
 
-  gst_base_transform_set_passthrough (base, FALSE);
   return TRUE;
 }
 
@@ -240,7 +195,11 @@ gst_ml_meta_parser_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
   GstMlMetaParser *mlmetaparser = GST_ML_META_PARSER (base);
+  GstMemory *mem = NULL;
+  gchar *output_string = NULL;
+  gsize output_size = 0;
   GstClockTime time = GST_CLOCK_TIME_NONE;
+  gboolean success = FALSE;
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
   if (gst_buffer_get_size (outbuffer) == 0 &&
@@ -249,10 +208,21 @@ gst_ml_meta_parser_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 
   time = gst_util_get_timestamp ();
 
-  if (!gst_parser_module_execute (mlmetaparser->module, inbuffer, outbuffer)) {
-    GST_ERROR_OBJECT (mlmetaparser, "Failed to parse metadata!");
+  success = gst_parser_module_execute (mlmetaparser->module, inbuffer,
+      &output_string);
+  if (!success) {
+    GST_ERROR_OBJECT(mlmetaparser, "Failed to parse metadata, sending empty buffer!");
     return GST_FLOW_ERROR;
   }
+
+  output_size = strlen (output_string) + 1;
+  mem = gst_memory_new_wrapped (
+      GST_MEMORY_FLAG_ZERO_PADDED & GST_MEMORY_FLAG_ZERO_PREFIXED,
+      output_string, output_size, 0, output_size, output_string, g_free);
+  gst_buffer_append_memory (outbuffer, mem);
+
+  GST_TRACE_OBJECT (mlmetaparser, "module output: %s", output_string);
+  GST_LOG_OBJECT (mlmetaparser, "output buffer size %zu", output_size);
 
   time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
@@ -320,15 +290,12 @@ gst_ml_meta_parser_class_init (GstMlMetaParserClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,
-      "Meta parser", "Filter/Effect/Converter", "Meta parsing plugin", "QTI");
+      "Meta parser", "Filter/Effect/Converter", "Mate parsing plugin", "QTI");
 
   gst_element_class_add_pad_template (element,
       gst_static_pad_template_get (&gst_ml_meta_parser_sink_template));
   gst_element_class_add_pad_template (element,
       gst_static_pad_template_get (&gst_ml_meta_parser_src_template));
-
-  base->propose_allocation =
-      GST_DEBUG_FUNCPTR (gst_ml_meta_parser_propose_allocation);
 
   base->prepare_output_buffer =
       GST_DEBUG_FUNCPTR (gst_ml_meta_parser_prepare_output_buffer);

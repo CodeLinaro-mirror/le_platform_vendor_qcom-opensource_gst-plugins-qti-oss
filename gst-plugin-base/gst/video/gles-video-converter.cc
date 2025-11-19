@@ -1,7 +1,36 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
- * SPDX-License-Identifier: BSD-3-Clause-Clear
- */
+* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
 
 #include "gles-video-converter.h"
 
@@ -10,7 +39,7 @@
 #include <cstdint>
 #include <cmath>
 
-#include <gst/gfx/ib2c.h>
+#include <iot-core-algs/ib2c.h>
 
 
 #define GST_CAT_DEFAULT gst_video_converter_engine_debug
@@ -50,12 +79,15 @@ struct _GstGlesVideoConverter
   // List of not yet processed IB2C fence objects.
   GList           *fences;
 
+  // IB2C library handle.
+  gpointer        ib2chandle;
+
   // IB2C engine interface.
   ::ib2c::IEngine *engine;
 };
 
 static gint
-gst_video_format_to_ib2c_format (GstVideoFormat format, const guint64 flags)
+gst_video_format_to_ib2c_format (GstVideoFormat format)
 {
   switch (format) {
     case GST_VIDEO_FORMAT_NV12:
@@ -78,155 +110,31 @@ gst_video_format_to_ib2c_format (GstVideoFormat format, const guint64 flags)
       return ::ib2c::ColorFormat::kYVYU;
     case GST_VIDEO_FORMAT_VYUY:
       return ::ib2c::ColorFormat::kVYUY;
+    case GST_VIDEO_FORMAT_RGB16:
+      return ::ib2c::ColorFormat::kRGB565;
+    case GST_VIDEO_FORMAT_BGR16:
+      return ::ib2c::ColorFormat::kBGR565;
     case GST_VIDEO_FORMAT_RGB:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kRGB888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kRGB161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kRGB161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kRGB161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kRGB323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kRGB888;
     case GST_VIDEO_FORMAT_BGR:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kBGR888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kBGR161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kBGR161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kBGR161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kBGR323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kBGR888;
     case GST_VIDEO_FORMAT_RGBA:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kRGBA8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBA16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBA16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBA16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kRGBA32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kRGBA8888;
     case GST_VIDEO_FORMAT_BGRA:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kBGRA8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRA16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRA16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRA16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kBGRA32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kBGRA8888;
     case GST_VIDEO_FORMAT_ARGB:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kARGB8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kARGB16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kARGB16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kARGB16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kARGB32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kARGB8888;
     case GST_VIDEO_FORMAT_ABGR:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kABGR8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kABGR16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kABGR16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kABGR16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kABGR32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kABGR8888;
     case GST_VIDEO_FORMAT_RGBx:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kRGBX8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBX16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBX16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kRGBX16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kRGBX32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kRGBX8888;
     case GST_VIDEO_FORMAT_BGRx:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kBGRX8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRX16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRX16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kBGRX16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kBGRX32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kBGRX8888;
     case GST_VIDEO_FORMAT_xRGB:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kXRGB8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kXRGB16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kXRGB16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kXRGB16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kXRGB32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kXRGB8888;
     case GST_VIDEO_FORMAT_xBGR:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kXBGR8888I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kXBGR16161616;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kXBGR16161616I;
-      else if (flags == GST_VCE_FLAG_F16_FORMAT)
-        return ::ib2c::ColorFormat::kXBGR16161616F;
-      else if (flags == GST_VCE_FLAG_F32_FORMAT)
-        return ::ib2c::ColorFormat::kXBGR32323232F;
-
-      // Default value.
       return ::ib2c::ColorFormat::kXBGR8888;
     case GST_VIDEO_FORMAT_GRAY8:
-      if (flags == GST_VCE_FLAG_I8_FORMAT)
-        return ::ib2c::ColorFormat::kGRAY8I;
-      else if (flags == GST_VCE_FLAG_U16_FORMAT)
-        return ::ib2c::ColorFormat::kGRAY16;
-      else if (flags == GST_VCE_FLAG_I16_FORMAT)
-        return ::ib2c::ColorFormat::kGRAY16I;
-
-      // Default value.
       return ::ib2c::ColorFormat::kGRAY8;
     default:
       GST_ERROR ("Unsupported format %s!", gst_video_format_to_string (format));
@@ -237,7 +145,7 @@ gst_video_format_to_ib2c_format (GstVideoFormat format, const guint64 flags)
 
 static guint64
 gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * direction,
-    const GstVideoFrame * frame, const guint64 flags)
+    const GstVideoFrame * frame, const gboolean isubwc, const guint64 flags)
 {
   GstMemory *memory = NULL;
   const gchar *format = NULL, *mode = "";
@@ -258,26 +166,26 @@ gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * directio
   format = gst_video_format_to_string (GST_VIDEO_FRAME_FORMAT (frame));
 
   surface.fd = gst_fd_memory_get_fd (memory);
+  surface.format = gst_video_format_to_ib2c_format (GST_VIDEO_FRAME_FORMAT (frame));
   surface.width = GST_VIDEO_FRAME_WIDTH (frame);
   surface.height = GST_VIDEO_FRAME_HEIGHT (frame);
   surface.size = gst_buffer_get_size (frame->buffer);
   surface.nplanes = GST_VIDEO_FRAME_N_PLANES (frame);
 
-  surface.format =
-      gst_video_format_to_ib2c_format (GST_VIDEO_FRAME_FORMAT (frame), flags);
-
-  if (flags == GST_VCE_FLAG_F16_FORMAT)
+  // In case the format has UBWC enabled append additional format mask.
+  if (isubwc) {
+    surface.format |= ::ib2c::ColorMode::kUBWC;
+    mode = " UBWC";
+  } else if (flags == GST_VCE_FLAG_F16_FORMAT) {
+    surface.format |= ::ib2c::ColorMode::kFloat16;
     mode = " FLOAT16";
-  else if (flags == GST_VCE_FLAG_F32_FORMAT)
+  } else if (flags == GST_VCE_FLAG_F32_FORMAT) {
+    surface.format |= ::ib2c::ColorMode::kFloat32;
     mode = " FLOAT32";
-  else if (flags == GST_VCE_FLAG_I16_FORMAT)
-    mode = " INT16";
-  else if (flags == GST_VCE_FLAG_U16_FORMAT)
-    mode = " UINT16";
-  else if (flags == GST_VCE_FLAG_I8_FORMAT)
-    mode = " INT8";
-  else
-    mode = " UINT8";
+  } else if (flags == GST_VCE_FLAG_I8_FORMAT) {
+    surface.format |= ::ib2c::ColorMode::kSigned;
+    mode = " SIGNED";
+  }
 
   GST_TRACE ("%s surface FD[%d] - Width[%u] Height[%u] Format[%s%s] Planes[%u]",
       direction, surface.fd, surface.width, surface.height, format, mode,
@@ -376,71 +284,68 @@ gst_gles_free_cache (gpointer key, gpointer value, gpointer userdata)
 
 static void
 gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
-    const GstVideoBlit * vblit, const GstVideoFrame * outframe)
+    const GstVideoFrame * inframe, const guint8 alpha,
+    const GstVideoConvFlip flip, const GstVideoConvRotate rotate,
+    const GstVideoRectangle * source, const GstVideoRectangle * destination,
+    const GstVideoFrame * outframe)
 {
   gint x = 0, y = 0, width = 0, height = 0;
 
   object->id = surface_id;
   object->mask = 0;
 
-  object->alpha = vblit->alpha;
+  object->alpha = alpha;
   GST_TRACE ("Input surface %lx - Global alpha: %u", surface_id, object->alpha);
 
   // Setup the source rectangle.
-  if ((vblit->source.w != 0) && (vblit->source.h != 0)) {
-    x = vblit->source.x;
-    y = vblit->source.y;
-    width = vblit->source.w;
-    height = vblit->source.h;
+  if (source != NULL) {
+    x = source->x;
+    y = source->y;
+    width = source->w;
+    height = source->h;
   }
 
-  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (vblit->frame) :
-      MIN (width, GST_VIDEO_FRAME_WIDTH (vblit->frame) - x);
-  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (vblit->frame) :
-      MIN (height, GST_VIDEO_FRAME_HEIGHT (vblit->frame) - y);
+  width = (width == 0) ? GST_VIDEO_FRAME_WIDTH (inframe) :
+      MIN (width, GST_VIDEO_FRAME_WIDTH (inframe) - x);
+  height = (height == 0) ? GST_VIDEO_FRAME_HEIGHT (inframe) :
+      MIN (height, GST_VIDEO_FRAME_HEIGHT (inframe) - y);
 
   object->source.x = x;
   object->source.y = y;
   object->source.w = width;
   object->source.h = height;
 
-  if ((vblit->flip == GST_VCE_FLIP_VERTICAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_VERTICAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kVFlip;
     GST_TRACE ("Input surface %lx - Flip Vertically", surface_id);
   }
 
-  if ((vblit->flip == GST_VCE_FLIP_HORIZONTAL) ||
-      (vblit->flip == GST_VCE_FLIP_BOTH)) {
+  if ((flip == GST_VCE_FLIP_HORIZONTAL) || (flip == GST_VCE_FLIP_BOTH)) {
     object->mask |= ::ib2c::ConfigMask::kHFlip;
     GST_TRACE ("Input surface %lx - Flip Horizontally", surface_id);
   }
 
-  // Reset the local dimension variables.
-  x = y = width = height = 0;
-
   // Setup the target rectangle.
-  if ((vblit->destination.w != 0) && (vblit->destination.h != 0)) {
-    x = vblit->destination.x;
-    y = vblit->destination.y;
-    width = vblit->destination.w;
-    height = vblit->destination.h;
+  if (destination != NULL) {
+    x = destination->x;
+    y = destination->y;
+    width = destination->w;
+    height = destination->h;
   }
 
   object->destination.x = ((width != 0) && (height != 0)) ? x : 0;
   object->destination.y = ((width != 0) && (height != 0)) ? y : 0;
 
   // Setup rotation angle and adjustments.
-  switch (vblit->rotate) {
+  switch (rotate) {
     case GST_VCE_ROTATE_90:
     {
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -458,7 +363,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       object->destination.w = width;
       object->destination.h = height;
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       // Adjust the target rectangle coordinates.
@@ -485,10 +390,9 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       gint dar_n = 0, dar_d = 0;
 
       gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
+          GST_VIDEO_FRAME_WIDTH (inframe), GST_VIDEO_FRAME_HEIGHT (inframe),
+          GST_VIDEO_INFO_PAR_N (&(inframe)->info),
+          GST_VIDEO_INFO_PAR_D (&(inframe)->info),
           &dar_n, &dar_d
       );
 
@@ -506,7 +410,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       object->destination.w = width;
       object->destination.h = height;
 
-      x = ((vblit->destination.w != 0) && (vblit->destination.h != 0)) ?
+      x = (destination != NULL) ?
           x : (GST_VIDEO_FRAME_WIDTH (outframe) - width) / 2;
 
       // Adjust the target rectangle coordinates.
@@ -539,7 +443,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
 static guint64
 gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
     GHashTable * surfaces, const gchar * direction,
-    const GstVideoFrame * vframe, const guint64 flags)
+    const GstVideoFrame * vframe, const gboolean isubwc, const guint64 flags)
 {
   GstMemory *memory = NULL;
   GstGlesSurface *glsurface = NULL;
@@ -560,7 +464,7 @@ gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
   if (!g_hash_table_contains (surfaces, GUINT_TO_POINTER (fd))) {
     // Create an input surface and add its ID to the input hash table.
     surface_id =
-        gst_gles_create_surface (convert, direction, vframe, flags);
+        gst_gles_create_surface (convert, direction, vframe, isubwc, flags);
 
     if (surface_id == 0) {
       GST_ERROR ("Failed to create surface!");
@@ -613,11 +517,13 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
     // Iterate over the input blit entries and update each IB2C object.
     for (num = 0; num < n_blits; num++) {
       GstVideoBlit *blit = &(blits[num]);
+      GstVideoRectangle *source = NULL, *destination = NULL;
+      guint r_idx = 0;
 
       GST_GLES_LOCK (convert);
 
       surface_id = gst_gles_retrieve_surface_id (convert, convert->insurfaces,
-          "Input", blit->frame, 0);
+          "Input", blit->frame, blit->isubwc, 0);
 
       GST_GLES_UNLOCK (convert);
 
@@ -636,16 +542,24 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
         g_array_append_val (fds, fd);
       }
 
-      ::ib2c::Object object;
+      // Update a new C2D object (at least 1) for each source/destnation pair.
+      do {
+        ::ib2c::Object object;
 
-      gst_gles_update_object (&object, surface_id, blit, outframe);
-      objects.push_back(object);
+        source = (blit->n_regions != 0) ? &(blit->sources[r_idx]) : NULL;
+        destination = (blit->n_regions != 0) ? &(blit->destinations[r_idx]) : NULL;
+
+        gst_gles_update_object (&object, surface_id, blit->frame, blit->alpha,
+            blit->flip, blit->rotate, source, destination, outframe);
+
+        objects.push_back(object);
+      } while (++r_idx < blit->n_regions);
     }
 
     GST_GLES_LOCK (convert);
 
     surface_id = gst_gles_retrieve_surface_id (convert, convert->outsurfaces,
-        "Output", outframe, compositions[idx].flags);
+        "Output", outframe, compositions[idx].isubwc, compositions[idx].flags);
 
     GST_GLES_UNLOCK (convert);
 
@@ -781,14 +695,26 @@ GstGlesVideoConverter *
 gst_gles_video_converter_new (GstStructure * settings)
 {
   GstGlesVideoConverter *convert = NULL;
+  ::ib2c::NewIEngine NewEngine;
 
   convert = g_slice_new0 (GstGlesVideoConverter);
   g_return_val_if_fail (convert != NULL, NULL);
 
   g_mutex_init (&convert->lock);
 
+  if ((convert->ib2chandle = dlopen ("libIB2C.so", RTLD_NOW)) == NULL) {
+    GST_ERROR ("Failed to open IB2C library, error: %s!", dlerror());
+    goto cleanup;
+  }
+
+  NewEngine = (::ib2c::NewIEngine) dlsym(convert->ib2chandle, IB2C_ENGINE_NEW_FUNC);
+  if (NewEngine == NULL) {
+    GST_ERROR ("Failed to load IB2C symbol, error: %s!", dlerror());
+    goto cleanup;
+  }
+
   try {
-    convert->engine = ::ib2c::NewGlEngine();
+    convert->engine = NewEngine();
   } catch (std::exception& e) {
     GST_ERROR ("Failed to create and init new engine, error: '%s'!", e.what());
     goto cleanup;
@@ -843,6 +769,9 @@ gst_gles_video_converter_free (GstGlesVideoConverter * convert)
 
   if (convert->engine != NULL)
     delete convert->engine;
+
+  if (convert->ib2chandle != NULL)
+    dlclose (convert->ib2chandle);
 
   g_mutex_clear (&convert->lock);
 

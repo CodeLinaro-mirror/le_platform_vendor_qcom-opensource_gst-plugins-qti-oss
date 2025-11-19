@@ -18,7 +18,7 @@
 
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
-    "type = (string) { FLOAT32 }, " \
+    "type = (string) { INT8, UINT8, INT32, FLOAT32 }, " \
     "dimensions = (int) < <1, 521> >"
 
 // Module caps instance
@@ -149,9 +149,8 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 {
   GstMLSubModule *submodule = GST_ML_SUB_MODULE_CAST (instance);
   GArray *predictions = (GArray *) output;
-  GstProtectionMeta *pmeta = NULL;
   GstMLClassPrediction *prediction = NULL;
-  gfloat *data = NULL;
+  guint8 *data = NULL;
   guint idx = 0, n_inferences = 0;
   gdouble confidence = 0.0;
 
@@ -159,21 +158,17 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   g_return_val_if_fail (mlframe != NULL, FALSE);
   g_return_val_if_fail (predictions != NULL, FALSE);
 
-  pmeta = gst_buffer_get_protection_meta_id (mlframe->buffer,
-      gst_batch_channel_name (0));
-
   prediction = &(g_array_index (predictions, GstMLClassPrediction, 0));
-  prediction->info = pmeta->info;
 
   n_inferences = GST_ML_FRAME_DIM (mlframe, 0, 1);
-  data = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+  data = GST_ML_FRAME_BLOCK_DATA (mlframe, 0);
 
   // Fill the prediction table.
   for (idx = 0; idx < n_inferences; ++idx) {
     GstMLLabel *label = NULL;
     GstMLClassEntry entry = { 0 };
 
-    confidence = data[idx];
+    confidence = GFLOAT_PTR_CAST(data) [idx];
     confidence *= 100;
 
     // Discard results with confidence below the set threshold.

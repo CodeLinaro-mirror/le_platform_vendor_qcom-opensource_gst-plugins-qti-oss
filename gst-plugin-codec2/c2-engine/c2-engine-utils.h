@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+* Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted (subject to the limitations in the
@@ -78,23 +78,22 @@ class GstC2Utils {
 
   /** PixelFormat
    * @format: GStreamer video format.
-   * @n_subframes: The number of subframes inside one buffer.
+   * @isubwc: Whetehr the format has Universal Bandwidth Compression.
    *
    * Get the equivalent Codec2 pixel format.
    *
    * return: The corresponding Codec2 pixel format.
    **/
-  static C2PixelFormat PixelFormat(GstVideoFormat format, guint32 n_subframes);
+  static C2PixelFormat PixelFormat(GstVideoFormat format, bool isubwc);
 
   /** VideoFormat
    * @format: Codec2 pixel format.
    *
    * Get the equivalent GStreamer video format.
    *
-   * return: Tuple with corresponding GStreamer video format and
-   * number of subframes inside one buffer.
+   * return: Tuple with corresponding GStreamer video format and whether is UBWC.
    **/
-  static std::tuple<GstVideoFormat, uint32_t> VideoFormat(C2PixelFormat format);
+  static std::tuple<GstVideoFormat, bool> VideoFormat(C2PixelFormat format);
 
   /** UnpackPayload
    * @type: Engine parameter type.
@@ -128,7 +127,6 @@ class GstC2Utils {
   /** ImportHandleInfo
    * @buffer: Pointer to GStreamer buffer.
    * @handle: Pointer to Codec2 GBM handle to be filled with data.
-   * @n_subframes: The number of subframes inside one buffer.
    *
    * Fills Codec2 GBM handle with the information (fd, width, height, etc.)
    * imported from the GStreamer buffer.
@@ -136,8 +134,7 @@ class GstC2Utils {
    * return: True on success or false on failure.
    **/
   static bool ImportHandleInfo(GstBuffer* buffer,
-                               ::android::C2HandleGBM* handle,
-                               uint32_t n_subframes);
+                               ::android::C2HandleGBM* handle);
 
   /** ExtractHandleInfo
    * @buffer: Pointer to GStreamer buffer to which video metadata will be added.
@@ -202,14 +199,12 @@ class GstC2Utils {
 
   /** ImportGraphicBuffer
    * @buffer: Pointer to GStreamer buffer.
-   * @n_subframes: The number of subframes inside one buffer.
    *
    * Create Graphic Codec2 buffer from GStreamer buffer without copy.
    *
    * return: Empty shared pointer on failure.
    **/
-  static std::shared_ptr<C2Buffer> ImportGraphicBuffer(GstBuffer* buffer,
-                                                       uint32_t n_subframes);
+  static std::shared_ptr<C2Buffer> ImportGraphicBuffer(GstBuffer* buffer);
 
 #if defined(ENABLE_LINEAR_DMABUF)
   /** ImportLinearBuffer

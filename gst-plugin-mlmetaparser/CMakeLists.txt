@@ -4,9 +4,7 @@ project(GST_PLUGIN_QTI_OSS_META_PARSE
   LANGUAGES C
 )
 
-include_directories(
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 include_directories(${SYSROOT_INCDIR})
 link_directories(${SYSROOT_LIBDIR})
@@ -24,8 +22,6 @@ pkg_check_modules(GST_ALLOC
 # Generate configuration header file.
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
-
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
@@ -54,7 +50,6 @@ target_link_libraries(${GST_QTI_ML_META_PARSER} PRIVATE
   ${GST_LIBRARIES}
   ${GST_BASE_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
-  ${GST_VIDEO_LIBRARIES}
   gstqtiutilsbase
   gstqtivideobase
 )

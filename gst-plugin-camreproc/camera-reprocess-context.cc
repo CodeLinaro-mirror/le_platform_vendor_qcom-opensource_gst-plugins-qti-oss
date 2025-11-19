@@ -10,6 +10,7 @@
 #include "camera-reprocess-context.h"
 
 #include <gst/allocators/allocators.h>
+#include <system/graphics.h>
 
 #include <qmmf-sdk/qmmf_camera_metadata.h>
 #include <qmmf-sdk/qmmf_offline_camera_params.h>
@@ -245,7 +246,7 @@ data_callback (GstCameraReprocessContext *context, guint fd, guint size)
   // Callback will invoke gst_pad_push to push data downstream
   context->data_cb ((gpointer *)array, context->camreproc);
 
-  g_ptr_array_unref(array);
+  g_ptr_array_free (array, FALSE);
 
   g_hash_table_remove (context->requests, GINT_TO_POINTER (fd));
   if (g_hash_table_size (context->requests) == 0)
@@ -263,8 +264,6 @@ parse_process_mode (GstVideoFormat in_format, GstVideoFormat out_format)
 
   switch (in_format) {
     case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_NV12_Q08C:
-    case GST_VIDEO_FORMAT_P010_10LE:
       in_flag = PROCESS_MODE_FLAG_YUV;
       break;
     default:
@@ -275,8 +274,6 @@ parse_process_mode (GstVideoFormat in_format, GstVideoFormat out_format)
 
   switch (out_format) {
     case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_NV12_Q08C:
-    case GST_VIDEO_FORMAT_P010_10LE:
       out_flag = PROCESS_MODE_FLAG_YUV;
       break;
     default:
@@ -290,29 +287,26 @@ parse_process_mode (GstVideoFormat in_format, GstVideoFormat out_format)
   return mode;
 }
 
-static ::qmmf::recorder::VideoFormat
-convert_to_video_format (const GstCameraReprocessBufferParams param)
+static guint
+convert_to_graphic_format (const GstCameraReprocessBufferParams param)
 {
-  qmmf::recorder::VideoFormat format;
+  guint ret = 0;
 
   switch (param.format) {
     case GST_VIDEO_FORMAT_NV12:
-      format = ::qmmf::recorder::VideoFormat::kNV12;
-      break;
-    case GST_VIDEO_FORMAT_NV12_Q08C:
-      format = ::qmmf::recorder::VideoFormat::kNV12UBWC;
-      break;
-    case GST_VIDEO_FORMAT_P010_10LE:
-      format = ::qmmf::recorder::VideoFormat::kP010;
+      if (param.isubwc) {
+        ret = HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED;
+        break;
+      }
+      ret = HAL_PIXEL_FORMAT_YCBCR_420_888;
       break;
     default:
       GST_ERROR ("Unsupported format(%s).",
           gst_video_format_to_string (param.format));
-      format = ::qmmf::recorder::VideoFormat::kNV12;
       break;
   }
 
-  return format;
+  return ret;
 }
 
 static guint
@@ -350,28 +344,38 @@ fill_metadata_from_properties (GstCameraReprocessContext *context,
       break;
     }
     case GST_CAMERA_REPROCESS_EIS_V2:
+    {
+      guint tag = 0;
+      guint8 val = 1;
+
+      tag = retrieve_vendor_tag_by_name (meta,
+          "org.codeaurora.qcamera3.sessionParameters.EnableEisV2");
+      if (tag > 0) {
+        if (!meta->update (tag, &val, 1))
+          GST_DEBUG ("Metadata EisV2 is updated.");
+        else
+          GST_ERROR ("Metadata EisV2 is failed to update.");
+      }
+      break;
+    }
     case GST_CAMERA_REPROCESS_EIS_V3:
     {
       guint tag = 0;
-      gint32 val = (gint32)context->eis;
+      guint8 val = 1;
 
       tag = retrieve_vendor_tag_by_name (meta,
-          "org.codeaurora.qcamera3.sessionParameters.EISMode");
-      if (tag == 0) {
-        GST_WARNING ("Unsupported vendortag.");
-        break;
+          "org.codeaurora.qcamera3.sessionParameters.EnableEisV3");
+      if (tag > 0) {
+        if (!meta->update (tag, &val, 1))
+          GST_DEBUG ("Metadata EisV3 is updated.");
+        else
+          GST_ERROR ("Metadata EisV3 is failed to update.");
       }
-
-      if (!meta->update (tag, &val, 1))
-        GST_DEBUG ("Metadata EISMode(%d) is updated.", val);
-      else
-        GST_ERROR ("Metadata EISMode(%d) failed to update.", val);
-
       break;
     }
     default:
     {
-      GST_WARNING ("Unknown EISMode(%d).", (gint32)context->eis);
+      GST_WARNING ("Unknown Eis.");
       break;
     }
   }
@@ -399,22 +403,24 @@ gst_camera_reprocess_context_create (GstCameraReprocessContext *context,
   g_return_val_if_fail (offcam_params.in_buffer.width > 0, FALSE);
   offcam_params.in_buffer.height = params[0].height;
   g_return_val_if_fail (offcam_params.in_buffer.height > 0, FALSE);
-  offcam_params.in_buffer.format = convert_to_video_format (params[0]);
+  offcam_params.in_buffer.format = convert_to_graphic_format (params[0]);
+  g_return_val_if_fail (offcam_params.in_buffer.format > 0, FALSE);
 
-  GST_DEBUG ("InputParam: %u x %u, %s",
+  GST_DEBUG ("InputParam: %u x %u, %s, UBWC: %d",
       offcam_params.in_buffer.width, offcam_params.in_buffer.height,
-      gst_video_format_to_string (params[0].format));
+      gst_video_format_to_string (params[0].format), params[0].isubwc);
 
     // BufferParams of output
   offcam_params.out_buffer.width = params[1].width;
   g_return_val_if_fail (offcam_params.out_buffer.width > 0, FALSE);
   offcam_params.out_buffer.height = params[1].height;
   g_return_val_if_fail (offcam_params.out_buffer.height > 0, FALSE);
-  offcam_params.out_buffer.format = convert_to_video_format (params[1]);
+  offcam_params.out_buffer.format = convert_to_graphic_format (params[1]);
+  g_return_val_if_fail (offcam_params.out_buffer.format > 0, FALSE);
 
-  GST_DEBUG ("OutputParam: %u x %u, %s",
+  GST_DEBUG ("OutputParam: %u x %u, %s, UBWC: %d",
       offcam_params.out_buffer.width, offcam_params.out_buffer.height,
-      gst_video_format_to_string (params[1].format));
+      gst_video_format_to_string (params[1].format), params[1].isubwc);
 
     // Process mode
   process_mode = parse_process_mode (params[0].format, params[1].format);
@@ -505,9 +511,8 @@ gst_camera_reprocess_context_process (GstCameraReprocessContext *context,
     GST_ERROR ("Failed to allocate GPtrArray.");
     return FALSE;
   }
-
-  g_ptr_array_add (ptr_array, inbuf);
-  g_ptr_array_add (ptr_array, outbuf);
+  g_ptr_array_index (ptr_array, 0) = inbuf;
+  g_ptr_array_index (ptr_array, 1) = outbuf;
 
   g_mutex_lock (&context->lock);
 
@@ -517,7 +522,7 @@ gst_camera_reprocess_context_process (GstCameraReprocessContext *context,
   if (context->recorder->ProcessOfflineCamera (params) != 0) {
     GST_ERROR ("Failed to ProcessOfflineCamera.");
     g_hash_table_remove (context->requests, GINT_TO_POINTER (params.out_buf_fd));
-    g_ptr_array_free (ptr_array, TRUE);
+    g_ptr_array_free (ptr_array, FALSE);
     g_mutex_unlock (&context->lock);
     return FALSE;
   }

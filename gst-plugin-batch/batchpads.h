@@ -66,6 +66,10 @@ G_BEGIN_DECLS
   (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_BATCH_SRC_PAD))
 #define GST_BATCH_SRC_PAD_CAST(obj) ((GstBatchSrcPad *)(obj))
 
+#define GST_BATCH_SINK_GET_LOCK(obj) (&GST_BATCH_SINK_PAD(obj)->lock)
+#define GST_BATCH_SINK_LOCK(obj)     g_mutex_lock(GST_BATCH_SINK_GET_LOCK(obj))
+#define GST_BATCH_SINK_UNLOCK(obj)   g_mutex_unlock(GST_BATCH_SINK_GET_LOCK(obj))
+
 #define GST_BATCH_SRC_GET_LOCK(obj) (&GST_BATCH_SRC_PAD(obj)->lock)
 #define GST_BATCH_SRC_LOCK(obj)     g_mutex_lock(GST_BATCH_SRC_GET_LOCK(obj))
 #define GST_BATCH_SRC_UNLOCK(obj)   g_mutex_unlock(GST_BATCH_SRC_GET_LOCK(obj))
@@ -108,14 +112,19 @@ struct _GstBatchSinkPad {
   /// Inherited parent structure.
   GstPad       parent;
 
-  /// Segment.
-  GstSegment   segment;
+  /// Global mutex lock.
+  GMutex       lock;
 
+  /// Condition for signalling that last buffer was submitted downstream.
+  GCond        drained;
   /// Flag indicating that there is no more work for processing.
   gboolean     is_idle;
 
+  /// Segment.
+  GstSegment   segment;
+
   /// Queue for managing incoming buffers.
-  GQueue       *buffers;
+  GstDataQueue *buffers;
 };
 
 struct _GstBatchSinkPadClass {
@@ -139,6 +148,11 @@ struct _GstBatchSrcPad {
   GstSegment   segment;
   /// Flag indicating whether STREAM_START event need to be sent.
   gboolean     stmstart;
+
+  /// Output buffers duration.
+  GstClockTime duration;
+  /// Base monotonic time when the 1st buffer has been received.
+  gint64       basetime;
 
   /// Queue for batched buffers that are ready to be sent to next plugin.
   GstDataQueue *buffers;

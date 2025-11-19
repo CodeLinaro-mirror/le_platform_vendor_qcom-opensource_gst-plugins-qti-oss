@@ -19,10 +19,7 @@
 #define GST_ML_MODULE_CAPS \
     "neural-network/tensors, " \
     "type = (string) { FLOAT32 }, " \
-    "dimensions = (int) < <1, 512>, <1, 265> >; " \
-    "neural-network/tensors, " \
-    "type = (string) { FLOAT32 }, " \
-    "dimensions = (int) < <1, 265> >"
+    "dimensions = (int) < <1, 512>, <1, 265> >"
 
 #define ALPHA_ID_SIZE          219
 #define ALPHA_EXP_SIZE         39
@@ -57,6 +54,11 @@ struct _GstMLSubModule {
   GHashTable *labels;
   // Confidence threshold value.
   gfloat     threshold;
+
+  // Offset values for each of the tensors for dequantization of some tensors.
+  gdouble    qoffsets[GST_ML_MAX_TENSORS];
+  // Scale values for each of the tensors for dequantization of some tensors.
+  gdouble    qscales[GST_ML_MAX_TENSORS];
 
   // Face related databases.
   GArray     *meanface;
@@ -222,9 +224,16 @@ gpointer
 gst_ml_module_open (void)
 {
   GstMLSubModule *submodule = NULL;
+  guint idx = 0;
 
   submodule = g_slice_new0 (GstMLSubModule);
   g_return_val_if_fail (submodule != NULL, NULL);
+
+  // Initialize the quantization offsets and scales.
+  for (idx = 0; idx < GST_ML_MAX_TENSORS; idx++) {
+    submodule->qoffsets[idx] = 0.0;
+    submodule->qscales[idx] = 1.0;
+  }
 
   return (gpointer) submodule;
 }
@@ -341,13 +350,13 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   GstMLPosePrediction *prediction = NULL;
   GstMLPoseEntry *entry = NULL;
   GstVideoRectangle region = { 0, };
-  gfloat *vertices = NULL;
+  gpointer vertices = NULL;
   gfloat matrix[9] = { 0, };
+  GstMLType mltype = GST_ML_TYPE_UNKNOWN;
   gfloat confidence = 0.0, roll = 0.0, yaw = 0.0, pitch = 0.0, value = 0.0;
   gfloat tx = 0.0, ty = 0.0, tf = 0.0, x = 0.0, y = 0.0, z = 0.0;
   gfloat tmp_x = 0.0, tmp_y = 0.0, tmp_z = 0.0;
   guint n_vertices = 0, idx = 0, num = 0, id = 0;
-  guint vertices_idx = 0;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (mlframe != NULL, FALSE);
@@ -368,13 +377,14 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
   // Extract the source tensor region with actual data.
   gst_ml_structure_get_source_region (pmeta->info, &region);
 
-  if (GST_ML_INFO_N_TENSORS (&(submodule->mlinfo)) == 2)
-    vertices_idx = 1;
+  mltype = GST_ML_FRAME_TYPE (mlframe);
 
-  vertices = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, vertices_idx));
-  n_vertices = GST_ML_FRAME_DIM (mlframe, vertices_idx, 1);
+  // Convenient pointer to the landmark vertices inside the 2nd tensor.
+  vertices = GST_ML_FRAME_BLOCK_DATA (mlframe, 1);
+  n_vertices = GST_ML_FRAME_DIM (mlframe, 1, 1);
 
-  confidence = vertices[n_vertices - 1];
+  confidence = gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 1,
+        submodule->qoffsets[1], submodule->qscales[1]);
 
   GST_LOG ("Confidence[%f]", confidence);
 
@@ -383,17 +393,23 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
   // Translation values on the Z, Y and X axis respectively.
   // TODO: What is tf ?? What are those coefficients ??
-  tf = vertices[n_vertices - 2] * 150.0F + 450.0F;
-  ty = vertices[n_vertices - 3] * 60.0F;
-  tx = vertices[n_vertices - 4] * 60.0F;
+  tf = (gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 2,
+      submodule->qoffsets[1], submodule->qscales[1]) * 150.0F) + 450.0F;
+  ty = gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 3,
+      submodule->qoffsets[1], submodule->qscales[1]) * 60.0F;
+  tx = gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 4,
+      submodule->qoffsets[1], submodule->qscales[1]) * 60.0F;
 
   GST_LOG ("Translation coordinates X[%f] Y[%f] F[%f]", tx, ty, tf);
 
   // The rotational angles along the 3 axis in radians.
   // TODO: What are those coefficients ??
-  roll = vertices[n_vertices - 5] * M_PI / 2;
-  yaw = vertices[n_vertices - 6] * M_PI / 2;
-  pitch = vertices[n_vertices - 7] * M_PI / 2 + M_PI;
+  roll = gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 5,
+      submodule->qoffsets[1], submodule->qscales[1]) * 1.5708F;
+  yaw = gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 6,
+      submodule->qoffsets[1], submodule->qscales[1]) * 1.5708F;
+  pitch = (gst_ml_tensor_extract_value (mltype, vertices, n_vertices - 7,
+      submodule->qoffsets[1], submodule->qscales[1]) * 1.5708F) + M_PI;
 
   GST_LOG ("Roll[%f] Yaw[%f] Pitch[%f]", roll, yaw, pitch);
 
@@ -454,7 +470,8 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     z = g_array_index (submodule->meanface, gfloat, id + 2);
 
     for (num = 0; num < ALPHA_ID_SIZE; num++) {
-      value = vertices[num] * 3.0F;
+      value = gst_ml_tensor_extract_value (mltype, vertices, num,
+          submodule->qoffsets[1], submodule->qscales[1]) * 3.0F;
 
       id = idx * 3 * ALPHA_ID_SIZE + num;
       x += value * g_array_index (submodule->shapebasis, gfloat, id);
@@ -467,7 +484,8 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     }
 
     for (num = 0; num < ALPHA_EXP_SIZE; num++) {
-      value = vertices[ALPHA_ID_SIZE + num] * 0.5F + 0.5F;
+      value = (gst_ml_tensor_extract_value (mltype, vertices, ALPHA_ID_SIZE + num,
+          submodule->qoffsets[1], submodule->qscales[1]) * 0.5F) + 0.5F;
 
       id = idx * 3 * ALPHA_EXP_SIZE + num;
       x += value * g_array_index (submodule->blendshape, gfloat, id);
@@ -502,9 +520,6 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
     GST_TRACE ("Keypoint: %u [%f x %f], confidence %f", idx / 2, kp->x, kp->y,
         kp->confidence);
   }
-
-  entry->xtraparams = gst_structure_new ("ExtraParams", "roll", G_TYPE_FLOAT,
-      roll, "yaw", G_TYPE_FLOAT, yaw, "pitch", G_TYPE_FLOAT, pitch, NULL);
 
   return TRUE;
 }

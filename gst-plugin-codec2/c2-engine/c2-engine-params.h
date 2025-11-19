@@ -42,10 +42,12 @@ G_BEGIN_DECLS
 
 // GST Buffer flag for key/sync frame.
 #define GST_VIDEO_BUFFER_FLAG_SYNC (GST_VIDEO_BUFFER_FLAG_LAST << 0)
+// GST Buffer flag for frame with UBWC.
+#define GST_VIDEO_BUFFER_FLAG_UBWC (GST_VIDEO_BUFFER_FLAG_LAST << 1)
 // GST Buffer flag for frame with HEIC encoding.
-#define GST_VIDEO_BUFFER_FLAG_HEIC (GST_VIDEO_BUFFER_FLAG_LAST << 1)
+#define GST_VIDEO_BUFFER_FLAG_HEIC (GST_VIDEO_BUFFER_FLAG_LAST << 2)
 // GST Buffer flag for frame with GBM format.
-#define GST_VIDEO_BUFFER_FLAG_GBM  (GST_VIDEO_BUFFER_FLAG_LAST << 2)
+#define GST_VIDEO_BUFFER_FLAG_GBM  (GST_VIDEO_BUFFER_FLAG_LAST << 3)
 
 
 // Maximum number of regions for encoding.
@@ -115,8 +117,6 @@ enum {
   GST_C2_PARAM_DOWN_SCALAR,          // GstC2Resolution
   GST_C2_PARAM_HIER_BPRECONDITIONS,  // gboolean
   GST_C2_PARAM_SUPER_FRAME,          // guint32
-  GST_C2_PARAM_LTR_USE,              // guint32
-  GST_C2_PARAM_FLIP,                 // GstC2VideoFlip
   GST_C2_PARAM_VBV_DELAY,            // gint32
 };
 
@@ -309,16 +309,9 @@ typedef enum {
   GST_C2_AAC_PACKAGING_ADTS,
 } GstC2AACStreamFormat;
 
-typedef enum {
-  GST_C2_FLIP_NONE,
-  GST_C2_FLIP_VERTICAL,
-  GST_C2_FLIP_HORIZONTAL,
-  GST_C2_FLIP_BOTH,
-} GstC2VideoFlip;
-
 struct _GstC2PixelInfo {
   GstVideoFormat format;
-  guint32        n_subframes;
+  gboolean       isubwc;
 };
 
 struct _GstC2Resolution {

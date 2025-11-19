@@ -39,7 +39,6 @@
 #include "c2venc.h"
 
 #include <gst/utils/common-utils.h>
-#include <gst/video/video-utils.h>
 
 #define GST_CAT_DEFAULT c2_venc_debug
 GST_DEBUG_CATEGORY_STATIC (c2_venc_debug);
@@ -53,12 +52,11 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define GST_TYPE_C2_LOOP_FILTER_MODE   (gst_c2_loop_filter_get_type())
 #define GST_TYPE_C2_SLICE_MODE         (gst_c2_slice_get_type())
 #define GST_TYPE_C2_VIDEO_ROTATION     (gst_c2_video_rotation_get_type())
-#define GST_TYPE_C2_VIDEO_FLIP         (gst_c2_video_flip_get_type())
 
 #define DEFAULT_PROP_ROTATE               (GST_C2_ROTATE_NONE)
 #define DEFAULT_PROP_RATE_CONTROL         (GST_C2_RATE_CTRL_DISABLE)
 #define DEFAULT_PROP_TARGET_BITRATE       (0xffffffff)
-#define DEFAULT_PROP_IDR_INTERVAL         (0x7fffffff)
+#define DEFAULT_PROP_IDR_INTERVAL         (0xffffffff)
 #define DEFAULT_PROP_INTRA_REFRESH_MODE   (0xffffffff)
 #define DEFAULT_PROP_INTRA_REFRESH_PERIOD (0)
 #define DEFAULT_PROP_B_FRAMES             (0xffffffff)
@@ -78,12 +76,15 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_ENTROPY_MODE         (0xffffffff)
 #define DEFAULT_PROP_LOOP_FILTER_MODE     (0xffffffff)
 #define DEFAULT_PROP_NUM_LTR_FRAMES       (0xffffffff)
-#define DEFAULT_PROP_PRIORITY             (0x7fffffff)
+#define DEFAULT_PROP_PRIORITY             (0xffffffff)
 #define DEFAULT_PROP_TEMPORAL_LAYER_NUM   (0xffffffff)
-#define DEFAULT_PROP_FLIP                 (GST_C2_FLIP_NONE)
 #define DEFAULT_PROP_VBV_DELAY            (0x7fffffff)
 
-#define GST_VIDEO_FORMATS "{ NV12, P010_10LE, NV12_Q08C, NV12_Q10LE32C }"
+#ifndef GST_CAPS_FEATURE_MEMORY_GBM
+#define GST_CAPS_FEATURE_MEMORY_GBM "memory:GBM"
+#endif
+
+#define GST_VIDEO_FORMATS "{ NV12, NV12_10LE32, P010_10LE, NV12_Q08C }"
 
 enum
 {
@@ -114,7 +115,6 @@ enum
   PROP_NUM_LTR_FRAMES,
   PROP_PRIORITY,
   PROP_TEMPORAL_LAYER,
-  PROP_FLIP,
   PROP_VBV_DELAY,
 };
 
@@ -254,25 +254,6 @@ gst_c2_video_rotation_get_type (void)
   return gtype;
 }
 
-static GType
-gst_c2_video_flip_get_type (void)
-{
-  static GType gtype = 0;
-
-  static const GEnumValue variants[] = {
-    { GST_C2_FLIP_NONE, "No flip", "none" },
-    { GST_C2_FLIP_VERTICAL, "Flip frame vertically", "vertical" },
-    { GST_C2_FLIP_HORIZONTAL, "Flip frame horizontally", "horizontal" },
-    { GST_C2_FLIP_BOTH, "Flip frame both horizontally and vertically", "both" },
-    { 0, NULL, NULL },
-  };
-
-  if (!gtype)
-    gtype = g_enum_register_static ("GstC2VideoFlip", variants);
-
-  return gtype;
-}
-
 static gboolean
 gst_caps_has_subformat (const GstCaps * caps, const gchar * subformat)
 {
@@ -287,10 +268,10 @@ gst_caps_has_subformat (const GstCaps * caps, const gchar * subformat)
 }
 
 static guint
-gst_caps_get_num_subframes (const GstCaps * caps)
+gst_caps_get_num_super_frames (const GstCaps * caps)
 {
   GstStructure *structure = gst_caps_get_structure (caps, 0);
-  gint n_subframes = 0;
+  gint n_super_frames = 0;
   const gchar *multiview_mode = NULL;
 
   multiview_mode = gst_structure_get_string (structure, "multiview-mode");
@@ -299,16 +280,19 @@ gst_caps_get_num_subframes (const GstCaps * caps)
 
   switch (gst_video_multiview_mode_from_caps_string (multiview_mode)) {
     case GST_VIDEO_MULTIVIEW_MODE_MONO:
-      if (!gst_structure_get_int (structure, "views", &n_subframes))
+      if (!gst_structure_get_int (structure, "views", &n_super_frames)) {
+        GST_ERROR ("Failed to get views in multiview(mode: mono).");
         goto exit;
+      }
       break;
     default:
+      GST_WARNING ("Unsupported multiview mode(%s).", multiview_mode);
       break;
   }
 
 exit:
-  GST_DEBUG ("Number of subframes: %d.", n_subframes);
-  return (guint)n_subframes;
+  GST_DEBUG ("Number of super frames: %d.", n_super_frames);
+  return (guint)n_super_frames;
 }
 
 static gboolean
@@ -346,38 +330,20 @@ gst_c2_venc_ltr_mark (GstC2VEncoder * c2venc, guint id)
 }
 
 static gboolean
-gst_c2_venc_ltr_use (GstC2VEncoder * c2venc, guint id)
-{
-  gboolean success = FALSE;
-
-  GST_DEBUG_OBJECT (c2venc, "LTR use frame index %d", id);
-
-  success = gst_c2_engine_set_parameter (c2venc->engine,
-      GST_C2_PARAM_LTR_USE, GPOINTER_CAST (&id));
-  if (!success) {
-    GST_ERROR_OBJECT (c2venc, "Failed to set ltr use index!");
-    return FALSE;
-  }
-
-  return TRUE;
-}
-
-static gboolean
 gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     GstVideoCodecState * instate, GstVideoCodecState * outstate)
 {
   GstVideoInfo *info = &instate->info;
-  GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, 0 };
+  GstC2PixelInfo pixinfo = { GST_VIDEO_FORMAT_UNKNOWN, FALSE };
   GstC2Resolution inresolution = { 0, 0 };
   GstC2Resolution outresolution = { 0, 0 };
   GstC2Gop gop = { 0, 0 };
   GstC2HeaderMode csdmode = GST_C2_PREPEND_HEADER_TO_ALL_SYNC;
-  GstC2QuantRanges qp_ranges = {0, 0, 0, 0, 0, 0};
   gdouble framerate = 0.0;
   gboolean success = FALSE;
 
   pixinfo.format = GST_VIDEO_INFO_FORMAT (info);
-  pixinfo.n_subframes = c2venc->n_subframes;
+  pixinfo.isubwc = c2venc->isubwc;
 
   success = gst_c2_engine_set_parameter (c2venc->engine,
       GST_C2_PARAM_IN_PIXEL_FORMAT, GPOINTER_CAST (&pixinfo));
@@ -526,26 +492,26 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
 
   success = gst_c2_engine_get_parameter (c2venc->engine,
       GST_C2_PARAM_GOP_CONFIG, GPOINTER_CAST (&gop));
-  if (success) {
-    if (c2venc->idr_interval != DEFAULT_PROP_IDR_INTERVAL)
-      gop.n_pframes = (guint32)c2venc->idr_interval;
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to get GOP parameter!");
+    return FALSE;
+  }
 
-    if (c2venc->bframes != DEFAULT_PROP_B_FRAMES)
-      gop.n_bframes = c2venc->bframes;
+  if (c2venc->idr_interval != DEFAULT_PROP_IDR_INTERVAL)
+    gop.n_pframes = c2venc->idr_interval;
 
-    // Overwrite B-Frames if IDR is set to 0 (key frames only)
-    if (c2venc->idr_interval == 0)
-      gop.n_bframes = 0;
+  if (c2venc->bframes != DEFAULT_PROP_B_FRAMES)
+    gop.n_bframes = c2venc->bframes;
 
-    success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_GOP_CONFIG, GPOINTER_CAST (&gop));
-    if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set GOP parameter!");
-      return FALSE;
-    }
-  } else {
-    GST_WARNING_OBJECT (c2venc, "GOP is not supported!");
-    success = TRUE;
+  // Overwrite B-Frames if IDR is set to 0 (key frames only)
+  if (c2venc->idr_interval == 0)
+    gop.n_bframes = 0;
+
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_GOP_CONFIG, GPOINTER_CAST (&gop));
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to set GOP parameter!");
+    return FALSE;
   }
 
   if (c2venc->bframes != DEFAULT_PROP_B_FRAMES) {
@@ -726,15 +692,6 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     }
   }
 
-  if (c2venc->flip != GST_C2_FLIP_NONE) {
-    success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_FLIP, GPOINTER_CAST (&(c2venc->flip)));
-    if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set flip parameter!");
-      return FALSE;
-    }
-  }
-
   success = gst_c2_engine_set_parameter (c2venc->engine,
       GST_C2_PARAM_PREPEND_HEADER_MODE, GPOINTER_CAST (&csdmode));
   if (!success) {
@@ -742,18 +699,11 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
-  success = gst_c2_engine_get_parameter (c2venc->engine,
-      GST_C2_PARAM_QP_RANGES, GPOINTER_CAST (&qp_ranges));
-  if (success) {
-    success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_QP_RANGES, GPOINTER_CAST (&(c2venc->quant_ranges)));
-    if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set QP ranges parameter!");
-      return FALSE;
-    }
-  } else {
-    GST_WARNING_OBJECT (c2venc, "QP ranges not supported!");
-    success = TRUE;
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_QP_RANGES, GPOINTER_CAST (&(c2venc->quant_ranges)));
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to set QP ranges parameter!");
+    return FALSE;
   }
 
   if ((c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_I_FRAMES) ||
@@ -775,9 +725,9 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
-  if (c2venc->n_subframes != 0) {
+  if (c2venc->n_super_frames != 0) {
     success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_SUPER_FRAME, GPOINTER_CAST (&c2venc->n_subframes));
+        GST_C2_PARAM_SUPER_FRAME, GPOINTER_CAST (&c2venc->n_super_frames));
     if (!success) {
       GST_ERROR_OBJECT (c2venc, "Failed to set super frame!");
       return FALSE;
@@ -964,6 +914,8 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
 
   // Unset the custom SYNC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_SYNC);
+  // Unset the custom UBWC flag if present.
+  GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
   // Unset the custom HEIC flag if present.
   GST_BUFFER_FLAG_UNSET (buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
   // Unset the custom GBM flag if present.
@@ -999,7 +951,7 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
     frame->output_buffer = buffer;
   }
 
-  if (c2venc->n_subframes > 0) {
+  if (c2venc->n_super_frames > 0) {
     // PTS was passed to codec2 backend as timestamp while encoding
     frame->pts = GST_BUFFER_TIMESTAMP (buffer);
 
@@ -1060,21 +1012,6 @@ gst_c2_venc_stop (GstVideoEncoder * encoder)
   c2venc->headers = NULL;
 
   GST_DEBUG_OBJECT (c2venc, "Engine stoped");
-  return TRUE;
-}
-
-static gboolean
-gst_c2_venc_close (GstVideoEncoder * encoder)
-{
-  GstC2VEncoder *c2venc = GST_C2_VENC (encoder);
-  GST_DEBUG_OBJECT (c2venc, "Close engine");
-
-  if (c2venc->engine != NULL) {
-    gst_c2_engine_free(c2venc->engine);
-    c2venc->engine = NULL;
-  }
-
-  GST_DEBUG_OBJECT (c2venc, "Engine closed");
   return TRUE;
 }
 
@@ -1197,13 +1134,16 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   gint32 outwidth = 0, outheight = 0;
   gboolean success = FALSE;
 
+  c2venc->isubwc = gst_caps_has_compression (state->caps, "ubwc");
+
   c2venc->isheif = gst_caps_has_subformat(state->caps, "heif");
 
   c2venc->isgbm = gst_caps_features_contains
       (gst_caps_get_features (state->caps, 0), GST_CAPS_FEATURE_MEMORY_GBM);
 
-  GST_DEBUG_OBJECT (c2venc, "Input format %s",
-      gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)));
+  GST_DEBUG_OBJECT (c2venc, "Setting new format %s%s",
+      gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (info)),
+      c2venc->isubwc ? " UBWC" : "");
 
   if ((c2venc->instate != NULL) &&
       !gst_video_info_is_equal (info, &(c2venc->instate->info))) {
@@ -1397,14 +1337,14 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
   GST_DEBUG_OBJECT (c2venc, "Output state caps: %" GST_PTR_FORMAT, outstate->caps);
 
-  c2venc->n_subframes = gst_caps_get_num_subframes (state->caps);
+  c2venc->n_super_frames = gst_caps_get_num_super_frames (state->caps);
 
   // Variable input fps and fixed output fps, get the duration for timestamp adjustment.
   if (((state->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS) &&
       !(outstate->info.flags & GST_VIDEO_FLAG_VARIABLE_FPS)) ||
       ((outstate->info.fps_n != state->info.fps_n) ||
       (outstate->info.fps_d != state->info.fps_d))) {
-    c2venc->duration = (c2venc->n_subframes ? c2venc->n_subframes : 1) *
+    c2venc->duration = (c2venc->n_super_frames ? c2venc->n_super_frames : 1) *
         gst_util_uint64_scale_int (GST_SECOND,
         GST_VIDEO_INFO_FPS_D (&outstate->info),
         GST_VIDEO_INFO_FPS_N (&outstate->info));
@@ -1478,6 +1418,9 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   gst_c2_venc_handle_region_encode (c2venc, frame);
 
+  if (c2venc->isubwc)
+    GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
+
   if (c2venc->isheif)
     GST_BUFFER_FLAG_SET (frame->input_buffer, GST_VIDEO_BUFFER_FLAG_HEIC);
 
@@ -1491,7 +1434,6 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   item.buffer = frame->input_buffer;
   item.index = frame->system_frame_number;
   item.userdata = gst_video_codec_frame_get_user_data (frame);
-  item.n_subframes = c2venc->n_subframes;
 
   if (!gst_c2_engine_queue (c2venc->engine, &item)) {
     GST_ERROR_OBJECT(c2venc, "Failed to send input frame to be emptied!");
@@ -1562,7 +1504,7 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       break;
     }
     case PROP_IDR_INTERVAL: {
-      c2venc->idr_interval = g_value_get_int (value);
+      c2venc->idr_interval = g_value_get_uint (value);
 
       if ((c2venc->engine != NULL) && (c2venc->instate != NULL) &&
           (c2venc->idr_interval != DEFAULT_PROP_IDR_INTERVAL)) {
@@ -1713,9 +1655,6 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->temp_layer.n_blayers = blayers;
       break;
     }
-    case PROP_FLIP:
-      c2venc->flip = g_value_get_enum (value);
-      break;
     case PROP_VBV_DELAY:
       c2venc->vbv_delay = g_value_get_int (value);
       break;
@@ -1746,7 +1685,7 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       g_value_set_uint (value, c2venc->target_bitrate);
       break;
     case PROP_IDR_INTERVAL:
-      g_value_set_int (value, c2venc->idr_interval);
+      g_value_set_uint (value, c2venc->idr_interval);
       break;
     case PROP_INTRA_REFRESH_MODE:
       g_value_set_enum (value, c2venc->intra_refresh.mode);
@@ -1861,9 +1800,6 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       g_value_unset (&val);
       break;
     }
-    case PROP_FLIP:
-      g_value_set_enum (value, c2venc->flip);
-      break;
     case PROP_VBV_DELAY:
       g_value_set_int (value, c2venc->vbv_delay);
       break;
@@ -1922,11 +1858,10 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           0, G_MAXUINT, DEFAULT_PROP_TARGET_BITRATE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_IDR_INTERVAL,
-      g_param_spec_int ("idr-interval", "IDR Interval",
-          "Periodicity of IDR/I frames (0x7fffffff=component default). "
-          "When set to -1, only the first frame will be IDR/I frame. "
-          "When set to 0 or 1, all frames will be IDR/I frame.",
-          -1, G_MAXINT, DEFAULT_PROP_IDR_INTERVAL,
+      g_param_spec_uint ("idr-interval", "IDR Interval",
+          "Periodicity of IDR frames. When set to 0 all frames will be I frames "
+          "(0xffffffff=component default)",
+          0, G_MAXUINT, DEFAULT_PROP_IDR_INTERVAL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_INTRA_REFRESH_MODE,
       g_param_spec_enum ("intra-refresh-mode", "Intra refresh mode",
@@ -2048,8 +1983,8 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
   g_object_class_install_property (gobject, PROP_PRIORITY,
       g_param_spec_int ("priority", "Priority",
           "The proirity of current video instance among concurrent cases,"
-          "(0x7fffffff=component default)",
-          G_MININT32, G_MAXINT32, DEFAULT_PROP_PRIORITY,
+          "(0xffffffff=component default)",
+          G_MININT32, G_MAXINT, DEFAULT_PROP_PRIORITY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_TEMPORAL_LAYER,
       gst_param_spec_array ("temporal-layer", "Temporal Layer",
@@ -2064,10 +1999,6 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
               "One of layers number, b-layers number", G_MININT,
               G_MAXINT, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
-  g_object_class_install_property (gobject, PROP_FLIP,
-      g_param_spec_enum ("flip", "Flip",
-          "Flip video image", GST_TYPE_C2_VIDEO_FLIP, DEFAULT_PROP_FLIP,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_VBV_DELAY,
       g_param_spec_int ("vbv-delay", "Video Buffer Verifier Delay",
           "The buffering delay in milliseconds which is used to stabilize "
@@ -2083,10 +2014,6 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
 
   g_signal_new_class_handler ("ltr-mark", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_mark),
-      NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_UINT);
-
-  g_signal_new_class_handler ("ltr-use", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_use),
       NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_UINT);
 
   // TODO: Temporary solution to flush all enqued buffers in the encoder
@@ -2106,7 +2033,6 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
 
   venc_class->start = GST_DEBUG_FUNCPTR (gst_c2_venc_start);
   venc_class->stop = GST_DEBUG_FUNCPTR (gst_c2_venc_stop);
-  venc_class->close = GST_DEBUG_FUNCPTR (gst_c2_venc_close);
   venc_class->flush = GST_DEBUG_FUNCPTR (gst_c2_venc_flush);
   venc_class->getcaps = GST_DEBUG_FUNCPTR (gst_c2_venc_getcaps);
   venc_class->set_format = GST_DEBUG_FUNCPTR (gst_c2_venc_set_format);
@@ -2121,6 +2047,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->engine = NULL;
 
   c2venc->instate = NULL;
+  c2venc->isubwc = FALSE;
   c2venc->isheif = FALSE;
   c2venc->isgbm = FALSE;
   c2venc->headers = NULL;
@@ -2131,7 +2058,6 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->duration = GST_CLOCK_TIME_NONE;
 
   c2venc->rotate = DEFAULT_PROP_ROTATE;
-  c2venc->flip = DEFAULT_PROP_FLIP;
   c2venc->control_rate = DEFAULT_PROP_RATE_CONTROL;
   c2venc->target_bitrate = DEFAULT_PROP_TARGET_BITRATE;
   c2venc->idr_interval = DEFAULT_PROP_IDR_INTERVAL;
@@ -2168,7 +2094,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->priority = DEFAULT_PROP_PRIORITY;
   c2venc->temp_layer.n_layers = DEFAULT_PROP_TEMPORAL_LAYER_NUM;
   c2venc->temp_layer.n_blayers = DEFAULT_PROP_TEMPORAL_LAYER_NUM;
-  c2venc->n_subframes = 0;
+  c2venc->n_super_frames = 0;
   c2venc->vbv_delay = DEFAULT_PROP_VBV_DELAY;
 
   GST_DEBUG_CATEGORY_INIT (c2_venc_debug, "qtic2venc", 0,

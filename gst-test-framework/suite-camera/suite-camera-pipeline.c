@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -14,7 +14,7 @@ void
 camera_pipeline (GstCapsParameters * params1,
     GstCapsParameters * params2, GstCapsParameters * rawparams,
     GstCapsParameters * jpegparams, guint duration) {
-  GstElement *pipeline, *qtiqmmfsrc, *capsfilter1, *wayland,
+  GstElement *pipeline, *qtiqmmfsrc, *capsfilter1, *sink1,
       *capsfilter2, *sink2, *capsfilter3, *sink3, *capsfilter4, *sink4;
   GstPad *previewpad;
   GstCaps *filtercaps;
@@ -28,9 +28,9 @@ camera_pipeline (GstCapsParameters * params1,
   // Create elements of first video stream.
   qtiqmmfsrc = gst_element_factory_make ("qtiqmmfsrc", "qtiqmmfsrc");
   capsfilter1 = gst_element_factory_make ("capsfilter", "capsfilter1");
-  wayland = gst_element_factory_make ("waylandsink", "waylandsink");
+  sink1 = gst_element_factory_make ("fakesink", "fakesink1");
 
-  fail_unless (pipeline && qtiqmmfsrc && capsfilter1 && wayland);
+  fail_unless (pipeline && qtiqmmfsrc && capsfilter1 && sink1);
 
   // Configure caps of video stream1.
   filtercaps = gst_caps_new_simple ("video/x-raw",
@@ -38,13 +38,16 @@ camera_pipeline (GstCapsParameters * params1,
       "width", G_TYPE_INT, params1->width,
       "height", G_TYPE_INT, params1->height,
       "framerate", GST_TYPE_FRACTION, params1->fps, 1,
+      "compression", G_TYPE_STRING, "ubwc",
       NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter1), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
   // Add elements to the pipeline and link them
   gst_bin_add_many (GST_BIN (pipeline), qtiqmmfsrc, capsfilter1,
-      wayland, NULL);
+      sink1, NULL);
 
   // Create video stream.
   if (params2 != NULL) {
@@ -59,7 +62,10 @@ camera_pipeline (GstCapsParameters * params1,
         "width", G_TYPE_INT, params2->width,
         "height", G_TYPE_INT, params2->height,
         "framerate", GST_TYPE_FRACTION, params2->fps, 1,
+        "compression", G_TYPE_STRING, "ubwc",
         NULL);
+    gst_caps_set_features (filtercaps, 0,
+        gst_caps_features_new ("memory:GBM", NULL));
     g_object_set (G_OBJECT (capsfilter2), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
 
@@ -115,7 +121,7 @@ camera_pipeline (GstCapsParameters * params1,
   }
 
   fail_unless (gst_element_link_many (qtiqmmfsrc, capsfilter1,
-      wayland, NULL));
+      sink1, NULL));
 
   // Set video_0 to preview.
   previewpad = gst_element_get_static_pad (qtiqmmfsrc, "video_0");
@@ -127,13 +133,13 @@ camera_pipeline (GstCapsParameters * params1,
         sink2, NULL));
 
   if (rawparams != NULL) {
-    fail_unless (gst_element_link_pads (qtiqmmfsrc, "image_2",
+    fail_unless (gst_element_link_pads (qtiqmmfsrc, "image_1",
         capsfilter3, NULL));
     fail_unless (gst_element_link_many (capsfilter3, sink3, NULL));
   }
 
   if (jpegparams != NULL) {
-    fail_unless (gst_element_link_pads (qtiqmmfsrc, "image_3",
+    fail_unless (gst_element_link_pads (qtiqmmfsrc, "image_2",
         capsfilter4, NULL));
     fail_unless (gst_element_link_many (capsfilter4, sink4, NULL));
   }
@@ -155,8 +161,11 @@ camera_pipeline (GstCapsParameters * params1,
     gst_message_unref (msg);
   }
 
-  // Send eos to pipeline.
-  fail_unless_equals_int (gst_element_send_eos (pipeline), 1);
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PAUSED),
+      GST_STATE_CHANGE_NO_PREROLL);
+
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
+      GST_STATE_CHANGE_SUCCESS);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_NULL),
       GST_STATE_CHANGE_SUCCESS);
@@ -166,13 +175,12 @@ camera_pipeline (GstCapsParameters * params1,
 void
 camera_display_encode_pipeline (GstCapsParameters * params1,
     GstCapsParameters * params2, guint duration) {
+
   GstElement *pipeline, *qtiqmmfsrc, *capsfilter1, *wayland;
   GstElement *capsfilter2, *filesink, *venc, *parse, *mp4mux;
-  gchar *location = NULL;
   GstPad *previewpad;
   GstCaps *filtercaps;
   GstMessage *msg;
-  gchar *codec = GST_VIDEO_CODEC_H264;
 
   pipeline = gst_pipeline_new (NULL);
   // Create all elements
@@ -188,10 +196,11 @@ camera_display_encode_pipeline (GstCapsParameters * params1,
   fail_unless (pipeline && qtiqmmfsrc && capsfilter1 && capsfilter2 &&
       wayland && venc && parse && mp4mux && filesink);
 
+  g_object_set (G_OBJECT (venc), "capture-io-mode", 5,
+      "output-io-mode", 5, NULL);
+
   // Set filesink properties
-  location = g_strdup_printf ("%s/encode_%dx%d.mp4",
-      CAMERA_FILE_PREFIX, params2->width, params2->height);
-  g_object_set (G_OBJECT (filesink), "location", location, NULL);
+  g_object_set (G_OBJECT (filesink), "location", "/opt/mux.mp4", NULL);
   g_object_set (G_OBJECT (filesink), "enable-last-sample", FALSE, NULL);
 
   // Configure the stream caps
@@ -200,7 +209,10 @@ camera_display_encode_pipeline (GstCapsParameters * params1,
       "width", G_TYPE_INT, params1->width,
       "height", G_TYPE_INT, params1->height,
       "framerate", GST_TYPE_FRACTION, params1->fps, 1,
+      "compression", G_TYPE_STRING, "ubwc",
       NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter1), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -210,7 +222,10 @@ camera_display_encode_pipeline (GstCapsParameters * params1,
       "width", G_TYPE_INT, params2->width,
       "height", G_TYPE_INT, params2->height,
       "framerate", GST_TYPE_FRACTION, params2->fps, 1,
+      "compression", G_TYPE_STRING, "ubwc",
       NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter2), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -247,17 +262,14 @@ camera_display_encode_pipeline (GstCapsParameters * params1,
     gst_message_unref (msg);
   }
 
-  // Send eos to pipeline.
-  fail_unless_equals_int (gst_element_send_eos (pipeline), 1);
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PAUSED),
+      GST_STATE_CHANGE_NO_PREROLL);
 
-  // Verify the output Mp4.
-  fail_unless_equals_int (gst_mp4_verification (location, params2->width,
-      params2->height, params2->fps, 0.5f, 0, &codec), 1);
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
+      GST_STATE_CHANGE_SUCCESS);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_NULL),
       GST_STATE_CHANGE_SUCCESS);
-
-  g_free (location);
   gst_object_unref (pipeline);
 }
 
@@ -288,7 +300,10 @@ camera_transform_display_pipeline (GstCapsParameters * params1,
       "width", G_TYPE_INT, params1->width,
       "height", G_TYPE_INT, params1->height,
       "framerate", GST_TYPE_FRACTION, params1->fps, 1,
+      "compression", G_TYPE_STRING, "ubwc",
       NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter1), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -329,8 +344,11 @@ camera_transform_display_pipeline (GstCapsParameters * params1,
     gst_message_unref (msg);
   }
 
-  // Send eos to pipeline.
-  fail_unless_equals_int (gst_element_send_eos (pipeline), 1);
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PAUSED),
+      GST_STATE_CHANGE_NO_PREROLL);
+
+  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
+      GST_STATE_CHANGE_SUCCESS);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_NULL),
       GST_STATE_CHANGE_SUCCESS);
@@ -339,20 +357,13 @@ camera_transform_display_pipeline (GstCapsParameters * params1,
 
 void
 camera_composer_display_pipeline (GstCapsParameters * params1,
-    gchar *filename, guint duration) {
+    gchar *location, guint duration) {
+
   GstElement *pipeline, *qtiqmmfsrc, *capsfilter, *vcomps, *wayland;
   GstElement *filesrc, *demux, *parse, *vdec, *queue1, *queue2;
-  GValue position = G_VALUE_INIT, dimension = G_VALUE_INIT, val = G_VALUE_INIT;
   GstPad *sink0, *sink1;
   GstCaps *filtercaps;
   GstMessage *msg;
-  gchar *codec = NULL;
-  gchar *location = g_strdup_printf ("%s/%s", CAMERA_FILE_PREFIX, filename);
-
-  // Check if file is existing and is Mp4.
-  fail_unless_equals_int (gst_mp4_verification (location,
-      0, 0, 0, 0, 0, &codec), 1);
-  fail_unless (codec);
 
   pipeline = gst_pipeline_new (NULL);
   // Create all elements
@@ -361,23 +372,15 @@ camera_composer_display_pipeline (GstCapsParameters * params1,
   queue1 = gst_element_factory_make ("queue", "queue1");
   filesrc = gst_element_factory_make ("filesrc", NULL);
   demux = gst_element_factory_make ("qtdemux", NULL);
+  parse = gst_element_factory_make ("h264parse", NULL);
+  vdec = gst_element_factory_make ("v4l2h264dec", NULL);
   queue2 = gst_element_factory_make ("queue", "queue2");
-
-  if (g_str_has_prefix (codec, "H.264")) {
-    parse = gst_element_factory_make ("h264parse", NULL);
-    vdec = gst_element_factory_make ("v4l2h264dec", NULL);
-  } else if (g_str_has_prefix (codec, "H.265")) {
-    parse = gst_element_factory_make ("h265parse", NULL);
-    vdec = gst_element_factory_make ("v4l2h265dec", NULL);
-  } else {
-    fail();
-  }
 
   vcomps = gst_element_factory_make ("qtivcomposer", "mixer");
   wayland = gst_element_factory_make ("waylandsink", "waylandsink");
 
   fail_unless (pipeline && qtiqmmfsrc && capsfilter && queue1 &&
-      filesrc && demux && parse && vdec && queue2 && vcomps && wayland);
+        filesrc && demux && parse && vdec && queue2 && vcomps && wayland);
 
   // Configure the stream caps
   filtercaps = gst_caps_new_simple ("video/x-raw",
@@ -385,7 +388,10 @@ camera_composer_display_pipeline (GstCapsParameters * params1,
       "width", G_TYPE_INT, params1->width,
       "height", G_TYPE_INT, params1->height,
       "framerate", GST_TYPE_FRACTION, params1->fps, 1,
+      "compression", G_TYPE_STRING, "ubwc",
       NULL);
+  gst_caps_set_features (filtercaps, 0,
+      gst_caps_features_new ("memory:GBM", NULL));
   g_object_set (G_OBJECT (capsfilter), "caps", filtercaps, NULL);
   gst_caps_unref (filtercaps);
 
@@ -393,55 +399,22 @@ camera_composer_display_pipeline (GstCapsParameters * params1,
 
   // Add elements to the pipeline and link them
   gst_bin_add_many (GST_BIN (pipeline), qtiqmmfsrc, capsfilter, queue1,
-      filesrc, demux, parse, vdec, queue2, vcomps, wayland, NULL);
+        filesrc, demux, parse, vdec, queue2, vcomps, wayland, NULL);
 
   fail_unless (gst_element_link_many (qtiqmmfsrc, capsfilter, queue1,
-      vcomps, wayland, NULL));
-  fail_unless (gst_element_link (filesrc, demux));
-  fail_unless (gst_element_link_many (parse, vdec, queue2, vcomps, NULL));
-  g_signal_connect (demux, "pad-added",
-      G_CALLBACK (gst_element_on_pad_added), parse);
+        vcomps, wayland, NULL));
+  fail_unless (gst_element_link_many (filesrc, demux, parse, vdec, queue2,
+        vcomps, NULL));
 
-  sink0 = gst_element_get_static_pad (vcomps, "sink_0");
-  sink1 = gst_element_get_static_pad (vcomps, "sink_1");
+  sink0 = gst_element_get_static_pad (qtiqmmfsrc, "sink_0");
+  sink1 = gst_element_get_static_pad (qtiqmmfsrc, "sink_1");
   fail_unless (sink0 && sink1);
 
-  // Set sink0 position and dimension.
-  g_value_init (&val, G_TYPE_INT);
-  g_value_init (&position, GST_TYPE_ARRAY);
-  g_value_init (&dimension, GST_TYPE_ARRAY);
-  g_value_set_int (&val, 0);
-  gst_value_array_append_value (&position, &val);
-  g_value_set_int (&val, 0);
-  gst_value_array_append_value (&position, &val);
+  g_object_set (G_OBJECT (sink0), "position", "<0, 0>",
+      "dimensions", "<640, 480>", NULL);
 
-  g_value_set_int (&val, params1->width);
-  gst_value_array_append_value (&dimension, &val);
-  g_value_set_int (&val, params1->height);
-  gst_value_array_append_value (&dimension, &val);
-  g_object_set_property (G_OBJECT (sink0), "position", &position);
-  g_object_set_property (G_OBJECT (sink0), "dimensions", &dimension);
-  g_value_unset (&position);
-  g_value_unset (&dimension);
-  gst_object_unref (sink0);
-
-  // Set sink1 position and dimension.
-  g_value_init (&position, GST_TYPE_ARRAY);
-  g_value_init (&dimension, GST_TYPE_ARRAY);
-  g_value_set_int (&val, 100);
-  gst_value_array_append_value (&position, &val);
-  g_value_set_int (&val, 100);
-  gst_value_array_append_value (&position, &val);
-  g_value_set_int (&val, 640);
-  gst_value_array_append_value (&dimension, &val);
-  g_value_set_int (&val, 480);
-  gst_value_array_append_value (&dimension, &val);
-  g_value_unset (&val);
-  g_object_set_property (G_OBJECT (sink1), "position", &position);
-  g_object_set_property (G_OBJECT (sink1), "dimensions", &dimension);
-  g_value_unset (&position);
-  g_value_unset (&dimension);
-  gst_object_unref (sink1);
+  g_object_set (G_OBJECT (sink1), "position", "<640, 0>",
+      "dimensions", "<640, 480>", NULL);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
       GST_STATE_CHANGE_SUCCESS);
@@ -460,90 +433,13 @@ camera_composer_display_pipeline (GstCapsParameters * params1,
     gst_message_unref (msg);
   }
 
-  // Send eos to pipeline.
-  fail_unless_equals_int (gst_element_send_eos (pipeline), 1);
-
-  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_NULL),
-      GST_STATE_CHANGE_SUCCESS);
-
-  g_free (codec);
-  g_free (location);
-  gst_object_unref (pipeline);
-}
-
-void
-camera_decoder_display_pipeline (gchar *filename, guint duration)
-{
-  GstElement *pipeline, *filesrc, *demux, *parse, *vdec, *queue, *wayland;
-  GstMessage *msg;
-  gchar *location = g_strdup_printf ("%s/%s", CAMERA_FILE_PREFIX, filename);
-  gchar *codec = NULL;
-
-  // Check if file is existing and is Mp4.
-  fail_unless_equals_int (gst_mp4_verification (location,
-      0, 0, 0, 0, 0, &codec), 1);
-  fail_unless (codec);
-
-  pipeline = gst_pipeline_new (NULL);
-  // Create all elements
-  filesrc = gst_element_factory_make ("filesrc", NULL);
-  demux = gst_element_factory_make ("qtdemux", NULL);
-  queue = gst_element_factory_make ("queue", NULL);
-  wayland = gst_element_factory_make ("waylandsink", "waylandsink");
-
-  if (g_str_has_prefix (codec, "H.264")) {
-    parse = gst_element_factory_make ("h264parse", NULL);
-    vdec = gst_element_factory_make ("v4l2h264dec", NULL);
-  } else if (g_str_has_prefix (codec, "H.265")) {
-    parse = gst_element_factory_make ("h265parse", NULL);
-    vdec = gst_element_factory_make ("v4l2h265dec", NULL);
-  } else {
-    fail();
-  }
-
-  fail_unless (pipeline && filesrc && demux && parse && vdec && queue && wayland);
-
-  // Set properties.
-  g_object_set (G_OBJECT (filesrc), "location", location, NULL);
-  g_object_set (G_OBJECT (wayland), "sync", TRUE, NULL);
-
-  // Add elements to the pipeline and link them
-  gst_bin_add_many (GST_BIN (pipeline), filesrc, demux, parse,
-      vdec, queue, wayland, NULL);
-  fail_unless (gst_element_link (filesrc, demux));
-  fail_unless (gst_element_link_many (parse, vdec, queue, wayland, NULL));
-  g_signal_connect (demux, "pad-added",
-      G_CALLBACK (gst_element_on_pad_added), parse);
-
-  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
-      GST_STATE_CHANGE_SUCCESS);
-
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PAUSED),
-      GST_STATE_CHANGE_ASYNC);
-
-  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PLAYING),
-      GST_STATE_CHANGE_ASYNC);
-
-  msg = gst_bus_timed_pop_filtered (GST_ELEMENT_BUS (pipeline),
-      duration * GST_SECOND, GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
-  if (msg) {
-    fail_unless_equals_int (GST_MESSAGE_TYPE (msg), GST_MESSAGE_EOS);
-    gst_message_unref (msg);
-  }
-
-  // Send eos to pipeline.
-  fail_unless_equals_int (gst_element_send_eos (pipeline), 1);
-
-  fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_PAUSED),
-      GST_STATE_CHANGE_SUCCESS);
+      GST_STATE_CHANGE_NO_PREROLL);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_READY),
       GST_STATE_CHANGE_SUCCESS);
 
   fail_unless_equals_int (gst_element_set_state (pipeline, GST_STATE_NULL),
       GST_STATE_CHANGE_SUCCESS);
-
-  g_free (codec);
-  g_free (location);
   gst_object_unref (pipeline);
 }

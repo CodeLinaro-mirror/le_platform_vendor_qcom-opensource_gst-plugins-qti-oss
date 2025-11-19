@@ -161,10 +161,6 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::C2StreamHierBPreconditions::output::PARAM_TYPE },
   { GST_C2_PARAM_SUPER_FRAME,
       qc2::C2VideoSuperFrameSetting::input::PARAM_TYPE },
-  { GST_C2_PARAM_LTR_USE,
-      qc2::C2VideoLTRUseTuning::input::PARAM_TYPE},
-  { GST_C2_PARAM_FLIP,
-      qc2::C2VideoMirrorTuning::input::PARAM_TYPE },
   { GST_C2_PARAM_VBV_DELAY,
       qc2::C2VBVDelayTuning::input::PARAM_TYPE },
 };
@@ -218,8 +214,6 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_DOWN_SCALAR, "DOWN_SCALAR" },
   { GST_C2_PARAM_HIER_BPRECONDITIONS, "HIER_BPREDCONDITIONS" },
   { GST_C2_PARAM_SUPER_FRAME, "SUPER_FRAME" },
-  { GST_C2_PARAM_LTR_USE, "LTR_USE" },
-  { GST_C2_PARAM_FLIP, "FLIP" },
   { GST_C2_PARAM_VBV_DELAY, "VBV_DELAY"},
 };
 
@@ -444,14 +438,6 @@ static const std::unordered_map<uint32_t, uint32_t> kPictureTypeMap = {
   { GST_C2_B_FRAME,    C2Config::B_FRAME },
 };
 
-// Map for the GstC2VideoFlip.
-static const std::unordered_map<uint32_t, qc2::QCMirrorType> kFlipMap = {
-  { GST_C2_FLIP_NONE,       Qc2MirrorNone },
-  { GST_C2_FLIP_VERTICAL,   Qc2MirrorVertical },
-  { GST_C2_FLIP_HORIZONTAL, Qc2MirrorHorizontal },
-  { GST_C2_FLIP_BOTH,       Qc2MirrorBoth },
-};
-
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
 
   return kParamIndexMap.at(type);
@@ -462,31 +448,20 @@ const char* GstC2Utils::ParamName(uint32_t type) {
   return kParamNameMap.at(type);
 }
 
-C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
-    guint32 n_subframes) {
+C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format, bool isubwc) {
 
-  if (format == GST_VIDEO_FORMAT_NV12) {
-    return C2PixelFormat::kNV12;
+  if (format == GST_VIDEO_FORMAT_RGBA) {
+    return isubwc ? C2PixelFormat::kRGBA_UBWC : C2PixelFormat::kRGBA;
+  } else if (format == GST_VIDEO_FORMAT_NV12) {
+    return isubwc ? C2PixelFormat::kNV12UBWC : C2PixelFormat::kNV12;
   } else if (format == GST_VIDEO_FORMAT_NV12_Q08C) {
-    switch (n_subframes) {
-      case 0:
-        return C2PixelFormat::kNV12UBWC;
-      case 2:
-        return C2PixelFormat::kNV12UBWC_FLEX_2_BATCH;
-      case 4:
-        return C2PixelFormat::kNV12UBWC_FLEX_4_BATCH;
-      case 8:
-        return C2PixelFormat::kNV12UBWC_FLEX_8_BATCH;
-      default:
-        GST_ERROR ("Unsupported batch number: %u!", n_subframes);
-        return C2PixelFormat::kUnknown;
-    }
+    return C2PixelFormat::kNV12UBWC;
   } else if (format == GST_VIDEO_FORMAT_YV12) {
     return C2PixelFormat::kYV12;
   } else if (format == GST_VIDEO_FORMAT_P010_10LE) {
     return C2PixelFormat::kP010;
-  } else if (format == GST_VIDEO_FORMAT_NV12_Q10LE32C) {
-    return C2PixelFormat::kTP10UBWC;
+  } else if (format == GST_VIDEO_FORMAT_NV12_10LE32) {
+    return isubwc ? C2PixelFormat::kTP10UBWC : C2PixelFormat::kUnknown;
   } else {
     GST_ERROR ("Unsupported format: %s!", gst_video_format_to_string (format));
   }
@@ -494,30 +469,27 @@ C2PixelFormat GstC2Utils::PixelFormat(GstVideoFormat format,
   return C2PixelFormat::kUnknown;
 }
 
-std::tuple<GstVideoFormat, uint32_t> GstC2Utils::VideoFormat(
-    C2PixelFormat format) {
+std::tuple<GstVideoFormat, bool> GstC2Utils::VideoFormat(C2PixelFormat format) {
 
-  if (format == C2PixelFormat::kNV12UBWC) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 0);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_2_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 2);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_4_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 4);
-  } else if (format == C2PixelFormat::kNV12UBWC_FLEX_8_BATCH) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, 8);
+  if (format == C2PixelFormat::kRGBA_UBWC) {
+    return std::make_tuple(GST_VIDEO_FORMAT_RGBA, true);
+  } else if (format == C2PixelFormat::kRGBA) {
+    return std::make_tuple(GST_VIDEO_FORMAT_RGBA, false);
+  } else if (format == C2PixelFormat::kNV12UBWC) {
+    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q08C, true);
   } else if (format == C2PixelFormat::kNV12) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12, 0);
+    return std::make_tuple(GST_VIDEO_FORMAT_NV12, false);
   } else if (format == C2PixelFormat::kYV12) {
-    return std::make_tuple(GST_VIDEO_FORMAT_YV12, 0);
+    return std::make_tuple(GST_VIDEO_FORMAT_YV12, false);
   } else if (format == C2PixelFormat::kP010) {
-    return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, 0);
+    return std::make_tuple(GST_VIDEO_FORMAT_P010_10LE, false);
   } else if (format == C2PixelFormat::kTP10UBWC) {
-    return std::make_tuple(GST_VIDEO_FORMAT_NV12_Q10LE32C, 0);
+    return std::make_tuple(GST_VIDEO_FORMAT_NV12_10LE32, true);
   } else {
     GST_ERROR ("Unsupported format: %u!", format);
   }
 
-  return std::make_tuple(GST_VIDEO_FORMAT_UNKNOWN, 0);
+  return std::make_tuple(GST_VIDEO_FORMAT_UNKNOWN, false);
 }
 
 bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
@@ -529,7 +501,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       GstC2PixelInfo *pixinfo = reinterpret_cast<GstC2PixelInfo*>(payload);
 
       pixformat.value = static_cast<uint32_t>(
-          GstC2Utils::PixelFormat(pixinfo->format, pixinfo->n_subframes));
+          GstC2Utils::PixelFormat(pixinfo->format, pixinfo->isubwc));
       c2param = C2Param::Copy(pixformat);
       break;
     }
@@ -538,7 +510,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       GstC2PixelInfo *pixinfo = reinterpret_cast<GstC2PixelInfo*>(payload);
 
       pixformat.value = static_cast<uint32_t>(
-          GstC2Utils::PixelFormat(pixinfo->format, pixinfo->n_subframes));
+          GstC2Utils::PixelFormat(pixinfo->format, pixinfo->isubwc));
       c2param = C2Param::Copy(pixformat);
       break;
     }
@@ -958,25 +930,10 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       break;
     }
     case GST_C2_PARAM_SUPER_FRAME: {
-      qc2::C2VideoSuperFrameSetting::input superframe;
+      qc2::C2VideoSuperFrameSetting::input n_super_frames;
 
-      superframe.value = *(reinterpret_cast<guint32*>(payload));
-      c2param = C2Param::Copy(superframe);
-      break;
-    }
-    case GST_C2_PARAM_LTR_USE: {
-      qc2::C2VideoLTRUseTuning::input ltruse;
-      ltruse.frameid = *(reinterpret_cast<guint32*>(payload));
-
-      c2param = C2Param::Copy(ltruse);
-      break;
-    }
-    case GST_C2_PARAM_FLIP: {
-      qc2::C2VideoMirrorTuning::input mirror;
-      uint32_t flip = *(reinterpret_cast<GstC2VideoFlip*>(payload));
-
-      mirror.mirrorType = kFlipMap.at (flip);
-      c2param = C2Param::Copy(mirror);
+      n_super_frames.value = *(reinterpret_cast<guint32*>(payload));
+      c2param = C2Param::Copy(n_super_frames);
       break;
     }
     case GST_C2_PARAM_VBV_DELAY: {
@@ -1001,25 +958,25 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_IN_PIXEL_FORMAT: {
       auto pixformat =
           reinterpret_cast<C2StreamPixelFormatInfo::input*>(c2param.get());
-      std::tuple<GstVideoFormat, uint32_t> tuple =
+      std::tuple<GstVideoFormat, bool> tuple =
           GstC2Utils::VideoFormat(static_cast<C2PixelFormat>(pixformat->value));
 
       reinterpret_cast<GstC2PixelInfo*>(payload)->format =
           std::get<GstVideoFormat>(tuple);
-      reinterpret_cast<GstC2PixelInfo*>(payload)->n_subframes =
-          std::get<uint32_t>(tuple);
+      reinterpret_cast<GstC2PixelInfo*>(payload)->isubwc =
+          std::get<bool>(tuple) ? TRUE : FALSE;
       break;
     }
     case GST_C2_PARAM_OUT_PIXEL_FORMAT: {
       auto pixformat =
           reinterpret_cast<C2StreamPixelFormatInfo::output*>(c2param.get());
-      std::tuple<GstVideoFormat, uint32_t> tuple =
+      std::tuple<GstVideoFormat, bool> tuple =
           GstC2Utils::VideoFormat(static_cast<C2PixelFormat>(pixformat->value));
 
       reinterpret_cast<GstC2PixelInfo*>(payload)->format =
           std::get<GstVideoFormat>(tuple);
-      reinterpret_cast<GstC2PixelInfo*>(payload)->n_subframes =
-          std::get<uint32_t>(tuple);
+      reinterpret_cast<GstC2PixelInfo*>(payload)->isubwc =
+          std::get<bool>(tuple) ? TRUE : FALSE;
       break;
     }
     case GST_C2_PARAM_IN_RESOLUTION: {
@@ -1379,28 +1336,10 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       break;
     }
     case GST_C2_PARAM_SUPER_FRAME: {
-      auto superframe =
+      auto n_super_frames =
           reinterpret_cast<qc2::C2VideoSuperFrameSetting::input*>(c2param.get());
 
-      *(reinterpret_cast<guint32*>(payload)) = superframe->value;
-      break;
-    }
-    case GST_C2_PARAM_LTR_USE: {
-      auto ltruse =
-          reinterpret_cast<qc2::C2VideoLTRUseTuning::input*>(c2param.get());
-
-      *(reinterpret_cast<guint32*>(payload)) = ltruse->frameid;
-      break;
-    }
-    case GST_C2_PARAM_FLIP: {
-      auto mirror =
-          reinterpret_cast<qc2::C2VideoMirrorTuning::input*>(c2param.get());
-
-      auto result = std::find_if(kFlipMap.begin(), kFlipMap.end(),
-          [&](const auto& m) { return m.second == mirror->mirrorType; });
-
-      *(reinterpret_cast<GstC2VideoFlip*>(payload)) =
-          static_cast<GstC2VideoFlip>(result->first);
+      *(reinterpret_cast<guint32*>(payload)) = n_super_frames->value;
       break;
     }
     case GST_C2_PARAM_VBV_DELAY: {
@@ -1419,15 +1358,15 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
 }
 
 bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
-                                  ::android::C2HandleGBM* handle,
-                                  uint32_t n_subframes) {
+                                  ::android::C2HandleGBM* handle) {
 
   GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
   uint32_t size = gst_buffer_get_size (buffer);
   int32_t fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, 0));
   int32_t meta_fd = -1;
 
-  C2PixelFormat format = GstC2Utils::PixelFormat(vmeta->format, n_subframes);
+  gboolean isubwc = GST_BUFFER_FLAG_IS_SET (buffer, GST_VIDEO_BUFFER_FLAG_UBWC);
+  C2PixelFormat format = GstC2Utils::PixelFormat(vmeta->format, isubwc);
 
   uint32_t width = vmeta->width;
   uint32_t height = vmeta->height;
@@ -1452,14 +1391,6 @@ bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
       }
       break;
     case C2PixelFormat::kNV12UBWC:
-      handle->mInts.format = GBM_FORMAT_NV12;
-      handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
-      handle->mInts.slice_height =
-          MMM_COLOR_FMT_Y_SCANLINES(MMM_COLOR_FMT_NV12_UBWC, height);
-      break;
-    case C2PixelFormat::kNV12UBWC_FLEX_2_BATCH:
-    case C2PixelFormat::kNV12UBWC_FLEX_4_BATCH:
-    case C2PixelFormat::kNV12UBWC_FLEX_8_BATCH:
       handle->mInts.format = GBM_FORMAT_NV12;
       handle->mInts.usage_lo |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       handle->mInts.slice_height =
@@ -1529,9 +1460,7 @@ bool GstC2Utils::ExtractHandleInfo(GstBuffer* buffer,
       strides[0] = strides[1] = stride;
       offsets[1] = (stride * scanline);
 
-      if (gbm_format == GBM_FORMAT_YCbCr_420_SP_VENUS_UBWC ||
-          (handle->mInts.usage_lo & GBM_BO_USAGE_UBWC_ALIGNED_QTI) != 0) {
-        format = GST_VIDEO_FORMAT_NV12_Q08C;
+      if (gbm_format == GBM_FORMAT_YCbCr_420_SP_VENUS_UBWC) {
         auto metastride =
             MMM_COLOR_FMT_Y_META_STRIDE(MMM_COLOR_FMT_NV12_UBWC, width);
         auto metascanline =
@@ -1551,7 +1480,7 @@ bool GstC2Utils::ExtractHandleInfo(GstBuffer* buffer,
     }
     case GBM_FORMAT_YCbCr_420_TP10_UBWC:
     {
-      format = GST_VIDEO_FORMAT_NV12_Q10LE32C;
+      format = GST_VIDEO_FORMAT_NV12_10LE32;
       n_planes = 2;
 
       strides[0] = strides[1] = stride;
@@ -1778,15 +1707,14 @@ private:
   C2Allocator::id_t    allocator_id_;
 };
 
-std::shared_ptr<C2Buffer> GstC2Utils::ImportGraphicBuffer(GstBuffer* buffer,
-    uint32_t n_subframes) {
+std::shared_ptr<C2Buffer> GstC2Utils::ImportGraphicBuffer(GstBuffer* buffer) {
 
   GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
   g_return_val_if_fail (vmeta != NULL, nullptr);
 
   ::android::C2HandleGBM *handle = new android::C2HandleGBM();
 
-  if (!GstC2Utils::ImportHandleInfo(buffer, handle, n_subframes)) {
+  if (!GstC2Utils::ImportHandleInfo(buffer, handle)) {
     GST_ERROR ("Failed to import handle info !");
     delete handle;
 

@@ -255,7 +255,6 @@ gst_metamux_data_pad_init (GstMetaMuxDataPad * pad)
 
   pad->prtlmeta = NULL;
   pad->strcache = NULL;
-  pad->lastmeta = NULL;
   pad->queue = g_queue_new ();
 }
 

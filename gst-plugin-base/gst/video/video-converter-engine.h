@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -15,18 +15,16 @@ GST_DEBUG_CATEGORY_EXTERN (gst_video_converter_engine_debug);
 
 
 // Composition flags valid only for the output frame.
-#define GST_VCE_FLAG_I8_FORMAT       (1)
-#define GST_VCE_FLAG_I16_FORMAT      (2)
-#define GST_VCE_FLAG_U16_FORMAT      (3)
-#define GST_VCE_FLAG_I32_FORMAT      (4)
-#define GST_VCE_FLAG_U32_FORMAT      (5)
-#define GST_VCE_FLAG_F16_FORMAT      (6)
-#define GST_VCE_FLAG_F32_FORMAT      (7)
+#define GST_VCE_FLAG_F32_FORMAT      (1)
+#define GST_VCE_FLAG_F16_FORMAT      (2)
+#define GST_VCE_FLAG_I32_FORMAT      (3)
+#define GST_VCE_FLAG_U32_FORMAT      (4)
+#define GST_VCE_FLAG_I8_FORMAT       (5)
 
 #define GST_VCE_BLIT_INIT \
-    { NULL, {0, 0, 0, 0}, {0, 0, 0, 0}, 255, GST_VCE_ROTATE_0, GST_VCE_FLIP_NONE }
+    { NULL, FALSE, NULL, NULL, 0, 255, GST_VCE_ROTATE_0, GST_VCE_FLIP_NONE }
 #define GST_VCE_COMPOSITION_INIT \
-    { NULL, 0, NULL, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
+    { NULL, 0, NULL, FALSE, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
         { 1.0, 1.0, 1.0, 1.0 }, 0 }
 
 // Maximum number of image channels, used for normalization offsets and scales.
@@ -62,7 +60,6 @@ typedef enum {
 
 /**
  * GstVideoConvBackend:
- * @GST_VCE_BACKEND_NONE: Do not use any backend
  * @GST_VCE_BACKEND_C2D: Use C2D based video converter.
  * @GST_VCE_BACKEND_GLES: Use OpenGLES based video converter.
  * @GST_VCE_BACKEND_FCV: Use FastCV based video converter.
@@ -70,7 +67,6 @@ typedef enum {
  * The backend of the video converter engine.
  */
 typedef enum {
-  GST_VCE_BACKEND_NONE,
   GST_VCE_BACKEND_C2D,
   GST_VCE_BACKEND_GLES,
   GST_VCE_BACKEND_FCV,
@@ -113,9 +109,11 @@ typedef enum {
 
 /**
  * GstVideoBlit:
- * @inframe: Input video frame.
- * @source: Source region in the input frame.
- * @destination: Destination region in the output frame.
+ * @frame: Input video frame.
+ * @isubwc: Whether the frame has Universal Bandwidth Compression.
+ * @sources: Source regions in the frame.
+ * @destinations: Destination regions in the frame.
+ * @n_regions: Number of Source - Destination region pairs.
  * @alpha: Global alpha, 0 = fully transparent, 255 = fully opaque.
  * @rotate: The degrees at which the frame will be rotatte.
  * @flip: The directions at which the frame will be flipped.
@@ -126,9 +124,11 @@ typedef enum {
 struct _GstVideoBlit
 {
   GstVideoFrame      *frame;
+  gboolean           isubwc;
 
-  GstVideoRectangle  source;
-  GstVideoRectangle  destination;
+  GstVideoRectangle  *sources;
+  GstVideoRectangle  *destinations;
+  guint8             n_regions;
 
   guint8             alpha;
   GstVideoConvRotate rotate;
@@ -140,6 +140,7 @@ struct _GstVideoBlit
  * @blits: Array of blit objects.
  * @n_blits: Number of blit objects.
  * @frame: Output video frame where the blit objects will be placed.
+ * @isubwc: Whether the frame has Universal Bandwidth Compression.
  * @bgcolor: Background color to be applied if bgfill is set to TRUE.
  * @bgfill: Whether to fill the background of the frame image with bgcolor.
  * @offsets: Channel offset factors, used in normalize float operation.
@@ -154,6 +155,7 @@ struct _GstVideoComposition
   guint         n_blits;
 
   GstVideoFrame *frame;
+  gboolean      isubwc;
 
   guint32       bgcolor;
   gboolean      bgfill;

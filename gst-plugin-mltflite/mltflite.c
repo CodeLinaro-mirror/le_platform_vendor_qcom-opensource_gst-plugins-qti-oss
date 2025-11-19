@@ -89,11 +89,11 @@ G_DEFINE_TYPE (GstMLTFLite, gst_ml_tflite, GST_TYPE_BASE_TRANSFORM);
 #define DEFAULT_PROP_MIN_BUFFERS 2
 #define DEFAULT_PROP_MAX_BUFFERS 10
 
-#if !defined(HAVE_TFLITE_VERSION_H) || TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
-#define GST_ML_TFLITE_TENSOR_TYPES "{ INT8, UINT8, INT16, UINT16, INT32, UINT32, INT64, UINT64, FLOAT16, FLOAT32 }"
+#if TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+#define GST_ML_TFLITE_TENSOR_TYPES "{ INT8, UINT8, INT32, UINT32, FLOAT16, FLOAT32 }"
 #else
-#define GST_ML_TFLITE_TENSOR_TYPES "{ INT8, UINT8, INT16, UINT16, INT32, INT64, UINT64, FLOAT16, FLOAT32 }"
-#endif // !defined(HAVE_TFLITE_VERSION_H) || TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
+#define GST_ML_TFLITE_TENSOR_TYPES "{ INT8, UINT8, INT32, FLOAT16, FLOAT32 }"
+#endif // TF_MAJOR_VERSION > 2 || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 5)
 
 #define GST_ML_TFLITE_CAPS                        \
     "neural-network/tensors, "                    \
@@ -364,6 +364,7 @@ gst_ml_tflite_transform_caps (GstBaseTransform * base,
 {
   GstMLTFLite *tflite = GST_ML_TFLITE (base);
   GstCaps *result = NULL;
+  const GstMLInfo *mlinfo = NULL;
   const GValue *value = NULL;
 
   if ((NULL == tflite->engine) && (filter != NULL))
@@ -377,15 +378,19 @@ gst_ml_tflite_transform_caps (GstBaseTransform * base,
 
   switch (direction) {
     case GST_PAD_SRC:
-      result = gst_ml_tflite_engine_get_input_caps (tflite->engine);
+      mlinfo = gst_ml_tflite_engine_get_input_info (tflite->engine);
       break;
     case GST_PAD_SINK:
-      result = gst_ml_tflite_engine_get_output_caps (tflite->engine);
+      mlinfo = gst_ml_tflite_engine_get_output_info (tflite->engine);
       break;
     default:
       GST_ERROR_OBJECT (tflite, "Invalid pad direction!");
       return NULL;
   }
+
+  // The source and sink pads caps do not depend on each other so directly take
+  // the ML caps from the engine for the corresponding pad and apply filter.
+  result = gst_ml_info_to_caps (mlinfo);
 
   // Extract the rate.
   value = gst_structure_get_value (gst_caps_get_structure (caps, 0), "rate");
@@ -414,6 +419,7 @@ gst_ml_tflite_accept_caps (GstBaseTransform * base, GstPadDirection direction,
 {
   GstMLTFLite *tflite = GST_ML_TFLITE (base);
   GstCaps *mlcaps = NULL;
+  const GstMLInfo *mlinfo = NULL;
 
   GST_DEBUG_OBJECT (tflite, "Accept caps: %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
@@ -423,10 +429,13 @@ gst_ml_tflite_accept_caps (GstBaseTransform * base, GstPadDirection direction,
   } else if ((NULL == tflite->engine) && (direction == GST_PAD_SRC)) {
     mlcaps = gst_pad_get_pad_template_caps (GST_BASE_TRANSFORM_SRC_PAD (base));
   } else if (direction == GST_PAD_SINK) {
-    mlcaps = gst_ml_tflite_engine_get_input_caps (tflite->engine);
+    mlinfo = gst_ml_tflite_engine_get_input_info (tflite->engine);
   } else if (direction == GST_PAD_SRC) {
-    mlcaps = gst_ml_tflite_engine_get_output_caps (tflite->engine);
+    mlinfo = gst_ml_tflite_engine_get_output_info (tflite->engine);
   }
+
+  if ((mlinfo != NULL) && (NULL == mlcaps))
+    mlcaps = gst_ml_info_to_caps (mlinfo);
 
   if (NULL == mlcaps) {
     GST_ERROR_OBJECT (base, "Failed to get ML caps!");
@@ -439,38 +448,6 @@ gst_ml_tflite_accept_caps (GstBaseTransform * base, GstPadDirection direction,
     GST_WARNING_OBJECT (base, "Caps can't intersect!");
     return FALSE;
   }
-
-  return TRUE;
-}
-
-static gboolean
-gst_ml_tflite_set_caps (GstBaseTransform * base, GstCaps * incaps,
-    GstCaps * outcaps)
-{
-  GstMLTFLite *tflite = GST_ML_TFLITE (base);
-  GstMLInfo info;
-
-  if (!gst_ml_info_from_caps (&info, incaps)) {
-    GST_ERROR_OBJECT (tflite, "Failed to get input ML info from caps!");
-    return FALSE;
-  }
-
-  if (tflite->ininfo != NULL)
-    gst_ml_info_free (tflite->ininfo);
-
-  tflite->ininfo = gst_ml_info_copy (&info);
-  GST_DEBUG_OBJECT (tflite, "Input caps: %" GST_PTR_FORMAT, incaps);
-
-  if (!gst_ml_info_from_caps (&info, outcaps)) {
-    GST_ERROR_OBJECT (tflite, "Failed to get input ML info from caps!");
-    return FALSE;
-  }
-
-  if (tflite->outinfo != NULL)
-    gst_ml_info_free (tflite->outinfo);
-
-  tflite->outinfo = gst_ml_info_copy (&info);
-  GST_DEBUG_OBJECT (tflite, "Output caps: %" GST_PTR_FORMAT, outcaps);
 
   return TRUE;
 }
@@ -547,6 +524,7 @@ gst_ml_tflite_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 {
   GstMLTFLite *tflite = GST_ML_TFLITE (base);
   GstMLFrame inframe, outframe;
+  const GstMLInfo * info = NULL;
   GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
   GstClockTimeDiff tsdelta = GST_CLOCK_STIME_NONE;
 
@@ -555,14 +533,18 @@ gst_ml_tflite_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
+  info = gst_ml_tflite_engine_get_input_info (tflite->engine);
+
   // Create ML frame from input buffer.
-  if (!gst_ml_frame_map (&inframe, tflite->ininfo, inbuffer, GST_MAP_READ)) {
+  if (!gst_ml_frame_map (&inframe, info, inbuffer, GST_MAP_READ)) {
     GST_ERROR_OBJECT (tflite, "Failed to map input buffer!");
     return GST_FLOW_ERROR;
   }
 
+  info = gst_ml_tflite_engine_get_output_info (tflite->engine);
+
   // Create ML frame from output buffer.
-  if (!gst_ml_frame_map (&outframe, tflite->outinfo, outbuffer, GST_MAP_READWRITE)) {
+  if (!gst_ml_frame_map (&outframe, info, outbuffer, GST_MAP_READWRITE)) {
     GST_ERROR_OBJECT (tflite, "Failed to map output buffer!");
     gst_ml_frame_unmap (&inframe);
     return GST_FLOW_ERROR;
@@ -673,12 +655,6 @@ gst_ml_tflite_finalize (GObject * object)
   }
 #endif // HAVE_EXTERNAL_DELEGATE_H
 
-  if (tflite->outinfo != NULL)
-    gst_ml_info_free (tflite->outinfo);
-
-  if (tflite->ininfo != NULL)
-    gst_ml_info_free (tflite->ininfo);
-
   gst_ml_tflite_engine_free (tflite->engine);
 
   if (tflite->outpool != NULL)
@@ -750,7 +726,6 @@ gst_ml_tflite_class_init (GstMLTFLiteClass * klass)
 
   base->transform_caps = GST_DEBUG_FUNCPTR (gst_ml_tflite_transform_caps);
   base->accept_caps = GST_DEBUG_FUNCPTR (gst_ml_tflite_accept_caps);
-  base->set_caps = GST_DEBUG_FUNCPTR (gst_ml_tflite_set_caps);
 
   base->transform = GST_DEBUG_FUNCPTR (gst_ml_tflite_transform);
 }
@@ -760,8 +735,6 @@ gst_ml_tflite_init (GstMLTFLite * tflite)
 {
   tflite->outpool = NULL;
   tflite->engine = NULL;
-  tflite->ininfo = NULL;
-  tflite->outinfo = NULL;
 
   tflite->model = DEFAULT_PROP_MODEL;
   tflite->delegate = DEFAULT_PROP_DELEGATE;

@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-
-################################################################################
-# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
-################################################################################
 
 import os
 import sys
@@ -15,63 +11,63 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import Gst, GLib
 
-# Configurations for Detection (0)
-DEFAULT_DETECTION_INPUT_0 = "/etc/media/detection_input.mp4"
-DEFAULT_DETECTION_MODEL_0 = "/etc/models/yolox_quantized.tflite"
-DEFAULT_DETECTION_MODULE_0 = "yolov8"
-DEFAULT_DETECTION_LABELS_0 = "/etc/labels/yolox.labels"
-DEFAULT_DETECTION_CONSTANTS_0 = "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
-
-# Configurations for Detection (1)
-DEFAULT_DETECTION_INPUT_1 = "/etc/media/detection_input.mp4"
-DEFAULT_DETECTION_MODEL_1 = "/etc/models/yolox_quantized.tflite"
-DEFAULT_DETECTION_MODULE_1 = "yolov8"
-DEFAULT_DETECTION_LABELS_1 = "/etc/labels/yolox.labels"
-DEFAULT_DETECTION_CONSTANTS_1 = "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
-
-# Configurations for Classification
-DEFAULT_CLASSIFICATION_INPUT = "/etc/media/classification_input.mp4"
-DEFAULT_CLASSIFICATION_MODEL = "/etc/models/Resnet101_Quantized.tflite"
-DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
-DEFAULT_CLASSIFICATION_LABELS = "/etc/labels/resnet101.labels"
-DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
-    q-scales=<0.21351955831050873>;"
-
-# Configurations for Segmentation
-DEFAULT_SEGMENTATION_INPUT = "/etc/media/segmentation_input.MOV"
-DEFAULT_SEGMENTATION_MODEL = "/etc/models/ffnet_40s_quantized.tflite"
-DEFAULT_SEGMENTATION_MODULE = "deeplab-argmax"
-DEFAULT_SEGMENTATION_LABELS = "/etc/labels/dv3-argmax.labels"
-DEFAULT_SEGMENTATION_CONSTANTS = "FFNet-40S,q-offsets=<50.0>,\
-    q-scales=<0.31378185749053955>;"
-
-DESCRIPTION = f"""
+DESCRIPTION = """
 The application uses:
-- A TFLite model to identify the object in scene from video file and
+- YOLOv8 TFLite model to identify the object in scene from video file and
 overlay the bounding boxes over the detected objects
-- A TFLite model to identify the object in scene from video file and
+- YOLOv8 TFLite model to identify the object in scene from video file and
 overlay the bounding boxes over the detected objects
-- A TFLite model to classify scene from video file and overlay the
+- Resnet101 TFLite model to classify scene from video file and overlay the
 classification labels on the top left corner
-- A TFLite model to produce semantic segmentations for video file
+- FFNet40S TFLite model to produce semantic segmentations for video file
 Then the results are shown side by side on the display.
 
 The default file paths in the python script are as follows:
-- Input video for detection:      {DEFAULT_DETECTION_INPUT_0}
-- Detection model:                {DEFAULT_DETECTION_MODEL_0}
-- Detection labels:               {DEFAULT_DETECTION_LABELS_0}
-- Input video for classification: {DEFAULT_CLASSIFICATION_INPUT}
-- Classification model:           {DEFAULT_CLASSIFICATION_MODEL}
-- Classification labels:          {DEFAULT_CLASSIFICATION_LABELS}
-- Input video for segmentation:   {DEFAULT_SEGMENTATION_INPUT}
-- Segmentation model:             {DEFAULT_SEGMENTATION_MODEL}
-- Segmentation labels:            {DEFAULT_SEGMENTATION_LABELS}
+- Detection model (YOLOv8): /opt/data/YoloV8N_Detection_Quantized.tflite
+- Detection labels: /opt/data/yolov8n.labels
+- Classification model: /opt/data/Resnet101_Quantized.tflite
+- Classification labels: /opt/data/resnet101.labels
+- Segmentation model: /opt/data/ffnet_40s_quantized.tflite
+- Segmentation labels: /opt/data/dv3-argmax.labels
+- Input video for detection: /opt/data/detection_input.mp4
+- Input video for classification: /opt/data/classification_input.mp4
+- Input video for segmentation: /opt/data/segmentation_input.MOV
 
 To override the default settings,
 please configure the corresponding module and constants as well.
 """
+
+# Configurations for Detection (0)
+DEFAULT_DETECTION_INPUT_0 = "/opt/data/detection_input.mp4"
+DEFAULT_DETECTION_MODEL_0 = "/opt/data/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE_0 = "yolov8"
+DEFAULT_DETECTION_LABELS_0 = "/opt/data/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS_0 = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+# Configurations for Detection (1)
+DEFAULT_DETECTION_INPUT_1 = "/opt/data/detection_input.mp4"
+DEFAULT_DETECTION_MODEL_1 = "/opt/data/YoloV8N_Detection_Quantized.tflite"
+DEFAULT_DETECTION_MODULE_1 = "yolov8"
+DEFAULT_DETECTION_LABELS_1 = "/opt/data/yolov8n.labels"
+DEFAULT_DETECTION_CONSTANTS_1 = "YoloV8,q-offsets=<-107.0,-128.0,0.0>,\
+    q-scales=<3.093529462814331,0.00390625,1.0>;"
+
+# Configurations for Classification
+DEFAULT_CLASSIFICATION_INPUT = "/opt/data/classification_input.mp4"
+DEFAULT_CLASSIFICATION_MODEL = "/opt/data/Resnet101_Quantized.tflite"
+DEFAULT_CLASSIFICATION_MODULE = "mobilenet"
+DEFAULT_CLASSIFICATION_LABELS = "/opt/data/resnet101.labels"
+DEFAULT_CLASSIFICATION_CONSTANTS = "Mobilenet,q-offsets=<-82.0>,\
+    q-scales=<0.21351955831050873>;"
+
+# Configurations for Segmentation
+DEFAULT_SEGMENTATION_INPUT = "/opt/data/segmentation_input.MOV"
+DEFAULT_SEGMENTATION_MODEL = "/opt/data/ffnet_40s_quantized.tflite"
+DEFAULT_SEGMENTATION_MODULE = "deeplab-argmax"
+DEFAULT_SEGMENTATION_LABELS = "/opt/data/dv3-argmax.labels"
+DEFAULT_SEGMENTATION_CONSTANTS = "FFNet-40S,q-offsets=<50.0>,\
+    q-scales=<0.31378185749053955>;"
 
 eos_received = False
 def create_element(factory_name, name):
@@ -100,14 +96,24 @@ def construct_pipeline(pipe):
     """Initialize and link elements for the GStreamer pipeline."""
     # Parse arguments
     parser = argparse.ArgumentParser(
-        description=DESCRIPTION,
+        add_help=False,
         formatter_class=type(
-            'CustomFormatter',
-            (argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter),
-            {}
-        )
+            "CustomFormatter",
+            (
+                argparse.ArgumentDefaultsHelpFormatter,
+                argparse.RawTextHelpFormatter,
+            ),
+            {},
+        ),
     )
 
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help=DESCRIPTION,
+    )
     parser.add_argument(
         "--detection_input_0", type=str, default=DEFAULT_DETECTION_INPUT_0,
         help="Input File Path for Detection (0)"
@@ -230,12 +236,14 @@ def construct_pipeline(pipe):
         "qtdemux_0":         create_element("qtdemux", "qtdemux0"),
         "h264parse_0":       create_element("h264parse", "h264parser0"),
         "v4l2h264dec_0":     create_element("v4l2h264dec", "v4l2h264decoder0"),
-        "deccaps_0":         create_element("capsfilter", "deccaps0"),
         "tee_0":             create_element("tee", "split0"),
         "mlvconverter_0":    create_element("qtimlvconverter", "converter0"),
+        "queue_0":           create_element("queue", "queue0"),
         "mltflite_0":        create_element("qtimltflite", "inference0"),
+        "queue_1":           create_element("queue", "queue1"),
         "mlvdetection_0":    create_element("qtimlvdetection", "detection0"),
         "capsfilter_0":      create_element("capsfilter", "metamux0metacaps"),
+        "queue_2":           create_element("queue", "queue2"),
         "metamux_0":         create_element("qtimetamux", "metamux0"),
         "overlay_0":         create_element("qtivoverlay", "overlay0"),
         # Stream 1
@@ -243,12 +251,14 @@ def construct_pipeline(pipe):
         "qtdemux_1":         create_element("qtdemux", "qtdemux1"),
         "h264parse_1":       create_element("h264parse", "h264parser1"),
         "v4l2h264dec_1":     create_element("v4l2h264dec", "v4l2h264decoder1"),
-        "deccaps_1":         create_element("capsfilter", "deccaps1"),
         "tee_1":             create_element("tee", "split1"),
         "mlvconverter_1":    create_element("qtimlvconverter", "converter1"),
+        "queue_3":           create_element("queue", "queue3"),
         "mltflite_1":        create_element("qtimltflite", "inference1"),
+        "queue_4":           create_element("queue", "queue4"),
         "mlvdetection_1":    create_element("qtimlvdetection", "detection1"),
         "capsfilter_1":      create_element("capsfilter", "metamux1metacaps"),
+        "queue_5":           create_element("queue", "queue5"),
         "metamux_1":         create_element("qtimetamux", "metamux1"),
         "overlay_1":         create_element("qtivoverlay", "overlay1"),
         # Stream 2
@@ -256,12 +266,14 @@ def construct_pipeline(pipe):
         "qtdemux_2":         create_element("qtdemux", "qtdemux2"),
         "h264parse_2":       create_element("h264parse", "h264parser2"),
         "v4l2h264dec_2":     create_element("v4l2h264dec", "v4l2h264decoder2"),
-        "deccaps_2":         create_element("capsfilter", "deccaps2"),
         "tee_2":             create_element("tee", "split2"),
         "mlvconverter_2":    create_element("qtimlvconverter", "converter2"),
+        "queue_6":           create_element("queue", "queue6"),
         "mltflite_2":        create_element("qtimltflite", "inference2"),
+        "queue_7":           create_element("queue", "queue7"),
         "mlvclassification": create_element("qtimlvclassification", "classification"),
         "capsfilter_2":      create_element("capsfilter", "metamux2metacaps"),
+        "queue_8":           create_element("queue", "queue8"),
         "metamux_2":         create_element("qtimetamux", "metamux2"),
         "overlay_2":         create_element("qtivoverlay", "overlay2"),
         # Stream 3
@@ -269,22 +281,21 @@ def construct_pipeline(pipe):
         "qtdemux_3":         create_element("qtdemux", "qtdemux3"),
         "h264parse_3":       create_element("h264parse", "h264parser3"),
         "v4l2h264dec_3":     create_element("v4l2h264dec", "v4l2h264decoder3"),
-        "deccaps_3":         create_element("capsfilter", "deccaps3"),
         "tee_3":             create_element("tee", "split3"),
+        "queue_9":           create_element("queue", "queue9"),
         "mlvconverter_3":    create_element("qtimlvconverter", "converter3"),
+        "queue_10":          create_element("queue", "queue10"),
         "mltflite_3":        create_element("qtimltflite", "inference3"),
+        "queue_11":          create_element("queue", "queue11"),
         "mlvsegmentation":   create_element("qtimlvsegmentation", "segmentation"),
         "capsfilter_3":      create_element("capsfilter", "metamux3metacaps"),
+        "queue_12":          create_element("queue", "queue12"),
         # Side by side all streams
         "composer":          create_element("qtivcomposer", "composer"),
+        "queue_13":          create_element("queue", "queue13"),
         "display":           create_element("waylandsink", "display")
     }
     # fmt: on
-
-    queue_count = 21
-    for i in range(queue_count):
-        queue_name = f"queue_{i}"
-        elements[queue_name] = create_element("queue", queue_name)
 
     # Set element properties
     # Stream 0
@@ -294,12 +305,8 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse_0"], "config-interval", "1")
 
-    Gst.util_set_object_arg(elements["v4l2h264dec_0"], "capture-io-mode", "dmabuf")
-    Gst.util_set_object_arg(elements["v4l2h264dec_0"], "output-io-mode", "dmabuf")
-
-    Gst.util_set_object_arg(
-        elements["deccaps_0"], "caps", "video/x-raw,format=NV12"
-    )
+    Gst.util_set_object_arg(elements["v4l2h264dec_0"], "capture-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264dec_0"], "output-io-mode", "5")
 
     Gst.util_set_object_arg(elements["mltflite_0"], "delegate", "external")
     Gst.util_set_object_arg(
@@ -341,12 +348,8 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse_1"], "config-interval", "1")
 
-    Gst.util_set_object_arg(elements["v4l2h264dec_1"], "capture-io-mode", "dmabuf")
-    Gst.util_set_object_arg(elements["v4l2h264dec_1"], "output-io-mode", "dmabuf")
-
-    Gst.util_set_object_arg(
-        elements["deccaps_1"], "caps", "video/x-raw,format=NV12"
-    )
+    Gst.util_set_object_arg(elements["v4l2h264dec_1"], "capture-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264dec_1"], "output-io-mode", "5")
 
     Gst.util_set_object_arg(elements["mltflite_1"], "delegate", "external")
     Gst.util_set_object_arg(
@@ -386,12 +389,8 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse_2"], "config-interval", "2")
 
-    Gst.util_set_object_arg(elements["v4l2h264dec_2"], "capture-io-mode", "dmabuf")
-    Gst.util_set_object_arg(elements["v4l2h264dec_2"], "output-io-mode", "dmabuf")
-
-    Gst.util_set_object_arg(
-        elements["deccaps_2"], "caps", "video/x-raw,format=NV12"
-    )
+    Gst.util_set_object_arg(elements["v4l2h264dec_2"], "capture-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264dec_2"], "output-io-mode", "5")
 
     Gst.util_set_object_arg(elements["mltflite_2"], "delegate", "external")
     Gst.util_set_object_arg(
@@ -434,12 +433,8 @@ def construct_pipeline(pipe):
 
     Gst.util_set_object_arg(elements["h264parse_3"], "config-interval", "2")
 
-    Gst.util_set_object_arg(elements["v4l2h264dec_3"], "capture-io-mode", "dmabuf")
-    Gst.util_set_object_arg(elements["v4l2h264dec_3"], "output-io-mode", "dmabuf")
-
-    Gst.util_set_object_arg(
-        elements["deccaps_3"], "caps", "video/x-raw,format=NV12"
-    )
+    Gst.util_set_object_arg(elements["v4l2h264dec_3"], "capture-io-mode", "5")
+    Gst.util_set_object_arg(elements["v4l2h264dec_3"], "output-io-mode", "5")
 
     Gst.util_set_object_arg(elements["mltflite_3"], "delegate", "external")
     Gst.util_set_object_arg(
@@ -481,41 +476,38 @@ def construct_pipeline(pipe):
     link_orders = [
         [ "filesrc_0", "qtdemux_0" ],
         [
-            "h264parse_0", "v4l2h264dec_0", "deccaps_0", "tee_0", "queue_0",
-            "metamux_0", "overlay_0", "composer"
-        ],
-        [
-            "tee_0", "queue_1", "mlvconverter_0", "queue_2", "mltflite_0",
-            "queue_3", "mlvdetection_0", "queue_4", "capsfilter_0", "metamux_0"
-        ],
-        [ "filesrc_1", "qtdemux_1" ],
-        [
-            "h264parse_1", "v4l2h264dec_1", "deccaps_1", "tee_1", "queue_5",
-            "metamux_1", "overlay_1", "composer"
-        ],
-        [
-            "tee_1", "queue_6", "mlvconverter_1", "queue_7", "mltflite_1",
-            "queue_8", "mlvdetection_1", "queue_9", "capsfilter_1", "metamux_1"
-        ],
-        [ "filesrc_2", "qtdemux_2" ],
-        [
-            "h264parse_2", "v4l2h264dec_2", "deccaps_2", "tee_2", "queue_10",
-            "metamux_2", "overlay_2", "composer"
-        ],
-        [
-            "tee_2", "queue_11", "mlvconverter_2", "queue_12", "mltflite_2",
-            "queue_13", "mlvclassification", "queue_14", "capsfilter_2", "metamux_2"
-        ],
-        [ "filesrc_3", "qtdemux_3" ],
-        [
-            "h264parse_3", "v4l2h264dec_3", "deccaps_3", "tee_3", "queue_15",
+            "h264parse_0", "v4l2h264dec_0", "tee_0", "metamux_0", "overlay_0",
             "composer"
         ],
         [
-            "tee_3", "queue_16", "mlvconverter_3", "queue_17", "mltflite_3",
-            "queue_18", "mlvsegmentation", "queue_19", "composer"
+            "tee_0", "mlvconverter_0", "queue_0", "mltflite_0", "queue_1",
+            "mlvdetection_0", "queue_2", "capsfilter_0", "metamux_0"
         ],
-        [ "composer", "queue_20", "display" ]
+        [ "filesrc_1", "qtdemux_1" ],
+        [
+            "h264parse_1", "v4l2h264dec_1", "tee_1", "metamux_1", "overlay_1",
+            "composer"
+        ],
+        [
+            "tee_1", "mlvconverter_1", "queue_3", "mltflite_1", "queue_4",
+            "mlvdetection_1", "queue_5", "capsfilter_1", "metamux_1"
+        ],
+        [ "filesrc_2", "qtdemux_2" ],
+        [
+            "h264parse_2", "v4l2h264dec_2", "tee_2", "metamux_2", "overlay_2",
+            "composer"
+        ],
+        [
+            "tee_2", "mlvconverter_2", "queue_6", "mltflite_2", "queue_7",
+            "mlvclassification", "queue_8", "capsfilter_2", "metamux_2"
+        ],
+        [ "filesrc_3", "qtdemux_3" ],
+        [ "h264parse_3", "v4l2h264dec_3", "tee_3", "queue_9", "composer" ],
+        [
+            "tee_3", "mlvconverter_3", "queue_10", "mltflite_3", "queue_11",
+            "mlvsegmentation", "queue_12", "composer"
+        ],
+        [ "composer", "queue_13", "display" ]
     ]
     # fmt: on
     link_elements(link_orders, elements)
@@ -611,23 +603,11 @@ def handle_interrupt_signal(pipe, loop):
         quit_mainloop(loop)
     return GLib.SOURCE_CONTINUE
 
-def is_linux():
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if "Linux" in line:
-                    return True
-    except FileNotFoundError:
-        return False
-    return False
 
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-
-    # Set the environment
-    if is_linux():
-        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
+    os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
+    os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     Gst.init(None)
 

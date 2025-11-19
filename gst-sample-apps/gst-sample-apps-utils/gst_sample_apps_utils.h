@@ -79,7 +79,6 @@ typedef enum {
  * @GST_YOLO_TYPE_V8  : Yolov8 Object Detection Model.
  * @GST_YOLO_TYPE_NAS : Yolonas Object Detection Model.
  * @GST_YOLO_TYPE_V7  : YoloV7 Object Detection Model.
- * @GST_YOLO_TYPE_X   : Yolox Object Detection Model.
  *
  * Type of Yolo Model.
  */
@@ -88,8 +87,7 @@ typedef enum {
   GST_YOLO_TYPE_V5,
   GST_YOLO_TYPE_V8,
   GST_YOLO_TYPE_NAS,
-  GST_YOLO_TYPE_V7,
-  GST_YOLO_TYPE_X
+  GST_YOLO_TYPE_V7
 } GstYoloModelType;
 
 /**
@@ -354,20 +352,6 @@ typedef enum {
 } GstFlipVideoType;
 
 /**
- * GstMLVideoDisposition:
- * @GST_ML_VIDEO_DISPOSITION_TOP_LEFT: Top Left disposition.
- * @GST_ML_VIDEO_DISPOSITION_CENTRE: Centre disposition.
- * @GST_ML_VIDEO_DISPOSITION_STRETCH: Stretch disposition
- * Options to select Video disposition type.
- */
-typedef enum
-{
-  GST_ML_VIDEO_DISPOSITION_TOP_LEFT,
-  GST_ML_VIDEO_DISPOSITION_CENTRE,
-  GST_ML_VIDEO_DISPOSITION_STRETCH
-} GstVideoDisposition;
-
-/**
  * GstRotateVideoType:
  * @GST_ROTATE_TYPE_NONE: No video rotation.
  * @GST_ROTATE_TYPE_90CW: 90 degree video rotation.
@@ -381,28 +365,6 @@ typedef enum {
   GST_ROTATE_TYPE_90CCW,
   GST_ROTATE_TYPE_180
 } GstRotateVideoType;
-
-/**
- * GstInputStreamType:
- * @GST_INPUT_STREAM_H264: H264 input stream encoding
- * @GST_INPUT_STREAM_H265: H265 input stream encoding
- */
-typedef enum {
-  GST_INPUT_STREAM_H264,
-  GST_INPUT_STREAM_H265
-} GstInputStreamType;
-
-/**
- * GstVideoFormat:
- * @GST_NV12_VIDEO_FORMAT: NV12 Format
- * @GST_YUV2_VIDEO_FORMAT: YUY2 Format
- * @GST_MJPEG_VIDEO_FORMAT: MJPEG Video Format
- */
- enum GstVideoFormat{
-  GST_NV12_VIDEO_FORMAT,
-  GST_YUV2_VIDEO_FORMAT,
-  GST_MJPEG_VIDEO_FORMAT
-};
 
 /*
  * Check if File Exists
