@@ -8,6 +8,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/ml/gstmlpool.h>
+#include <gst/ml/ml-frame.h>
 
 #ifdef HAVE_LINUX_DMA_BUF_H
 #include <sys/ioctl.h>
@@ -20,7 +21,7 @@
 #include <unistd.h>
 #include <cairo/cairo.h>
 
-#include "modules/qti-ml-post-proccess.h"
+#include "modules/qti-ml-post-process.h"
 #include "modules/qti-json-parser.h"
 
 #define DISPLACEMENT_THRESHOLD      0.7F
@@ -139,8 +140,18 @@ gst_ml_post_process_boxes_intersection_score (ObjectDetection& l_box,
  * return: None.
  **/
 void
-gst_ml_post_process_box_displacement_correction (ObjectDetection &l_box,
+gst_ml_post_process_box_displacement_correction (ObjectDetection& l_box,
                                                  ObjectDetections& boxes);
+
+/* gst_ml_box_compare_entries_by_position
+ *
+ * Helper function to compare boxes by position.
+ *
+ * return: TRUE if arguments in order.
+ **/
+gboolean
+gst_ml_box_compare_entries_by_position (ObjectDetection& l_entry,
+                                        ObjectDetection& r_entry);
 
 /* gst_ml_module_caps_get_type
  *
@@ -224,3 +235,22 @@ gst_cairo_draw_setup (GstVideoFrame * frame, cairo_surface_t ** surface,
 void
 gst_cairo_draw_cleanup (GstVideoFrame * frame, cairo_surface_t * surface,
     cairo_t * context);
+
+/* gst_ml_tensors_convert
+ *
+ * Helper function to convert GstMLFrame to Tensors.
+ *
+ * return: Success.
+ **/
+gboolean
+gst_ml_tensors_convert (const GstMLFrame& mlframe, GstBuffer * buffer,
+    Tensors& tensors);
+
+/* gst_is_valid_protection_meta
+ *
+ * Helper function to check if necessary fields are present in protection meta.
+ *
+ * return: Success.
+ **/
+gboolean
+gst_is_valid_protection_meta (const GstProtectionMeta *pmeta);

@@ -433,7 +433,7 @@ gst_ml_post_process_boxes_intersection_score (ObjectDetection& l_box,
 }
 
 void
-gst_ml_post_process_box_displacement_correction (ObjectDetection &l_box,
+gst_ml_post_process_box_displacement_correction (ObjectDetection& l_box,
     ObjectDetections& boxes)
 {
   gdouble score = 0.0;
@@ -462,6 +462,23 @@ gst_ml_post_process_box_displacement_correction (ObjectDetection &l_box,
   }
 
   return;
+}
+
+gboolean
+gst_ml_box_compare_entries_by_position (ObjectDetection& l_entry,
+    ObjectDetection& r_entry)
+{
+  gfloat delta = l_entry.left - r_entry.left;
+
+  if (fabs (delta) > POSITION_THRESHOLD)
+    return (delta < 0);
+
+  delta = l_entry.top - r_entry.top;
+
+  if (fabs (delta) > POSITION_THRESHOLD)
+    return (delta < 0);
+
+  return TRUE;
 }
 
 GQuark
@@ -700,4 +717,92 @@ gst_cairo_draw_cleanup (GstVideoFrame * frame, cairo_surface_t * surface,
       GST_WARNING ("DMA IOCTL SYNC END failed!");
   }
 #endif // HAVE_LINUX_DMA_BUF_H
+}
+
+gboolean
+gst_ml_tensors_convert (const GstMLFrame& mlframe, GstBuffer * buffer,
+    Tensors& tensors)
+{
+  for (guint num = 0; num < GST_ML_FRAME_N_TENSORS (&mlframe); ++num) {
+    TensorType type;
+    std::string name;
+    std::vector<uint32_t> dimensions;
+    void* data = NULL;
+    GstMLTensorMeta *mlmeta = NULL;
+    guint size = 1;
+
+    mlmeta = gst_buffer_get_ml_tensor_meta_id (buffer, num);
+
+    if (mlmeta == NULL) {
+      GST_ERROR ("Invalid tensor meta: %p", mlmeta);
+      return FALSE;
+    }
+
+    switch (GST_ML_FRAME_TYPE (&mlframe)) {
+      case GST_ML_TYPE_INT8:
+        type = kInt8;
+        break;
+      case GST_ML_TYPE_UINT8:
+        type = kUint8;
+        break;
+      case GST_ML_TYPE_INT32:
+        type = kInt32;
+        break;
+      case GST_ML_TYPE_UINT32:
+        type = kUint32;
+        break;
+      case GST_ML_TYPE_FLOAT16:
+        type = kFloat16;
+        break;
+      case GST_ML_TYPE_FLOAT32:
+        type = kFloat32;
+        break;
+      default:
+        GST_ERROR ("Unsupported ML type!");
+        return FALSE;
+    }
+
+    // Workaround: Sometimes mlmeta->name is NULL
+    const char *meta_name = g_quark_to_string (mlmeta->name);
+    name = std::string ((meta_name != NULL) ? meta_name : "");
+
+    // Always set batch index to 1, the postprocess will not process batching
+    dimensions.push_back (1);
+
+    for (guint pos = 1; pos < GST_ML_FRAME_N_DIMENSIONS (&mlframe, num); ++pos) {
+      dimensions.push_back (GST_ML_FRAME_DIM (&mlframe, num, pos));
+      size *= GST_ML_FRAME_DIM (&mlframe, num, pos);
+    }
+
+    // Increment the pointer with the size of single batch and current index.
+    data = GST_ML_FRAME_BLOCK_DATA (&mlframe, num);
+
+    tensors.emplace_back(type, name, dimensions, data);
+  }
+
+  return TRUE;
+}
+
+gboolean
+gst_is_valid_protection_meta (const GstProtectionMeta *pmeta)
+{
+  g_return_val_if_fail (pmeta != NULL, FALSE);
+
+  const GstStructure *structure = pmeta->info;
+  gboolean success = TRUE;
+
+  // Check all required fields for protection meta
+  success &= gst_structure_has_field (structure, "timestamp");
+  if (!success)
+    GST_ERROR ("Protection meta has no timestamp!");
+
+  success &= gst_structure_has_field (structure, "sequence-index");
+  if (!success)
+    GST_ERROR ("Protection meta has no sequence-index!");
+
+  success &= gst_structure_has_field (structure, "sequence-num-entries");
+  if (!success)
+    GST_ERROR ("Protection meta has no sequence-num-entries!");
+
+  return success;
 }

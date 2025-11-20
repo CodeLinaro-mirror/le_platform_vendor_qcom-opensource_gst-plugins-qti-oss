@@ -189,25 +189,25 @@ Engine::Engine() {
   shaders_.emplace(ShaderType::kCompute32F, shader);
 
   // Construct shader code for 8-bit unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA8 + kComputeMainPlanar;
+  compute = kComputeHeader + kComputeOutputRGBA8 + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar8, shader);
 
   if (env_->QueryExtension("GL_NV_image_formats")) {
     // Construct shader code for 16-bit unaligned RGB(A) output textures.
-    compute = kComputeHeader + kComputeOutputRGBA16 + kComputeMainPlanar;
+    compute = kComputeHeader + kComputeOutputRGBA16 + kComputePlanarMain;
 
     shader = std::make_shared<ShaderProgram>(env_, compute);
     shaders_.emplace(ShaderType::kComputePlanar16, shader);
   }
 
   // Construct shader code for 16-bit float unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA16F + kComputeMainPlanar;
+  compute = kComputeHeader + kComputeOutputRGBA16F + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar16F, shader);
 
-  // Construct shader code for 16-bit float unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA32F + kComputeMainPlanar;
+  // Construct shader code for 32-bit float unaligned RGB(A) output textures.
+  compute = kComputeHeader + kComputeOutputRGBA32F + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar32F, shader);
 
@@ -348,8 +348,8 @@ std::uintptr_t Engine::Compose(const Compositions& compositions,
     if (!clean && (stgtex != 0)) {
       objects.insert(objects.begin(), Object());
 
-      objects[0].source.w = objects[0].destination.w = surface.width;
-      objects[0].source.h = objects[0].destination.h = surface.height;
+      objects[0].source = Quadrilateral(surface.width, surface.height);
+      objects[0].destination = Rectangle(surface.width, surface.height);
 
       objects[0].id = surface_id;
     }
@@ -524,7 +524,10 @@ std::string Engine::RenderYuvTexture(std::vector<GraphicTuple>& graphics,
     float hscale = static_cast<float>(height) / maxheight;
 
     for (auto& object : objects) {
-      Region destination = object.destination;
+      Rectangle destination(maxwidth, maxheight);
+
+      if (object.mask & ConfigMask::kDestination)
+        destination = object.destination;
 
       // Adjust destination coordinates which will be used for the view port.
       env_->Gles()->Viewport(destination.x * wscale, destination.y * hscale,
@@ -591,8 +594,18 @@ std::string Engine::RenderRgbTexture(std::vector<GraphicTuple>& graphics,
   env_->Gles()->ActiveTexture(GL_TEXTURE0);
   RETURN_IF_GL_ERROR(env_, "Failed to set active texture unit 0");
 
+  // Get the width and height for possible usage when setting the Viewport.
+  // Dimensions are same for all RGB planes so get them from the first entry.
+  ImageParam& imgparam = std::get<ImageParam>(graphics.at(0));
+
+  uint32_t width = std::get<0>(imgparam);
+  uint32_t height = std::get<1>(imgparam);
+
   for (auto& object : objects) {
-    const Region& destination = object.destination;
+    Rectangle destination(width, height);
+
+    if (object.mask & ConfigMask::kDestination)
+      destination = object.destination;
 
     env_->Gles()->Viewport(
         destination.x, destination.y, destination.w, destination.h);
@@ -637,8 +650,17 @@ std::string Engine::RenderStageTexture(GLuint texture, uint32_t color,
   env_->Gles()->ActiveTexture(GL_TEXTURE0);
   RETURN_IF_GL_ERROR(env_, "Failed to set active texture unit 0");
 
+  // Get the width and height for possible usage when setting the Viewport.
+  TextureTuple& textuple = stage_textures_.at(texture);
+
+  uint32_t width = std::get<0>(textuple);
+  uint32_t height = std::get<1>(textuple);
+
   for (auto& object : objects) {
-    const Region& destination = object.destination;
+    Rectangle destination(width, height);
+
+    if (object.mask & ConfigMask::kDestination)
+      destination = object.destination;
 
     env_->Gles()->Viewport(
         destination.x, destination.y, destination.w,destination.h);
@@ -670,7 +692,8 @@ std::string Engine::DrawObject(std::shared_ptr<ShaderProgram>& shader,
     shader->SetFloat("globalAlpha", (object.alpha / 255.0));
 
   // Rotation angle in radians.
-  shader->SetFloat("rotationAngle", object.rotation * M_PI / 180);
+  float angle = (object.mask & ConfigMask::kRotation) ? object.rotation : 0;
+  shader->SetFloat("rotationAngle", angle * M_PI / 180);
 
   auto mask = object.mask & (ConfigMask::kHFlip | ConfigMask::kVFlip);
   GLuint pos = shader->GetAttribLocation("vPosition");
@@ -679,21 +702,21 @@ std::string Engine::DrawObject(std::shared_ptr<ShaderProgram>& shader,
                                     kVertices.at(mask).data());
   RETURN_IF_GL_ERROR(env_, "Failed to define main vertex array");
 
-  const Region& source = object.source;
+  const Quadrilateral& source = object.source;
   std::array<float, 8> coords = kTextureCoords;
 
   uint32_t width = insurface.width;
   uint32_t height = insurface.height;
 
-  if ((source.w != 0) && (source.h != 0)) {
-    coords[0] = static_cast<float>(source.x) / width;
-    coords[1] = static_cast<float>(source.y + source.h) / height;
-    coords[2] = static_cast<float>(source.x) / width;
-    coords[3] = static_cast<float>(source.y) / height;
-    coords[4] = static_cast<float>(source.x + source.w) / width;
-    coords[5] = static_cast<float>(source.y + source.h) / height;
-    coords[6] = static_cast<float>(source.x + source.w) / width;
-    coords[7] = static_cast<float>(source.y) / height;
+  if (object.mask & ConfigMask::kSource) {
+    coords[0] = source.b.x / width;
+    coords[1] = source.b.y / height;
+    coords[2] = source.a.x / width;
+    coords[3] = source.a.y / height;
+    coords[4] = source.d.x / width;
+    coords[5] = source.d.y / height;
+    coords[6] = source.c.x / width;
+    coords[7] = source.c.y / height;
   }
 
   // Load the vertex position.
@@ -847,11 +870,12 @@ bool Engine::IsSurfaceRenderable(const Surface& surface) {
   if (Format::IsSigned(surface.format))
     return false;
 
-  uint32_t n_components = Format::NumComponents(surface.format);
-
-  // RGB(A) planar formats are not renderable
-  if (Format::IsPlanar(surface.format))
+  // Float planar RGB formats are not rederable as there is no DRM format.
+  // TODO Remove when float planar RGB formats are supported.
+  if (Format::IsFloat(surface.format) && Format::IsPlanar(surface.format))
     return false;
+
+  uint32_t n_components = Format::NumComponents(surface.format);
 
   // 3 channeled Float RGB surfaces are not renderable due to limitation.
   // TODO Remove when 3 channel RGB float formats are supported.
@@ -1092,9 +1116,15 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
     uint32_t n_components = Format::NumComponents(surface.format);
     uint32_t bitdepth = Format::BitDepth(surface.format);
 
-    // Overwrite the 3 channeled format to corresponding 4 channeled format.
+    // For planar formats reset to single plane and adjust stride.
+    if (Format::IsPlanar(surface.format)) {
+      subsurface.planes.resize(1);
+      subsurface.planes[0].stride *= n_components;
+    }
+
+    // Overwrite formats to corresponding 4 channeled format if necessary.
     // This will make it compatible for creating EGL image and use in compute.
-    if (n_components == 3) {
+    if (n_components != 4) {
       subsurface.format = ColorFormat::kRGBA8888;
 
       if (Format::IsFloat(surface.format) && (bitdepth == 32))
