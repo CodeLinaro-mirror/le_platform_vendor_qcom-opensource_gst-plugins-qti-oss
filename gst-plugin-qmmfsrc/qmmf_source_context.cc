@@ -896,8 +896,16 @@ qmmfsrc_gst_get_stream_colorimetry (gchar *colorimetry)
   if (colorimetry == NULL)
     return ::qmmf::recorder::VideoColorimetry::kBT601;
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
-  else if (g_strcmp0(colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT2100HLG;
+  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT601;
+  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT2100HLGFULL;
+  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT2100PQFULL;
+  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601_FULL) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT601FULL;
+  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT709_FULL) == 0)
+    return ::qmmf::recorder::VideoColorimetry::kBT709FULL;
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   else {
     GST_WARNING ("Colorimetry value %s is invalid default to BT.601",
@@ -1505,7 +1513,7 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   if (vpad->compression != GST_VIDEO_COMPRESSION_NONE &&
       vpad->format != GST_VIDEO_FORMAT_NV12 &&
       vpad->format != GST_VIDEO_FORMAT_NV12_10LE32) {
-    GST_ERROR ("Compresion is not supported for %s format!",
+    GST_ERROR ("Compression is not supported for %s format!",
         gst_qmmf_video_format_to_string (vpad->format));
     GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
     return FALSE;
@@ -1514,15 +1522,22 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   switch (vpad->format) {
     case GST_VIDEO_FORMAT_NV12:
       format = (vpad->compression == GST_VIDEO_COMPRESSION_UBWC) ?
+          (vpad->super_buffer_mode) ?
+          ::qmmf::recorder::VideoFormat::kNV12UBWCFLEX :
           ::qmmf::recorder::VideoFormat::kNV12UBWC :
+          (vpad->super_buffer_mode) ?
+          ::qmmf::recorder::VideoFormat::kNV12FLEX :
           ::qmmf::recorder::VideoFormat::kNV12;
       break;
     case GST_VIDEO_FORMAT_NV12_Q08C:
-      format = !vpad->super_buffer_mode ? ::qmmf::recorder::VideoFormat::kNV12UBWC :
-          ::qmmf::recorder::VideoFormat::kNV12UBWCFLEX;
+      format = (vpad->super_buffer_mode) ?
+          ::qmmf::recorder::VideoFormat::kNV12UBWCFLEX :
+          ::qmmf::recorder::VideoFormat::kNV12UBWC;
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
-      format = ::qmmf::recorder::VideoFormat::kP010;
+      format = (vpad->super_buffer_mode) ?
+          ::qmmf::recorder::VideoFormat::kP010FLEX :
+          ::qmmf::recorder::VideoFormat::kP010;
       break;
     case GST_VIDEO_FORMAT_NV12_10LE32:
       if (vpad->compression != GST_VIDEO_COMPRESSION_UBWC) {
@@ -1531,7 +1546,9 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
         GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
         return FALSE;
       }
-      format = ::qmmf::recorder::VideoFormat::kTP10UBWC;
+      format = (vpad->super_buffer_mode) ?
+          ::qmmf::recorder::VideoFormat::kTP10UBWCFLEX :
+          ::qmmf::recorder::VideoFormat::kTP10UBWC;
       break;
     case GST_VIDEO_FORMAT_NV16:
       format = ::qmmf::recorder::VideoFormat::kNV16;
@@ -1739,8 +1756,10 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     tag_id = get_vendor_tag_by_name (
         "org.quic.camera2.streamconfigs", "HDRVideoMode");
-    if (g_strcmp0(vpad->colorimetry , GST_VIDEO_COLORIMETRY_BT2100_HLG) == 0)
+    if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
       streamhdrmode = 1;
+    else if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
+      streamhdrmode = 2;
     else
       streamhdrmode = 0;
     if (meta.update (tag_id, &streamhdrmode, 1) != 0)
