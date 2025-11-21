@@ -91,39 +91,6 @@
  */
 #define DEFAULT_SNPE_DELEGATE GST_ML_SNPE_DELEGATE_DSP
 
-/**
- * Default constants to dequantize values
- */
-#define DEFAULT_CONSTANTS_YOLOV8 \
- "YOLOv8,q-offsets=<12.0, 0.0, 0.0>,q-scales=<2.8047633171081543, \
- 0.00390625, 0.0>;"
-
-/**
- * Default constants to dequantize values
- */
-#define DEFAULT_CONSTANTS_YOLOX "YOLOx,q-offsets=<38.0, 0.0, 0.0>,\
-    q-scales=<3.6124823093414307, 0.003626860911026597, 1.0>;"
-
-/**
- * Default constants to dequantize values
- */
-#define DEFAULT_CONSTANTS_YOLOV5 \
- "YoloV5,q-offsets=<3.0>,q-scales=<0.005047998391091824>;"
-
-/**
-* Default constants to dequantize values
-*/
-#define DEFAULT_CONSTANTS_YOLONAS \
- "YoloNas,q-offsets=<37.0, 0.0, 0.0>,q-scales=<3.416602611541748, \
- 0.00390625, 1.0>;"
-
-/**
-* Default constants to dequantize values
-*/
-#define DEFAULT_CONSTANTS_YOLOV7 \
- "Yolov7,q-offsets=<30.0, 0.0, 0.0>,q-scales=<3.320857286453247, \
- 0.0037717572413384914, 1.0>;"
-
 // Structure to hold the application context
 struct GstCameraAppCtx
 {
@@ -150,7 +117,6 @@ typedef struct
   gchar *file_path;
   gchar *model_path;
   gchar *labels_path;
-  gchar *constants;
   gchar **snpe_layers;
   GstCameraSourceType camera_type;
   GstModelType model_type;
@@ -233,14 +199,6 @@ static void
       options->labels_path != (gchar *) (&DEFAULT_YOLOV7_LABELS) &&
       options->labels_path != NULL) {
     g_free ((gpointer) options->labels_path);
-  }
-
-  if (options->constants != (gchar *) (&DEFAULT_CONSTANTS_YOLOV5) &&
-      options->constants != (gchar *) (&DEFAULT_CONSTANTS_YOLOV8) &&
-      options->constants != (gchar *) (&DEFAULT_CONSTANTS_YOLONAS) &&
-      options->constants != (gchar *) (&DEFAULT_CONSTANTS_YOLOV7) &&
-      options->constants != NULL) {
-    g_free ((gpointer) options->constants);
   }
 
   if (options->snpe_layers != NULL) {
@@ -436,12 +394,6 @@ parse_json (gchar * file, GstAppOptions * options, GstCameraAppContext * appctx)
   if (json_object_has_member (root_obj, "labels")) {
     options->labels_path =
         g_strdup (json_object_get_string_member (root_obj, "labels"));
-  }
-
-  if (json_object_has_member (root_obj, "constants")) {
-    options->constants =
-        g_strdup (json_object_get_string_member (root_obj, "constants"));
-    g_print ("constants : %s\n", options->constants);
   }
 
   if (json_object_has_member (root_obj, "threshold")) {
@@ -936,7 +888,8 @@ create_preview_pipe (GstCameraAppContext * appctx)
       ret = gst_element_link_many (v4l2src, capsfilter, waylandsink, NULL);
       if (!ret) {
         g_printerr
-            ("\n Pipeline elements cannot be linked from v4l2src to waylandsink. \n");
+            ("\n Pipeline elements cannot be linked from v4l2src ->"
+            "waylandsink. \n");
         goto error_clean_pipeline;
       }
     } else if (appctx->video_format == GST_MJPEG_VIDEO_FORMAT) {
@@ -944,7 +897,8 @@ create_preview_pipe (GstCameraAppContext * appctx)
           queue[0],waylandsink, NULL);
       if (!ret) {
         g_printerr
-            ("\n Pipeline elements cannot be linked from v4l2src to waylandsink. \n");
+            ("\n Pipeline elements cannot be linked from v4l2src-> jpegdec->"
+            "waylandsink. \n");
         goto error_clean_pipeline;
       }
     }
@@ -984,12 +938,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
   GstElement *qtimlvdetection = NULL, *detection_filter = NULL;
   GstElement *qtivcomposer = NULL, *fpsdisplaysink = NULL, *waylandsink = NULL;
   GstElement *filesink = NULL, *v4l2h264enc = NULL, *h264parse = NULL;
-  GstElement *mp4mux = NULL, *qtirtspbin = NULL;
+  GstElement *mp4mux = NULL, *qtirtspbin = NULL, *qtivtransform = NULL;
+  GstElement *qtivtransform_capsfilter = NULL, *videoconvert = NULL;
+  GstElement *jpegdec = NULL;
   GstCaps *pad_filter = NULL, *filtercaps = NULL;
   GstStructure *fcontrols = NULL;
   GstStructure *delegate_options = NULL;
   gboolean ret = FALSE;
-  gchar element_name[128];
+  gchar element_name[128], settings[128];
   GValue layers = G_VALUE_INIT;
   GValue value = G_VALUE_INIT;
   gint module_id;
@@ -1009,6 +965,31 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
   if (!v4l2src_caps) {
     g_printerr ("Failed to create v4l2src_caps\n");
     goto error_clean_elements;
+  }
+  if (appctx->video_format == GST_MJPEG_VIDEO_FORMAT) {
+    // 1. Create qtivtransform plugin
+    qtivtransform = gst_element_factory_make ("qtivtransform", "qtivtransform");
+    if (!qtivtransform) {
+      g_printerr ("Failed to create qtivtransform\n");
+      goto error_clean_elements;
+    }
+    //transform filter caps
+    qtivtransform_capsfilter = gst_element_factory_make ("capsfilter",
+        "qtivtransform_capsfilter");
+    if (!qtivtransform_capsfilter) {
+      g_printerr ("Failed to create qtivtransform_capsfilter\n");
+      goto error_clean_elements;
+    }
+    videoconvert = gst_element_factory_make ("videoconvert", "videoconvert");
+    if (!videoconvert) {
+      g_printerr ("Failed to create videoconvert\n");
+      goto error_clean_elements;
+    }
+    jpegdec = gst_element_factory_make ("jpegdec", "jpegdec");
+    if (!jpegdec) {
+      g_printerr ("Failed to create jpegdec\n");
+      goto error_clean_elements;
+    }
   }
   // Create queue to decouple the processing on sink and source pad
   for (gint i = 0; i < QUEUE_COUNT; i++) {
@@ -1049,8 +1030,8 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
     goto error_clean_elements;
   }
   // Create plugin for ML postprocessing for object detection
-  qtimlvdetection = gst_element_factory_make ("qtimlvdetection",
-      "qtimlvdetection");
+  qtimlvdetection = gst_element_factory_make ("qtimlpostprocess",
+      "qtimlpostprocess");
   if (!qtimlvdetection) {
     g_printerr ("Failed to create qtimlvdetection\n");
     goto error_clean_elements;
@@ -1095,7 +1076,6 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
       g_printerr ("Failed to create mp4mux\n");
       goto error_clean_elements;
     }
-
   } else if (appctx->sinktype == GST_RTSP_STREAMING) {
     // Create H.264 Encoder plugin for file output
     v4l2h264enc = gst_element_factory_make ("v4l2h264enc", "v4l2h264enc");
@@ -1168,13 +1148,38 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
   }
 
   // 2.4 Set the capabilities of camera plugin output for inference
-  filtercaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING, "NV12",
-      "width", G_TYPE_INT, appctx->width,
-      "height", G_TYPE_INT, appctx->height,
-      "framerate", GST_TYPE_FRACTION, appctx->framerate, 1, NULL);
-  g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
-  gst_caps_unref (filtercaps);
+  if (appctx->video_format == GST_NV12_VIDEO_FORMAT) {
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "NV12",
+        "width", G_TYPE_INT, appctx->width,
+        "height", G_TYPE_INT, appctx->height,
+        "framerate", GST_TYPE_FRACTION, appctx->framerate, 1, NULL);
+    g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else if (appctx->video_format == GST_YUV2_VIDEO_FORMAT) {
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+        "format", G_TYPE_STRING, "YUY2",
+        "width", G_TYPE_INT, appctx->width,
+        "height", G_TYPE_INT, appctx->height,
+        "framerate", GST_TYPE_FRACTION, appctx->framerate, 1, NULL);
+    g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else if (appctx->video_format == GST_MJPEG_VIDEO_FORMAT) {
+    filtercaps = gst_caps_new_simple ("image/jpeg",
+        "width", G_TYPE_INT, appctx->width,
+        "height", G_TYPE_INT, appctx->height,
+        "framerate", GST_TYPE_FRACTION, appctx->framerate, 1, NULL);
+    g_object_set (G_OBJECT (v4l2src_caps), "caps", filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+    filtercaps = gst_caps_new_simple ("video/x-raw",
+    "format", G_TYPE_STRING, "NV12", NULL);
+    g_object_set (G_OBJECT (qtivtransform_capsfilter), "caps",
+        filtercaps, NULL);
+    gst_caps_unref (filtercaps);
+  } else {
+    g_printerr ("Invalid Video Format Type\n");
+    goto error_clean_elements;
+  }
 
   // 2.5 Select the HW to DSP/GPU/CPU for model inferencing using
   // delegate property
@@ -1249,6 +1254,7 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // get enum values of module properties from qtimlvdetection plugin
         module_id = get_enum_value (qtimlvdetection, "module", "yolov5");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov5 is not available in qtimlvdetection\n");
@@ -1257,9 +1263,8 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // set qtimlvdetection properties
         g_object_set (G_OBJECT (qtimlvdetection), "labels",
             options->labels_path, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
 
         // YOLO_V8 specific settings
@@ -1270,6 +1275,7 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // get enum values of module property frrom qtimlvdetection plugin
         module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
@@ -1278,9 +1284,8 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // set qtimlvdetection properties
         g_object_set (G_OBJECT (qtimlvdetection), "labels",
             options->labels_path, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
 
         // YOLO_NAS specific settings
@@ -1291,6 +1296,7 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // get enum values of module property frrom qtimlvdetection plugin
         module_id = get_enum_value (qtimlvdetection, "module", "yolo-nas");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolo-nas is not available in qtimlvdetection\n");
@@ -1299,9 +1305,8 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         // set qtimlvdetection properties
         g_object_set (G_OBJECT (qtimlvdetection), "labels",
             options->labels_path, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
 
       default:
@@ -1318,17 +1323,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
-        g_printerr ("%s\n", options->constants);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
       // YOLO_X specific settings
       case GST_YOLO_TYPE_X:
@@ -1337,16 +1339,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
         if (module_id != -1) {
-            g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
+          g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
         // YOLO_V5 specific settings
       case GST_YOLO_TYPE_V5:
@@ -1356,16 +1356,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolov5");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov5 is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         break;
         // YOLO_NAS specific settings
       case GST_YOLO_TYPE_NAS:
@@ -1375,16 +1373,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolo-nas");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolonas is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
         break;
         // YOLOV7 specific settings
       case GST_YOLO_TYPE_V7:
@@ -1394,16 +1390,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
         break;
       default:
         g_printerr ("Unsupported TFLITE model, Use YoloV5 or "
@@ -1419,16 +1413,14 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
             options->labels_path, NULL);
         module_id = get_enum_value (qtimlvdetection, "module", "yolov8");
         if (module_id != -1) {
+          snprintf (settings, 127, "{\"confidence\": %.1f}", options->threshold);
           g_object_set (G_OBJECT (qtimlvdetection), "module", module_id, NULL);
         } else {
           g_printerr ("Module yolov8 is not available in qtimlvdetection\n");
           goto error_clean_elements;
         }
-        g_object_set (G_OBJECT (qtimlvdetection), "threshold",
-            options->threshold, NULL);
+        g_object_set (G_OBJECT (qtimlvdetection), "settings", settings, NULL);
         g_object_set (G_OBJECT (qtimlvdetection), "results", 10, NULL);
-        g_object_set (G_OBJECT (qtimlvdetection), "constants",
-            options->constants, NULL);
         break;
 
       default:
@@ -1462,6 +1454,10 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
   gst_bin_add_many (GST_BIN (appctx->pipeline), v4l2src, v4l2src_caps,
       tee, qtimlvconverter, qtimlelement, qtimlvdetection, detection_filter,
       qtivcomposer, NULL);
+  if (appctx->video_format == GST_MJPEG_VIDEO_FORMAT) {
+    gst_bin_add_many (GST_BIN (appctx->pipeline), qtivtransform,
+        qtivtransform_capsfilter, videoconvert, jpegdec, NULL);
+  }
 
   for (gint i = 0; i < QUEUE_COUNT; i++) {
     gst_bin_add_many (GST_BIN (appctx->pipeline), queue[i], NULL);
@@ -1470,17 +1466,32 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
   g_print ("Linking elements...\n");
 
   // Create pipeline for object detection
-  ret = gst_element_link_many (v4l2src, v4l2src_caps, queue[0], tee, NULL);
-  if (!ret) {
-    g_printerr ("Pipeline elements cannot be linked for "
-        "qmmfsource->composer\n");
+  if (appctx->video_format == GST_YUV2_VIDEO_FORMAT ||
+      appctx->video_format == GST_NV12_VIDEO_FORMAT) {
+    ret = gst_element_link_many (v4l2src, v4l2src_caps, queue[0], tee, NULL);
+    if (!ret) {
+      g_printerr ("Pipeline elements cannot be linked for "
+          "usb_source->usb_caps->tee\n");
+      goto error_clean_pipeline;
+    }
+  } else if (appctx->video_format == GST_MJPEG_VIDEO_FORMAT) {
+    ret = gst_element_link_many (v4l2src, v4l2src_caps, jpegdec, videoconvert,
+        qtivtransform_capsfilter, qtivtransform, queue[0],
+        tee, NULL);
+    if (!ret) {
+      g_printerr ("Pipeline elements cannot be linked for "
+          "usb_source->usb_caps->qtivtransform->tee\n");
+      goto error_clean_pipeline;
+    }
+  } else {
+    g_printerr ("Invalid Video Format\n");
     goto error_clean_pipeline;
   }
 
   ret = gst_element_link_many (tee, queue[1], qtivcomposer, NULL);
   if (!ret) {
     g_printerr ("Pipeline elements cannot be linked for "
-        "qmmfsource->converter\n");
+        "tee->qtivcomposer\n");
     goto error_clean_pipeline;
   }
 
@@ -1498,7 +1509,7 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         mp4mux, filesink, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for"
-          "qtivcomposer->fpsdisplaysink.\n");
+          "qtivcomposer->filesink.\n");
       goto error_clean_pipeline;
     }
   } else if (appctx->sinktype == GST_RTSP_STREAMING) {
@@ -1506,7 +1517,7 @@ create_pipe (GstCameraAppContext * appctx, GstAppOptions * options)
         qtirtspbin, NULL);
     if (!ret) {
       g_printerr ("Pipeline elements cannot be linked for"
-          "qtivcomposer->fpsdisplaysink.\n");
+          "qtivcomposer->qtirtspbin.\n");
       goto error_clean_pipeline;
     }
   } else {
@@ -1529,7 +1540,8 @@ error_clean_elements:
   cleanup_gst (&v4l2src, &v4l2src_caps, &tee, &qtimlvconverter,
       &qtimlelement, &qtimlvdetection, &qtivcomposer, &detection_filter,
       &waylandsink, &fpsdisplaysink, &filesink, &mp4mux, &qtirtspbin,
-      &h264parse, &v4l2h264enc, NULL);
+      &h264parse, &v4l2h264enc, &jpegdec, &videoconvert,
+      &qtivtransform_capsfilter, &qtivtransform, NULL);
   for (gint i = 0; i < QUEUE_COUNT; i++) {
     gst_object_unref (queue[i]);
   }
@@ -1571,7 +1583,6 @@ main (gint argc, gchar * argv[])
   options.yolo_model_type = GST_YOLO_TYPE_NAS;
   options.model_path = NULL;
   options.labels_path = NULL;
-  options.constants = NULL;
   options.snpe_layers = NULL;
 
   // Structure to define the user options selected
@@ -1593,8 +1604,7 @@ main (gint argc, gchar * argv[])
       "  width: USB Camera Resolution width\n"
       "  height: USB Camera Resolution Height\n"
       "  framerate: USB Camera Frame Rate\n"
-      "  video-type: Video Type format can be nv12, yuy2 or mjpeg\n"
-      "      It is applicable only when enable-object-detection is set false"
+      "  video-format: Video Type format can be nv12, yuy2 or mjpeg\n"
       "  output: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
       "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
@@ -1606,8 +1616,8 @@ main (gint argc, gchar * argv[])
       "      Default port is:" DEFAULT_PORT "\n"
       "  enable-object-detection: Use this parameter to enable object detection.\n"
       "      eg: TRUE or FALSE\n"
-      "  yolo-model-type: \"yolov5\" or \"yolov8\" or \"yolonas\"\n"
-      "      Yolo Model version to Execute: Yolov5, Yolov8 or YoloNas\n"
+      "  yolo-model-type: \"yolov5\" or \"yolov8\" or \"yolox\" or \"yolonas\"\n"
+      "      Yolo Model version to Execute: Yolov5, Yolov8 or YoloNas or Yolox\n"
       "      Yolov7 Tflite Model works with yolov8 yolo-model-type\n"
       "  ml-framework: \"snpe\" or \"tflite\" or \"qnn\"\n"
       "      Execute Model in SNPE DLC or TFlite [Default] or QNN format\n"
@@ -1623,6 +1633,8 @@ main (gint argc, gchar * argv[])
       DEFAULT_TFLITE_YOLONAS_MODEL "\n"
       "      Default model path for YOLO_V7 TFLITE: "
       DEFAULT_TFLITE_YOLOV7_MODEL "\n"
+      "      Default model path for YOLOX TFLITE: " DEFAULT_TFLITE_YOLOX_MODEL
+      "\n"
       "      Default model path for YOLOV8 QNN: " DEFAULT_QNN_YOLOV8_MODEL "\n"
       "  labels: \"/PATH\"\n"
       "      This is an optional parameter and overrides default path\n"
@@ -1631,15 +1643,6 @@ main (gint argc, gchar * argv[])
       "      Default labels path for YOLOX: "DEFAULT_YOLOX_LABELS"\n"
       "      Default labels path for YOLO NAS: " DEFAULT_YOLONAS_LABELS "\n"
       "      Default labels path for YOLOV7: " DEFAULT_YOLOV7_LABELS "\n"
-      "  constants: \"CONSTANTS\"\n"
-      "      Constants, offsets and coefficients used by the chosen module \n"
-      "      for post-processing of incoming tensors."
-      "  Applicable only for some modules\n"
-      "      Default constants for YOLOV5: " DEFAULT_CONSTANTS_YOLOV5 "\n"
-      "      Default constants for YOLOV8: " DEFAULT_CONSTANTS_YOLOV8 "\n"
-      "      Default constants for YOLOX: " DEFAULT_CONSTANTS_YOLOX"\n"
-      "      Default constants for YOLO NAS: " DEFAULT_CONSTANTS_YOLONAS "\n"
-      "      Default constants for YOLOV7: " DEFAULT_CONSTANTS_YOLOV7 "\n"
       "  threshold: 0 to 100\n"
       "      This is an optional parameter and overides "
       "  default threshold value 40\n"
@@ -1766,11 +1769,6 @@ main (gint argc, gchar * argv[])
       return -EINVAL;
     }
 
-    if(options.constants == NULL) {
-      g_print ("Using default Constants\n");
-      options.constants = DEFAULT_CONSTANTS_YOLOV8;
-    }
-
     if (options.model_path == NULL) {
       if (options.model_type == GST_MODEL_TYPE_SNPE) {
         options.model_path =
@@ -1843,16 +1841,6 @@ main (gint argc, gchar * argv[])
           (options.yolo_model_type == GST_YOLO_TYPE_V7 ? DEFAULT_YOLOV7_LABELS :
           (options.yolo_model_type == GST_YOLO_TYPE_X ? DEFAULT_YOLOX_LABELS :
           DEFAULT_YOLONAS_LABELS))));
-    }
-
-    if (options.model_type == GST_MODEL_TYPE_TFLITE
-        && options.constants == NULL) {
-      options.constants =
-          (options.yolo_model_type == GST_YOLO_TYPE_V5 ? DEFAULT_CONSTANTS_YOLOV5:
-          options.yolo_model_type == GST_YOLO_TYPE_NAS ? DEFAULT_CONSTANTS_YOLONAS:
-          options.yolo_model_type == GST_YOLO_TYPE_V7 ? DEFAULT_CONSTANTS_YOLOV7:
-          options.yolo_model_type == GST_YOLO_TYPE_X ? DEFAULT_CONSTANTS_YOLOX:
-          DEFAULT_CONSTANTS_YOLOV8);
     }
 
     if (!file_exists (options.model_path)) {

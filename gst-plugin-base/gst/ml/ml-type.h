@@ -42,8 +42,13 @@ G_BEGIN_DECLS
  * @GST_ML_TYPE_UNKNOWN: Invalid data.
  * @GST_ML_TYPE_INT8: Data is represented as 1 byte of signed integer value.
  * @GST_ML_TYPE_UINT8: Data is represented as 1 byte of unsigned integer value.
+ * @GST_ML_TYPE_INT16: Data is represented as 2 byte of signed integer value.
+ * @GST_ML_TYPE_UINT16: Data is represented as 2 byte of unsigned integer value.
  * @GST_ML_TYPE_INT32: Data is represented as 4 byte of signed integer value.
  * @GST_ML_TYPE_UINT32: Data is represented as 4 byte of unsigned integer value.
+ * @GST_ML_TYPE_INT64: Data is represented as 8 byte of signed integer value.
+ * @GST_ML_TYPE_UINT64: Data is represented as 8 byte of unsigned integer value.
+ * @GST_ML_TYPE_FLOAT16: Data is represented as 2 bytes of floating point value.
  * @GST_ML_TYPE_FLOAT32: Data is represented as 4 bytes of floating point value.
  *
  * The possible values of the #GstMLType describing the tensor format.
@@ -52,8 +57,12 @@ typedef enum {
   GST_ML_TYPE_UNKNOWN,
   GST_ML_TYPE_INT8,
   GST_ML_TYPE_UINT8,
+  GST_ML_TYPE_INT16,
+  GST_ML_TYPE_UINT16,
   GST_ML_TYPE_INT32,
   GST_ML_TYPE_UINT32,
+  GST_ML_TYPE_INT64,
+  GST_ML_TYPE_UINT64,
   GST_ML_TYPE_FLOAT16,
   GST_ML_TYPE_FLOAT32,
 } GstMLType;

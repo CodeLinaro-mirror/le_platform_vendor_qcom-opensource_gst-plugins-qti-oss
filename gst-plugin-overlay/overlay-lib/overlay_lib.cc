@@ -26,10 +26,9 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center, Inc. are provided under the
- *     following license:
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
  *
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -753,21 +752,8 @@ int32_t Overlay::Init (OverlayBlitType blit_type)
 #endif // ENABLE_C2D
   } else if (blit_type_ == OverlayBlitType::kGLES) {
 #ifdef ENABLE_GLES
-    void* handle = dlopen("libIB2C.so", RTLD_NOW);
-    if (!handle || dlerror()) {
-      GST_ERROR ("dlopen failed: '%s'", dlerror());
-      return -1;
-    }
-
-    ::ib2c::NewIEngine NewEngine =
-        (::ib2c::NewIEngine) dlsym(handle, IB2C_ENGINE_NEW_FUNC);
-    if (dlerror()) {
-      GST_ERROR ("dlsym failed: '%s'", dlerror());
-      return -1;
-    }
-
     ib2c_engine_ = std::shared_ptr<::ib2c::IEngine>(
-        NewEngine(), [handle](::ib2c::IEngine* e) { delete e; dlclose(handle); }
+        ::ib2c::NewGlEngine(), [](::ib2c::IEngine* e) { delete e; }
     );
 #else
     GST_ERROR ("GLES converter is not supported!");
@@ -1160,11 +1146,12 @@ int32_t Overlay::ApplyOverlay_GLES (const OverlayTargetBuffer& buffer)
     outsurface.width = buffer.width;
     outsurface.height = buffer.height;
     outsurface.size = buffer.frame_len;
-    outsurface.stride0 = buffer.stride[0];
-    outsurface.stride1 = buffer.stride[1];
-    outsurface.offset0 = buffer.offset[0];
-    outsurface.offset1 = buffer.offset[1];
-    outsurface.nplanes = 2;
+
+    outsurface.planes.resize(2);
+    outsurface.planes[0].stride = buffer.stride[0];
+    outsurface.planes[1].stride = buffer.stride[1];
+    outsurface.planes[0].offset = buffer.offset[0];
+    outsurface.planes[1].offset = buffer.offset[1];
 
     try {
       surface_id = ib2c_engine_->CreateSurface(outsurface,
@@ -1839,9 +1826,10 @@ int32_t OverlayItem::MapOverlaySurface (OverlaySurface &surface,
     insurface.width = surface.width_;
     insurface.height = surface.height_;
     insurface.size = mem_info.size;
-    insurface.stride0 = surface.stride_;
-    insurface.offset0 = 0;
-    insurface.nplanes = 1;
+
+    insurface.planes.resize(1);
+    insurface.planes[0].stride = surface.stride_;
+    insurface.planes[0].offset = 0;
 
     try {
       surface.ib2c_surface_id_ = ib2c_engine_->CreateSurface(insurface,
