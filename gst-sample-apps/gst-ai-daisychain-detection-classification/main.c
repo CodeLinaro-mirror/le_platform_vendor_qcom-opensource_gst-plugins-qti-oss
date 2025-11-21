@@ -101,9 +101,9 @@
  */
 #define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
-    "/etc/models/mobilenet_v2_quantized.tflite"
-#define DEFAULT_DETECTION_LABELS "/etc/labels/coco_labels.txt"
-#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/imagenet_labels.txt"
+    "/etc/models/inception_v3_quantized.tflite"
+#define DEFAULT_DETECTION_LABELS "/etc/labels/yolox.json"
+#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.json"
 
 /**
  * Default path of config file
@@ -1637,6 +1637,7 @@ main (gint argc, gchar * argv[])
       "  width: USB Camera Resolution width.\n"
       "  height: USB Camera Resolution Height.\n"
       "  framerate: USB Camera Frame Rate.\n"
+      "  video-format: USB Video Format format can be nv12, yuy2 or mjpeg\n"
       "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
       "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
