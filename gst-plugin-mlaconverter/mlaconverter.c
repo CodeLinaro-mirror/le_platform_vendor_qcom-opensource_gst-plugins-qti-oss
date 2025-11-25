@@ -172,8 +172,8 @@ gst_ml_audio_converter_create_pool (GstMLAudioConverter * mlconverter,
   GST_DEBUG_OBJECT (mlconverter, "Create buffer pool based on caps: %"
       GST_PTR_FORMAT, caps);
 
-  GST_INFO ("Uses ION memory");
-  pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_ION);
+  GST_INFO ("Uses DMA memory");
+  pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_DMA);
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, gst_ml_info_size (&info),
@@ -184,6 +184,8 @@ gst_ml_audio_converter_create_pool (GstMLAudioConverter * mlconverter,
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (
       config, GST_ML_BUFFER_POOL_OPTION_TENSOR_META);
+  gst_buffer_pool_config_add_option (
+      config, GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING ("Failed to set pool configuration!");

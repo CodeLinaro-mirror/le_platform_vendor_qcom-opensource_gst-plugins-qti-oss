@@ -38,7 +38,7 @@
 #include <gst/base/gstbasetransform.h>
 #include <gst/ml/ml-module-utils.h>
 
-#include "modules/qti-ml-post-proccess.h"
+#include "modules/qti-ml-post-process.h"
 #include "modules/qti-json-parser.h"
 
 G_BEGIN_DECLS
@@ -65,10 +65,15 @@ typedef struct _GstMLPostProcessClass GstMLPostProcessClass;
 struct _GstMLPostProcess {
   GstBaseTransform     parent;
 
-  GstMLInfo            *mlinfo;
+  /// Input video info.
   GstVideoInfo         *vinfo;
+  /// Input ML info.
+  GstMLInfo            *mlinfo;
 
-  /// Output mode (video or text)
+  /// Output ML info.
+  GstMLInfo            *outmlinfo;
+
+  /// Output mode (video, text or tensor)
   guint                mode;
 
   /// Buffer pools.
@@ -89,11 +94,15 @@ struct _GstMLPostProcess {
   /// Array with info for each batch.
   GPtrArray            *info;
 
+  // Stashed ML boxes used fot stabilization
+  std::vector<DetectionPrediction> *stashedmlboxes;
+
   /// Properties.
   gint                 mdlenum;
   gchar                *labels;
   guint                n_results;
   gchar                *settings;
+  gboolean             bbox_stabilization;
 };
 
 struct _GstMLPostProcessClass {

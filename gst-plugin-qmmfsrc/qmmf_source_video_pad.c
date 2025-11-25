@@ -179,6 +179,8 @@ video_pad_worker_task (GstPad * pad)
 {
   GstDataQueue *buffers;
   GstDataQueueItem *item;
+  GstFlowReturn ret;
+  gboolean success;
 
   buffers = GST_QMMFSRC_VIDEO_PAD (pad)->buffers;
 
@@ -186,7 +188,26 @@ video_pad_worker_task (GstPad * pad)
     GstBuffer *buffer = gst_buffer_ref (GST_BUFFER (item->object));
     item->destroy (item);
 
-    gst_pad_push (pad, buffer);
+    ret = gst_pad_push (pad, buffer);
+    GST_INFO_OBJECT (pad, "pad %s: gst_pad_push returned %d",
+        gst_pad_get_name (pad), ret);
+
+    if (ret == GST_FLOW_EOS) {
+      GST_DEBUG_OBJECT (pad, "EOS received on pad %s", gst_pad_get_name (pad));
+
+      success = gst_pad_push_event (pad, gst_event_new_eos ());
+      if (success == FALSE) {
+        GST_ERROR_OBJECT (pad, "Failed to push EOS event on pad %s",
+            gst_pad_get_name (pad));
+
+        gst_pad_pause_task (pad);
+      }
+    } else if (ret != GST_FLOW_OK) {
+      GST_ERROR_OBJECT (pad, "Error pushing buffer to pad %s: %s",
+          gst_pad_get_name (pad), gst_flow_get_name (ret));
+
+      gst_pad_pause_task (pad);
+    }
   } else {
     GST_INFO_OBJECT (pad, "Pause video pad worker thread");
     gst_pad_pause_task (pad);
@@ -498,22 +519,27 @@ video_pad_set_super_buffer_mode (GstPad * pad, GstStructure *structure)
   vpad->duration = gst_util_uint64_scale_int (GST_SECOND, fps_d, fps_n);
   fps = 1 / GST_TIME_AS_SECONDS (gst_guint64_to_gdouble (vpad->duration));
 
-  if (vpad->super_buffer_mode == TRUE &&
-      !((fps == 120) || (fps == 240) || (fps == 480))) {
-    GST_ERROR_OBJECT(pad, "Don't support super buffer mode for this framerate");
-    return FALSE;
-  }
-
   if (vpad->super_buffer_mode == TRUE) {
     const gchar *viewmode;
-    guint super_frames;
+    guint batch = 0;
 
-    super_frames = fps / vpad->superframerate;
-    viewmode = gst_video_multiview_mode_to_caps_string (
-        GST_VIDEO_MULTIVIEW_MODE_MONO);
-      gst_structure_set (structure,
-          "multiview-mode", G_TYPE_STRING, viewmode,
-              "views", G_TYPE_INT, super_frames, NULL);
+    if (vpad->superframerate <= 0) {
+      GST_ERROR_OBJECT (pad, "Invalid HFR platform capability: %d",
+          vpad->superframerate);
+      return FALSE;
+    }
+
+    batch = fps / vpad->superframerate;
+    if (!((batch == 2) || (batch == 4) || (batch == 8) || (batch == 16))) {
+      GST_ERROR_OBJECT (pad, "Don't support super buffer with batch %u.", batch);
+      return FALSE;
+    }
+
+    viewmode =
+      gst_video_multiview_mode_to_caps_string (GST_VIDEO_MULTIVIEW_MODE_MONO);
+    gst_structure_set (structure,
+        "multiview-mode", G_TYPE_STRING, viewmode,
+        "views", G_TYPE_INT, batch, NULL);
   }
 
   return TRUE;

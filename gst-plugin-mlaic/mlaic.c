@@ -223,8 +223,8 @@ gst_ml_aic_create_pool (GstPad * pad, GstCaps * caps)
     return NULL;
   }
 
-   GST_INFO_OBJECT (pad, "Uses ION memory");
-   pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_ION);
+   GST_INFO_OBJECT (pad, "Uses DMA memory");
+   pool = gst_ml_buffer_pool_new (GST_ML_BUFFER_POOL_TYPE_DMA);
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, gst_ml_info_size (&info),
@@ -237,6 +237,8 @@ gst_ml_aic_create_pool (GstPad * pad, GstCaps * caps)
       config, GST_ML_BUFFER_POOL_OPTION_TENSOR_META);
   gst_buffer_pool_config_add_option (
       config, GST_ML_BUFFER_POOL_OPTION_CONTINUOUS);
+  gst_buffer_pool_config_add_option (
+      config, GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (pad, "Failed to set pool configuration!");
