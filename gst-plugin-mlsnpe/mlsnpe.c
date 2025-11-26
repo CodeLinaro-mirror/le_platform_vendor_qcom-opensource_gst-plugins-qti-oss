@@ -174,6 +174,8 @@ gst_ml_snpe_create_pool (GstMLSnpe * snpe, GstCaps * caps)
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (
       config, GST_ML_BUFFER_POOL_OPTION_TENSOR_META);
+  gst_buffer_pool_config_add_option (
+      config, GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (snpe, "Failed to set pool configuration!");
@@ -495,10 +497,6 @@ gst_ml_snpe_change_state (GstElement * element, GstStateChange transition)
   }
 
   ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret != GST_STATE_CHANGE_SUCCESS) {
-    GST_ERROR_OBJECT (snpe, "Failure");
-    return ret;
-  }
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_NULL:
@@ -506,9 +504,6 @@ gst_ml_snpe_change_state (GstElement * element, GstStateChange transition)
       snpe->engine = NULL;
       break;
     default:
-      // This is to catch PAUSED->PAUSED and PLAYING->PLAYING transitions.
-      ret = (GST_STATE_TRANSITION_NEXT (transition) == GST_STATE_PAUSED) ?
-          GST_STATE_CHANGE_NO_PREROLL : GST_STATE_CHANGE_SUCCESS;
       break;
   }
 
