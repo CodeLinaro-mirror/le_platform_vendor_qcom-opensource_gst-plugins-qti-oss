@@ -87,6 +87,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_mem_pool_debug);
     (type == g_quark_from_static_string (GST_MEMORY_BUFFER_POOL_TYPE_SECURE))
 
 #define DEFAULT_PAGE_ALIGNMENT 4096
+#define IS_SECURE 1
 
 struct _GstMemBufferPoolPrivate
 {
@@ -184,8 +185,14 @@ dma_device_alloc (GstMemBufferPool * mempool, gint size)
   alloc_data.fd_flags = O_RDWR | O_CLOEXEC;
   alloc_data.heap_flags = 0;
 #else
+#ifdef IS_SECURE
+  GST_INFO_OBJECT (mempool,"ION_SECURE_DISPLAY_HEAP_ID");
+  alloc_data.heap_id_mask = ION_HEAP(ION_SECURE_DISPLAY_HEAP_ID);
+  alloc_data.flags = ION_FLAG_SECURE | ION_FLAG_CP_BITSTREAM;
+#else
   alloc_data.heap_id_mask = ION_HEAP(ION_SYSTEM_HEAP_ID);
   alloc_data.flags = ION_FLAG_CACHED;
+#endif
 
 #if !defined(TARGET_ION_ABI_VERSION)
   alloc_data.align = DEFAULT_PAGE_ALIGNMENT;
