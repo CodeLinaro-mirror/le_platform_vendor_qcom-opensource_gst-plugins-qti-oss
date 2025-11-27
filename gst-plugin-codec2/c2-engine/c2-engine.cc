@@ -432,7 +432,7 @@ gst_c2_engine_flush (GstC2Engine * engine)
   }
 
   // Wait until all work is completed or EOS.
-  GST_C2_ENGINE_CHECK_AND_WAIT_PENDING_WORK (engine, 0);
+  GST_C2_ENGINE_ZERO_OUT_PENDING_WORK (engine);
 
   return TRUE;
 }
