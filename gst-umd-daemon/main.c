@@ -73,7 +73,7 @@
 #define PIPELINE_ERROR_MESSAGE "PIPELINE_ERROR_MSG"
 
 #define GST_ML_VIDEO_PIPELINE "qtiqmmfsrc name=camsrc " \
-    "camsrc. ! capsfilter name=mlfilter caps=video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! " \
+    "camsrc. ! capsfilter name=mlfilter caps=video/x-raw(memory:GBM),format=NV12,width=640,height=360,framerate=30/1 ! " \
     "queue name=camsrc_queue ! qtimlvconverter name=mlvconverter ! queue name=mlvconverter_queue ! " \
     "qtimltflite name=mltflite delegate=hexagon model=/data/yolov5m-320x320-int8.tflite ! queue name=mltflite_queue ! " \
     "qtimlvdetection name=mlvdetection threshold=60.0 results=1 module=yolov5 labels=/data/yolov5m.labels " \
@@ -83,7 +83,7 @@
     "appsink name=umdvsink"
 
 #define GST_NON_ML_VIDEO_PIPELINE "qtiqmmfsrc name=camsrc " \
-    "camsrc. ! capsfilter name=mlfilter caps=video/x-raw(memory:GBM),format=NV12,width=1280,height=720,framerate=30/1 ! fakesink " \
+    "camsrc. ! capsfilter name=mlfilter caps=video/x-raw(memory:GBM),format=NV12,width=640,height=360,framerate=30/1 ! fakesink " \
     "camsrc. ! capsfilter name=umdvfilter ! queue name=vqueue ! qtivtransform name=vtransform ! queue name=umdvqueue ! " \
     "appsink name=umdvsink"
 
