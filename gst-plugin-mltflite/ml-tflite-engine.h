@@ -68,7 +68,9 @@
 #include <gst/allocators/allocators.h>
 #include <gst/ml/ml-info.h>
 #include <gst/ml/ml-frame.h>
+#if defined(HAVE_TFLITE_VERSION_H)
 #include <tensorflow/lite/version.h>
+#endif //HAVE_TFLITE_VERSION_H
 
 G_BEGIN_DECLS
 
