@@ -312,6 +312,15 @@ gst_c2_vdec_stop (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Stop engine");
 
+  // Properly clean up the output state
+  if (c2vdec->outstate) {
+    gst_video_codec_state_unref (c2vdec->outstate);
+    c2vdec->outstate = NULL;
+  }
+
+  // Reset format-related flags
+  c2vdec->isubwc = FALSE;
+
   if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, TRUE)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to flush engine");
     return FALSE;
@@ -441,11 +450,35 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
   // Try to negotiate with caps feature.
   caps = gst_video_info_to_caps (&outstate->info);
-  gst_caps_set_features (caps, 0,
-      gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL));
 
-  outstate->caps = gst_pad_peer_query_caps (decoder->srcpad, caps);
-  gst_caps_unref (caps);
+  // If we previously had a specific format, try to maintain it
+  if (c2vdec->outstate && c2vdec->outstate->caps) {
+    gboolean previous_ubwc = gst_caps_has_compression (c2vdec->outstate->caps, "ubwc");
+    //Addition change
+    GstStructure *prev_structure = gst_caps_get_structure (c2vdec->outstate->caps, 0);
+    const gchar *prev_format = gst_structure_get_string (prev_structure, "format");
+
+    // Try to maintain the same compression format if possible
+    if (previous_ubwc) {
+      GST_DEBUG_OBJECT (c2vdec, "Attempting to maintain UBWC format from previous session");
+      gst_caps_set_features (caps, 0,
+          gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL));
+      gst_caps_set_simple (caps, "compression", G_TYPE_STRING, "ubwc", NULL);
+    }
+
+    // Addition change Try to maintain the same color format if possible
+    if (prev_format) {
+      GST_DEBUG_OBJECT (c2vdec, "Attempting to maintain format %s from previous session", prev_format);
+      gst_caps_set_simple (caps, "format", G_TYPE_STRING, prev_format, NULL);
+    }
+  } else {
+    // Standard negotiation
+    gst_caps_set_features (caps, 0,
+        gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GBM, NULL));
+  }
+
+  //Addition change Set the negotiated caps
+  outstate->caps = caps;
 
   // In case this fails fallback to caps without features.
   if (!outstate->caps || gst_caps_is_empty (outstate->caps)) {
