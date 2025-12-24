@@ -1,35 +1,6 @@
 /*
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifdef HAVE_CONFIG_H
@@ -270,7 +241,7 @@ gst_buffer_find_region_of_interest_meta (GstBuffer * buffer, const guint index)
     if (roimeta->parent_id != -1)
       continue;
 
-    if (++num == index)
+    if (num++ == index)
       return roimeta;
   }
 
@@ -282,14 +253,14 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
     GstVideoComposition * composition, GstVideoRegionOfInterestMeta * roimeta)
 {
   GstBuffer *inbuffer = NULL, *outbuffer = NULL;
-  GstVideoRectangle *source = NULL, *destination = NULL;
+  GstVideoRectangle source = {0}, *destination = NULL;
   GstMeta *meta = NULL;
   gpointer state = NULL;
 
   inbuffer = composition->blits[0].frame->buffer;
   outbuffer = composition->frame->buffer;
 
-  source = &(composition->blits[0].source);
+  gst_video_quadrilateral_to_rectangle (&(composition->blits[0].source), &source);
   destination = &(composition->blits[0].destination);
 
   while ((meta = gst_buffer_iterate_meta (inbuffer, &state))) {
@@ -306,7 +277,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       rmeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, rmeta);
-      gst_video_region_of_interest_coordinates_correction (roimeta, source,
+      gst_video_region_of_interest_coordinates_correction (rmeta, &source,
           destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoRegionOfInterest' meta "
@@ -333,7 +304,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
-      gst_video_landmarks_coordinates_correction (lmkmeta, source, destination);
+      gst_video_landmarks_coordinates_correction (lmkmeta, &source, destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoLandmarks' meta "
           "with ID[0x%X] and parent ID[0x%X] to buffer %p", lmkmeta->id,
@@ -347,34 +318,40 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
     GstVideoComposition * composition, GstVideoRegionOfInterestMeta * roimeta)
 {
   GstBuffer *outbuffer = NULL;
-  GstVideoRectangle *source = NULL, *destination = NULL;
+  GstVideoBlit *vblit = NULL;
+  GstVideoRectangle source = {0}, *destination = NULL;
   GstVideoRegionOfInterestMeta *rmeta = NULL;
   gint maxwidth = 0, maxheight = 0;
 
   outbuffer = composition->frame->buffer;
-  source = &(composition->blits[0].source);
-  destination = &(composition->blits[0].destination);
+  vblit = &(composition->blits[0]);
 
   if (roimeta != NULL) {
-    source->x = roimeta->x;
-    source->y = roimeta->y;
-    source->w = roimeta->w;
-    source->h = roimeta->h;
+    source.x = roimeta->x;
+    source.y = roimeta->y;
+    source.w = roimeta->w;
+    source.h = roimeta->h;
   } else {
-    source->x = source->y = 0;
-    source->w = GST_VIDEO_FRAME_WIDTH (composition->blits[0].frame);
-    source->h = GST_VIDEO_FRAME_HEIGHT (composition->blits[0].frame);
+    source.x = source.y = 0;
+    source.w = GST_VIDEO_FRAME_WIDTH (vblit->frame);
+    source.h = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
   }
+
+  gst_video_rectangle_to_quadrilateral (&source, &(vblit->source));
+  vblit->mask |= GST_VCE_MASK_SOURCE;
+
+  destination = &(vblit->destination);
+  vblit->mask |= GST_VCE_MASK_DESTINATION;
 
   destination->x = destination->y = 0;
   destination->w = maxwidth = GST_VIDEO_FRAME_WIDTH (composition->frame);
   destination->h = maxheight = GST_VIDEO_FRAME_HEIGHT (composition->frame);
 
   // Recalculate the destination width or height depending on the ratios.
-  if ((source->w * destination->h) > (source->h * destination->w))
-    destination->h = gst_util_uint64_scale_int (maxwidth, source->h, source->w);
-  else if ((source->w * destination->h) < (source->h * destination->w))
-    destination->w = gst_util_uint64_scale_int (maxheight, source->w, source->h);
+  if ((source.w * destination->h) > (source.h * destination->w))
+    destination->h = gst_util_uint64_scale_int (maxwidth, source.h, source.w);
+  else if ((source.w * destination->h) < (source.h * destination->w))
+    destination->w = gst_util_uint64_scale_int (maxheight, source.w, source.h);
 
   // Additional correction of X and Y axis for centred image disposition.
   destination->x += (maxwidth - destination->w) / 2;
@@ -698,7 +675,7 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       continue;
 
     // Skip this pad as there is no corresponding ROI meta in single ROI mode.
-    if ((srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE) && (num++ >= n_metas))
+    if ((srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE) && (num >= n_metas))
       continue;
 
     // Skip this pad as there is no ROI meta in batched ROI mode.
@@ -717,7 +694,8 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
 
     // Aquire buffer for each frame and update the converter parameters.
     for (idx = 0; idx < outframes->len; idx++, id++) {
-      GstVideoRectangle *source = NULL, *destination = NULL;
+      GstVideoBlit *vblit = NULL;
+      GstVideoRectangle source = {0}, *destination = NULL;
 
       outframe = &(g_array_index (outframes, GstVideoFrame, idx));
       success = gst_video_split_acquire_video_frame (srcpad, inframe, outframe);
@@ -730,7 +708,7 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition = &(g_array_index (compositions, GstVideoComposition, id));
 
       composition->frame = outframe;
-      composition->flags = 0;
+      composition->datatype = 0;
 
       composition->bgcolor = 0x00000000;
       composition->bgfill = TRUE;
@@ -743,11 +721,13 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       composition->blits = g_slice_new0 (GstVideoBlit);
       composition->n_blits = 1;
 
-      composition->blits[0].frame = inframe;
+      vblit = &(composition->blits[0]);
 
-      composition->blits[0].alpha = G_MAXUINT8;
-      composition->blits[0].rotate = GST_VCE_ROTATE_0;
-      composition->blits[0].flip = GST_VCE_FLIP_NONE;
+      vblit->frame = inframe;
+      vblit->mask = 0;
+
+      vblit->alpha = G_MAXUINT8;
+      vblit->rotate = GST_VCE_ROTATE_0;
 
       // Depending on the mode a different ROI meta is used or none at all.
       if (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE)
@@ -755,15 +735,17 @@ gst_video_split_populate_frames_and_compositions (GstVideoSplit * vsplit,
       else if (srcpad->mode == GST_VSPLIT_MODE_ROI_BATCH)
         roimeta = gst_buffer_find_region_of_interest_meta (inframe->buffer, idx);
 
+      num += (srcpad->mode == GST_VSPLIT_MODE_ROI_SINGLE) ? 1 : 0;
+
       // Update source/destination regions and output buffer meta.
       gst_video_split_composition_update_regions (srcpad, composition, roimeta);
       gst_video_split_composition_populate_metas (srcpad, composition, roimeta);
 
-      source = &(composition->blits[0].source);
-      destination = &(composition->blits[0].destination);
+      gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
+      destination = &(vblit->destination);
 
       GST_TRACE_OBJECT (srcpad, "Composition [%u] Regions: [%d %d %d %d] ->"
-          " [%d %d %d %d]", id, source->x, source->y, source->w, source->h,
+          " [%d %d %d %d]", id, source.x, source.y, source.w, source.h,
           destination->x, destination->y, destination->w, destination->h);
 
       // Reset ROI metadata pointer.
@@ -972,6 +954,8 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
     {
       GstCaps *caps = NULL;
       GstBufferPool *pool = NULL;
+      GstStructure *config = NULL;
+      GstVideoAlignment align = { 0, };
       GstVideoInfo info;
       gboolean needpool = FALSE;
 
@@ -988,22 +972,19 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
         return FALSE;
       }
 
+      if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+        GST_ERROR_OBJECT (pad, "Failed to get alignment!");
+        return FALSE;
+      }
+
       if (needpool) {
-        GstStructure *structure = NULL;
-        GstVideoAlignment align = { 0, };
-
-        if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
-          GST_ERROR_OBJECT (pad, "Failed to get alignment!");
-          return FALSE;
-        }
-
         pool = gst_video_split_create_pool (pad, caps, &align, NULL);
-        structure = gst_buffer_pool_get_config (pool);
+        config = gst_buffer_pool_get_config (pool);
 
         // Set caps and size in query.
-        gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
+        gst_buffer_pool_config_set_params (config, caps, info.size, 0, 0);
 
-        if (!gst_buffer_pool_set_config (pool, structure)) {
+        if (!gst_buffer_pool_set_config (pool, config)) {
           GST_ERROR_OBJECT (pad, "Failed to set buffer pool configuration!");
           gst_object_unref (pool);
           return FALSE;
@@ -1016,7 +997,11 @@ gst_video_split_sinkpad_query (GstPad * pad, GstObject * parent,
       if (pool != NULL)
         gst_object_unref (pool);
 
-      gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+      config = gst_structure_new_empty ("video-meta");
+      gst_buffer_pool_config_set_video_alignment (config, &align);
+
+      // Add video meta with alignment information for upstream.
+      gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, config);
 
       return TRUE;
     }

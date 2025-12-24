@@ -1,36 +1,7 @@
 /*
-* Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -56,6 +27,7 @@ G_DEFINE_TYPE (GstJPEGEncoder, gst_jpeg_enc, GST_TYPE_VIDEO_ENCODER);
 
 #define DEFAULT_PROP_JPEG_QUALITY   85
 #define DEFAULT_PROP_ORIENTATION    GST_JPEG_ENC_ORIENTATION_0
+#define DEFAULT_PROP_CAMERA_ID      0
 
 #define DEFAULT_PROP_MIN_BUFFERS    2
 #define DEFAULT_PROP_MAX_BUFFERS    10
@@ -86,6 +58,7 @@ enum
   PROP_0,
   PROP_QUALITY,
   PROP_ORIENTATION,
+  PROP_CAMERA_ID,
 };
 
 struct _GstVideoFrameData {
@@ -264,6 +237,7 @@ gst_jpeg_enc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
       GST_JPEG_ENC_QUALITY, G_TYPE_UINT, jpegenc->quality,
       GST_JPEG_ENC_ORIENTATION, GST_TYPE_JPEG_ENC_ORIENTATION,
           jpegenc->orientation,
+      GST_JPEG_ENC_CAMERA_ID, G_TYPE_UINT, jpegenc->camera_id,
       NULL);
 
   if (!gst_jpeg_enc_context_create (jpegenc->context, params)) {
@@ -409,6 +383,9 @@ gst_jpeg_enc_set_property (GObject * object, guint prop_id,
     case PROP_ORIENTATION:
       jpegenc->orientation = g_value_get_enum (value);
       break;
+    case PROP_CAMERA_ID:
+      jpegenc->camera_id = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -431,6 +408,9 @@ gst_jpeg_enc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_ORIENTATION:
       g_value_set_enum (value, jpegenc->orientation);
+      break;
+    case PROP_CAMERA_ID:
+      g_value_set_uint (value, jpegenc->camera_id);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -484,6 +464,10 @@ gst_jpeg_enc_class_init (GstJPEGEncoderClass * klass)
           "Orientation of Jpeg encoder",
           GST_TYPE_JPEG_ENC_ORIENTATION, DEFAULT_PROP_ORIENTATION,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_CAMERA_ID,
+      g_param_spec_uint ("camera-id", "Camera ID",
+          "Camera ID", 0, G_MAXINT8, DEFAULT_PROP_CAMERA_ID,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_set_static_metadata (element,
       "Jpeg encoder", "JPEG/Encoder",
@@ -514,6 +498,8 @@ gst_jpeg_enc_init (GstJPEGEncoder * jpegenc)
   g_rec_mutex_init (&jpegenc->worklock);
 
   jpegenc->quality = DEFAULT_PROP_JPEG_QUALITY;
+  jpegenc->orientation = DEFAULT_PROP_ORIENTATION;
+  jpegenc->camera_id = DEFAULT_PROP_CAMERA_ID;
   jpegenc->outpool = NULL;
   jpegenc->worktask = NULL;
 

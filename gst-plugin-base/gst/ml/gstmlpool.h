@@ -25,6 +25,11 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef __GST_ML_POOL_H__
@@ -48,11 +53,11 @@ G_BEGIN_DECLS
 #define GST_ML_POOL_CAST(obj) ((GstMLBufferPool*)(obj))
 
 /**
- * GST_ML_BUFFER_POOL_TYPE_ION:
+ * GST_ML_BUFFER_POOL_TYPE_DMA:
  *
  * Type of memory that the pool will use for allocating buffers.
  */
-#define GST_ML_BUFFER_POOL_TYPE_ION "GstMLBufferPoolTypeIonMemory"
+#define GST_ML_BUFFER_POOL_TYPE_DMA "GstMLBufferPoolTypeDmaMemory"
 
 /**
  * GST_ML_BUFFER_POOL_TYPE_SYSTEM:
@@ -80,6 +85,16 @@ typedef struct _GstMLBufferPoolPrivate GstMLBufferPoolPrivate;
  * into a continuous physical memory.
  */
 #define GST_ML_BUFFER_POOL_OPTION_CONTINUOUS "GstMLBufferPoolOptionContinuous"
+
+/**
+ * GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED:
+ *
+ * An option indicating that once the buffer memory is mapped it will be
+ * kept mapped until the memory is destroyed.
+ *
+ * Note: This setting has no effect on system memory.
+ */
+#define GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED "GstMLBufferPoolOptionKeepMapped"
 
 struct _GstMLBufferPool
 {

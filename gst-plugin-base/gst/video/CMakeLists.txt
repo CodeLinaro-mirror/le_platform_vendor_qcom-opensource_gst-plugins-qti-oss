@@ -15,6 +15,7 @@ add_library(${TARGET_NAME} SHARED
   $<$<BOOL:${HAVE_ADRENO_C2D2_H}>:c2d-video-converter.c>
   $<$<BOOL:${GLES_FOUND}>:gles-video-converter.cc>
   $<$<BOOL:${HAVE_FASTCV_H}>:fcv-video-converter.c>
+  $<$<BOOL:${OPEN_CV_FOUND}>:ocv-video-converter.cc>
 )
 
 set(TARGET_HEADERS
@@ -43,16 +44,15 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
   $<$<BOOL:${GLES_FOUND}>:HAVE_GLES2_H>
   $<$<BOOL:${HAVE_FASTCV_H}>:HAVE_FASTCV_H>
   $<$<BOOL:${FASTCV_FOUND}>:FASTCV_PKG_FOUND>
-  FASTCV_VERSION_MAJOR="${FASTCV_VERSION_MAJOR}"
+  $<$<BOOL:${FASTCV_FOUND}>:FASTCV_VERSION_MAJOR="${FASTCV_VERSION_MAJOR}">
+  $<$<BOOL:${OPEN_CV_FOUND}>:HAVE_OPENCV_H>
   $<$<BOOL:${HAVE_GBM_PRIV_H}>:HAVE_GBM_PRIV_H>
 )
 
-target_include_directories(${TARGET_NAME} PUBLIC
-  ${GST_INCLUDE_DIRS}
-)
-
 target_include_directories(${TARGET_NAME} PRIVATE
+  ${GST_INCLUDE_DIRS}
   ${KERNEL_BUILDDIR}/usr/include
+  $<$<BOOL:${OPEN_CV_FOUND}>:${OPEN_CV_INCLUDE_DIRS}>
 )
 
 # Path for some headers in msm-5.4 kernel.
@@ -71,6 +71,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
   ${GST_VIDEO_LIBRARIES}
   gstqtiallocatorsbase
   gstqtigfxbase
+  $<$<BOOL:${OPEN_CV_FOUND}>:${OPEN_CV_LIBRARIES}>
 )
 
 install(
@@ -83,7 +84,7 @@ install(
 )
 
 configure_file(
-  ${CMAKE_SOURCE_DIR}/gst/common.pc.in
+  ${BASE_COMMON_PC_IN}
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
   @ONLY
 )

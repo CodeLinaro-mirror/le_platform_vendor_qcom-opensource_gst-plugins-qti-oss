@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -393,7 +393,7 @@ gst_camera_reprocess_context_create (GstCameraReprocessContext *context,
 
   // Fill CreateParams
     // CameraID
-  offcam_params.camera_id = context->camera_id;
+  offcam_params.camera_id[0] = context->camera_id;
     // BufferParams of input
   offcam_params.in_buffer.width = params[0].width;
   g_return_val_if_fail (offcam_params.in_buffer.width > 0, FALSE);
@@ -433,22 +433,22 @@ gst_camera_reprocess_context_create (GstCameraReprocessContext *context,
 
     // Request metadata path
   if (context->req_meta_path != NULL)
-    g_strlcpy (offcam_params.request_metadata_path,
+    g_strlcpy (offcam_params.request_metadata_path[0],
         context->req_meta_path, OFFLINE_CAMERA_REQ_METADATA_PATH_MAX);
 
     // Request metadata step
-  offcam_params.metadata_step = context->req_meta_step;
+  offcam_params.metadata_step[0] = context->req_meta_step;
   GST_DEBUG ("request meta path: %s, request meta step: %u.",
-      offcam_params.request_metadata_path, offcam_params.metadata_step);
+      offcam_params.request_metadata_path[0], offcam_params.metadata_step[0]);
 
     // Fill metadata
   if (context->session_metadata == NULL) {
     GST_DEBUG ("Fill metadata from properties.");
     fill_metadata_from_properties (context, &meta);
-    offcam_params.session_meta = meta;
+    offcam_params.session_meta[0] = meta;
   } else {
     GST_DEBUG ("Fill metadata from external pointer.");
-    offcam_params.session_meta = *context->session_metadata;
+    offcam_params.session_meta[0] = *context->session_metadata;
   }
 
   qmmf::recorder::OfflineCameraCb offcam_cb =
@@ -496,9 +496,10 @@ gst_camera_reprocess_context_process (GstCameraReprocessContext *context,
   out_buf_fd = gst_fd_memory_get_fd (outmem);
   g_return_val_if_fail (out_buf_fd >= 0, GST_FLOW_ERROR);
 
-  params.in_buf_fd = in_buf_fd;
+  params.in_buf_fd[0] = in_buf_fd;
+  params.in_buf_fd[1] = -1;
   params.out_buf_fd = out_buf_fd;
-  GST_LOG ("inbuf fd(%u), outbuf fd(%u).", params.in_buf_fd, params.out_buf_fd);
+  GST_LOG ("inbuf fd(%u), outbuf fd(%u).", params.in_buf_fd[0], params.out_buf_fd);
 
   ptr_array = g_ptr_array_sized_new (2);
   if (ptr_array == NULL) {

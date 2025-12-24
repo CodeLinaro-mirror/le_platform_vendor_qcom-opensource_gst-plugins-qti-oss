@@ -27,6 +27,7 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
  * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ *
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
@@ -147,6 +148,10 @@ gst_video_retrieve_gpu_alignment (GstVideoInfo * info, GstVideoAlignment * align
   if (format == GST_VIDEO_FORMAT_RGB || format == GST_VIDEO_FORMAT_BGR) {
     align->padding_right = info->width / 3;
   }
+
+  // Freedreno alignment limitation. Height need to be multiple of 4
+  if (GST_VIDEO_FORMAT_INFO_IS_RGB (vfinfo))
+    align->padding_bottom = GST_ROUND_UP_4 (info->height) - info->height;
 
   return gst_video_info_align (info, align);
 }
@@ -286,4 +291,24 @@ gst_buffer_has_valid_parent_meta (GstBuffer * buffer, gint parent_id)
     return FALSE;
 
   return TRUE;
+}
+
+void
+gst_video_point_affine_correction (GstVideoPoint * point, gdouble matrix[3][3])
+{
+  gdouble x = 0.0, y = 0.0, z = 0.0;
+
+  // Calcualte the new X and Y coordinates with the following formulas:
+  // +------------+ +---+   +----+
+  // | A0  A1  A2 | | x |   | x' | x' = A0 * x + A1 * y + A2
+  // | B0  B1  B2 | | y | = | y' | y' = B0 * x + B1 * y + B2
+  // | C0  C1  C2 | | 1 |   | z' | z' = C0 * x + C1 * y + C2
+  // +------------+ +---+   +----+
+  x = matrix[0][0] * point->x + matrix[0][1] * point->y + matrix[0][2];
+  y = matrix[1][0] * point->x + matrix[1][1] * point->y + matrix[1][2];
+  z = matrix[2][0] * point->x + matrix[2][1] * point->y + matrix[2][2];
+
+  // Transform from world space (3D) to screen space (2D).
+  point->x = x / z;
+  point->y = y / z;
 }

@@ -27,13 +27,14 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
 * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #pragma once
 
-#include "qti-ml-post-proccess.h"
+#include "qti-ml-post-process.h"
 #include "qti-labels-parser.h"
 
 #include <string>

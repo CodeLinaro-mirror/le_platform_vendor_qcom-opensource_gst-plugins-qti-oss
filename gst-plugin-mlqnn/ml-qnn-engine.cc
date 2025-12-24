@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -42,7 +42,16 @@
 
 #endif
 
-#if defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V2_INIT)
+#if defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V3_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO(graphInfo) \
+    ((graphInfo)->graphInfoV3)
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED(graphInfo) \
+    (((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) || \
+        ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2)|| \
+        ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_3))
+
+#elif defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V2_INIT)
 
 #define QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO(graphInfo) \
     ((graphInfo)->graphInfoV2)
@@ -63,7 +72,16 @@
 
 #endif
 
-#if defined(QNN_SYSTEM_CONTEXT_BINARY_INFO_V2_INIT)
+#if defined(QNN_SYSTEM_CONTEXT_BINARY_INFO_V3_INIT)
+
+#define QNN_GET_SYSTEM_CONTEXT_BINARY_INFO(binary_info) \
+    ((binary_info)->contextBinaryInfoV3)
+#define QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED(binary_info) \
+    (((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_1) || \
+        ((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_2) || \
+        ((binary_info)->version == QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_3))
+
+#elif defined(QNN_SYSTEM_CONTEXT_BINARY_INFO_V2_INIT)
 
 #define QNN_GET_SYSTEM_CONTEXT_BINARY_INFO(binary_info) \
     ((binary_info)->contextBinaryInfoV2)
@@ -1133,17 +1151,19 @@ gst_ml_qnn_engine_execute (GstMLQnnEngine *engine, GstMLFrame *inframe,
   // populate input tensor data
   for (idx = 0; idx < graph_info->numInputTensors; idx++) {
     Qnn_Tensor_t *tensor = &(graph_info->inputTensors[idx]);
+    guint size = gst_ml_info_tensor_size (&(inframe->info), idx);
 
     QNN_TENSOR_CLIENTBUF (tensor).data = GST_ML_FRAME_BLOCK_DATA (inframe, idx);
-    QNN_TENSOR_CLIENTBUF (tensor).dataSize = GST_ML_FRAME_BLOCK_SIZE (inframe, idx);
+    QNN_TENSOR_CLIENTBUF (tensor).dataSize = size;
   }
 
   // populate output tensor data
   for (idx = 0; idx < graph_info->numOutputTensors; idx++) {
     Qnn_Tensor_t *tensor = &(graph_info->outputTensors[idx]);
+    guint size = gst_ml_info_tensor_size (&(outframe->info), idx);
 
     QNN_TENSOR_CLIENTBUF (tensor).data = GST_ML_FRAME_BLOCK_DATA (outframe, idx);
-    QNN_TENSOR_CLIENTBUF (tensor).dataSize = GST_ML_FRAME_BLOCK_SIZE (outframe, idx);
+    QNN_TENSOR_CLIENTBUF (tensor).dataSize = size;
   }
 
   // Execute Graph

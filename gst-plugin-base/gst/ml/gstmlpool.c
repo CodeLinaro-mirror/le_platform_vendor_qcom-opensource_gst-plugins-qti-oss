@@ -26,39 +26,10 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "gstmlpool.h"
@@ -81,8 +52,8 @@
 GST_DEBUG_CATEGORY_STATIC (gst_ml_pool_debug);
 #define GST_CAT_DEFAULT gst_ml_pool_debug
 
-#define GST_IS_ION_MEMORY_TYPE(type) \
-    (type == g_quark_from_static_string (GST_ML_BUFFER_POOL_TYPE_ION))
+#define GST_IS_DMA_MEMORY_TYPE(type) \
+    (type == g_quark_from_static_string (GST_ML_BUFFER_POOL_TYPE_DMA))
 #define GST_IS_SYSTEM_MEMORY_TYPE(type) \
     (type == g_quark_from_static_string (GST_ML_BUFFER_POOL_TYPE_SYSTEM))
 
@@ -93,19 +64,21 @@ struct _GstMLBufferPoolPrivate
   // Allocation memory type.
   GQuark memtype;
 
-  GstAllocator *allocator;
+  GstAllocator        *allocator;
   GstAllocationParams params;
-  GstMLInfo info;
+  GstMLInfo           info;
+  guint               maxsize;
 
-  gboolean addmeta;
-  gboolean continuous;
+  gboolean            addmeta;
+  gboolean            continuous;
+  GstFdMemoryFlags    memflags;
 
-  // ION device FD.
-  gint devfd;
+  // DMA/ION device FD.
+  gint                devfd;
 
 #if !defined(HAVE_LINUX_DMA_HEAP_H) && !defined(TARGET_ION_ABI_VERSION)
   // Map of data FDs and ION handles on case ION memory is used.
-  GHashTable *datamap;
+  GHashTable          *datamap;
 #endif
 };
 
@@ -114,7 +87,7 @@ G_DEFINE_TYPE_WITH_PRIVATE (GstMLBufferPool, gst_ml_buffer_pool,
     GST_TYPE_BUFFER_POOL);
 
 static gboolean
-open_ion_device (GstMLBufferPool * mlpool)
+open_dma_device (GstMLBufferPool * mlpool)
 {
   GstMLBufferPoolPrivate *priv = mlpool->priv;
 
@@ -141,17 +114,17 @@ open_ion_device (GstMLBufferPool * mlpool)
   priv->datamap = g_hash_table_new (NULL, NULL);
 #endif // TARGET_ION_ABI_VERSION
 
-  GST_INFO_OBJECT (mlpool, "Opened ION device FD %d", priv->devfd);
+  GST_INFO_OBJECT (mlpool, "Opened DMA/ION device FD %d", priv->devfd);
   return TRUE;
 }
 
 static void
-close_ion_device (GstMLBufferPool * mlpool)
+close_dma_device (GstMLBufferPool * mlpool)
 {
   GstMLBufferPoolPrivate *priv = mlpool->priv;
 
   if (priv->devfd >= 0) {
-    GST_INFO_OBJECT (mlpool, "Closing ION device FD %d", priv->devfd);
+    GST_INFO_OBJECT (mlpool, "Closing DMA/ION device FD %d", priv->devfd);
     close (priv->devfd);
   }
 
@@ -161,7 +134,7 @@ close_ion_device (GstMLBufferPool * mlpool)
 }
 
 static GstMemory *
-ion_device_alloc (GstMLBufferPool * mlpool, gsize size)
+dma_device_alloc (GstMLBufferPool * mlpool, gsize size)
 {
   GstMLBufferPoolPrivate *priv = mlpool->priv;
   gint result = 0, fd = -1;
@@ -198,7 +171,7 @@ ion_device_alloc (GstMLBufferPool * mlpool, gsize size)
 #endif
 
   if (result != 0) {
-    GST_ERROR_OBJECT (mlpool, "Failed to allocate ION memory!");
+    GST_ERROR_OBJECT (mlpool, "Failed to allocate memory!");
     return NULL;
   }
 
@@ -220,17 +193,17 @@ ion_device_alloc (GstMLBufferPool * mlpool, gsize size)
   fd = alloc_data.fd;
 #endif
 
-  GST_DEBUG_OBJECT (mlpool, "Allocated ION memory FD %d", fd);
+  GST_DEBUG_OBJECT (mlpool, "Allocated DMA/ION memory FD %d", fd);
 
   // Wrap the allocated FD in FD backed allocator.
   return gst_fd_allocator_alloc (priv->allocator, fd, size,
-      GST_FD_MEMORY_FLAG_DONT_CLOSE);
+      priv->memflags);
 }
 
 static void
-ion_device_free (GstMLBufferPool * mlpool, gint fd)
+dma_device_free (GstMLBufferPool * mlpool, gint fd)
 {
-  GST_DEBUG_OBJECT (mlpool, "Closing ION memory FD %d", fd);
+  GST_DEBUG_OBJECT (mlpool, "Closing DMA/ION memory FD %d", fd);
 
 #if !defined(HAVE_LINUX_DMA_HEAP_H) && !defined(TARGET_ION_ABI_VERSION)
   ion_user_handle_t handle = GPOINTER_TO_INT (
@@ -252,6 +225,7 @@ gst_ml_buffer_pool_get_options (GstBufferPool * pool)
   static const gchar *options[] = {
     GST_ML_BUFFER_POOL_OPTION_TENSOR_META,
     GST_ML_BUFFER_POOL_OPTION_CONTINUOUS,
+    GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED,
     NULL
   };
   return options;
@@ -268,7 +242,7 @@ gst_ml_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
   GstMLInfo info;
   GstAllocator *allocator;
   GstAllocationParams params;
-  gboolean success;
+  gboolean success, keepmapped = FALSE;
 
   success = gst_buffer_pool_config_get_params (config, &caps, &maxsize,
       &minbuffers, &maxbuffers);
@@ -286,16 +260,25 @@ gst_ml_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
     GST_ERROR_OBJECT (mlpool, "Failed getting geometry from caps %"
         GST_PTR_FORMAT, caps);
     return FALSE;
-  } else if (maxsize != gst_ml_info_size (&info)) {
-    GST_ERROR_OBJECT (pool, "Provided size is not equal for the caps: %u != %"
+  } else if (maxsize < gst_ml_info_size (&info)) {
+    GST_ERROR_OBJECT (pool, "Provided size is not enough for the caps: %u != %"
         G_GSIZE_FORMAT, maxsize, gst_ml_info_size (&info));
     return FALSE;
   }
 
+  // Check whether we should keep buffer memory mapped.
+  keepmapped = gst_buffer_pool_config_has_option (config,
+      GST_ML_BUFFER_POOL_OPTION_KEEP_MAPPED);
+
+  if (keepmapped)
+    priv->memflags |= GST_FD_MEMORY_FLAG_KEEP_MAPPED;
+  else
+    priv->memflags &= ~GST_FD_MEMORY_FLAG_KEEP_MAPPED;
+
   if (!gst_buffer_pool_config_get_allocator (config, &allocator, &params)) {
     GST_ERROR_OBJECT (mlpool, "Allocator missing from configuration");
     return FALSE;
-  } else if (GST_IS_ION_MEMORY_TYPE (priv->memtype) &&
+  } else if (GST_IS_DMA_MEMORY_TYPE (priv->memtype) &&
       !GST_IS_FD_ALLOCATOR (allocator)) {
     GST_ERROR_OBJECT (mlpool, "Allocator %p is not FD backed!", allocator);
     return FALSE;
@@ -309,6 +292,7 @@ gst_ml_buffer_pool_set_config (GstBufferPool * pool, GstStructure * config)
 
   priv->params = params;
   priv->info = info;
+  priv->maxsize = maxsize;
 
   // Remove cached allocator.
   if (priv->allocator)
@@ -346,13 +330,13 @@ gst_ml_buffer_pool_alloc (GstBufferPool * pool, GstBuffer ** buffer,
 
   for (idx = 0; idx < priv->info.n_tensors; idx++) {
     // Check if a single continuous memory block is requested for all tensors.
-    size = priv->continuous ? gst_ml_info_size (&priv->info) :
+    size = priv->continuous ? priv->maxsize :
         gst_ml_info_tensor_size (&priv->info, idx);
 
     if (GST_IS_SYSTEM_MEMORY_TYPE (priv->memtype))
       mem = gst_allocator_alloc (priv->allocator, size, NULL);
-    else if (GST_IS_ION_MEMORY_TYPE (priv->memtype))
-      mem = ion_device_alloc (mlpool, size);
+    else if (GST_IS_DMA_MEMORY_TYPE (priv->memtype))
+      mem = dma_device_alloc (mlpool, size);
 
     if (NULL == mem) {
       GST_WARNING_OBJECT (mlpool, "Failed to allocate memory!");
@@ -391,9 +375,9 @@ gst_ml_buffer_pool_free (GstBufferPool * pool, GstBuffer * buffer)
   guint idx = 0;
 
   for (idx = 0; idx < gst_buffer_n_memory (buffer); idx++) {
-    if (GST_IS_ION_MEMORY_TYPE (mlpool->priv->memtype)) {
+    if (GST_IS_DMA_MEMORY_TYPE (mlpool->priv->memtype)) {
       gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (buffer, idx));
-      ion_device_free (mlpool, fd);
+      dma_device_free (mlpool, fd);
     } else if (GST_IS_SYSTEM_MEMORY_TYPE (mlpool->priv->memtype)) {
       // No additional handling is needed.
     }
@@ -415,8 +399,8 @@ gst_ml_buffer_pool_finalize (GObject * object)
     gst_object_unref (priv->allocator);
   }
 
-  if (GST_IS_ION_MEMORY_TYPE (priv->memtype))
-    close_ion_device (mlpool);
+  if (GST_IS_DMA_MEMORY_TYPE (priv->memtype))
+    close_dma_device (mlpool);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -441,6 +425,7 @@ static void
 gst_ml_buffer_pool_init (GstMLBufferPool * mlpool)
 {
   mlpool->priv = gst_ml_buffer_pool_get_instance_private (mlpool);
+  mlpool->priv->memflags = GST_FD_MEMORY_FLAG_DONT_CLOSE;
 }
 
 GstBufferPool *
@@ -458,9 +443,9 @@ gst_ml_buffer_pool_new (const gchar * memtype)
   mlpool->priv->addmeta = FALSE;
   mlpool->priv->continuous = FALSE;
 
-  if (GST_IS_ION_MEMORY_TYPE (mlpool->priv->memtype)) {
-    GST_INFO_OBJECT (mlpool, "Using ION memory");
-    success = open_ion_device (mlpool);
+  if (GST_IS_DMA_MEMORY_TYPE (mlpool->priv->memtype)) {
+    GST_INFO_OBJECT (mlpool, "Using DMA memory");
+    success = open_dma_device (mlpool);
   } else if (GST_IS_SYSTEM_MEMORY_TYPE (mlpool->priv->memtype)) {
     GST_INFO_OBJECT (mlpool, "Using SYSTEM memory");
     success = TRUE;

@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -101,9 +101,9 @@
  */
 #define DEFAULT_TFLITE_YOLOX_MODEL "/etc/models/yolox_quantized.tflite"
 #define DEFAULT_TFLITE_CLASSIFICATION_MODEL \
-    "/etc/models/mobilenet_v2_quantized.tflite"
-#define DEFAULT_DETECTION_LABELS "/etc/labels/coco_labels.txt"
-#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/imagenet_labels.txt"
+    "/etc/models/inception_v3_quantized.tflite"
+#define DEFAULT_DETECTION_LABELS "/etc/labels/yolox.json"
+#define DEFAULT_CLASSIFICATION_LABELS "/etc/labels/classification.json"
 
 /**
  * Default path of config file
@@ -829,24 +829,70 @@ create_pipe (GstAppContext * appctx, const GstAppOptions options)
   if (options.detection_use_cpu) {
     tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
     g_print ("Using CPU Delegate for Detection\n");
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid\n");
+      goto error_clean_elements;
+  }
     g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]), "delegate",
         tflite_delegate, NULL);
   }
   if (options.classification_use_cpu) {
     tflite_delegate = GST_ML_TFLITE_DELEGATE_NONE;
     g_print ("Using CPU Delegate for Classification\n");
-    g_object_set (G_OBJECT (qtimlelement[GST_CLASSIFICATION_TYPE_INCEPTION]),
-        "delegate", tflite_delegate, NULL);
+    gint valid_elements = 0;
+    // Validate all classification elements (indices 1 through
+    // TFLITE_ELEMENT_COUNT-1)
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+      if (qtimlelement[i] == NULL) {
+        g_printerr("Element at index %d is NULL\n", i);
+        continue;
+      }
+      if (!G_IS_OBJECT(qtimlelement[i])) {
+        g_printerr("Invalid element at index %d\n", i);
+        continue;
+      }
+      g_object_set (G_OBJECT (qtimlelement[i]),
+          "delegate", tflite_delegate, NULL);
+      valid_elements++;
+    }
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "CPU delegate\n");
+      goto error_clean_elements;
+    }
   }
   if (options.classification_use_gpu) {
     g_print ("Using GPU delegate for Classification\n");
     tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
-    g_object_set (G_OBJECT (qtimlelement[GST_CLASSIFICATION_TYPE_INCEPTION]),
-        "delegate", tflite_delegate, NULL);
+    gint valid_elements = 0;
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+        if (qtimlelement[i] == NULL) {
+          g_printerr("Element at index %d is NULL\n", i);
+          continue;
+        }
+        if (!G_IS_OBJECT(qtimlelement[i])) {
+          g_printerr("Invalid element at index %d\n", i);
+          continue;
+        }
+        g_object_set (G_OBJECT (qtimlelement[i]),
+          "delegate", tflite_delegate, NULL);
+        valid_elements++;
+    }
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "GPU delegate\n");
+      goto error_clean_elements;
+    }
   }
   if (options.detection_use_gpu) {
     g_print ("Using GPU delegate for Detection\n");
     tflite_delegate = GST_ML_TFLITE_DELEGATE_GPU;
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid\n");
+      goto error_clean_elements;
+    }
     g_object_set (G_OBJECT (qtimlelement[GST_DETECTION_TYPE_YOLO]),
         "delegate", tflite_delegate, NULL);
   }
@@ -855,16 +901,38 @@ create_pipe (GstAppContext * appctx, const GstAppOptions options)
     delegate_options =
         gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
         NULL);
-    g_object_set (G_OBJECT (qtimlelement[GST_CLASSIFICATION_TYPE_INCEPTION]),
-        "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
-    g_object_set (G_OBJECT (qtimlelement[GST_CLASSIFICATION_TYPE_INCEPTION]),
-        "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
-    g_object_set (G_OBJECT (qtimlelement[GST_CLASSIFICATION_TYPE_INCEPTION]),
-        "external_delegate_options", delegate_options, NULL);
+    gint valid_elements = 0;
+    for (gint i = 1; i < TFLITE_ELEMENT_COUNT; i++) {
+        if (qtimlelement[i] == NULL) {
+          g_printerr("Element at index %d is NULL\n", i);
+          continue;
+        }
+        if (!G_IS_OBJECT(qtimlelement[i])) {
+          g_printerr("Invalid element at index %d\n", i);
+          continue;
+        }
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "delegate", GST_ML_TFLITE_DELEGATE_EXTERNAL, NULL);
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "external_delegate_path", "libQnnTFLiteDelegate.so", NULL);
+        g_object_set (G_OBJECT (qtimlelement[i]),
+            "external_delegate_options", delegate_options, NULL);
+        valid_elements++;
+    }
     gst_structure_free (delegate_options);
+    if (valid_elements == 0) {
+      g_printerr("Error: No valid classification elements configured for "
+          "DSP delegate\n");
+      goto error_clean_elements;
+    }
   }
   if (options.detection_use_dsp) {
     g_print ("Using DSP delegate with TFLITE for Detection\n");
+    if (qtimlelement[GST_DETECTION_TYPE_YOLO] == NULL ||
+        !G_IS_OBJECT(qtimlelement[GST_DETECTION_TYPE_YOLO])) {
+      g_printerr("Error: Detection element is invalid for DSP delegate\n");
+      goto error_clean_elements;
+    }
     delegate_options =
         gst_structure_from_string ("QNNExternalDelegate,backend_type=htp",
         NULL);
@@ -1637,6 +1705,7 @@ main (gint argc, gchar * argv[])
       "  width: USB Camera Resolution width.\n"
       "  height: USB Camera Resolution Height.\n"
       "  framerate: USB Camera Frame Rate.\n"
+      "  video-format: USB Video Format format can be nv12, yuy2 or mjpeg\n"
       "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
       "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"
