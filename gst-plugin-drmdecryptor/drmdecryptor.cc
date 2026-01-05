@@ -201,6 +201,7 @@ gst_drm_decryptor_sinkpad_chain (GstPad *pad, GstObject *parent, GstBuffer *in_b
 {
   GstDrmDecryptor *decryptor = GST_DRM_DECRYPTOR (parent);
   GstBuffer *out_buffer = NULL;
+  GstFlowReturn result = GST_FLOW_OK;
 
   // TODO: Video backend is failing to handle vp9 clear content on secure path.
   // Added this temporary check to skip clear content until the issue is fixed.
@@ -218,10 +219,15 @@ gst_drm_decryptor_sinkpad_chain (GstPad *pad, GstObject *parent, GstBuffer *in_b
     }
   }
 
-  if (gst_buffer_pool_acquire_buffer (decryptor->pool, &out_buffer, NULL)
-      != GST_FLOW_OK) {
-    GST_ERROR_OBJECT (decryptor, "Failed to acquire secure buffer from pool!");
-    return GST_FLOW_ERROR;
+  result = gst_buffer_pool_acquire_buffer (decryptor->pool, &out_buffer, NULL);
+  if (result != GST_FLOW_OK) {
+    if (result == GST_FLOW_FLUSHING) {
+      GST_INFO_OBJECT (decryptor, "Failed to acquire secure buffer from pool, we are flushing");
+      return result;
+    } else {
+      GST_ERROR_OBJECT (decryptor, "Failed to acquire secure buffer from pool, result %d", result);
+      return GST_FLOW_ERROR;
+    }
   }
 
   if (gst_drm_decryptor_engine_execute (decryptor->engine, in_buffer,
