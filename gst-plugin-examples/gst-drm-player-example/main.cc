@@ -24,6 +24,7 @@
 #define PLAY                   "p"
 #define STOP                   "s"
 #define QUIT                   "q"
+#define SEEK                   "k"
 
 // For inter-thread communication
 #define TERMINATE_MESSAGE      "APP_TERMINATE_MSG"
@@ -965,8 +966,104 @@ print_menu ()
   g_print ("%.2s %s %.2s : %.2s %s\n", SPACE, PLAY, SPACE, SPACE, "Play/Pause");
   g_print ("%.2s %s %.2s : %.2s %s\n", SPACE, STOP, SPACE, SPACE, "Stop");
   g_print ("%.2s %s %.2s : %.2s %s\n", SPACE, QUIT, SPACE, SPACE, "Quit");
+  g_print ("%.2s %s %.2s : %.2s %s\n", SPACE, SEEK, SPACE, SPACE, "Seek");
+  // Example: after 'k', input '12.5' for absolute seek, or '+5'/'-10' for relative seek
 
   g_print ("\nChoose an option: ");
+}
+
+static gboolean
+pipeline_seek_seconds (GstAppContext *appctx, gdouble seconds, gboolean relative)
+{
+  gboolean seekable = FALSE;
+  gint64 start = 0, end = 0;
+  GstQuery *query = NULL;
+
+  if (appctx == NULL || appctx->pipeline == NULL) {
+    g_printerr ("ERROR: Pipeline is not initialized.\n");
+    return FALSE;
+  }
+
+  // Check if pipeline is in a seekable state
+  if (appctx->current_state < GST_STATE_PAUSED) {
+    g_printerr ("ERROR: Pipeline must be in PAUSED or PLAYING state to seek.\n");
+    return FALSE;
+  }
+
+  query = gst_query_new_seeking (GST_FORMAT_TIME);
+  if (G_UNLIKELY(query == NULL)) {
+    g_printerr ("ERROR: Failed to create seeking query.\n");
+    return FALSE;
+  }
+
+  if (!gst_element_query (appctx->pipeline, query)) {
+    gst_query_unref (query);
+    g_printerr ("ERROR: Failed to query seeking capability.\n");
+    return FALSE;
+  }
+
+  gst_query_parse_seeking (query, NULL /* fmt */,
+                           &seekable, &start, &end);
+  gst_query_unref (query);
+
+  if (seekable) {
+    g_print ("Seek is enabled from %" GST_TIME_FORMAT " to %" GST_TIME_FORMAT "\n",
+        GST_TIME_ARGS (start), GST_TIME_ARGS (end));
+  } else {
+    g_print ("Seek is not supported by this pipeline.\n");
+    return FALSE;
+  }
+
+  // Query current position if relative seek is requested
+  gint64 cur = GST_CLOCK_TIME_NONE;
+  if (relative) {
+    if (!gst_element_query_position (appctx->pipeline, GST_FORMAT_TIME, &cur) ||
+        cur == GST_CLOCK_TIME_NONE) {
+      g_printerr ("ERROR: Failed to query current position.\n");
+      return FALSE;
+    }
+  }
+
+  // relative == TRUE: seek from current position by +/-seconds
+  // relative == FALSE: seek to absolute seconds from start
+  gint64 delta_ns = (gint64) (seconds * GST_SECOND);
+  gint64 position = relative ? (cur + delta_ns) : delta_ns;
+
+  // Clamp to [start, end)
+  if (position < start) {
+    position = start;
+  }
+  if (end > 0 && position >= end) {
+    gint64 backoff = 100 * GST_MSECOND;
+    if (end > start + backoff)
+      position = end - backoff;
+    else
+      position = start;
+  }
+
+  if (relative) {
+    g_print ("Seeking relative: from %" GST_TIME_FORMAT " by %+.3f s to %" GST_TIME_FORMAT "\n",
+             GST_TIME_ARGS (cur), seconds, GST_TIME_ARGS (position));
+  } else {
+    g_print ("Seeking absolute: to %" GST_TIME_FORMAT " (%.3f s)\n",
+             GST_TIME_ARGS (position), seconds);
+  }
+
+  gboolean ok = gst_element_seek (
+      appctx->pipeline,
+      1.0 /* rate */,
+      GST_FORMAT_TIME,
+      (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+      GST_SEEK_TYPE_SET, position,
+      GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+  if (!ok) {
+    g_printerr ("ERROR: gst_element_seek failed.\n");
+    return FALSE;
+  }
+
+  g_print ("Seek done.\n");
+  return TRUE;
 }
 
 static gpointer
@@ -990,6 +1087,29 @@ main_menu (gpointer data)
       toggle_play (appctx);
     else if (g_str_equal (str, STOP))
       update_pipeline_state (appctx, GST_STATE_NULL);
+    else if (g_str_equal (str, SEEK)) {
+      g_print ("Enter seconds (e.g. 12.5 or +5/-10): ");
+      gchar *sec_input = NULL;
+      if (!wait_stdin_message (appctx->messages, &sec_input) || !sec_input) {
+        g_free (sec_input);
+        continue;
+      }
+      g_strstrip (sec_input);
+      gchar *endptr = NULL;
+      gdouble seconds = g_ascii_strtod (sec_input, &endptr);
+      // Reject trailing non-numeric garbage, and empty input
+      if (sec_input[0] == '\0' ||
+          endptr == sec_input ||
+          (endptr != NULL && *endptr != '\0')) {
+        g_print ("Invalid seconds: '%s'\n", sec_input);
+      } else {
+        gboolean is_relative = (sec_input[0] == '+' || sec_input[0] == '-');
+        if (!pipeline_seek_seconds (appctx, seconds, is_relative)) {
+          g_print ("Seek operation failed. Please try again.\n");
+        }
+      }
+      g_free (sec_input);
+    }
   }
   g_free (str);
 
