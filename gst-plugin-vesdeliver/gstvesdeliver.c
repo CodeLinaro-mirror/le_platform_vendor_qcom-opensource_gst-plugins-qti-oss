@@ -520,9 +520,11 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   int buf_fd = -1;
 
   if (TRANSFORM_DISABLE != vesdeliver->transform_caps) {
-    GST_LOG_OBJECT (vesdeliver, "Input buf %p with sz %" G_GSIZE_FORMAT ", pts %"
-        GST_TIME_FORMAT ", only caps change", inbuf, gst_buffer_get_size(inbuf),
-        GST_TIME_ARGS (GST_BUFFER_PTS (inbuf)));
+    gsize buf_sz = 0;
+    gsize len = gst_buffer_get_sizes (inbuf, NULL, &buf_sz);
+    GST_LOG_OBJECT (vesdeliver, "Input buf %p with len %" G_GSIZE_FORMAT ", sz %"
+        G_GSIZE_FORMAT ", pts %" GST_TIME_FORMAT ", only caps change", inbuf, len,
+        buf_sz, GST_TIME_ARGS (GST_BUFFER_PTS (inbuf)));
     return GST_FLOW_OK;
   }
 
@@ -531,7 +533,7 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   GstMapInfo input_map = { };
   gst_buffer_map (inbuf, &input_map, GST_MAP_READ);
   GST_DEBUG_OBJECT (vesdeliver,
-      "Input buffer %p with size: %" G_GSIZE_FORMAT ", timestamp: %"
+      "Input buffer %p with len: %" G_GSIZE_FORMAT ", timestamp: %"
       GST_TIME_FORMAT ", offset: %" G_GUINT64_FORMAT, inbuf, input_map.size,
       GST_TIME_ARGS (GST_BUFFER_PTS (inbuf)), GST_BUFFER_OFFSET (inbuf));
 
