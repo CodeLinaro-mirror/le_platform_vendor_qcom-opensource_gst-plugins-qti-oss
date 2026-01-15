@@ -27,6 +27,7 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
 * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
@@ -40,7 +41,7 @@
 *
 * Description of the supported caps and the type of the module.
 */
-static const char* kModuleCaps = R"(
+static const std::string kModuleCaps = R"(
 {
   "type": "super-resolution",
   "tensors": [
@@ -67,7 +68,7 @@ Module::Module(LogCallback cb)
 
 std::string Module::Caps() {
 
-  return std::string(kModuleCaps);
+  return kModuleCaps;
 }
 
 bool Module::Configure(const std::string& labels_file,
@@ -119,5 +120,6 @@ bool Module::Process(const Tensors& tensors, Dictionary& mlparams,
 }
 
 IModule* NewModule(LogCallback logger) {
+
   return new Module(logger);
 }

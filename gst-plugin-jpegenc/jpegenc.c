@@ -1,36 +1,7 @@
 /*
-* Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -60,11 +31,6 @@ G_DEFINE_TYPE (GstJPEGEncoder, gst_jpeg_enc, GST_TYPE_VIDEO_ENCODER);
 
 #define DEFAULT_PROP_MIN_BUFFERS    2
 #define DEFAULT_PROP_MAX_BUFFERS    10
-
-#define SMALLSIZE_RESOLUTION_WIDTH      640
-#define SMALLSIZE_RESOLUTION_HEIGHT     480
-// Buffer size multiplier for small resolution images
-#define SMALLSIZE_BUFFER_MULTIPLIER     5
 
 // Caps formats.
 #define GST_VIDEO_FORMATS "{ NV12, NV21 }"
@@ -148,15 +114,6 @@ gst_jpeg_enc_create_pool (GstJPEGEncoder * jpegenc, GstCaps * caps)
   gint alignedw = (GST_VIDEO_INFO_WIDTH (&info) + 64-1) & ~(64-1);
   gint alignedh = (GST_VIDEO_INFO_HEIGHT (&info) + 64-1) & ~(64-1);
   gsize aligned_size = alignedw * alignedh * 4;
-
-  // JpegBufferSize needs more space to storage extended message. Smallest
-  // 160*90 requests 283638 for buffer size, which is 20x of alignedw * alignedh
-  // here. According to camxstaticcaps.cpp and camximageformatutils.cpp,
-  // extended message will exceed space and cause mmap() failed!
-  if (alignedw < SMALLSIZE_RESOLUTION_WIDTH ||
-      alignedh < SMALLSIZE_RESOLUTION_HEIGHT) {
-    aligned_size = aligned_size * SMALLSIZE_BUFFER_MULTIPLIER;
-  }
 
   config = gst_buffer_pool_get_config (pool);
   gst_buffer_pool_config_set_params (config, caps, aligned_size,

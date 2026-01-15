@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifdef HAVE_CONFIG_H
@@ -241,6 +212,9 @@ struct _GstQmmfContext {
   GstQmmfLogicalCamInfo logical_cam_info;
   /// Sensor Switch Information
   GstQmmfCameraSwitchInfo camera_switch_info;
+
+  /// Super FrameRate Base
+  gint32            superframerate;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -1170,6 +1144,66 @@ camera_event_callback (GstQmmfContext * context,
       event = EVENT_CAMERA_CLOSED;
       break;
     }
+    case  ::qmmf::recorder::EventType::kSOFFreeze:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_SOF_FREEZE;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kRecoveryFailure:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_RECOVERYFAILURE;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kFatal:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_FATAL;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kRecoverySuccess:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_RECOVERYSUCCESS;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kInternal_Recovery:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_INTERNAL_RECOVERY;
+      break;
+    }
     default:
       event = EVENT_UNKNOWN;
       break;
@@ -1223,6 +1257,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->logical_cam_info.is_logical_cam = FALSE;
   context->logical_cam_info.phy_cam_num = 0;
   context->camera_switch_info.input_req_id = -1;
+
+  context->superframerate = 60;
 
   status = gst_qmmf_context_get_cam_static_info (context);
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, status == 0,
@@ -1480,6 +1516,21 @@ gst_qmmf_context_open (GstQmmfContext * context)
         meta.find (ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
   }
 
+  // update context from static metadata
+  {
+    gint tag_id;
+
+    tag_id = get_vendor_tag_by_name (
+        "org.codeaurora.qcamera3.platformCapabilities", "HFRPreviewFPS");
+
+    if (meta.exists(tag_id)) {
+      context->superframerate = meta.find(tag_id).data.i32[0];
+
+      GST_DEBUG ("update superframerate (%d) from static meta data",
+          context->superframerate);
+    }
+  }
+
   gst_qmmf_context_parse_logical_cam_info(context, meta);
 
   context->state = GST_STATE_READY;
@@ -1715,7 +1766,7 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 
   if (vpad->super_buffer_mode) {
     ::qmmf::recorder::SuperFrames super_frames;
-    super_frames.n_frames = vpad->framerate / vpad->superframerate;
+    super_frames.n_frames = vpad->framerate / context->superframerate;
     extraparam.Update(::qmmf::recorder::QMMF_SUPER_FRAMES, super_frames);
   }
 
@@ -2218,6 +2269,23 @@ gst_qmmf_context_update_local_props (GstQmmfContext * context,
       "org.codeaurora.qcamera3.multicam_exptime", "slaveExpTime");
   if (meta->exists(tag_id)) {
     context->slave_exp_time = meta->find(tag_id).data.i64[0];
+  }
+}
+
+void
+gst_qmmf_context_update_local_session_params(GstQmmfContext * context,
+    ::camera::CameraMetadata *meta)
+{
+  gint temp = 0;
+  guint tag_id = 0;
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.sessionParameters", "PreviewFPSOnHFRMode");
+  if (meta->exists(tag_id)) {
+    context->superframerate = meta->find(tag_id).data.i32[0];
+
+    GST_DEBUG ("found PreviewFPSOnHFRMode (%d), update new value (%d)",
+        tag_id, context->superframerate);
   }
 }
 
@@ -2849,6 +2917,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       ::camera::CameraMetadata *meta_ptr =
           (::camera::CameraMetadata *) g_value_get_pointer (value);
       recorder->SetCameraSessionParam (context->camera_id, *meta_ptr);
+
+      // Update local params from session metadata
+      gst_qmmf_context_update_local_session_params (context, meta_ptr);
     } else {
       recorder->SetCameraParam (context->camera_id, meta);
     }
@@ -2954,22 +3025,7 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       break;
     case PARAM_CAMERA_SUPER_FRAMERATE:
     {
-      ::camera::CameraMetadata meta;
-      static gint superframerate;
-
-      if (superframerate != 0) {
-        g_value_set_int (value, superframerate);
-      } else {
-        if (context->state >= GST_STATE_READY)
-          recorder->GetCameraParam (context->camera_id, meta);
-
-        guint tag_id = get_vendor_tag_by_name(
-            "org.codeaurora.qcamera3.platformCapabilities", "HFRPreviewFPS");
-        if (tag_id > 0) {
-          superframerate = meta.find(tag_id).data.i32[0];
-          g_value_set_int (value, superframerate);
-        }
-      }
+      g_value_set_int (value, context->superframerate);
       break;
     }
 #ifdef FEATURE_OFFLINE_IFE_SUPPORT

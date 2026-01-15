@@ -26,39 +26,10 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Changes from Qualcomm Technologies, Inc. are provided under the following license:
  *
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #ifdef HAVE_CONFIG_H
@@ -86,6 +57,7 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define GST_TYPE_VIDEO_TRANSFORM_ROTATE (gst_video_trasform_rotate_get_type())
 
 #define DEFAULT_PROP_ENGINE_BACKEND     (gst_video_converter_default_backend())
+#define DEFAULT_PROP_BACKEND_PARAM      NULL
 #define DEFAULT_PROP_FLIP_HORIZONTAL    FALSE
 #define DEFAULT_PROP_FLIP_VERTICAL      FALSE
 #define DEFAULT_PROP_ROTATE             GST_VIDEO_TRANSFORM_ROTATE_NONE
@@ -118,6 +90,7 @@ enum
 {
   PROP_0,
   PROP_ENGINE_BACKEND,
+  PROP_BACKEND_PARAM,
   PROP_FLIP_HORIZONTAL,
   PROP_FLIP_VERTICAL,
   PROP_ROTATE,
@@ -327,24 +300,24 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps,
 
 static gboolean
 gst_video_transform_propose_allocation (GstBaseTransform * base,
-    GstQuery * inquery, GstQuery * outquery)
+    GstQuery * decide_query, GstQuery * query)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
+  GstStructure *config = NULL;
+  GstVideoAlignment align = { 0, };
   GstVideoInfo info;
-  gboolean needpool = FALSE;
+  gboolean needpool = FALSE, success = FALSE;
 
-  if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (
-        base, inquery, outquery))
+  success = GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (
+      base, decide_query, query);
+
+  if (!success)
     return FALSE;
 
-  // No input query, nothing to do.
-  if (NULL == inquery)
-    return TRUE;
-
   // Extract caps from the query.
-  gst_query_parse_allocation (outquery, &caps, &needpool);
+  gst_query_parse_allocation (query, &caps, &needpool);
 
   if (NULL == caps) {
     GST_ERROR_OBJECT (vtrans, "Failed to extract caps from query!");
@@ -356,39 +329,42 @@ gst_video_transform_propose_allocation (GstBaseTransform * base,
     return FALSE;
   }
 
-  if (needpool) {
-    GstStructure *structure = NULL;
-    GstAllocator *allocator = NULL;
-    GstVideoAlignment align = { 0, };
+  if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+    GST_ERROR_OBJECT (vtrans, "Failed to get alignment!");
+    return FALSE;
+  }
 
-    if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
-      GST_ERROR_OBJECT (vtrans, "Failed to get alignment!");
-      return FALSE;
-    }
+  if (needpool) {
+    GstAllocator *allocator = NULL;
 
     pool = gst_video_transform_create_pool (vtrans, caps, &align, NULL);
-    structure = gst_buffer_pool_get_config (pool);
+    config = gst_buffer_pool_get_config (pool);
 
     // Set caps and size in query.
-    gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
+    gst_buffer_pool_config_set_params (config, caps, info.size, 0, 0);
 
-    gst_buffer_pool_config_get_allocator (structure, &allocator, NULL);
-    gst_query_add_allocation_param (outquery, allocator, NULL);
+    gst_buffer_pool_config_get_allocator (config, &allocator, NULL);
+    gst_query_add_allocation_param (query, allocator, NULL);
 
-    if (!gst_buffer_pool_set_config (pool, structure)) {
+    if (!gst_buffer_pool_set_config (pool, config)) {
       GST_ERROR_OBJECT (vtrans, "Failed to set buffer pool configuration!");
       gst_object_unref (pool);
       return FALSE;
     }
   }
 
-  // If upstream does't have a pool requirement, set only size in query.
-  gst_query_add_allocation_pool (outquery, pool, info.size, 0, 0);
+  // If upstream doesn't have a pool requirement, set only size in query.
+  gst_query_add_allocation_pool (query, pool, info.size, 0, 0);
 
   if (pool != NULL)
     gst_object_unref (pool);
 
-  gst_query_add_allocation_meta (outquery, GST_VIDEO_META_API_TYPE, NULL);
+  config = gst_structure_new_empty ("video-meta");
+  gst_buffer_pool_config_set_video_alignment (config, &align);
+
+  // Add video meta with alignment information for upstream.
+  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, config);
+
   return TRUE;
 }
 
@@ -471,7 +447,6 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
     gst_query_add_allocation_pool (query, pool, size, minbuffers,
         maxbuffers);
 
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
   return TRUE;
 }
 
@@ -481,7 +456,7 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstBufferPool *pool = vtrans->outpool;
-  gboolean passthrough = FALSE, writable = TRUE;
+  gboolean passthrough = FALSE, writable = TRUE, success = FALSE;
 
   // Check whether passthrough should be true/false based on parameters.
   gst_video_transform_determine_passthrough (vtrans);
@@ -518,9 +493,13 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
     return GST_FLOW_ERROR;
   }
 
-  // Copy the flags and timestamps from the input buffer.
-  gst_buffer_copy_into (*outbuffer, inbuffer,
-      GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+  success = GST_BASE_TRANSFORM_CLASS (parent_class)->copy_metadata (
+      base, inbuffer, *outbuffer);
+
+  if (!success) {
+    GST_ELEMENT_WARNING (vtrans, STREAM, NOT_IMPLEMENTED,
+        ("could not copy metadata"), (NULL));
+  }
 
   return GST_FLOW_OK;
 }
@@ -693,7 +672,8 @@ gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
   if (vtrans->converter != NULL)
     gst_video_converter_engine_free (vtrans->converter);
 
-  vtrans->converter = gst_video_converter_engine_new (vtrans->backend, NULL);
+  vtrans->converter = gst_video_converter_engine_new (vtrans->backend,
+      vtrans->backendparam);
 
   // Disable passthrough in order to decide output allocation.
   gst_base_transform_set_passthrough (base, FALSE);
@@ -1636,7 +1616,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   composition.n_blits = 1;
 
   composition.frame = &outframe;
-  composition.flags = 0;
+  composition.datatype = 0;
 
   composition.bgcolor = vtrans->background;
   composition.bgfill = TRUE;
@@ -1695,6 +1675,24 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       vtrans->backend = g_value_get_enum (value);
       break;
+    case PROP_BACKEND_PARAM:
+    {
+      GValue structure = G_VALUE_INIT;
+
+      g_value_init (&structure, GST_TYPE_STRUCTURE);
+
+      if (!gst_parse_string_property_value (value, &structure)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to parse backend paramters!");
+        break;
+      }
+
+      if (vtrans->backendparam != NULL)
+        gst_structure_free (vtrans->backendparam);
+
+      vtrans->backendparam = GST_STRUCTURE (g_value_dup_boxed (&structure));
+      g_value_unset (&structure);
+      break;
+    }
     case PROP_FLIP_HORIZONTAL:
       vtrans->flip_h = g_value_get_boolean (value);
       break;
@@ -1771,6 +1769,16 @@ gst_video_transform_get_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       g_value_set_enum (value, vtrans->backend);
       break;
+    case PROP_BACKEND_PARAM:
+    {
+      gchar *string = NULL;
+
+      if (vtrans->backendparam != NULL)
+        string = gst_structure_to_string (vtrans->backendparam);
+
+      g_value_take_string (value, string);
+      break;
+    }
     case PROP_FLIP_HORIZONTAL:
       g_value_set_boolean (value, vtrans->flip_h);
       break;
@@ -1844,6 +1852,9 @@ gst_video_transform_finalize (GObject * object)
   if (vtrans->outpool != NULL)
     gst_object_unref (vtrans->outpool);
 
+  if (vtrans->backendparam != NULL)
+    gst_structure_free (vtrans->backendparam);
+
   g_mutex_clear (&(vtrans)->lock);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (vtrans));
@@ -1868,6 +1879,11 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
           "Engine backend used for the conversion operations",
           GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_BACKEND_PARAM,
+      g_param_spec_string ("engine-param", "Engine Parameters",
+          "Parameters setting for each convert engine",
+          DEFAULT_PROP_BACKEND_PARAM,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_FLIP_HORIZONTAL,
       g_param_spec_boolean ("flip-horizontal", "Flip horizontally",
           "Flip video image horizontally", DEFAULT_PROP_FLIP_HORIZONTAL,
@@ -1940,6 +1956,7 @@ gst_video_transform_init (GstVideoTransform * vtrans)
   g_mutex_init (&(vtrans)->lock);
 
   vtrans->backend = DEFAULT_PROP_ENGINE_BACKEND;
+  vtrans->backendparam = DEFAULT_PROP_BACKEND_PARAM;
   vtrans->flip_h = DEFAULT_PROP_FLIP_HORIZONTAL;
   vtrans->flip_v = DEFAULT_PROP_FLIP_VERTICAL;
   vtrans->rotation = DEFAULT_PROP_ROTATE;

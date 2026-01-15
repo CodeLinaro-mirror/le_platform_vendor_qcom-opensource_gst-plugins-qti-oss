@@ -1,36 +1,7 @@
 /*
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -1383,6 +1354,9 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     if (outwidth > 0 && outwidth < info->width) {
       outstate->info.width = outwidth;
       GST_DEBUG_OBJECT (c2venc, "Set output width to %d", outwidth);
+    } else if (c2venc->rotate == GST_C2_ROTATE_90_CW ||
+        c2venc->rotate ==  GST_C2_ROTATE_90_CCW) {
+      outstate->info.width = info->height;
     } else if (outwidth > 0) {
       GST_ERROR_OBJECT (c2venc, "Failed to set output width to %d", outwidth);
       return FALSE;
@@ -1396,6 +1370,9 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
     if (outheight > 0 && outheight < info->height) {
       outstate->info.height = outheight;
       GST_DEBUG_OBJECT (c2venc, "Set output height to %d", outheight);
+    } else if (c2venc->rotate == GST_C2_ROTATE_90_CW ||
+        c2venc->rotate == GST_C2_ROTATE_90_CCW) {
+      outstate->info.height = info->width;
     } else if (outheight > 0) {
       GST_ERROR_OBJECT (c2venc, "Failed to set output height to %d", outheight);
       return FALSE;
@@ -1712,6 +1689,7 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     {
       gint idx = 0, size = 0, n_layers = 0;
       gfloat ratio = 0.0;
+      const GValue* val = NULL;
 
       // Sanity check, at least 3 values: <1,0,100>.
       if ((size = gst_value_array_get_size (value)) < 3) {
@@ -1719,7 +1697,14 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
             " expecting at least 3 but received %d !", size);
         break;
       }
-      n_layers = g_value_get_int (gst_value_array_get_value (value, 0));
+
+      // Validate type of first value (n_layers)
+      val = gst_value_array_get_value (value, 0);
+      if (!G_VALUE_HOLDS_INT (val)) {
+        GST_ERROR_OBJECT (c2venc, "First value (n_layers) is not an integer");
+        break;
+      }
+      n_layers = g_value_get_int (val);
 
       if (n_layers != (size - 2)) {
         GST_ERROR_OBJECT (c2venc, "Invalid number or bitrate ratios for "
@@ -1728,23 +1713,27 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
         break;
       }
 
+      val = gst_value_array_get_value (value, 1);
       c2venc->temp_layer.n_layers = n_layers;
-      c2venc->temp_layer.n_blayers =
-          g_value_get_int (gst_value_array_get_value (value, 1));
+      c2venc->temp_layer.n_blayers = g_value_get_int (val);
 
-      // Remove all old values.
-      g_array_set_size (c2venc->temp_layer.bitrate_ratios, 0);
+      // Ensure bitrate_ratios array is initialized
+      if (c2venc->temp_layer.bitrate_ratios == NULL)
+        c2venc->temp_layer.bitrate_ratios = g_array_new (FALSE, FALSE, sizeof (gfloat));
+      else // Remove all old values.
+        g_array_set_size (c2venc->temp_layer.bitrate_ratios, 0);
 
       // Convert to ratio in float.
-      for (idx = 2; idx < gst_value_array_get_size (value); idx++) {
-        ratio =
-            g_value_get_int (gst_value_array_get_value (value, idx)) / 100.0;
-        g_array_insert_val (c2venc->temp_layer.bitrate_ratios, idx - 2, ratio);
+      for (idx = 2; idx < size; idx++) {
+        val = gst_value_array_get_value (value, idx);
+        ratio = g_value_get_int (val) / 100.0;
+        if (ratio < 0 || ratio > 100) {
+          GST_WARNING_OBJECT (c2venc, "Unusual bitrate ratio value "
+              "(%d) at index %d", ratio, idx);
+        }
+
+        g_array_append_val (c2venc->temp_layer.bitrate_ratios, ratio);
       }
-
-      // Shrink the array in case the current allocated size is greater.
-      g_array_set_size (c2venc->temp_layer.bitrate_ratios, size - 2);
-
       break;
     }
     case PROP_FLIP:
