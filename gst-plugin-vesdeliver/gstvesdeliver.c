@@ -36,6 +36,8 @@ static const char *vm_name = "qcom,cp_bitstream";
 
 GST_DEBUG_CATEGORY (vesdeliver_debug);
 #define GST_CAT_DEFAULT vesdeliver_debug
+#define THRESHOLD_ALLOC_BUFFER_COUNT 30
+#define THRESHOLD_ALLOC_BUFFER_COUNT_REVISED 12
 
 enum
 {
@@ -810,6 +812,7 @@ static gboolean
 gst_vesdeliver_set_caps (GstBaseTransform * trans, GstCaps * in_caps, GstCaps * out_caps)
 {
   GstVesDeliver *vesdeliver = GST_VESDELIVER (trans);
+  GstVesDeliverAllocator *alloc = GST_VESDELIVER_ALLOCATOR (vesdeliver->allocator);
   GstStructure *in_structure;
   const gchar *format;
   gint width, height;
@@ -833,6 +836,19 @@ gst_vesdeliver_set_caps (GstBaseTransform * trans, GstCaps * in_caps, GstCaps * 
   vesdeliver->input_format = g_strdup (format);
   vesdeliver->input_width = width;
   vesdeliver->input_height = height;
+
+  /* Update allocator param.
+   * Set threshold_buf_count to THRESHOLD_ALLOC_BUFFER_COUNT_REVISED if secure mode
+   * is LEND_DMABUF and resolution is more than 2560*1440.
+   */
+  alloc->param.threshold_buf_count = THRESHOLD_ALLOC_BUFFER_COUNT;
+  if (alloc->param.secure_mode == LEND_DMABUF
+      && vesdeliver->input_width * vesdeliver->input_height > 2560*1440) {
+    alloc->param.threshold_buf_count = THRESHOLD_ALLOC_BUFFER_COUNT_REVISED;
+  }
+
+  GST_INFO_OBJECT (vesdeliver, "set threshold_buf_count to %d",
+      alloc->param.threshold_buf_count);
 
   return TRUE;
 }

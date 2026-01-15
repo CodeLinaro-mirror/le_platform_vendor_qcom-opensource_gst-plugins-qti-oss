@@ -25,8 +25,7 @@ G_DEFINE_TYPE (GstVesDeliverAllocator, gst_vesdeliver_allocator,
     GST_TYPE_DMABUF_ALLOCATOR);
 
 #define ALIGN(num, to) (((num) + (to - 1)) & (~(to - 1)))
-#define THRESHOLD_ALLOC_BUFFER_COUNT 30
-#define MAX_ALLOC_BUFFER_COUNT (THRESHOLD_ALLOC_BUFFER_COUNT + 10)
+#define ALLOC_BUFFER_COUNT_INCREMENT 10
 #define SHARED_BUF_WAIT_TIMEOUT_MS 100
 
 static void
@@ -205,7 +204,7 @@ _acquire_buffer (GstAllocator * allocator, gsize alloc_size)
     }
 
     if (!acquired) {
-      if (list_size > THRESHOLD_ALLOC_BUFFER_COUNT) {
+      if (list_size > alloc->param.threshold_buf_count) {
         timeout =
             g_get_monotonic_time () +
             (SHARED_BUF_WAIT_TIMEOUT_MS * G_TIME_SPAN_MILLISECOND);
@@ -276,7 +275,7 @@ _insert_buffer_to_list (GstAllocator * allocator, GstMemory * mem, gint buf_fd,
     buf->size = alloc_size;
     buf->used = TRUE;
     g_mutex_lock (&alloc->buf_lock);
-    if (g_slist_length (alloc->buffer_list) >= THRESHOLD_ALLOC_BUFFER_COUNT) {
+    if (g_slist_length (alloc->buffer_list) >= alloc->param.threshold_buf_count) {
       // remove the min unused buffer from the buffer list
       _try_remove_buffer_from_list (allocator);
     }
@@ -374,9 +373,9 @@ gst_vesdeliver_allocator_alloc (GstAllocator * allocator, gsize size,
     mem = _acquire_buffer (allocator, alloc_size);
     if (!mem) {
       list_size = g_slist_length (alloc->buffer_list);
-      if (list_size >= MAX_ALLOC_BUFFER_COUNT) {
+      if (list_size >= alloc->param.threshold_buf_count + ALLOC_BUFFER_COUNT_INCREMENT) {
         GST_ERROR_OBJECT (alloc, "allocated buffer count reach the limit %d",
-            MAX_ALLOC_BUFFER_COUNT);
+            alloc->param.threshold_buf_count + ALLOC_BUFFER_COUNT_INCREMENT);
         need_alloc = FALSE;
       }
     } else {
