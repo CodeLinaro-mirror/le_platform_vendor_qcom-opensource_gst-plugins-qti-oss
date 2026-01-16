@@ -75,6 +75,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_PROP_ROTATE              ROTATE_NONE
 #define DEFAULT_PROP_LOGICAL_STREAM_TYPE GST_PAD_LOGICAL_STREAM_TYPE_NONE
 #define DEFAULT_PROP_SUPER_BUFFER        FALSE
+#define DEFAULT_PROP_WRAP_META           FALSE
 
 enum
 {
@@ -95,6 +96,7 @@ enum
   PROP_VIDEO_TYPE,
   PROP_VIDEO_ROTATE,
   PROP_VIDEO_LOGICAL_STREAM_TYPE,
+  PROP_VIDEO_WRAP_META,
 };
 
 static guint signals[LAST_SIGNAL];
@@ -167,15 +169,17 @@ video_pad_worker_task (GstPad * pad)
     if (ret == GST_FLOW_EOS) {
       GST_DEBUG_OBJECT (pad, "EOS received on pad %s", gst_pad_get_name (pad));
 
-      success = gst_pad_push_event (pad, gst_event_new_eos ());
-      if (success == FALSE) {
-        GST_ERROR_OBJECT (pad, "Failed to push EOS event on pad %s",
-            gst_pad_get_name (pad));
-
-        gst_pad_pause_task (pad);
+      if (!GST_PAD_IS_EOS (pad)) {
+        success = gst_pad_push_event (pad, gst_event_new_eos ());
+        if (success == FALSE) {
+          GST_WARNING_OBJECT (pad, "Failed to push EOS event on pad %s",
+              gst_pad_get_name (pad));
+        }
       }
+
+      gst_pad_pause_task (pad);
     } else if (ret != GST_FLOW_OK) {
-      GST_ERROR_OBJECT (pad, "Error pushing buffer to pad %s: %s",
+      GST_WARNING_OBJECT (pad, "Error pushing buffer to pad %s: %s",
           gst_pad_get_name (pad), gst_flow_get_name (ret));
 
       gst_pad_pause_task (pad);
@@ -232,6 +236,28 @@ video_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
       // the maximum latency is the complete buffer of frames.
       // This should not be done before camera prerolled.
       gst_query_set_latency (query, TRUE, min_latency, max_latency);
+      break;
+    }
+    case GST_QUERY_CUSTOM:
+    {
+      const GstStructure *structure = gst_query_get_structure (query);
+
+      if (structure == NULL) {
+        GST_WARNING_OBJECT (pad, "Custom query has no structure");
+        success = gst_pad_query_default (pad, parent, query);
+        break;
+      }
+
+      if (gst_structure_has_name (structure, "need-metadata")) {
+        GST_INFO_OBJECT (pad, "Received need-metadata custom query");
+
+        GST_QMMFSRC_VIDEO_PAD (pad)->attach_metadata = TRUE;
+        success = TRUE;
+      } else {
+        GST_DEBUG_OBJECT (pad, "Received custom query with name: %s",
+            gst_structure_get_name (structure));
+        success = gst_pad_query_default (pad, parent, query);
+      }
       break;
     }
     default:
@@ -728,6 +754,9 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_LOGICAL_STREAM_TYPE:
       pad->log_stream_type = (glong) g_value_get_enum (value);
       break;
+    case PROP_VIDEO_WRAP_META:
+      pad->attach_metadata = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
       break;
@@ -789,6 +818,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
       break;
     case PROP_VIDEO_LOGICAL_STREAM_TYPE:
       g_value_set_enum (value, (GstPadLogicalStreamType) pad->log_stream_type);
+      break;
+    case PROP_VIDEO_WRAP_META:
+      g_value_set_boolean (value, pad->attach_metadata);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
@@ -915,6 +947,13 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PAUSED));
 #endif // FEATURE_LOGICAL_CAMERA_SUPPORT
+  g_object_class_install_property (gobject, PROP_VIDEO_WRAP_META,
+      g_param_spec_boolean ("attach-cam-meta", "Attach cam-meta with gstbuffer",
+          "this flag if TRUE, Along with GstBuffer the camera"
+          " metadata will be attached.",
+          DEFAULT_PROP_WRAP_META,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
@@ -958,4 +997,5 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->duration        = GST_CLOCK_TIME_NONE;
 
   pad->buffers         = gst_data_queue_new (queue_is_full_cb, NULL, NULL, pad);
+  pad->attach_metadata = FALSE;
 }
