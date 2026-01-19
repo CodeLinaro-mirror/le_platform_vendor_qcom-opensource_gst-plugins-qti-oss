@@ -329,7 +329,6 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
-#if defined(CAMERA_METADATA_1_0_NS)
   if (meta.exists(ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION)) {
     entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION);
 
@@ -338,7 +337,6 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
         supported = TRUE;
     }
   }
-#endif
 
   if ((supported != TRUE) && (!meta.exists(ANDROID_SENSOR_OPAQUE_RAW_SIZE))) {
       GST_WARNING ("There is no camera bayer size information!");
