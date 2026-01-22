@@ -94,6 +94,8 @@ gst_video_format_to_ib2c_format (GstVideoFormat format)
       return ::ib2c::ColorFormat::kNV12;
     case GST_VIDEO_FORMAT_NV12_Q08C:
       return ::ib2c::ColorFormat::kNV12 | ::ib2c::ColorMode::kUBWC;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      return ::ib2c::ColorFormat::kP010;
     case GST_VIDEO_FORMAT_NV21:
       return ::ib2c::ColorFormat::kNV21;
     case GST_VIDEO_FORMAT_NV16:
