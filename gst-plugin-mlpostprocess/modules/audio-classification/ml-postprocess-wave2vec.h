@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "qti-ml-post-proccess.h"
+#include "qti-ml-post-process.h"
 #include "qti-labels-parser.h"
 
 #include <cstdio>
@@ -26,7 +26,6 @@ class Module : public IModule {
 
   bool Process(const Tensors& tensors, Dictionary& mlparams,
                std::any& output) override;
-
  private:
   // Logging callback.
   LogCallback logger_;

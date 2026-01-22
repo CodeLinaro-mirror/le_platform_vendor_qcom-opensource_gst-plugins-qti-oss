@@ -27,6 +27,7 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ *
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
@@ -150,18 +151,33 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
     GstVideoComposition * composition)
 {
   GstBuffer *inbuffer = NULL, *outbuffer = NULL;
-  GstVideoRectangle *source = NULL, *destination = NULL;
   GstMeta *meta = NULL;
   gpointer state = NULL;
+  GstVideoBlit *vblit = NULL;
+  GstVideoRectangle source = {0}, destination = {0};
   guint idx = 0;
 
   outbuffer = composition->frame->buffer;
 
   for (idx = 0; idx < composition->n_blits; idx++) {
-    inbuffer = composition->blits[idx].frame->buffer;
+    vblit = &(composition->blits[idx]);
+    inbuffer = vblit->frame->buffer;
 
-    source = &(composition->blits[idx].source);
-    destination = &(composition->blits[idx].destination);
+    if (vblit->mask & GST_VCE_MASK_SOURCE) {
+      gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
+    } else {
+      source.x = source.y = 0;
+      source.w = GST_VIDEO_FRAME_WIDTH (vblit->frame);
+      source.h = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
+    }
+
+    if (vblit->mask & GST_VCE_MASK_DESTINATION) {
+      destination = vblit->destination;
+    } else {
+      destination.x = destination.y = 0;
+      destination.w = GST_VIDEO_FRAME_WIDTH (composition->frame);
+      destination.h = GST_VIDEO_FRAME_HEIGHT (composition->frame);
+    }
 
     while ((meta = gst_buffer_iterate_meta (inbuffer, &state))) {
       if (meta->info->api == GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE) {
@@ -173,8 +189,8 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
           continue;
 
         roimeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, roimeta);
-        gst_video_region_of_interest_coordinates_correction (roimeta, source,
-            destination);
+        gst_video_region_of_interest_coordinates_correction (roimeta, &source,
+            &destination);
 
         if (!gst_buffer_has_valid_parent_meta (inbuffer, roimeta->parent_id))
           roimeta->parent_id = -1;
@@ -199,7 +215,7 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
         GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (meta);
 
         lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
-        gst_video_landmarks_coordinates_correction (lmkmeta, source, destination);
+        gst_video_landmarks_coordinates_correction (lmkmeta, &source, &destination);
 
         if (!gst_buffer_has_valid_parent_meta (inbuffer, lmkmeta->parent_id))
           lmkmeta->parent_id = -1;
@@ -210,19 +226,6 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
       }
     }
   }
-}
-
-static inline GstVideoConvFlip
-gst_video_composer_translate_flip (gboolean flip_h, gboolean flip_v)
-{
-  if (flip_h && flip_v)
-   return GST_VCE_FLIP_BOTH;
-  else if (flip_h)
-    return GST_VCE_FLIP_HORIZONTAL;
-  else if (flip_v)
-    return GST_VCE_FLIP_VERTICAL;
-
-  return GST_VCE_FLIP_NONE;
 }
 
 static inline GstVideoConvRotate
@@ -317,18 +320,20 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps,
 
 static gboolean
 gst_video_composer_propose_allocation (GstAggregator * aggregator,
-    GstAggregatorPad * pad, GstQuery * inquery, GstQuery * outquery)
+    GstAggregatorPad * pad, GstQuery * decide_query, GstQuery * query)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
+  GstStructure *config = NULL;
+  GstVideoAlignment align = { 0, };
   GstVideoInfo info;
   gboolean needpool = FALSE;
 
   GST_DEBUG_OBJECT (vcomposer, "Pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
   // Extract caps from the query.
-  gst_query_parse_allocation (outquery, &caps, &needpool);
+  gst_query_parse_allocation (query, &caps, &needpool);
 
   if (NULL == caps) {
     GST_ERROR_OBJECT (vcomposer, "Failed to extract caps from query!");
@@ -340,39 +345,42 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
     return FALSE;
   }
 
-  if (needpool) {
-    GstStructure *structure = NULL;
-    GstAllocator *allocator = NULL;
-    GstVideoAlignment align = { 0, };
+  if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
+    return FALSE;
+  }
 
-    if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
-      return FALSE;
-    }
+  if (needpool) {
+    GstAllocator *allocator = NULL;
 
     pool = gst_video_composer_create_pool (vcomposer, caps, &align, NULL);
-    structure = gst_buffer_pool_get_config (pool);
+    config = gst_buffer_pool_get_config (pool);
 
     // Set caps and size in query.
-    gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
+    gst_buffer_pool_config_set_params (config, caps, info.size, 0, 0);
 
-    gst_buffer_pool_config_get_allocator (structure, &allocator, NULL);
-    gst_query_add_allocation_param (outquery, allocator, NULL);
+    gst_buffer_pool_config_get_allocator (config, &allocator, NULL);
+    gst_query_add_allocation_param (query, allocator, NULL);
 
-    if (!gst_buffer_pool_set_config (pool, structure)) {
+    if (!gst_buffer_pool_set_config (pool, config)) {
       GST_ERROR_OBJECT (vcomposer, "Failed to set buffer pool configuration!");
       gst_object_unref (pool);
       return FALSE;
     }
   }
 
-  // If upstream does't have a pool requirement, set only size in query.
-  gst_query_add_allocation_pool (outquery, pool, info.size, 0, 0);
+  // If upstream doesn't have a pool requirement, set only size in query.
+  gst_query_add_allocation_pool (query, pool, info.size, 0, 0);
 
   if (pool != NULL)
     gst_object_unref (pool);
 
-  gst_query_add_allocation_meta (outquery, GST_VIDEO_META_API_TYPE, NULL);
+  config = gst_structure_new_empty ("video-meta");
+  gst_buffer_pool_config_set_video_alignment (config, &align);
+
+  // Add video meta with alignment information for upstream.
+  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, config);
+
   return TRUE;
 }
 
@@ -454,8 +462,6 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
   else
     gst_query_add_allocation_pool (query, pool, size, minbuffers,
         maxbuffers);
-
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
 
   vcomposer->outpool = pool;
 
@@ -677,22 +683,6 @@ gst_video_composer_fixate_src_caps (GstAggregator * aggregator, GstCaps * caps)
 }
 
 static gboolean
-gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
-    GstCaps * caps)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  GST_DEBUG_OBJECT (vcomposer, "Negotiated caps %" GST_PTR_FORMAT, caps);
-
-  if (vcomposer->converter != NULL)
-    gst_video_converter_engine_free (vcomposer->converter);
-
-  vcomposer->converter = gst_video_converter_engine_new (vcomposer->backend, NULL);
-
-  return GST_AGGREGATOR_CLASS (parent_class)->negotiated_src_caps (aggregator, caps);
-}
-
-static gboolean
 gst_video_composer_stop (GstAggregator * aggregator)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
@@ -781,22 +771,29 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
     vblit->alpha = sinkpad->alpha * G_MAXUINT8;
-    vblit->flip = gst_video_composer_translate_flip (sinkpad->flip_h, sinkpad->flip_v);
-    vblit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
-    vblit->source = sinkpad->crop;
-    vblit->destination = sinkpad->destination;
+
+    if ((sinkpad->crop.w != 0) && (sinkpad->crop.h != 0)) {
+      gst_video_rectangle_to_quadrilateral (&(sinkpad->crop), &(vblit->source));
+      vblit->mask |= GST_VCE_MASK_SOURCE;
+    }
+
+    if ((sinkpad->destination.w != 0) && (sinkpad->destination.h != 0)) {
+      vblit->destination = sinkpad->destination;
+      vblit->mask |= GST_VCE_MASK_DESTINATION;
+    }
+
+    if (sinkpad->flip_h)
+      vblit->mask |= GST_VCE_MASK_FLIP_HORIZONTAL;
+
+    if (sinkpad->flip_v)
+      vblit->mask |= GST_VCE_MASK_FLIP_VERTICAL;
+
+    if (sinkpad->rotation != GST_VIDEO_COMPOSER_ROTATE_NONE) {
+      vblit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
+      vblit->mask |= GST_VCE_MASK_ROTATION;
+    }
 
     GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
-
-    if ((vblit->source.w == 0) && (vblit->source.h == 0)) {
-      vblit->source.w = GST_VIDEO_FRAME_WIDTH (vblit->frame);
-      vblit->source.h = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
-    }
-
-    if ((vblit->destination.w == 0) && (vblit->destination.h == 0)) {
-      vblit->destination.w = GST_VIDEO_INFO_WIDTH (&(vaggregator->info));
-      vblit->destination.h = GST_VIDEO_INFO_HEIGHT (&(vaggregator->info));
-    }
 
     // Increase the number of populated blit objects.
     n_inputs++;
@@ -829,7 +826,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   composition.frame = &outframe;
   composition.bgfill = TRUE;
-  composition.flags = 0;
+  composition.datatype = 0;
 
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
   composition.bgcolor = vcomposer->background;
@@ -928,11 +925,56 @@ gst_video_composer_release_pad (GstElement * element, GstPad * pad)
   gst_pad_mark_reconfigure (GST_AGGREGATOR_SRC_PAD (vcomposer));
 }
 
+static GstStateChangeReturn
+gst_video_composer_change_state (GstElement * element, GstStateChange transition)
+{
+  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (element);
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      if (vcomposer->converter != NULL)
+        gst_video_converter_engine_free (vcomposer->converter);
+
+      vcomposer->converter =
+          gst_video_converter_engine_new (vcomposer->backend, NULL);
+
+      if (vcomposer->converter == NULL) {
+        GST_ERROR_OBJECT (vcomposer, "Failed to create engine!");
+        return GST_STATE_CHANGE_FAILURE;
+      }
+      break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_video_converter_engine_free (vcomposer->converter);
+      vcomposer->converter = NULL;
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+}
+
 static void
 gst_video_composer_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (object);
+  const gchar *propname = g_param_spec_get_name (pspec);
+  GstState state = GST_STATE (vcomposer);
+
+  if (!GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE (pspec, state)) {
+    GST_WARNING_OBJECT (vcomposer, "Property '%s' change not supported in %s "
+        "state!", propname, gst_element_state_get_name (state));
+    return;
+  }
 
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
 
@@ -1011,7 +1053,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
       g_param_spec_enum ("engine", "Engine",
           "Engine backend used for the conversion operations",
           GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_BACKGROUND,
       g_param_spec_uint ("background", "Background",
           "Background color", 0, 0xFFFFFFFF, DEFAULT_PROP_BACKGROUND,
@@ -1029,6 +1071,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
 
   element->request_new_pad = GST_DEBUG_FUNCPTR (gst_video_composer_request_pad);
   element->release_pad = GST_DEBUG_FUNCPTR (gst_video_composer_release_pad);
+  element->change_state = GST_DEBUG_FUNCPTR (gst_video_composer_change_state);
 
   aggregator->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_video_composer_propose_allocation);
@@ -1037,8 +1080,6 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
   aggregator->sink_query = GST_DEBUG_FUNCPTR (gst_video_composer_sink_query);
   aggregator->fixate_src_caps =
       GST_DEBUG_FUNCPTR (gst_video_composer_fixate_src_caps);
-  aggregator->negotiated_src_caps =
-      GST_DEBUG_FUNCPTR (gst_video_composer_negotiated_src_caps);
   aggregator->stop = GST_DEBUG_FUNCPTR (gst_video_composer_stop);
   aggregator->flush = GST_DEBUG_FUNCPTR (gst_video_composer_flush);
 
@@ -1063,6 +1104,7 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
 
   vcomposer->backend = DEFAULT_PROP_ENGINE_BACKEND;
   vcomposer->background = DEFAULT_PROP_BACKGROUND;
+  vcomposer->converter = NULL;
 
   GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment.position =
       GST_CLOCK_TIME_NONE;

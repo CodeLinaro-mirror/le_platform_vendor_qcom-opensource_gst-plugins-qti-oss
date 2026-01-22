@@ -27,23 +27,17 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
 * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #pragma once
 
-#include "qti-ml-post-proccess.h"
+#include "qti-ml-post-process.h"
 #include "qti-labels-parser.h"
 
 #include <string>
-
-struct RootPoint {
-  uint32_t id;
-  float    x;
-  float    y;
-  float    confidence;
-};
 
 struct KeypointLinkIds {
   uint32_t s_kp_id;
@@ -68,21 +62,21 @@ class Module : public IModule {
 
   bool Process(const Tensors& tensors, Dictionary& mlparams,
                 std::any& output) override;
-
  private:
-  void KeypointTransformCoordinates (Keypoint& keypoint,
+  void KeypointTransformCoordinates(Keypoint& keypoint,
                                      const Region& region);
+
   bool LoadConnections(const std::vector<JsonValue::Ptr>& nodes);
+
   int32_t TensorCompareValues(const void *data,
                               const uint32_t& l_idx, const uint32_t& r_idx);
 
   // Logging callback.
-  LogCallback logger_;
+  LogCallback                  logger_;
   // Confidence threshold value.
-  double       threshold_;
-
+  double                       threshold_;
   // Labels parser.
-  LabelsParser labels_parser_;
+  LabelsParser                 labels_parser_;
 
   std::vector<KeypointLinkIds> connections_;
 };

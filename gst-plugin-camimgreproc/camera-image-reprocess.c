@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries..
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -172,6 +172,7 @@ gst_camera_image_reproc_create_buffer_pool (GstCameraImageReproc *reprocess,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
 
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
+  gst_buffer_pool_config_add_option (config, GST_BUFFER_POOL_OPTION_VIDEO_META);
 
   if (!gst_buffer_pool_set_config (pool, config)) {
     GST_WARNING_OBJECT (reprocess, "Failed to set pool configuration!");
@@ -275,6 +276,7 @@ gst_camera_image_reproc_set_format (GstCameraImageReproc * reprocess)
   guint idx = 0;
   GstCaps * sinkcaps;
   GstCaps * srccaps;
+  GstQuery *query;
   GstStructure *input, *output;
   GstCameraImageParams params[2] = {0};
   gboolean ret;
@@ -305,6 +307,13 @@ gst_camera_image_reproc_set_format (GstCameraImageReproc * reprocess)
         sinkpad->camera_id, sinkpad->req_meta_path, sinkpad->req_meta_step,
         sinkpad->eis);
     idx++;
+
+    query = gst_query_new_custom (GST_QUERY_CUSTOM,
+        gst_structure_new_empty ("need-metadata"));
+    if (!gst_pad_peer_query (GST_PAD (sinkpad), query)) {
+      GST_WARNING_OBJECT (reprocess, "Upstream did not respond to need-metadata query");
+    }
+    gst_query_unref (query);
   }
 
   srccaps = gst_pad_get_current_caps (GST_PAD (reprocess->srcpad));
@@ -743,6 +752,16 @@ gst_camera_reproc_sink_pad_query (GstPad * pad, GstObject * parent,
 
       gst_query_set_accept_caps_result (query, success);
       return TRUE;
+    }
+    case GST_QUERY_CUSTOM:
+    {
+      const GstStructure *structure = gst_query_get_structure (query);
+      if (gst_structure_has_name (structure, "need-metadata")) {
+        GST_INFO_OBJECT (pad, "Forwarding need-metadata query upstream");
+        gboolean success = gst_pad_peer_query (pad, query);
+        return success;
+      }
+      break;
     }
     default:
       break;

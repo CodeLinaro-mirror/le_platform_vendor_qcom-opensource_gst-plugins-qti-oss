@@ -280,7 +280,11 @@ bool Environment::QueryExtension(const std::string extname) {
   if (strstr(extensions, extname.c_str()) != nullptr)
     return true;
 
-  GLint n_extensions;
+  // No current context – cannot query GL extensions safely.
+  if (egl_lib_->GetCurrentContext() == EGL_NO_CONTEXT)
+    return false;
+
+  GLint n_extensions = 0;
 
   gles_lib_->GetIntegerv(GL_NUM_EXTENSIONS, &n_extensions);
   GLenum error = gles_lib_->GetError();
@@ -364,6 +368,7 @@ GlesLib::GlesLib() {
   LOAD_GL_SYMBOL(handle_, UniformMatrix4fv);
   LOAD_GL_SYMBOL(handle_, GetIntegerv);
   LOAD_GL_SYMBOL(handle_, GetStringi);
+  LOAD_GL_SYMBOL(handle_, GetString);
   LOAD_GL_SYMBOL(handle_, Viewport);
   LOAD_GL_SYMBOL(handle_, DrawBuffers);
   LOAD_GL_SYMBOL(handle_, DrawArrays);

@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifdef HAVE_CONFIG_H
@@ -152,6 +123,7 @@ enum
   SIGNAL_RESULT_METADATA,
   SIGNAL_URGENT_METADATA,
   SIGNAL_VIDEO_PADS_ACTIVATION,
+  SIGNAL_DEVICE_STATUS_CHANGE,
   LAST_SIGNAL
 };
 
@@ -456,7 +428,11 @@ qmmfsrc_pad_push_event (GstElement * element, GstPad * pad, gpointer data)
   GstEvent *event = GST_EVENT (data);
 
   GST_DEBUG_OBJECT (qmmfsrc, "Event: %s", GST_EVENT_TYPE_NAME (event));
-  return gst_pad_push_event (pad, gst_event_copy (event));
+  if (GST_EVENT_TYPE (event) == GST_EVENT_EOS && GST_PAD_IS_EOS (pad)) {
+    return TRUE;
+  } else {
+    return gst_pad_push_event (pad, gst_event_copy (event));
+  }
 }
 
 static gboolean
@@ -776,9 +752,9 @@ static GstStaticCaps gst_qmmfsrc_image_static_src_caps =
         QMMFSRC_IMAGE_RAW_CAPS (
                 "{ NV21"
 #ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
+                ", NV12, NV12_Q08C"
 #endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }") "; "
+                ", P010_10LE, NV12_Q10LE32C }") "; "
             QMMFSRC_IMAGE_BAYER_CAPS (
                 "{ bggr, rggb, gbrg, grbg, mono }",
                 "{ 8, 10, 12, 16 }"));
@@ -833,9 +809,9 @@ gst_qmmfsrc_image_src_caps (void)
           QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
                 "{ NV21"
 #ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
+                ", NV12, NV12_Q08C"
 #endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }"));
+                ", P010_10LE, NV12_Q10LE32C }"));
 
       caps = gst_caps_make_writable (caps);
       gst_caps_append (caps, tmplcaps);
@@ -864,6 +840,8 @@ static void
 qmmfsrc_event_callback (guint event, gpointer userdata)
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (userdata);
+  GstStructure *event_msg = NULL;
+  GstMessage *message = NULL;
 
   switch (event) {
     case EVENT_SERVICE_DIED:
@@ -901,9 +879,51 @@ qmmfsrc_event_callback (guint event, gpointer userdata)
       GST_WARNING_OBJECT (qmmfsrc, "Camera device has encountered non-fatal "
           "metadata drop error !");
       break;
+    case EVENT_SOF_FREEZE:
+      GST_LOG_OBJECT (qmmfsrc, "SOF Freeze occured");
+      break;
+    case EVENT_RECOVERYFAILURE:
+      GST_LOG_OBJECT (qmmfsrc, "Recovery Failure occured");
+      break;
+    case EVENT_FATAL:
+      GST_LOG_OBJECT (qmmfsrc, "Fatal Error occured");
+      break;
+    case EVENT_RECOVERYSUCCESS:
+      GST_LOG_OBJECT (qmmfsrc, "Recovery success occured");
+      break;
+    case EVENT_INTERNAL_RECOVERY:
+      GST_LOG_OBJECT (qmmfsrc, "Internal Recovery occured");
+      break;
+    case EVENT_DEVICE_STATUS_CHANGE:
+      GST_LOG_OBJECT (qmmfsrc, "Camera device status change event received");
+      g_signal_emit_by_name (qmmfsrc, "device-status-change",
+          gst_qmmf_context_get_device_status_camera_id (qmmfsrc->context),
+          gst_qmmf_context_get_device_status_is_present (qmmfsrc->context));
+      break;
     default:
       GST_WARNING_OBJECT (qmmfsrc, "Unknown camera device event");
       break;
+  }
+
+  event_msg = gst_structure_new ("qmmfsrc-event",
+      "event-type", G_TYPE_UINT, event,
+      NULL);
+
+  if (!event_msg) {
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to create structure for event %d", event);
+    return;
+  }
+
+  message = gst_message_new_element (GST_OBJECT (qmmfsrc), event_msg);
+  if (!message) {
+    gst_structure_free (event_msg);
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to create message for event %d", event);
+    return;
+  }
+
+  if (!gst_element_post_message (GST_ELEMENT (qmmfsrc), message)) {
+    gst_message_unref(message);
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to post message for event %d", event);
   }
 }
 
@@ -913,10 +933,12 @@ qmmfsrc_metadata_callback (gint camera_id, gconstpointer metadata,
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (userdata);
 
-  if (isurgent)
+  if (isurgent) {
     g_signal_emit_by_name (qmmfsrc, "urgent-metadata", metadata);
-  else
+  } else {
     g_signal_emit_by_name (qmmfsrc, "result-metadata", metadata);
+    gst_qmmf_context_store_metadata (qmmfsrc->context, metadata);
+  }
 }
 
 static gboolean
@@ -926,10 +948,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
   gpointer key = NULL;
   GstPad *pad = NULL;
   GList *list = NULL;
-  GValue isslave = G_VALUE_INIT, sframerate = G_VALUE_INIT;
-
-  g_value_init (&isslave, G_TYPE_BOOLEAN);
-  g_value_init (&sframerate, G_TYPE_INT);
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
 
@@ -937,17 +955,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-
-    gst_qmmf_context_get_camera_param (qmmfsrc->context,
-        PARAM_CAMERA_SLAVE, &isslave);
-
-    if (!g_value_get_boolean (&isslave)) {
-      GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
-
-      gst_qmmf_context_get_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
-      vpad->superframerate = g_value_get_int (&sframerate);
-    }
 
     success = qmmfsrc_video_pad_fixate_caps (pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -957,9 +964,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Video stream creation failed!");
   }
-
-  g_value_unset (&isslave);
-  g_value_unset (&sframerate);
 
   // Iterate over the image pads, fixate caps and create streams.
   for (list = qmmfsrc->imgindexes; list != NULL; list = list->next) {
@@ -994,6 +998,10 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
       qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
@@ -1048,6 +1056,13 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
     if (gst_pad_get_task_state (pad) != GST_TASK_STARTED) {
       GST_INFO_OBJECT (qmmfsrc, "Pad %s is not activated", GST_PAD_NAME (pad));
       continue;
+    }
+
+    // Register pad for metadata if attach_metadata is enabled
+    if (GST_QMMFSRC_VIDEO_PAD (pad)->attach_metadata) {
+      GST_INFO_OBJECT (qmmfsrc, "Registering pad %s for metadata attachment",
+          GST_PAD_NAME (pad));
+      gst_qmmf_context_register_metadata_pad (qmmfsrc->context, pad);
     }
 
     ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
@@ -2244,6 +2259,10 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   signals[SIGNAL_URGENT_METADATA] =
       g_signal_new ("urgent-metadata", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_POINTER);
+
+  signals[SIGNAL_DEVICE_STATUS_CHANGE] =
+      g_signal_new ("device-status-change", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_BOOLEAN);
 
   gstelement->request_new_pad = GST_DEBUG_FUNCPTR (qmmfsrc_request_pad);
   gstelement->release_pad = GST_DEBUG_FUNCPTR (qmmfsrc_release_pad);

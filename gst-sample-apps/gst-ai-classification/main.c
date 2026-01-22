@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -48,7 +48,7 @@
 #include <glib.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
@@ -1314,6 +1314,7 @@ main (gint argc, gchar * argv[])
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
       "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
       "  enable-usb-camera: Use this Parameter to enable-usb-camera\n"
+      "      It can take TRUE or FALSE as input\n"
       "  ml-framework: \"snpe\" or \"tflite\" or \"qnn\"\n"
       "      Execute Model in SNPE DLC or TFlite or QNN format\n"
       "      Default model format: SNPE DLC\n"

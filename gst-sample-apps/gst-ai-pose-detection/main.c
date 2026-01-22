@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -46,7 +46,7 @@
 #include <sys/ioctl.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
@@ -1279,6 +1279,7 @@ main (gint argc, gchar * argv[])
       "      Input should be provided as rtsp://<ip>:<port>/<stream>,\n"
       "      eg: rtsp://192.168.1.110:8554/live.mkv\n"
       "  enable-usb-camera: Use this Parameter to enable-usb-camera\n"
+      "      It can take TRUE or FALSE as input\n"
       "  ml-framework: \"tflite\" or \"qnn\"\n"
       "      Execute Model in TFlite [Default] or QNN format\n"
       "  model: \"/PATH\"\n"
@@ -1290,6 +1291,9 @@ main (gint argc, gchar * argv[])
       "  labels: \"/PATH\"\n"
       "      This is an optional parameter and overrides default path\n"
       "      Default labels path: "DEFAULT_POSE_DETECTION_LABELS"\n"
+      "  pose-settings-path: \"/PATH\"\n"
+      "      This is an optional parameter and overrides default path\n"
+      "      Default pose-settings path: "DEFAULT_POSE_SETTINGS_PATH"\n"
       "  output-type: It can be either be waylandsink, filesink or rtspsink\n"
       "  output-file: Use this Parameter to set output file path\n"
       "      Default output file path is:" DEFAULT_OUTPUT_FILENAME "\n"

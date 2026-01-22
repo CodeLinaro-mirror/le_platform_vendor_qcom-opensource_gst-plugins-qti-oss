@@ -48,6 +48,11 @@ target_include_directories(${TARGET_NAME} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
+target_include_directories(${TARGET_NAME} INTERFACE
+  $<BUILD_INTERFACE:${QTI_PLUGINS_BASE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
+)
+
 target_include_directories(${TARGET_NAME} PRIVATE
   ${KERNEL_BUILDDIR}/usr/include
 )
@@ -82,8 +87,11 @@ install(
   PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/ml/
 )
 
+# Add destination of compiletime pkg-config file to PKG_CONFIG_PATH
+set(ENV{PKG_CONFIG_PATH} "${CMAKE_CURRENT_BINARY_DIR}:$ENV{PKG_CONFIG_PATH}")
+
 configure_file(
-  ${CMAKE_SOURCE_DIR}/gst/common.pc.in
+  ${BASE_COMMON_PC_IN}
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
   @ONLY
 )

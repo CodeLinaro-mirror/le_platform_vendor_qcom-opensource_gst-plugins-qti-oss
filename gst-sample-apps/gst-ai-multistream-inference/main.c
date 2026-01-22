@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -40,7 +40,7 @@
 #include <glib.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
@@ -1004,7 +1004,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
     gst_element_set_enum_property (file_v4l2_decoder[i], "output-io-mode",
         "dmabuf");
     filtercaps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, "NV12", NULL);
+        "format", G_TYPE_STRING, "NV12_Q08C", NULL);
     g_object_set (G_OBJECT (file_decode_caps[i]), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
     if (!set_ml_params (file_qtimlelement[i], file_qtimlpostprocess[i],
@@ -1021,7 +1021,7 @@ create_pipe (GstAppContext * appctx, GstAppOptions * options, guint htp_count)
     gst_element_set_enum_property (rtsp_v4l2_dec[i], "output-io-mode",
         "dmabuf");
     filtercaps = gst_caps_new_simple ("video/x-raw",
-        "format", G_TYPE_STRING, "NV12", NULL);
+        "format", G_TYPE_STRING, "NV12_Q08C", NULL);
     g_object_set (G_OBJECT (rtsp_decode_caps[i]), "caps", filtercaps, NULL);
     gst_caps_unref (filtercaps);
     if (!set_ml_params (rtsp_qtimlelement[i], rtsp_qtimlpostprocess[i],

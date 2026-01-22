@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_CODEC2
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
@@ -24,6 +24,8 @@ pkg_check_modules(GST_AUDIO
   REQUIRED gstreamer-audio-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_PBUTILS
   REQUIRED gstreamer-pbutils-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_QCOM_UTILS
+  REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
 
 # Check whether MMM color format header is present.
 include(CheckIncludeFileCXX)
@@ -40,6 +42,12 @@ add_definitions(-D_LINUX_)
 # Common compiler flags.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
+
+# Create an interface library for c2engine headers
+add_library(c2engine_interface INTERFACE)
+target_include_directories(c2engine_interface INTERFACE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_subdirectory(c2-engine)
 add_subdirectory(c2venc)

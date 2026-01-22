@@ -189,27 +189,29 @@ Engine::Engine() {
   shaders_.emplace(ShaderType::kCompute32F, shader);
 
   // Construct shader code for 8-bit unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA8 + kComputeMainPlanar;
+  compute = kComputeHeader + kComputeOutputRGBA8 + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar8, shader);
 
   if (env_->QueryExtension("GL_NV_image_formats")) {
     // Construct shader code for 16-bit unaligned RGB(A) output textures.
-    compute = kComputeHeader + kComputeOutputRGBA16 + kComputeMainPlanar;
+    compute = kComputeHeader + kComputeOutputRGBA16 + kComputePlanarMain;
 
     shader = std::make_shared<ShaderProgram>(env_, compute);
     shaders_.emplace(ShaderType::kComputePlanar16, shader);
   }
 
   // Construct shader code for 16-bit float unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA16F + kComputeMainPlanar;
+  compute = kComputeHeader + kComputeOutputRGBA16F + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar16F, shader);
 
-  // Construct shader code for 16-bit float unaligned RGB(A) output textures.
-  compute = kComputeHeader + kComputeOutputRGBA32F + kComputeMainPlanar;
+  // Construct shader code for 32-bit float unaligned RGB(A) output textures.
+  compute = kComputeHeader + kComputeOutputRGBA32F + kComputePlanarMain;
   shader = std::make_shared<ShaderProgram>(env_, compute);
   shaders_.emplace(ShaderType::kComputePlanar32F, shader);
+
+  vendor_ = GetVendor();
 
   error = env_->UnbindContext(ContextType::kPrimary) ;
   if (!error.empty()) throw std::runtime_error(error);
@@ -325,11 +327,16 @@ std::uintptr_t Engine::Compose(const Compositions& compositions,
     auto& graphics = std::get<std::vector<GraphicTuple>>(stuple);
 
     // Resize normalization length and apply conversion needed for shaders.
-    if (normalize.size() != 4) { normalize.resize(4); }
+    normalize.resize(4);
 
     for (auto& norm : normalize) {
+      auto bitdepth = Format::BitDepth(surface.format);
+
       // Adjust data range to match fragment shader data representation.
-      norm.offset /= 255.0;
+      if (!Format::IsFloat(surface.format) && (bitdepth == 16))
+        norm.offset /= std::numeric_limits<uint16_t>::max();
+      else if (bitdepth == 8)
+        norm.offset /= std::numeric_limits<uint8_t>::max();
 
       if (!Format::IsSigned(surface.format))
         continue;
@@ -348,8 +355,8 @@ std::uintptr_t Engine::Compose(const Compositions& compositions,
     if (!clean && (stgtex != 0)) {
       objects.insert(objects.begin(), Object());
 
-      objects[0].source.w = objects[0].destination.w = surface.width;
-      objects[0].source.h = objects[0].destination.h = surface.height;
+      objects[0].source = Quadrilateral(surface.width, surface.height);
+      objects[0].destination = Rectangle(surface.width, surface.height);
 
       objects[0].id = surface_id;
     }
@@ -448,6 +455,16 @@ void Engine::Finish(std::uintptr_t fence) {
   if (!error.empty()) throw std::runtime_error(error);
 }
 
+const char* Engine::GetVendor() {
+
+  return reinterpret_cast<const char*>(env_->Gles()->GetString(GL_VENDOR));
+}
+
+const char* Engine::GetRenderer() {
+
+  return reinterpret_cast<const char*>(env_->Gles()->GetString(GL_RENDERER));
+}
+
 std::string Engine::RenderYuvTexture(std::vector<GraphicTuple>& graphics,
                                      bool clean, uint32_t color,
                                      uint32_t colorspace, Objects& objects) {
@@ -524,7 +541,10 @@ std::string Engine::RenderYuvTexture(std::vector<GraphicTuple>& graphics,
     float hscale = static_cast<float>(height) / maxheight;
 
     for (auto& object : objects) {
-      Region destination = object.destination;
+      Rectangle destination(maxwidth, maxheight);
+
+      if (object.mask & ConfigMask::kDestination)
+        destination = object.destination;
 
       // Adjust destination coordinates which will be used for the view port.
       env_->Gles()->Viewport(destination.x * wscale, destination.y * hscale,
@@ -591,8 +611,18 @@ std::string Engine::RenderRgbTexture(std::vector<GraphicTuple>& graphics,
   env_->Gles()->ActiveTexture(GL_TEXTURE0);
   RETURN_IF_GL_ERROR(env_, "Failed to set active texture unit 0");
 
+  // Get the width and height for possible usage when setting the Viewport.
+  // Dimensions are same for all RGB planes so get them from the first entry.
+  ImageParam& imgparam = std::get<ImageParam>(graphics.at(0));
+
+  uint32_t width = std::get<0>(imgparam);
+  uint32_t height = std::get<1>(imgparam);
+
   for (auto& object : objects) {
-    const Region& destination = object.destination;
+    Rectangle destination(width, height);
+
+    if (object.mask & ConfigMask::kDestination)
+      destination = object.destination;
 
     env_->Gles()->Viewport(
         destination.x, destination.y, destination.w, destination.h);
@@ -637,8 +667,17 @@ std::string Engine::RenderStageTexture(GLuint texture, uint32_t color,
   env_->Gles()->ActiveTexture(GL_TEXTURE0);
   RETURN_IF_GL_ERROR(env_, "Failed to set active texture unit 0");
 
+  // Get the width and height for possible usage when setting the Viewport.
+  TextureTuple& textuple = stage_textures_.at(texture);
+
+  uint32_t width = std::get<0>(textuple);
+  uint32_t height = std::get<1>(textuple);
+
   for (auto& object : objects) {
-    const Region& destination = object.destination;
+    Rectangle destination(width, height);
+
+    if (object.mask & ConfigMask::kDestination)
+      destination = object.destination;
 
     env_->Gles()->Viewport(
         destination.x, destination.y, destination.w,destination.h);
@@ -670,7 +709,8 @@ std::string Engine::DrawObject(std::shared_ptr<ShaderProgram>& shader,
     shader->SetFloat("globalAlpha", (object.alpha / 255.0));
 
   // Rotation angle in radians.
-  shader->SetFloat("rotationAngle", object.rotation * M_PI / 180);
+  float angle = (object.mask & ConfigMask::kRotation) ? object.rotation : 0;
+  shader->SetFloat("rotationAngle", angle * M_PI / 180);
 
   auto mask = object.mask & (ConfigMask::kHFlip | ConfigMask::kVFlip);
   GLuint pos = shader->GetAttribLocation("vPosition");
@@ -679,21 +719,21 @@ std::string Engine::DrawObject(std::shared_ptr<ShaderProgram>& shader,
                                     kVertices.at(mask).data());
   RETURN_IF_GL_ERROR(env_, "Failed to define main vertex array");
 
-  const Region& source = object.source;
+  const Quadrilateral& source = object.source;
   std::array<float, 8> coords = kTextureCoords;
 
   uint32_t width = insurface.width;
   uint32_t height = insurface.height;
 
-  if ((source.w != 0) && (source.h != 0)) {
-    coords[0] = static_cast<float>(source.x) / width;
-    coords[1] = static_cast<float>(source.y + source.h) / height;
-    coords[2] = static_cast<float>(source.x) / width;
-    coords[3] = static_cast<float>(source.y) / height;
-    coords[4] = static_cast<float>(source.x + source.w) / width;
-    coords[5] = static_cast<float>(source.y + source.h) / height;
-    coords[6] = static_cast<float>(source.x + source.w) / width;
-    coords[7] = static_cast<float>(source.y) / height;
+  if (object.mask & ConfigMask::kSource) {
+    coords[0] = source.b.x / width;
+    coords[1] = source.b.y / height;
+    coords[2] = source.a.x / width;
+    coords[3] = source.a.y / height;
+    coords[4] = source.d.x / width;
+    coords[5] = source.d.y / height;
+    coords[6] = source.c.x / width;
+    coords[7] = source.c.y / height;
   }
 
   // Load the vertex position.
@@ -734,21 +774,27 @@ std::string Engine::DispatchCompute(GLuint stgtex, Surface& surface,
   std::shared_ptr<ShaderProgram> shader = shaders_.at(stype);
   shader->Use();
 
-  uint32_t width = surface.width;
-  uint32_t height = surface.height;
+  uint32_t n_pixels = surface.width * surface.height;
+  uint32_t n_components = Format::NumComponents(surface.format);
+
+  shader->SetInt("numPixels", n_pixels);
+  shader->SetInt("numChannels", n_components);
 
   auto& gltuple = graphics.at(0);
   GLuint& otexture = std::get<GLuint>(gltuple);
   ImageParam& imgparam = std::get<ImageParam>(gltuple);
 
-  shader->SetInt("targetWidth", width);
-  shader->SetInt("targetHeight", height);
+  shader->SetInt("targetWidth", surface.width);
   shader->SetInt("imageWidth", std::get<0>(imgparam));
-  shader->SetInt("numPixels", (width * height));
-  shader->SetInt("numChannels", Format::NumComponents(surface.format));
-  shader->SetInt("inTex", 1);
 
-  env_->Gles()->ActiveTexture(GL_TEXTURE1);
+  // Adjust the number of plane pixels for planar RGBs witn number of views/images.
+  uint32_t n_views = Format::IsPlanar(surface.format) ?
+      (surface.planes.size() / n_components) : 1;
+
+  shader->SetInt("numPlanePixels", n_pixels / n_views);
+  shader->SetInt("inTex", 0);
+
+  env_->Gles()->ActiveTexture(GL_TEXTURE0);
   RETURN_IF_GL_ERROR(env_, "Failed to set active texture unit 1");
 
   env_->Gles()->BindTexture(GL_TEXTURE_2D, stgtex);
@@ -756,12 +802,12 @@ std::string Engine::DispatchCompute(GLuint stgtex, Surface& surface,
 
   GLenum format = Format::ToGL(std::get<2>(imgparam));
 
-  env_->Gles()->BindImageTexture(1, otexture, 0, GL_FALSE, 0, GL_WRITE_ONLY,
+  env_->Gles()->BindImageTexture(0, otexture, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                                  format);
   RETURN_IF_GL_ERROR(env_, "Failed to bind output image texture ", otexture);
 
   // Align to the divisor for the number of X groups explained below.
-  uint32_t n_pixels = (((width * height) + ((32 * 4) - 1)) & ~((32 * 4) - 1));
+  n_pixels = ((n_pixels + ((32 * 4) - 1)) & ~((32 * 4) - 1));
 
   // 32 because of the local size and 4 pixels are processed at a time.
   GLuint xgroups = n_pixels / (32 * 4);
@@ -847,11 +893,12 @@ bool Engine::IsSurfaceRenderable(const Surface& surface) {
   if (Format::IsSigned(surface.format))
     return false;
 
-  uint32_t n_components = Format::NumComponents(surface.format);
-
-  // RGB(A) planar formats are not renderable
+  // Prefer compute shader for planar RGB formats as only few of configurations
+  // are currently directly rederable and performance seems to be equivalent.
   if (Format::IsPlanar(surface.format))
     return false;
+
+  uint32_t n_components = Format::NumComponents(surface.format);
 
   // 3 channeled Float RGB surfaces are not renderable due to limitation.
   // TODO Remove when 3 channel RGB float formats are supported.
@@ -862,6 +909,10 @@ bool Engine::IsSurfaceRenderable(const Surface& surface) {
   // TODO Remove when 3 channel 16-bit integer RGB float formats are supported.
   if (!Format::IsFloat(surface.format) && (n_components == 3) &&
       (Format::BitDepth(surface.format) == 16))
+    return false;
+
+  // 3 channeled RGB surfaces are not renderable due to freedreno limitation.
+  if (vendor_ == "freedreno" && n_components == 3)
     return false;
 
   return true;
@@ -936,9 +987,12 @@ std::vector<GraphicTuple> Engine::ImportSurface(const Surface& surface,
   std::vector<Surface> imgsurfaces = GetImageSurfaces(surface, flags);
   std::vector<GraphicTuple> graphics;
 
+  bool is_adreno = vendor_ != "freedreno";
+
   for (auto& subsurface : imgsurfaces) {
     // Retrieve the tuple of DRM format and its modifier.
-    std::tuple<uint32_t, uint64_t> internal = Format::ToInternal(subsurface.format);
+    std::tuple<uint32_t, uint64_t> internal =
+        Format::ToInternal(subsurface.format, is_adreno);
 
     EGLint attribs[64] = { EGL_NONE };
     uint32_t index = 0;
@@ -1058,7 +1112,8 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
 
       // Depending on the surface format the chroma plane has different size.
       if (surface.format == ColorFormat::kNV12 ||
-          surface.format == ColorFormat::kNV21) {
+          surface.format == ColorFormat::kNV21 ||
+          surface.format == ColorFormat::kP010) {
         subsurface.width /= 2;
         subsurface.height /= 2;
       } else if (surface.format == ColorFormat::kNV16 ||
@@ -1092,9 +1147,15 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
     uint32_t n_components = Format::NumComponents(surface.format);
     uint32_t bitdepth = Format::BitDepth(surface.format);
 
-    // Overwrite the 3 channeled format to corresponding 4 channeled format.
+    // For planar formats reset to single plane and adjust stride.
+    if (Format::IsPlanar(surface.format)) {
+      subsurface.planes.resize(1);
+      subsurface.planes[0].stride *= n_components;
+    }
+
+    // Overwrite formats to corresponding 4 channeled format if necessary.
     // This will make it compatible for creating EGL image and use in compute.
-    if (n_components == 3) {
+    if (n_components != 4) {
       subsurface.format = ColorFormat::kRGBA8888;
 
       if (Format::IsFloat(surface.format) && (bitdepth == 32))
@@ -1126,10 +1187,21 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
 
     subsurface.width = subsurface.planes[0].stride / bpp;
 
-    // Calculate the aligned height value rounded up based on surface size.
-    uint32_t size = subsurface.size - subsurface.planes[0].offset;
+    // Exact size needed for computation.
+    uint32_t size = surface.width * surface.height *
+        Format::NumComponents(surface.format) * bytedepth;
+
+    // Calculate the aligned height value rounded up based on size.
     subsurface.height =
-        std::ceil((size / bpp) / static_cast<float>(subsurface.width));
+        std::ceil(size / static_cast<float>(subsurface.width) / bpp);
+
+    // Round up to multiple of 4
+    subsurface.height = ((subsurface.height + 3) &  ~3);
+
+    // Sanity check for size of the allocated bufffer
+    if (size > subsurface.size - subsurface.planes[0].offset)
+      throw Exception("Allocated buffer size is not big enough! Actual: ",
+          subsurface.size, ", Expected: ", size);
 
     imgsurfaces.push_back(subsurface);
   } else {
@@ -1142,9 +1214,14 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
 
 } // namespace gl
 
-IEngine* NewGlEngine() {
+IEngine* NewGlEngine(const char** vendor, const char** renderer) {
 
-  return new gl::Engine();
+  auto engine = new gl::Engine();
+
+  *vendor = engine->GetVendor();
+  *renderer = engine->GetRenderer();
+
+  return engine;
 }
 
 } // namespace ib2c

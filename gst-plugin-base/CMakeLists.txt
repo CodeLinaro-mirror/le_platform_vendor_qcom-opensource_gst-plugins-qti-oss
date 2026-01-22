@@ -1,5 +1,8 @@
-cmake_minimum_required(VERSION 3.8.2)
-project(gstreamer-qcom-oss-base-1.0 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.16)
+project(gstreamer-qcom-oss-base-1.0
+  VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
+  LANGUAGES C CXX
+)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -15,6 +18,7 @@ pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED
 pkg_check_modules(FASTCV qcom-fastcv-binaries)
 pkg_check_modules(EGL egl)
 pkg_check_modules(GLES glesv2)
+pkg_check_modules(OPEN_CV opencv4)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
@@ -59,6 +63,12 @@ include_directories(
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
 )
 
+# Define path to gst-plugins-base tree
+set(QTI_PLUGINS_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Define the path to the common pkg-config template file used by all subdirectories
+set(BASE_COMMON_PC_IN ${CMAKE_CURRENT_SOURCE_DIR}/gst/common.pc.in)
+
 add_subdirectory(gst/gfx)
 add_subdirectory(gst/utils)
 add_subdirectory(gst/video)
@@ -66,3 +76,4 @@ add_subdirectory(gst/memory)
 add_subdirectory(gst/ml)
 add_subdirectory(gst/cv)
 add_subdirectory(gst/allocators)
+add_subdirectory(gst/camera)

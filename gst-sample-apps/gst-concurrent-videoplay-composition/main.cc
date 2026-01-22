@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -33,8 +33,8 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_pipeline.h>
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_pipeline.h>
+#include <gst_sample_apps_utils.h>
 
 #define ARRAY_LENGTH 20
 #define TWO_STREAM_CNT 2
