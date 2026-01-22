@@ -278,8 +278,9 @@ class GstC2Notifier : public IC2Notifier {
     engine_->callbacks->buffer (buffer, engine_->userdata);
 
     // Deincrement the number of pending works if frame is complete.
-    if (!(flags & C2FrameData::FLAG_INCOMPLETE))
+    if (!(flags & C2FrameData::FLAG_INCOMPLETE) && engine_->n_pending > 0)
       GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
+
   }
 
  private:
@@ -422,7 +423,6 @@ gboolean
 gst_c2_engine_flush (GstC2Engine * engine)
 {
   C2Module *c2module = engine->c2module;
-
   try {
     c2module->Flush (C2Component::FLUSH_COMPONENT);
     GST_DEBUG ("Flushed c2module '%s'", engine->name);
