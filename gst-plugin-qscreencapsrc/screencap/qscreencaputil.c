@@ -943,6 +943,7 @@ gst_qscreencapbuf_new (GstQCtx * qctx,
       GST_ERROR ("create wl_buffer failed...");
       if(params)
         gbm_buffer_params_destroy(params);
+      params = NULL;
     }
   }
 
