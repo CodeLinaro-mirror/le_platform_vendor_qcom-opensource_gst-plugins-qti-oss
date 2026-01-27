@@ -341,10 +341,14 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Flush engine");
 
+  GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
+
   if ((c2vdec->engine != NULL) && !gst_c2_engine_flush (c2vdec->engine)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to flush engine");
     return FALSE;
   }
+
+  GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
   GST_DEBUG_OBJECT (c2vdec, "Engine flushed");
   return TRUE;
