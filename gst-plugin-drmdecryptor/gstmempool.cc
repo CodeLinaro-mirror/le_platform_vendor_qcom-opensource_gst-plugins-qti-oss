@@ -190,8 +190,10 @@ ion_device_alloc (GstMemBufferPool * mempool, gint size)
   alloc_data.fd_flags = O_RDWR | O_CLOEXEC;
   alloc_data.heap_flags = 0;
 #else
-  alloc_data.heap_id_mask = ION_HEAP(ION_SYSTEM_HEAP_ID);
-  alloc_data.flags = ION_FLAG_CACHED;
+  //Drm decryptor needs secure contiguous buffer
+  alloc_data.heap_id_mask = ION_HEAP(ION_SECURE_HEAP_ID);
+  alloc_data.heap_id_mask |= ION_HEAP(ION_SECURE_DISPLAY_HEAP_ID);
+  alloc_data.flags = ION_FLAG_SECURE | ION_FLAG_CP_BITSTREAM;
 
 #if !defined(TARGET_ION_ABI_VERSION)
   alloc_data.align = DEFAULT_PAGE_ALIGNMENT;
