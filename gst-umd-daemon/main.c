@@ -28,7 +28,7 @@
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
  *
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2026 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted (subject to the limitations in the
@@ -70,6 +70,7 @@
 #include <ml-meta/ml_meta.h>
 #include <iot-core-algs/umd-gadget.h>
 #include <sys/epoll.h>
+#include <alsa/asoundlib.h>
 
 
 #define HASH_LINE  "##################################################"
@@ -126,11 +127,10 @@
 #define GST_AUDIO_CP_PIPELINE "pulsesrc name=src ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! queue ! " \
     "audiobuffersplit output-buffer-duration=3/100 ! pulsesink name=sink"
 
-#define AUDIO_P_STATUS_CMD "cat /sys/kernel/config/usb_gadget/g1/functions/uac1.uac1/p_status"
-#define AUDIO_C_STATUS_CMD "cat /sys/kernel/config/usb_gadget/g1/functions/uac1.uac1/c_status"
+#define AUDIO_STATUS_DEVICE "hw:1,0"
 #define AUDIO_PB_PIPELINE  "audio playback pipeline"
 #define AUDIO_CP_PIPELINE  "audio capture pipeline"
-#define AUDIO_UAC1_EVENT   "change@/devices/virtual/android_usb/android0/f_uac1"
+#define AUDIO_UAC2_EVENT   "change@/devices/virtual/android_usb/android0"
 #define UEVENT_MSG_LEN     2048
 
 
@@ -414,30 +414,50 @@ struct _GstServiceContext
 static gint
 get_audio_sysfs_data (gint sysfs_entry)
 {
-  FILE *file = NULL;
-  gchar content[128] = {0};
-  gint status = -1;
+  snd_pcm_t *handle = NULL;
+  snd_pcm_status_t *status;
+  snd_pcm_stream_t stream;
+  const gchar *device_name = NULL;
+  gint audio_status = 0;
+  int err;
 
+  // "hw:1,0" is "sound card num: device num", stream decide the action.
   switch (sysfs_entry) {
-    case C_STATUS :
-      snprintf (content, 128, AUDIO_C_STATUS_CMD);
+    case C_STATUS:
+      device_name = AUDIO_STATUS_DEVICE;
+      stream = SND_PCM_STREAM_CAPTURE;
       break;
-    case P_STATUS :
-      snprintf (content, 128, AUDIO_P_STATUS_CMD);
+    case P_STATUS:
+      device_name = AUDIO_STATUS_DEVICE;
+      stream = SND_PCM_STREAM_PLAYBACK;
       break;
+    default:
+      return 0;
   }
 
-  file = popen (content, "r");
-  if (!file) {
-    g_printerr ("\nFailed to open audio sysfs entry!\n");
-  }
-  fscanf (file, "%d", &status);
-  if (file) {
-    pclose (file);
-    file = NULL;
+  if ((err = snd_pcm_open(&handle, device_name, stream, SND_PCM_NONBLOCK)) < 0) {
+    if (err == -EBUSY) {
+        g_print("Device %s is BUSY, assuming RUNNING\n", device_name);
+        return 1;
+    }
+    g_printerr("\nALSA: Cannot open PCM device %s (%s)\n",
+                device_name, snd_strerror(err));
+    return 0;
   }
 
-  return status;
+  snd_pcm_status_alloca(&status);
+
+  if ((err = snd_pcm_status(handle, status)) == 0) {
+      if (snd_pcm_status_get_state(status) == SND_PCM_STATE_RUNNING) {
+          audio_status = 1;
+      }
+  } else {
+      g_printerr("\nALSA: Failed to get PCM Status (%s)\n", snd_strerror(err));
+  }
+
+  snd_pcm_close(handle);
+
+  return audio_status;
 }
 
 static AudioState
@@ -506,7 +526,7 @@ uevent_event (UeventData *payload)
   GstState state = GST_STATE_VOID_PENDING;
   char msg[UEVENT_MSG_LEN + 2];
   gint n;
-  gchar event[] = AUDIO_UAC1_EVENT;
+  gchar event[] = AUDIO_UAC2_EVENT;
 
   n = uevent_kernel_multicast_recv (payload->fd, msg, UEVENT_MSG_LEN);
   if (n <=0 || n >= UEVENT_MSG_LEN) return;
@@ -519,28 +539,31 @@ uevent_event (UeventData *payload)
       payload->cur = newstate;
       switch (newstate) {
         case AUDIO_STATE_PAUSED:
-          if (srvctx->apipelinecp != NULL)
+          if (srvctx->apipelinecp != NULL) {
             change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PAUSED);
-          if (srvctx->apipelinepb != NULL)
+            g_print("Change audio Capture state to PAUSED.\n");
+          }
+          if (srvctx->apipelinepb != NULL) {
             change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PAUSED);
+            g_print("Change audio Playback state to PAUSED.\n");
+          }
         break;
         case AUDIO_STATE_CAPTURE:
-          if (srvctx->apipelinecp != NULL)
-            change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PLAYING);
-          if (srvctx->apipelinepb != NULL)
+          // Remove UAC playing step to UVC
+          if (srvctx->apipelinepb != NULL) {
             change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PAUSED);
+            g_print("Change audio Playback state to PAUSED.\n");
+          }
         break;
         case AUDIO_STATE_PLAYBACK:
-          if (srvctx->apipelinecp != NULL)
+          if (srvctx->apipelinecp != NULL) {
             change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PAUSED);
-          if (srvctx->apipelinepb != NULL)
-            change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PLAYING);
+            g_print("Change audio Capture state to PAUSED.\n");
+          }
+          // Remove UAC playing step to UVC
         break;
         case AUDIO_STATE_PLAYBACK_CAPTURE:
-          if (srvctx->apipelinecp != NULL)
-            change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PLAYING);
-          if (srvctx->apipelinepb != NULL)
-            change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PLAYING);
+          // Remove UAC playing step to UVC
         break;
         default:
           g_printerr ("\n invalid audio state \n");
@@ -592,7 +615,8 @@ monitor_audio_status (gpointer userdata)
 
   while (active) {
     active = (srvctx->apipelinecp != NULL || srvctx->apipelinepb != NULL);
-    nevents = epoll_wait (epoll_fd, events, 64, -1);
+    // Check if active every 500ms
+    nevents = epoll_wait (epoll_fd, events, 64, 500);
     if (nevents == -1) {
       if (errno == EINTR) continue;
       break;
@@ -1335,7 +1359,7 @@ create_audio_cp_pipeline (GstServiceContext * srvctx)
   g_object_set (G_OBJECT (element), "device", mainops.audiosink, NULL);
   gst_object_unref (element);
 
-    // Retrieve reference to the pipeline's bus.
+  // Retrieve reference to the pipeline's bus.
   if ((bus = gst_pipeline_get_bus (GST_PIPELINE (srvctx->apipelinecp))) == NULL) {
     g_printerr ("\nERROR: Failed to retrieve audio cp pipeline bus!\n");
     gst_object_unref (srvctx->apipelinecp);
@@ -1957,6 +1981,16 @@ enable_camera_stream (void * userdata)
     return false;
   }
 
+  // Playing UAC when available
+  if (srvctx->apipelinecp != NULL) {
+    change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PLAYING);
+    g_print("Change audio Capture state to PLAYING.\n");
+  }
+  if (srvctx->apipelinepb != NULL) {
+    change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PLAYING);
+    g_print("Change audio Playback state to PLAYING.\n");
+  }
+
   // Send a empty message to the menu in order to reset it.
   g_async_queue_push (srvctx->menumsgs, gst_structure_new (STDIN_MESSAGE,
       "input", G_TYPE_STRING, "", NULL));
@@ -1974,6 +2008,16 @@ disable_camera_stream (void * userdata)
   if (!update_pipeline_state (srvctx->vpipeline, srvctx->pipemsgs, state)) {
     g_printerr ("\nFailed to update video pipeline state!\n");
     return false;
+  }
+
+  // Pause UAC when UVC stream off
+  if (srvctx->apipelinecp != NULL) {
+    change_audio_pipeline_state (srvctx->apipelinecp, GST_STATE_PAUSED);
+    g_print("Change audio Capture state to PAUSED.\n");
+  }
+  if (srvctx->apipelinepb != NULL) {
+    change_audio_pipeline_state (srvctx->apipelinepb, GST_STATE_PAUSED);
+    g_print("Change audio Playback state to PAUSED.\n");
   }
 
   // Send a empty message to the menu in order to reset it.
