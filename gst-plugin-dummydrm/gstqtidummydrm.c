@@ -281,7 +281,7 @@ gst_qtidummydrm_start (GstBaseTransform * trans)
     return FALSE;
   }
 
-  res = qtidummydrm->cpc.Content_Protection_Set_AppName ("smpcpyap64");
+  res = qtidummydrm->cpc.Content_Protection_Set_AppName ("cntcpy64");
   if (res != SAMPLE_CLIENT_SUCCESS) {
     GST_ERROR ("Content_Protection_Set_AppName failed! err:0x%08lx", res);
     if (qtidummydrm->lib_handle) {
