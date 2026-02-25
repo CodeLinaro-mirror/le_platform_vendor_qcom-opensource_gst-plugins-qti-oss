@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
  * Application:
@@ -711,10 +711,6 @@ main (int argc, char * * argv)
 
   g_cond_init (&app_ctx.cond_quit);
   g_mutex_init (&app_ctx.mutex);
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   ctx = g_option_context_new (NULL);
   if (!ctx) {

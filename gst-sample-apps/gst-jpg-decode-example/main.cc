@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
 * Application:
@@ -25,10 +25,8 @@
 
 #include <glib-unix.h>
 #include <stdio.h>
-#include <stdlib.h>
-
 #include <gst/gst.h>
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -192,10 +190,6 @@ main (gint argc, gchar *argv[])
   GstComposeAppContext *appctx = NULL;
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // create the app context
   appctx = gst_app_context_new ();

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_ML_POST_PROCESS
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
@@ -34,7 +34,7 @@ pkg_check_modules(GST_QCOM_ML
 pkg_check_modules(GST_QCOM_MEM
   REQUIRED gstreamer-qcom-oss-memory-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -57,7 +57,7 @@ add_library(${GST_QTI_ML_POST_PROCESS} SHARED
 )
 
 target_compile_definitions(${GST_QTI_ML_POST_PROCESS} PRIVATE
-  GST_ML_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/ml/modules"
+  GST_ML_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtimlpostprocess/modules"
   $<$<BOOL:${HAVE_LINUX_DMA_BUF_H}>:HAVE_LINUX_DMA_BUF_H>
 )
 

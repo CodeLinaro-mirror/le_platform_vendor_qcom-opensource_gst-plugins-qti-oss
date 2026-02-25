@@ -25,43 +25,12 @@
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
-
-/*
- *  Changes from Qualcomm Innovation Center are provided under the following license:
- *
- *  Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted (subject to the limitations in the
- *  disclaimer below) provided that the following conditions are met:
- *
- *      * Redistributions of source code must retain the above copyright
- *        notice, this list of conditions and the following disclaimer.
- *
- *      * Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials provided
- *        with the distribution.
- *
- *      * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *        contributors may be used to endorse or promote products derived
- *        from this software without specific prior written permission.
- *
- *  NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- *  GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- *  HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- *   WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- *  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- *  ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- *  GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- *  IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- *  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- *  IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
 
 #ifndef __GST_QMMFSRC_UTILS_H__
 #define __GST_QMMFSRC_UTILS_H__
@@ -132,9 +101,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
 #define GST_TYPE_QMMFSRC_CAM_OPMODE (gst_qmmfsrc_cam_opmode_get_type())
-#ifdef EIS_MODES_ENABLE
 #define GST_TYPE_QMMFSRC_EIS_MODE (gst_qmmfsrc_eis_mode_get_type())
-#endif // EIS_MODES_ENABLE
 #ifdef VHDR_MODES_ENABLE
 #define GST_TYPE_QMMFSRC_VHDR_MODE (gst_qmmfsrc_vhdr_mode_get_type())
 #endif // VHDR_MODES_ENABLE
@@ -155,6 +122,15 @@ G_BEGIN_DECLS
 
 typedef struct _GstQmmfBufferPool GstQmmfBufferPool;
 typedef struct _GstQmmfBufferPoolClass GstQmmfBufferPoolClass;
+typedef struct _GstQmmfSrcResolutionCache GstQmmfSrcResolutionCache;
+
+// Resolution range structure
+typedef struct GstQmmfSrcResolutionRange {
+  guint max_width;
+  guint max_height;
+  guint min_width;
+  guint min_height;
+} GstQmmfSrcResolutionRange;
 
 // Extension to the GstVideoFormat for supporting bayer formats.
 typedef enum {
@@ -164,6 +140,23 @@ typedef enum {
   GST_BAYER_FORMAT_GRBG,
   GST_BAYER_FORMAT_MONO,
 } GstBayerFormat;
+
+typedef enum pixformats {
+  FORMAT_NV12 = 0x22,
+  FORMAT_YUY2 = 0x14,
+  FORMAT_UYVY = 0x120,
+  FORMAT_P010_10LE = 0x4C595559,
+  FORMAT_NV12_Q10LE32C = 0x7FA30C09
+} PixFormat;
+
+typedef enum formats {
+  HAL_PIXEL_FORMAT_BLOB = 33,
+  HAL_PIXEL_FORMAT_RAW10 = 37,
+  HAL_PIXEL_FORMAT_RAW16 = 32,
+  HAL_PIXEL_FORMAT_RAW12 = 38,
+  HAL_PIXEL_FORMAT_RAW8 = 0x123,
+  HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED = 34
+} formats;
 
 enum
 {
@@ -297,14 +290,12 @@ enum
   CAPTURE_REQUEST,
 };
 
-#ifdef EIS_MODES_ENABLE
 enum
 {
   EIS_OFF,
   EIS_ON_SINGLE_STREAM,
   EIS_ON_DUAL_STREAM,
 };
-#endif // EIS_MODES_ENABLE
 
 #ifdef VHDR_MODES_ENABLE
 enum
@@ -373,9 +364,7 @@ GType gst_qmmfsrc_capture_mode_get_type (void);
 
 GType gst_qmmfsrc_frc_mode_get_type (void);
 
-#ifdef EIS_MODES_ENABLE
 GType gst_qmmfsrc_eis_mode_get_type (void);
-#endif // EIS_MODES_ENABLE
 
 #ifdef VHDR_MODES_ENABLE
 GType gst_qmmfsrc_vhdr_mode_get_type (void);
@@ -389,41 +378,65 @@ GType gst_qmmfsrc_pad_logical_stream_type_get_type (void);
 
 GType gst_qmmfsrc_pad_activation_mode_get_type (void);
 
-guchar gst_qmmfsrc_control_mode_android_value (const guint value);
+guchar gst_qmmfsrc_control_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_control_mode (const guchar value);
 
-guchar gst_qmmfsrc_effect_mode_android_value (const guint value);
+guchar gst_qmmfsrc_effect_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_effect_mode (const guchar value);
 
-guchar gst_qmmfsrc_scene_mode_android_value (const guint value);
+guchar gst_qmmfsrc_scene_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_scene_mode (const guchar value);
 
-guchar gst_qmmfsrc_antibanding_android_value (const guint value);
+guchar gst_qmmfsrc_antibanding_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_antibanding (const guchar value);
 
-guchar gst_qmmfsrc_exposure_mode_android_value (const guint value);
+guchar gst_qmmfsrc_exposure_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_exposure_mode (const guchar value);
 
-guchar gst_qmmfsrc_white_balance_mode_android_value (const guint value);
+guchar gst_qmmfsrc_white_balance_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_white_balance_mode (const guchar value);
 
-guchar gst_qmmfsrc_focus_mode_android_value (const guint value);
+guchar gst_qmmfsrc_focus_mode_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_focus_mode (const guchar value);
 
-guchar gst_qmmfsrc_noise_reduction_android_value (const guint value);
+guchar gst_qmmfsrc_noise_reduction_android_value (const gint value);
 
 guint gst_qmmfsrc_android_value_noise_reduction (const guchar value);
 
 const char * gst_qmmf_video_format_to_string (gint format);
 
 GQuark qmmf_buffer_qdata_quark ();
+
+GHashTable* gst_qmmf_get_static_metas(void);
+
+void gst_qmmf_cleanup_static_metas(void);
+
+GST_API gboolean gst_qmmfsrc_check_logical_cam_support ();
+
+GST_API gboolean gst_qmmfsrc_check_format (PixFormat format);
+
+guint gst_qmmfsrc_get_max_width ();
+
+guint gst_qmmfsrc_get_min_width ();
+
+guint gst_qmmfsrc_check_sw_tnr_support ();
+
+void gst_qmmfsrc_get_jpeg_resolution_range (GstQmmfSrcResolutionRange *range);
+
+void gst_qmmfsrc_get_bayer_resolution_range (GstQmmfSrcResolutionRange *range);
+
+void gst_qmmfsrc_get_raw_resolution_range (GstQmmfSrcResolutionRange *range);
+
+guint gst_qmmfsrc_get_max_fps ();
+
+guint gst_qmmfsrc_check_eis_support ();
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =

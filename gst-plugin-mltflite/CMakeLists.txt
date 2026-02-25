@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_ML_TFLITE
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
@@ -67,7 +67,9 @@ else()
   # Prefer the prebuilt TFLite package.
   pkg_check_modules(TFLITE tensorflow-lite-prebuilt)
   if(NOT TFLITE_FOUND)
-    pkg_check_modules(TFLITE REQUIRED tensorflow-lite)
+    pkg_check_modules(TFLITE tensorflow-lite)
+  else()
+    pkg_check_modules(TFLITE REQUIRED tensorflowlite_c)
   endif()
 
   include(CheckIncludeFile)
@@ -91,7 +93,7 @@ else()
   )
 endif()
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -46,7 +46,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define DEFAULT_OP_YUV_FILENAME "/etc/media/yuv_dump%d.yuv"
 #define DEFAULT_OP_MP4_FILENAME "/etc/media/video.mp4"
@@ -355,10 +355,6 @@ main (gint argc, gchar *argv[])
   GstCameraAppContext *appctx = NULL;
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // create the application context
   appctx = gst_app_context_new ();

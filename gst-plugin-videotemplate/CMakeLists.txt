@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_VIDEO_TEMPLATE
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C
@@ -23,7 +23,7 @@ pkg_check_modules(GST_QCOM_UTILS
 pkg_check_modules(GST_QCOM_VIDEO
   REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -39,7 +39,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
 # GStreamer plugin.
-set(GST_QTI_VIDEO_TEMPLATE qtivideotemplate)
+set(GST_QTI_VIDEO_TEMPLATE gstqtivideotemplate)
 
 add_library(${GST_QTI_VIDEO_TEMPLATE} SHARED
   qtivideotemplate.c

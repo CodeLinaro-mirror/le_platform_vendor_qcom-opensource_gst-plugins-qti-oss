@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries..
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -113,4 +113,4 @@ gst_objtracker_algo_execute_buffer (GstObjTrackerAlgo * algo,
 
 G_END_DECLS
 
-#endif // __GST_OBJTRACKER_ALGO_H__
+#endif /* __GST_OBJTRACKER_ALGO_H__ */

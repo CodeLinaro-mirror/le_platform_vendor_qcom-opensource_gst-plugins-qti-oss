@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_VIDEO_COMPOSER
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C
@@ -27,7 +27,7 @@ if(GST_VERSION VERSION_LESS 1.16.0)
   pkg_check_modules(GST_BAD_VIDEO REQUIRED gstreamer-bad-video-1.0>=${GST_VERSION_REQUIRED})
 endif()
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

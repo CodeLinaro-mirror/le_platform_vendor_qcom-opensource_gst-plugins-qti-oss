@@ -8,13 +8,18 @@ add_library(${KAFKA} SHARED
 
 pkg_check_modules(RDKAFKA REQUIRED rdkafka)
 
+set_target_properties(${KAFKA} PROPERTIES
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR}
+)
+
 target_include_directories(${KAFKA} PRIVATE
   ${GST_INCLUDE_DIRS}
-  ${CMAKE_SOURCE_DIR}
   ${RDKAFKA_INCLUDE_DIRS}
 )
 
 target_link_libraries(${KAFKA} PRIVATE
+  qtimsgadaptor_interface
   ${GST_LIBRARIES}
   ${CMAKE_DL_LIBS}
   ${RDKAFKA_LIBRARIES}

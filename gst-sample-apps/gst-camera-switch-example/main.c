@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -30,7 +30,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define GST_APP_SUMMARY "This application uses the two cameras of the " \
   "device and switch them without changing the state of the pipeline. \n" \
@@ -363,10 +363,6 @@ main (gint argc, gchar * argv[])
 
   // Initialize GST library.
   gst_init (&argc, &argv);
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   GOptionEntry entries[] = {
       { "display", 'd', 0, G_OPTION_ARG_INT,

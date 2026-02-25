@@ -26,7 +26,7 @@
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <unordered_map>
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 #include <qmmf-sdk/qmmf_camera_metadata.h>
 
 namespace camera = qmmf;
@@ -577,10 +577,6 @@ main (gint argc, gchar *argv[])
     return -1;
   }
   appctx->threshold = threshold;
-
-  // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Create pipeline using factory-based function
   if (!create_pipeline (appctx)) {

@@ -1,35 +1,6 @@
 /*
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted (subject to the limitations in the
- * disclaimer below) provided that the following conditions are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *
- *     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
- * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
- * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
- * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #include "overlayutils.h"
@@ -56,15 +27,11 @@ gst_video_blit_release (GstVideoBlit * blit)
   blit->destination.x = blit->destination.y = 0;
   blit->destination.w = blit->destination.h = 0;
 
-  buffer = blit->frame->buffer;
-  gst_video_frame_unmap (blit->frame);
+  buffer = blit->buffer;
 
   // Unreference buffer twice as 2nd refcount has been set when blit was cached.
   gst_buffer_unref (buffer);
   gst_buffer_unref (buffer);
-
-  g_slice_free (GstVideoFrame, blit->frame);
-  blit->frame = NULL;
 }
 
 void
@@ -207,7 +174,7 @@ gst_extract_bboxes (const GValue * value, GArray * bboxes)
     GST_TRACE ("%s: Color: 0x%X", name, bbox->color);
 
     // Clear the cached blit if the flag has been raised.
-    if (changed && (bbox->blit.frame != NULL))
+    if (changed && (bbox->blit.buffer != NULL))
       gst_video_blit_release (&(bbox->blit));
 
     if (gst_structure_has_field (structure, "enable"))
@@ -468,7 +435,7 @@ gst_extract_strings (const GValue * value, GArray * strings)
     GST_TRACE ("%s: Font size: %d", name, string->fontsize);
 
     // Clear the cached blit if the flag has been raised.
-    if (changed && (string->blit.frame != NULL))
+    if (changed && (string->blit.buffer != NULL))
       gst_video_blit_release (&(string->blit));
 
     if (gst_structure_has_field (structure, "enable"))
@@ -699,7 +666,7 @@ gst_extract_masks (const GValue * value, GArray * masks)
         mask->infill ? "YES" : "NO", mask->inverse ? "YES" : "NO");
 
     // Clear the cached blit if the flag has been raised.
-    if (changed && (mask->blit.frame != NULL))
+    if (changed && (mask->blit.buffer != NULL))
       gst_video_blit_release (&(mask->blit));
 
     if (gst_structure_has_field (structure, "enable"))
@@ -831,7 +798,7 @@ gst_extract_static_images (const GValue * value, GArray * images)
     }
 
     // Clear the cached blit if the flag has been raised.
-    if (changed && (image->blit.frame != NULL))
+    if (changed && (image->blit.buffer != NULL))
       gst_video_blit_release (&(image->blit));
 
     if (gst_structure_has_field (structure, "enable"))

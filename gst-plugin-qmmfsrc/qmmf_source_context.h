@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 
@@ -75,6 +46,11 @@ typedef struct _GstQmmfContext            GstQmmfContext;
 typedef struct _GstQmmfLogicalCamInfo     GstQmmfLogicalCamInfo;
 typedef struct _GstQmmfCameraSwitchInfo   GstQmmfCameraSwitchInfo;
 
+typedef struct _CameraDeviceStatus {
+  guint32 camera_id;
+  guint8 is_present;
+} CameraDeviceStatus;
+
 typedef void (*GstCameraEventCb) (guint event, gpointer userdata);
 typedef void (*GstCameraMetaCb) (gint camera_id, gconstpointer metadata,
     gboolean isurgent, gpointer userdata);
@@ -88,6 +64,12 @@ enum {
   EVENT_CAMERA_CLOSED,
   EVENT_FRAME_ERROR,
   EVENT_METADATA_ERROR,
+  EVENT_SOF_FREEZE,
+  EVENT_RECOVERYFAILURE,
+  EVENT_FATAL,
+  EVENT_RECOVERYSUCCESS,
+  EVENT_INTERNAL_RECOVERY,
+  EVENT_DEVICE_STATUS_CHANGE,
 };
 
 enum
@@ -143,9 +125,6 @@ enum
   PARAM_CAMERA_INPUT_ROI_INFO,
   PARAM_CAMERA_PHYISICAL_CAMERA_SWITCH,
   PARAM_CAMERA_SUPER_FRAMERATE,
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-  PARAM_CAMERA_MULTICAMERA_HINT,
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
   PARAM_CAMERA_SW_TNR,
   PARAM_CAMERA_STATIC_METADATAS,
 };
@@ -190,6 +169,18 @@ gst_qmmf_context_capture_image (GstQmmfContext * context,
                                 guint n_images,
                                 GPtrArray * metas);
 
+GST_API gboolean
+gst_qmmf_context_is_metadata_enabled (GstQmmfContext * context);
+
+GST_API void
+gst_qmmf_context_store_metadata (GstQmmfContext * context, gpointer metadata);
+
+GST_API void
+gst_qmmf_context_register_metadata_pad (GstQmmfContext * context, GstPad * pad);
+
+GST_API void
+gst_qmmf_context_unregister_metadata_pad (GstQmmfContext * context, GstPad * pad);
+
 GST_API void
 gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
                                    const GValue * value);
@@ -201,6 +192,18 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
 GST_API void
 gst_qmmf_context_update_video_param (GstPad * pad, GParamSpec * pspec,
                                      GstQmmfContext * context);
+
+GST_API guint32
+gst_qmmf_context_get_device_status_camera_id (GstQmmfContext * context);
+
+GST_API gboolean
+gst_qmmf_context_get_device_status_is_present (GstQmmfContext * context);
+
+GST_API void
+gst_qmmf_context_get_static_meta ();
+
+guint
+get_vendor_tag_by_name (const gchar * section, const gchar * name);
 
 G_END_DECLS
 

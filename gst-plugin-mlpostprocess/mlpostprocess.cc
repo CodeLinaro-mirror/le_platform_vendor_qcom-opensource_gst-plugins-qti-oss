@@ -27,6 +27,7 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
 * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
@@ -459,7 +460,7 @@ cleanup:
 
 static GstBufferPool *
 gst_ml_post_process_create_pool (GstMLPostProcess * postprocess,
-    GstCaps * caps)
+    GstCaps * caps, GstVideoAlignment * align)
 {
   GstStructure *config = NULL;
   GstBufferPool *pool = NULL;
@@ -467,7 +468,6 @@ gst_ml_post_process_create_pool (GstMLPostProcess * postprocess,
 
   GstVideoInfo video_info = {0,};
   GstMLInfo ml_info = {};
-  GstVideoAlignment align = {0,};
   gboolean success = TRUE;
   guint size = 0;
 
@@ -522,17 +522,11 @@ gst_ml_post_process_create_pool (GstMLPostProcess * postprocess,
         GST_IMAGE_BUFFER_POOL_OPTION_KEEP_MAPPED);
   }
 
-  if (postprocess->mode == OUTPUT_MODE_VIDEO &&
-      !gst_video_retrieve_gpu_alignment (&video_info, &align)) {
-    GST_ERROR_OBJECT (postprocess, "Failed to get alignment!");
-    gst_clear_object (&pool);
-    return NULL;
-  }
-
   if (postprocess->mode == OUTPUT_MODE_VIDEO) {
     gst_buffer_pool_config_add_option (config,
         GST_BUFFER_POOL_OPTION_VIDEO_ALIGNMENT);
-    gst_buffer_pool_config_set_video_alignment (config, &align);
+    gst_buffer_pool_config_set_video_alignment (config, align);
+    gst_video_info_align (&video_info, align);
   }
 
   if (postprocess->mode == OUTPUT_MODE_TENSOR)
@@ -1793,6 +1787,7 @@ gst_ml_post_process_decide_allocation (GstBaseTransform * base,
   GstStructure *config = NULL;
   GstAllocator *allocator = NULL;
   GstAllocationParams params = {};
+  GstVideoAlignment align = {0,};
   guint size = 0, minbuffers = 0, maxbuffers = 0;
 
   gst_clear_object (&(postprocess->outpool));
@@ -1807,8 +1802,17 @@ gst_ml_post_process_decide_allocation (GstBaseTransform * base,
     return FALSE;
   }
 
+  if (gst_query_get_video_alignment (query, &align)) {
+    GST_DEBUG_OBJECT (postprocess, "Downstream alignment: padding (top: %u "
+        "bottom: %u left: %u right: %u) stride (%u, %u, %u, %u)",
+        align.padding_top, align.padding_bottom, align.padding_left,
+        align.padding_right, align.stride_align[0], align.stride_align[1],
+        align.stride_align[2], align.stride_align[3]);
+  }
+
   // Create a new buffer pool.
-  if ((pool = gst_ml_post_process_create_pool (postprocess, caps)) == NULL) {
+  pool = gst_ml_post_process_create_pool (postprocess, caps, &align);
+  if (pool == NULL) {
     GST_ERROR_OBJECT (postprocess, "Failed to create buffer pool!");
     return FALSE;
   }
@@ -1832,11 +1836,6 @@ gst_ml_post_process_decide_allocation (GstBaseTransform * base,
   else
     gst_query_add_allocation_pool (query, pool, size, minbuffers,
         maxbuffers);
-
-  if (GST_IS_IMAGE_BUFFER_POOL (pool))
-    gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
-  else
-    gst_query_add_allocation_meta (query, GST_ML_TENSOR_META_API_TYPE, NULL);
 
   return TRUE;
 }
@@ -2083,7 +2082,7 @@ gst_ml_post_process_fixate_caps (GstBaseTransform * base,
       } else if (GST_IS_SEGMENTATION_TYPE (postprocess->type) ||
           GST_IS_SUPER_RESOLUTION_TYPE (postprocess->type)) {
         // 2nd dimension correspond to height, 3rd dimension correspond to width.
-        width = GST_ROUND_DOWN_16 (mlinfo.tensors[0][2]);
+        width = GST_ROUND_DOWN_2 (mlinfo.tensors[0][2]);
       }
 
       gst_structure_set (output, "width", G_TYPE_INT, width, NULL);
@@ -2104,7 +2103,7 @@ gst_ml_post_process_fixate_caps (GstBaseTransform * base,
       } else if (GST_IS_SEGMENTATION_TYPE (postprocess->type) ||
           GST_IS_SUPER_RESOLUTION_TYPE (postprocess->type)) {
         // 2nd dimension correspond to height, 3rd dimension correspond to width.
-        height = mlinfo.tensors[0][1];
+        height = GST_ROUND_DOWN_2 (mlinfo.tensors[0][1]);
       }
 
       gst_structure_set (output, "height", G_TYPE_INT, height, NULL);

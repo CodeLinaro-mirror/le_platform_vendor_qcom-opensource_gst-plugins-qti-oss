@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #include "qmmf_source_video_pad.h"
@@ -67,11 +38,9 @@
 #include <gst/gstelementfactory.h>
 #include <gst/gstpadtemplate.h>
 #include <gst/allocators/allocators.h>
-#ifdef ENABLE_RUNTIME_PARSER
-#include <gst/utils/runtime-flags-parser-c-api.h>
-#endif // ENABLE_RUNTIME_PARSER
 
 #include "qmmf_source_utils.h"
+#include "qmmf_source.h"
 
 // Declare qmmfsrc_video_pad_class_init() and qmmfsrc_video_pad_init()
 // functions, implement qmmfsrc_video_pad_get_type() function and set
@@ -103,6 +72,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_video_pad_debug);
 #define DEFAULT_PROP_ROTATE              ROTATE_NONE
 #define DEFAULT_PROP_LOGICAL_STREAM_TYPE GST_PAD_LOGICAL_STREAM_TYPE_NONE
 #define DEFAULT_PROP_SUPER_BUFFER        FALSE
+#define DEFAULT_PROP_WRAP_META           FALSE
 
 enum
 {
@@ -123,6 +93,7 @@ enum
   PROP_VIDEO_TYPE,
   PROP_VIDEO_ROTATE,
   PROP_VIDEO_LOGICAL_STREAM_TYPE,
+  PROP_VIDEO_WRAP_META,
 };
 
 static guint signals[LAST_SIGNAL];
@@ -195,15 +166,17 @@ video_pad_worker_task (GstPad * pad)
     if (ret == GST_FLOW_EOS) {
       GST_DEBUG_OBJECT (pad, "EOS received on pad %s", gst_pad_get_name (pad));
 
-      success = gst_pad_push_event (pad, gst_event_new_eos ());
-      if (success == FALSE) {
-        GST_ERROR_OBJECT (pad, "Failed to push EOS event on pad %s",
-            gst_pad_get_name (pad));
-
-        gst_pad_pause_task (pad);
+      if (!GST_PAD_IS_EOS (pad)) {
+        success = gst_pad_push_event (pad, gst_event_new_eos ());
+        if (success == FALSE) {
+          GST_WARNING_OBJECT (pad, "Failed to push EOS event on pad %s",
+              gst_pad_get_name (pad));
+        }
       }
+
+      gst_pad_pause_task (pad);
     } else if (ret != GST_FLOW_OK) {
-      GST_ERROR_OBJECT (pad, "Error pushing buffer to pad %s: %s",
+      GST_WARNING_OBJECT (pad, "Error pushing buffer to pad %s: %s",
           gst_pad_get_name (pad), gst_flow_get_name (ret));
 
       gst_pad_pause_task (pad);
@@ -260,6 +233,28 @@ video_pad_query (GstPad * pad, GstObject * parent, GstQuery * query)
       // the maximum latency is the complete buffer of frames.
       // This should not be done before camera prerolled.
       gst_query_set_latency (query, TRUE, min_latency, max_latency);
+      break;
+    }
+    case GST_QUERY_CUSTOM:
+    {
+      const GstStructure *structure = gst_query_get_structure (query);
+
+      if (structure == NULL) {
+        GST_WARNING_OBJECT (pad, "Custom query has no structure");
+        success = gst_pad_query_default (pad, parent, query);
+        break;
+      }
+
+      if (gst_structure_has_name (structure, "need-metadata")) {
+        GST_INFO_OBJECT (pad, "Received need-metadata custom query");
+
+        GST_QMMFSRC_VIDEO_PAD (pad)->attach_metadata = TRUE;
+        success = TRUE;
+      } else {
+        GST_DEBUG_OBJECT (pad, "Received custom query with name: %s",
+            gst_structure_get_name (structure));
+        success = gst_pad_query_default (pad, parent, query);
+      }
       break;
     }
     default:
@@ -440,12 +435,13 @@ video_pad_update_params (GstPad * pad, GstStructure * structure)
 
   if (gst_structure_has_field (structure, "colorimetry")) {
     const gchar *string = gst_structure_get_string (structure, "colorimetry");
+    gchar *new_colorimetry = g_strdup (string);
 
     reconfigure |= (g_strcmp0 (string, vpad->colorimetry) != 0);
 
     if (vpad->colorimetry != NULL)
-      free(vpad->colorimetry);
-    vpad->colorimetry = g_strdup (string);
+      g_free (vpad->colorimetry);
+    vpad->colorimetry = new_colorimetry;
   }
 
   GST_QMMFSRC_VIDEO_PAD_UNLOCK (pad);
@@ -512,37 +508,67 @@ qmmfsrc_release_video_pad (GstElement * element, GstPad * pad)
 gboolean
 video_pad_set_super_buffer_mode (GstPad * pad, GstStructure *structure)
 {
+  GstQmmfSrc *qmmfsrc = GST_QMMFSRC (gst_pad_get_parent_element (pad));
   GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
   gint fps_n, fps_d, fps;
+  GstClockTime duration;
+  GValue isslave = G_VALUE_INIT, sframerate = G_VALUE_INIT;
+  gint superframerate = 0;
+  const gchar *viewmode;
+  guint batch = 0;
+  gboolean success = TRUE;
 
-  gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
-  vpad->duration = gst_util_uint64_scale_int (GST_SECOND, fps_d, fps_n);
-  fps = 1 / GST_TIME_AS_SECONDS (gst_guint64_to_gdouble (vpad->duration));
+  // if super_buffer_mode is not enabled in this vpad, return true directly
+  if (vpad->super_buffer_mode != TRUE)
+    goto exit;
 
-  if (vpad->super_buffer_mode == TRUE) {
-    const gchar *viewmode;
-    guint batch = 0;
+  g_value_init (&isslave, G_TYPE_BOOLEAN);
+  gst_qmmf_context_get_camera_param (qmmfsrc->context, PARAM_CAMERA_SLAVE,
+      &isslave);
 
-    if (vpad->superframerate <= 0) {
-      GST_ERROR_OBJECT (pad, "Invalid HFR platform capability: %d",
-          vpad->superframerate);
-      return FALSE;
-    }
-
-    batch = fps / vpad->superframerate;
-    if (!((batch == 2) || (batch == 4) || (batch == 8) || (batch == 16))) {
-      GST_ERROR_OBJECT (pad, "Don't support super buffer with batch %u.", batch);
-      return FALSE;
-    }
-
-    viewmode =
-      gst_video_multiview_mode_to_caps_string (GST_VIDEO_MULTIVIEW_MODE_MONO);
-    gst_structure_set (structure,
-        "multiview-mode", G_TYPE_STRING, viewmode,
-        "views", G_TYPE_INT, batch, NULL);
+  // if camera is under slave mode, return true directly
+  if (g_value_get_boolean (&isslave)) {
+    GST_DEBUG ("camera is in slave mode, super buffer disabled");
+    goto exit;
   }
 
-  return TRUE;
+  g_value_init (&sframerate, G_TYPE_INT);
+  gst_qmmf_context_get_camera_param (qmmfsrc->context,
+      PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
+  superframerate = g_value_get_int (&sframerate);
+
+  // if superframerate is not set with super_buffer_mode enabled, return false
+  if (superframerate <= 0) {
+    GST_ERROR_OBJECT (pad, "Invalid HFR platform capability: %d",
+        superframerate);
+    success = FALSE;
+    goto exit;
+  }
+
+  gst_structure_get_fraction (structure, "framerate", &fps_n, &fps_d);
+  duration = gst_util_uint64_scale_int (GST_SECOND, fps_d, fps_n);
+  fps = 1 / GST_TIME_AS_SECONDS (gst_guint64_to_gdouble (duration));
+
+  batch = fps / superframerate;
+  if (!((batch == 2) || (batch == 4) || (batch == 8) || (batch == 16))) {
+    GST_ERROR_OBJECT (pad, "Don't support super buffer with batch %u.", batch);
+    success = FALSE;
+    goto exit;
+  }
+
+  GST_DEBUG ("super buffer mode enabled on pad %s with batch %d",
+      GST_PAD_NAME (pad), batch);
+
+  viewmode =
+    gst_video_multiview_mode_to_caps_string (GST_VIDEO_MULTIVIEW_MODE_MONO);
+  gst_structure_set (structure,
+      "multiview-mode", G_TYPE_STRING, viewmode,
+      "views", G_TYPE_INT, batch, NULL);
+
+exit:
+  gst_object_unref (qmmfsrc);
+
+  return success;
 }
 
 gboolean
@@ -558,9 +584,13 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
   caps = gst_pad_get_allowed_caps (pad);
   g_return_val_if_fail (caps != NULL, FALSE);
 
+  // need to update some params, so mark it writable here
+  caps = gst_caps_make_writable (caps);
+  structure = gst_caps_get_structure (caps, 0);
+
   // Immediately return the fetched caps if they are fixed.
   if (gst_caps_is_fixed (caps)) {
-    if (!video_pad_set_super_buffer_mode (pad, gst_caps_get_structure (caps, 0)))
+    if (!video_pad_set_super_buffer_mode (pad, structure))
       return FALSE;
 
     video_pad_send_stream_start (pad);
@@ -578,9 +608,6 @@ qmmfsrc_video_pad_fixate_caps (GstPad * pad)
   g_return_val_if_fail (!gst_caps_is_empty(caps), FALSE);
 
   // Capabilities are not fixated, fixate them.
-  caps = gst_caps_make_writable (caps);
-  structure = gst_caps_get_structure (caps, 0);
-
   gst_structure_get_int (structure, "width", &width);
   gst_structure_get_int (structure, "height", &height);
   framerate = gst_structure_get_value (structure, "framerate");
@@ -730,6 +757,9 @@ video_pad_set_property (GObject * object, guint property_id,
     case PROP_VIDEO_LOGICAL_STREAM_TYPE:
       pad->log_stream_type = (glong) g_value_get_enum (value);
       break;
+    case PROP_VIDEO_WRAP_META:
+      pad->attach_metadata = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
       break;
@@ -791,6 +821,9 @@ video_pad_get_property (GObject * object, guint property_id, GValue * value,
       break;
     case PROP_VIDEO_LOGICAL_STREAM_TYPE:
       g_value_set_enum (value, (GstPadLogicalStreamType) pad->log_stream_type);
+      break;
+    case PROP_VIDEO_WRAP_META:
+      g_value_set_boolean (value, pad->attach_metadata);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (pad, property_id, pspec);
@@ -881,42 +914,31 @@ qmmfsrc_video_pad_class_init (GstQmmfSrcVideoPadClass * klass)
           "the ratio of the framerate to the superframerate. The default superframerate"
           "is 60fps", DEFAULT_PROP_SUPER_BUFFER,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS
-	  | GST_PARAM_MUTABLE_READY));
+          | GST_PARAM_MUTABLE_READY));
 
-#ifdef ENABLE_RUNTIME_PARSER
-  void* qmmfsrc_parser = get_qmmfsrc_parser ();
-
-  gboolean gst_video_type_support = get_flag_as_bool (qmmfsrc_parser,
-      "GST_VIDEO_TYPE_SUPPORT");
-
-  if (gst_video_type_support) {
-     g_object_class_install_property (gobject, PROP_VIDEO_TYPE,
-      g_param_spec_enum ("type", "Type",
-          "The type of the stream.",
-          GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
-  }
-#else
-#ifdef GST_VIDEO_TYPE_SUPPORT
   g_object_class_install_property (gobject, PROP_VIDEO_TYPE,
       g_param_spec_enum ("type", "Type",
           "The type of the stream.",
           GST_TYPE_QMMFSRC_VIDEO_TYPE, DEFAULT_PROP_VIDEO_TYPE,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
-#endif // GST_VIDEO_TYPE_SUPPORT
-#endif // ENABLE_RUNTIME_PARSER
 
-#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
-  g_object_class_install_property (gobject, PROP_VIDEO_LOGICAL_STREAM_TYPE,
-      g_param_spec_enum ("logical-stream-type", "Stream type for logical camera",
-          "Type of the stream for logical camera.",
-          GST_TYPE_QMMFSRC_PAD_LOGICAL_STREAM_TYPE,
-          DEFAULT_PROP_LOGICAL_STREAM_TYPE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PAUSED));
-#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    g_object_class_install_property (gobject, PROP_VIDEO_LOGICAL_STREAM_TYPE,
+        g_param_spec_enum ("logical-stream-type", "Stream type for logical camera",
+            "Type of the stream for logical camera.",
+            GST_TYPE_QMMFSRC_PAD_LOGICAL_STREAM_TYPE,
+            DEFAULT_PROP_LOGICAL_STREAM_TYPE,
+            G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PAUSED));
+  }
+
+  g_object_class_install_property (gobject, PROP_VIDEO_WRAP_META,
+      g_param_spec_boolean ("attach-cam-meta", "Attach cam-meta with gstbuffer",
+          "this flag if TRUE, Along with GstBuffer the camera"
+          " metadata will be attached.",
+          DEFAULT_PROP_WRAP_META,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   signals[SIGNAL_PAD_RECONFIGURE] =
       g_signal_new ("reconfigure", G_TYPE_FROM_CLASS (klass),
@@ -943,7 +965,6 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->width           = -1;
   pad->height          = -1;
   pad->framerate       = 0.0;
-  pad->superframerate  = 60;
   pad->super_buffer_mode = FALSE;
   pad->format          = GST_VIDEO_FORMAT_UNKNOWN;
   pad->codec           = GST_VIDEO_CODEC_UNKNOWN;
@@ -961,4 +982,5 @@ qmmfsrc_video_pad_init (GstQmmfSrcVideoPad * pad)
   pad->duration        = GST_CLOCK_TIME_NONE;
 
   pad->buffers         = gst_data_queue_new (queue_is_full_cb, NULL, NULL, pad);
+  pad->attach_metadata = FALSE;
 }

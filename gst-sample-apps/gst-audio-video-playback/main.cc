@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
 * Application:
@@ -33,7 +33,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define GST_APP_SUMMARY "This application designed to handle the playback " \
   "of audio and video streams. \n " \
@@ -308,11 +308,6 @@ main (gint argc, gchar *argv[])
     g_print ("\n usage: gst-audio-video-playback --help \n");
     return -1;
   }
-
-  // Setting Display environment variables
-  g_print ("Setting Display environment \n");
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Create the application context
   appctx = gst_app_context_new ();

@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifdef HAVE_CONFIG_H
@@ -66,10 +37,6 @@
 #endif
 
 #include "qmmf_source_context.h"
-
-#ifdef ENABLE_RUNTIME_PARSER
-#include <gst/utils/runtime-flags-parser-c-api.h>
-#endif // ENABLE_RUNTIME_PARSER
 #include <gst/allocators/allocators.h>
 #include <qmmf-sdk/qmmf_recorder.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param_tags.h>
@@ -80,6 +47,8 @@
 #include "qmmf_source_utils.h"
 #include "qmmf_source_image_pad.h"
 #include "qmmf_source_video_pad.h"
+#include <gst/camera/gstcamerameta.h>
+#include <set>
 
 namespace camera = qmmf;
 #define GST_QMMF_CONTEXT_GET_LOCK(obj) (&GST_QMMF_CONTEXT_CAST(obj)->lock)
@@ -115,6 +84,20 @@ struct _GstQmmfCameraSwitchInfo {
   gint            input_req_id;
 };
 
+struct PendingBuffer {
+  GstBuffer *gstbuffer;
+  GstPad *pad;
+  guint64 timestamp;
+  guint64 frame_number;
+  GstDataQueueItem *item;
+};
+
+struct MetadataRefCount {
+  camera_metadata_t *metadata;
+  guint ref_count;  // Number of pads that still need this metadata
+  guint total_pads; // Total number of pads that requested this metadata
+};
+
 struct _GstQmmfContext {
   /// Global mutex lock.
   GMutex            lock;
@@ -125,6 +108,10 @@ struct _GstQmmfContext {
   GstCameraMetaCb   metacb;
   /// User provided private data to be called with the callback.
   gpointer          userdata;
+
+  /// Device status change information
+  guint32           device_status_camera_id;
+  gboolean          device_status_is_present;
 
   /// QMMF Recorder camera device opened by this source.
   guint             camera_id;
@@ -145,13 +132,10 @@ struct _GstQmmfContext {
   gboolean          ldc;
   /// Camera property to Enable or Disable Lateral Chromatic Aberration Correction.
   gboolean          lcac;
-#ifndef EIS_MODES_ENABLE
   /// Camera property to Enable or Disable Electronic Image Stabilization.
-  gboolean          eis;
-#else
+  gboolean          eis_bool;
   /// Camera property to select Electronic Image Stabilization mode.
-  gint              eis;
-#endif // EIS_MODES_ENABLE
+  gint              eis_enum;
 #ifndef VHDR_MODES_ENABLE
   /// Camera property to Enable or Disable Super High Dynamic Range.
   gboolean          shdr;
@@ -229,18 +213,25 @@ struct _GstQmmfContext {
   gboolean          input_roi_enable;
   /// Number of Input ROI's
   gint32            input_roi_count;
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-  /// Offline IFE enable for multicamera usecase
-  gboolean          multicamera_hint;
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
+
   gboolean          sw_tnr;
   /// Capabilities of each camera
   GHashTable        *static_metas;
-
-  /// Logical Camera Information
-  GstQmmfLogicalCamInfo logical_cam_info;
+  /// Map of frame timestamp to metadata with reference counting
+  std::unique_ptr<std::map<guint64, MetadataRefCount>> metadata_refcount_map;
+  /// Map of frame timestamp to pending buffers
+  std::unique_ptr<std::map<guint64, std::vector<PendingBuffer>>> pending_buffers;
+  /// Set of pads that have metadata attachment enabled
+  std::unique_ptr<std::set<GstPad*>> metadata_enabled_pads;
+  /// Mutex for thread-safe access
+  GMutex metadata_lock;
   /// Sensor Switch Information
   GstQmmfCameraSwitchInfo camera_switch_info;
+  /// Logical Camera Information
+  GstQmmfLogicalCamInfo logical_cam_info;
+
+  /// Super FrameRate Base
+  gint32            superframerate;
 
   /// QMMF Recorder instance.
   ::qmmf::recorder::Recorder *recorder;
@@ -328,7 +319,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
       return FALSE;
   }
 
-#if defined(CAMERA_METADATA_1_0_NS)
+#ifdef HAS_ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION
   if (meta.exists(ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION)) {
     entry = meta.find (ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION);
 
@@ -356,7 +347,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
   return TRUE;
 }
 
-static guint
+guint
 get_vendor_tag_by_name (const gchar * section, const gchar * name)
 {
   std::shared_ptr<VendorTagDescriptor> vtags;
@@ -773,6 +764,7 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
 {
   gsize value;
   guint track_id, camera_id;
+  GstQmmfContext* context = NULL;
   std::vector<::qmmf::BufferDescriptor> buffers;
   ::qmmf::recorder::Recorder *recorder = NULL;
   ::qmmf::BufferDescriptor buffer;
@@ -806,7 +798,315 @@ qmmfsrc_gst_buffer_release (GstStructure * structure)
     recorder->ReturnImageCaptureBuffer (camera_id, buffer);
   }
 
+  if (gst_structure_has_field (structure, "context")) {
+    gst_structure_get (structure, "context", G_TYPE_ULONG, &value, NULL);
+    context = reinterpret_cast<GstQmmfContext*> (GSIZE_TO_POINTER (value));
+
+    // Check if this buffer had metadata attached
+    gboolean had_metadata = FALSE;
+    if (gst_structure_has_field (structure, "has_metadata"))
+      gst_structure_get_boolean (structure, "has_metadata", &had_metadata);
+
+    if (context && had_metadata) {
+      g_mutex_lock (&context->metadata_lock);
+      // Find the metadata reference count for this timestamp
+      auto meta_it = (*context->metadata_refcount_map).find (buffer.timestamp);
+      if (meta_it != (*context->metadata_refcount_map).end ()) {
+        MetadataRefCount &ref_info = meta_it->second;
+        if (ref_info.metadata != NULL && ref_info.ref_count > 0) {
+          ref_info.ref_count--;
+
+          GST_DEBUG ("Decremented metadata ref_count for timestamp %"
+              G_GUINT64_FORMAT " to %u (total_pads: %u)",
+              buffer.timestamp, ref_info.ref_count, ref_info.total_pads);
+
+          // If all pads have received their buffers, free the metadata
+          if (ref_info.ref_count == 0) {
+            GST_INFO ("All pads received buffers for timestamp %"
+                G_GUINT64_FORMAT ", freeing metadata", buffer.timestamp);
+
+            if (ref_info.metadata) {
+              ref_info.metadata = NULL;
+            }
+
+            // Remove from map
+            (*context->metadata_refcount_map).erase (meta_it);
+          }
+        } else {
+          GST_WARNING ("Metadata ref_count already 0 for timestamp %"
+              G_GUINT64_FORMAT, buffer.timestamp);
+        }
+      } else {
+        GST_DEBUG ("No metadata found for timestamp %" G_GUINT64_FORMAT
+            " (may have been already freed)", buffer.timestamp);
+      }
+
+      g_mutex_unlock (&context->metadata_lock);
+    }
+  }
+
   gst_structure_free (structure);
+}
+
+static void
+gst_qmmf_context_attach_metadata_to_buffer (GstQmmfContext *context,
+    PendingBuffer *pending, camera_metadata_t *metadata)
+{
+  GST_DEBUG ("Attaching metadata to buffer with timestamp %" G_GUINT64_FORMAT,
+      pending->timestamp);
+
+  gst_buffer_add_camera_meta (pending->gstbuffer, metadata);
+
+  GstStructure *structure = (GstStructure *) gst_mini_object_get_qdata (
+      GST_MINI_OBJECT (pending->gstbuffer), qmmf_buffer_qdata_quark ());
+
+  if (structure)
+    gst_structure_set (structure, "has_metadata", G_TYPE_BOOLEAN, TRUE, NULL);
+}
+
+static void
+gst_qmmf_context_push_buffer_downstream (GstQmmfContext *context,
+    PendingBuffer *pending)
+{
+  GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pending->pad);
+
+  GST_DEBUG ("Pushing buffer with timestamp %" G_GUINT64_FORMAT " downstream",
+      pending->timestamp);
+
+  if (!gst_data_queue_push (vpad->buffers, pending->item))
+    pending->item->destroy (pending->item);
+}
+
+static void
+gst_qmmf_context_cleanup_pending_buffers_for_pad (GstQmmfContext * context,
+    GstPad * pad)
+{
+  g_return_if_fail (context != NULL);
+  g_return_if_fail (pad != NULL);
+
+  g_mutex_lock (&context->metadata_lock);
+
+  GST_INFO ("Cleaning up pending buffers for pad %s", GST_PAD_NAME (pad));
+
+  // Iterate through all pending buffers and remove those belonging to this pad
+  auto it = context->pending_buffers->begin ();
+  while (it != context->pending_buffers->end ()) {
+    guint64 timestamp = it->first;
+    std::vector<PendingBuffer> &buffers = it->second;
+
+    // Remove buffers for this pad
+    auto buf_it = buffers.begin ();
+    while (buf_it != buffers.end ()) {
+      if (buf_it->pad == pad) {
+        GST_DEBUG ("Releasing pending buffer for pad %s, timestamp %"
+            G_GUINT64_FORMAT, GST_PAD_NAME (pad), timestamp);
+
+        // Destroy the buffer item
+        if (buf_it->item) {
+          buf_it->item->destroy (buf_it->item);
+        }
+
+        buf_it = buffers.erase (buf_it);
+      } else {
+        ++buf_it;
+      }
+    }
+
+    // If no more buffers for this timestamp, remove the entry
+    if (buffers.empty ())
+      it = context->pending_buffers->erase (it);
+    else
+      ++it;
+  }
+
+  g_mutex_unlock (&context->metadata_lock);
+}
+
+static void
+gst_qmmf_context_cleanup_all_pending_buffers (GstQmmfContext * context)
+{
+  g_return_if_fail (context != NULL);
+
+  g_mutex_lock (&context->metadata_lock);
+
+  GST_INFO ("Cleaning up all pending buffers");
+
+  // Iterate through all pending buffers and destroy them
+  for (auto& pair : (*context->pending_buffers)) {
+    guint64 timestamp = pair.first;
+
+    for (auto& pending : pair.second) {
+      GST_DEBUG ("Releasing pending buffer for pad %s, timestamp %"
+          G_GUINT64_FORMAT, GST_PAD_NAME (pending.pad), timestamp);
+
+      if (pending.item)
+        pending.item->destroy (pending.item);
+    }
+  }
+
+  context->pending_buffers->clear ();
+
+  g_mutex_unlock (&context->metadata_lock);
+}
+
+void
+gst_qmmf_context_register_metadata_pad (GstQmmfContext * context, GstPad * pad)
+{
+  g_return_if_fail (context != NULL);
+  g_return_if_fail (pad != NULL);
+
+  g_mutex_lock (&context->metadata_lock);
+  context->metadata_enabled_pads->insert (pad);
+  GST_INFO ("Registered pad %s for metadata attachment", GST_PAD_NAME (pad));
+  g_mutex_unlock (&context->metadata_lock);
+}
+
+void
+gst_qmmf_context_unregister_metadata_pad (GstQmmfContext * context, GstPad * pad)
+{
+  g_return_if_fail (context != NULL);
+  g_return_if_fail (pad != NULL);
+
+  g_mutex_lock (&context->metadata_lock);
+
+  // Check if this pad was registered
+  auto pad_it = context->metadata_enabled_pads->find (pad);
+  if (pad_it != context->metadata_enabled_pads->end ()) {
+    GST_INFO ("Unregistering pad %s from metadata attachment", GST_PAD_NAME (pad));
+
+    // Decrement reference counts for all metadata entries
+    // since this pad will no longer consume them
+    for (auto& meta_pair : (*context->metadata_refcount_map)) {
+      MetadataRefCount &ref_info = meta_pair.second;
+
+      if (ref_info.metadata != NULL && ref_info.ref_count > 0) {
+        ref_info.ref_count--;
+
+        GST_DEBUG ("Decremented ref_count for timestamp %" G_GUINT64_FORMAT
+            " to %u due to pad unregistration", meta_pair.first, ref_info.ref_count);
+
+        // If ref_count reaches 0, free the metadata
+        if (ref_info.ref_count == 0) {
+          GST_INFO ("Freeing metadata for timestamp %" G_GUINT64_FORMAT
+              " after pad unregistration", meta_pair.first);
+
+          if (ref_info.metadata) {
+            ::camera::CameraMetadata meta_wrapper(ref_info.metadata);
+            meta_wrapper.clear();
+            ref_info.metadata = NULL;
+          }
+        }
+      }
+    }
+
+    // Remove entries with ref_count == 0
+    auto meta_it = context->metadata_refcount_map->begin ();
+    while (meta_it != context->metadata_refcount_map->end ()) {
+      if (meta_it->second.ref_count == 0 && meta_it->second.metadata == NULL)
+        meta_it = context->metadata_refcount_map->erase (meta_it);
+      else
+        ++meta_it;
+    }
+
+    // Remove pad from the set
+    context->metadata_enabled_pads->erase (pad_it);
+  }
+
+  g_mutex_unlock (&context->metadata_lock);
+}
+
+gboolean
+gst_qmmf_context_is_metadata_enabled (GstQmmfContext * context)
+{
+  gboolean enabled = FALSE;
+
+  g_return_val_if_fail (context != NULL, FALSE);
+
+  g_mutex_lock (&context->metadata_lock);
+  enabled = !context->metadata_enabled_pads->empty ();
+  g_mutex_unlock (&context->metadata_lock);
+
+  return enabled;
+}
+
+void
+gst_qmmf_context_store_metadata (GstQmmfContext * context, gpointer metadata)
+{
+  ::camera::CameraMetadata *meta = NULL;
+  camera_metadata_t *camerameta = NULL;
+  guint64 timestamp = 0;
+  gint32 frame_count = 0;
+  gboolean should_store = FALSE;
+  guint num_pads_needing_metadata = 0;
+
+  meta = static_cast<::camera::CameraMetadata*>(metadata);
+
+  // Extract frame identifiers
+  if (meta->exists (ANDROID_SENSOR_TIMESTAMP)) {
+    timestamp = meta->find (ANDROID_SENSOR_TIMESTAMP).data.i64[0];
+  }
+
+  if (meta->exists (ANDROID_REQUEST_FRAME_COUNT)) {
+    frame_count = meta->find (ANDROID_REQUEST_FRAME_COUNT).data.i32[0];
+  }
+
+  g_mutex_lock (&context->metadata_lock);
+
+  // Check if any pad needs metadata or if there are pending buffers
+  should_store = !context->metadata_enabled_pads->empty () ||
+                 ((*context->pending_buffers).find (timestamp) !=
+                  (*context->pending_buffers).end ());
+
+  if (!should_store) {
+    g_mutex_unlock (&context->metadata_lock);
+    GST_DEBUG ("No pads require metadata for frame %d, timestamp %"
+        G_GUINT64_FORMAT ", skipping storage", frame_count, timestamp);
+    return;
+  }
+
+  // Count how many pads need this metadata
+  num_pads_needing_metadata = context->metadata_enabled_pads->size ();
+
+  GST_DEBUG ("Storing metadata for frame %d, timestamp %" G_GUINT64_FORMAT
+      " with ref_count %u", frame_count, timestamp, num_pads_needing_metadata);
+
+  const camera_metadata_t *buffer = meta->getbuffer ();
+
+  if (buffer == NULL) {
+    g_mutex_unlock (&context->metadata_lock);
+    GST_ERROR ("Failed to get camera metadata buffer");
+    return;
+  }
+
+  ::camera::CameraMetadata cloned_meta;
+  cloned_meta = buffer;
+  camerameta = cloned_meta.release();
+
+  MetadataRefCount ref_count_info;
+  ref_count_info.metadata = camerameta;
+  ref_count_info.ref_count = num_pads_needing_metadata;
+  ref_count_info.total_pads = num_pads_needing_metadata;
+
+  (*context->metadata_refcount_map)[timestamp] = ref_count_info;
+
+  g_mutex_unlock (&context->metadata_lock);
+
+  // Check if there are pending buffers waiting for this metadata
+  auto pending_it = (*context->pending_buffers).find (timestamp);
+  if (pending_it != (*context->pending_buffers).end ()) {
+    GST_INFO ("Found %zu pending buffers for timestamp %" G_GUINT64_FORMAT,
+        pending_it->second.size (), timestamp);
+
+    // Attach metadata to all pending buffers with this timestamp
+    for (auto& pending : pending_it->second) {
+      gst_qmmf_context_attach_metadata_to_buffer (context,
+          &pending, ref_count_info.metadata);
+      gst_qmmf_context_push_buffer_downstream (context, &pending);
+    }
+
+    // Remove from pending queue
+    (*context->pending_buffers).erase (pending_it);
+  }
 }
 
 static GstBuffer *
@@ -859,6 +1159,8 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
   gst_structure_set (structure,
       "recorder", G_TYPE_ULONG, GPOINTER_TO_SIZE (context->recorder),
       "camera", G_TYPE_UINT, context->camera_id,
+      "context", G_TYPE_ULONG, GPOINTER_TO_SIZE (context),
+      "has_metadata", G_TYPE_BOOLEAN, FALSE,
       NULL
   );
 
@@ -910,27 +1212,27 @@ qmmfsrc_gst_get_stream_rotaion (gint rotate)
   }
 }
 
-::qmmf::recorder::VideoColorimetry
+::qmmf::recorder::Colorimetry
 qmmfsrc_gst_get_stream_colorimetry (gchar *colorimetry)
 {
   if (colorimetry == NULL)
-    return ::qmmf::recorder::VideoColorimetry::kBT601;
+    return ::qmmf::recorder::Colorimetry::kBT601;
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT601;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT2100HLGFULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT2100PQFULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601_FULL) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT601FULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT709_FULL) == 0)
-    return ::qmmf::recorder::VideoColorimetry::kBT709FULL;
+    return ::qmmf::recorder::Colorimetry::kBT601;
+  else if (g_strcmp0 (colorimetry, "1:6:15:7") == 0)
+    return ::qmmf::recorder::Colorimetry::kBT2100HLGFULL;
+  else if (g_strcmp0 (colorimetry, "1:6:14:7") == 0)
+    return ::qmmf::recorder::Colorimetry::kBT2100PQFULL;
+  else if (g_strcmp0 (colorimetry, "1:4:16:4") == 0)
+    return ::qmmf::recorder::Colorimetry::kBT601FULL;
+  else if (g_strcmp0 (colorimetry, "1:3:5:1") == 0)
+    return ::qmmf::recorder::Colorimetry::kBT709FULL;
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   else {
     GST_WARNING ("Colorimetry value %s is invalid default to BT.601",
         colorimetry);
-    return ::qmmf::recorder::VideoColorimetry::kBT601;
+    return ::qmmf::recorder::Colorimetry::kBT601;
   }
 }
 
@@ -1015,9 +1317,52 @@ video_data_callback (GstQmmfContext * context, GstPad * pad,
     item->visible = TRUE;
     item->destroy = (GDestroyNotify) qmmfsrc_free_queue_item;
 
-    // Push the buffer into the queue or free it on failure.
-    if (!gst_data_queue_push (vpad->buffers, item))
-      item->destroy (item);
+    if (vpad->attach_metadata) {
+      g_mutex_lock (&context->metadata_lock);
+
+      // Check if metadata already available
+      auto meta_it = (*context->metadata_refcount_map).find (buffer.timestamp);
+      if (meta_it != (*context->metadata_refcount_map).end ()) {
+        // Metadata available, attach immediately
+        GST_DEBUG ("Metadata found for pad %s, timestamp %" G_GUINT64_FORMAT,
+            GST_PAD_NAME (pad), buffer.timestamp);
+
+        PendingBuffer pending;
+        pending.gstbuffer = gstbuffer;
+        pending.pad = pad;
+        pending.timestamp = buffer.timestamp;
+        pending.frame_number = buffer.seqnum;
+        pending.item = item;
+
+        gst_qmmf_context_attach_metadata_to_buffer (context, &pending,
+            meta_it->second.metadata);
+
+        g_mutex_unlock (&context->metadata_lock);
+
+        // Push buffer downstream
+        if (!gst_data_queue_push (vpad->buffers, item))
+          item->destroy (item);
+      } else {
+        // Metadata not yet available, add to pending queue
+        GST_DEBUG ("Metadata NOT found for pad %s, timestamp %" G_GUINT64_FORMAT
+            ", adding to pending queue", GST_PAD_NAME (pad), buffer.timestamp);
+
+        PendingBuffer pending;
+        pending.gstbuffer = gstbuffer;
+        pending.pad = pad;
+        pending.timestamp = buffer.timestamp;
+        pending.frame_number = buffer.seqnum;
+        pending.item = item;
+
+        (*context->pending_buffers)[buffer.timestamp].push_back (pending);
+
+        g_mutex_unlock (&context->metadata_lock);
+      }
+    } else {
+      // Metadata not requested for this pad, push immediately
+      if (!gst_data_queue_push (vpad->buffers, item))
+        item->destroy (item);
+    }
   }
 }
 
@@ -1170,12 +1515,120 @@ camera_event_callback (GstQmmfContext * context,
       event = EVENT_CAMERA_CLOSED;
       break;
     }
+    case  ::qmmf::recorder::EventType::kSOFFreeze:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_SOF_FREEZE;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kRecoveryFailure:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_RECOVERYFAILURE;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kFatal:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_FATAL;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kRecoverySuccess:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_RECOVERYSUCCESS;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kInternal_Recovery:
+    {
+      g_assert (size == sizeof (guint));
+      uint32_t camera_id = *(static_cast<uint32_t*>(payload));
+
+      // Ignore event if it is not for this camera id.
+      if (camera_id != context->camera_id)
+        return;
+
+      event = EVENT_INTERNAL_RECOVERY;
+      break;
+    }
+    case  ::qmmf::recorder::EventType::kCameraDeviceStatusChanged:
+    {
+      // Cast the payload to the named struct type
+      const CameraDeviceStatus* camera_status =
+          static_cast<const CameraDeviceStatus*>(payload);
+      g_assert (size == sizeof(CameraDeviceStatus));
+
+      guint32 camera_id = camera_status->camera_id;
+      guint8 is_present = camera_status->is_present;
+
+      // Store device status information in context
+      context->device_status_camera_id = camera_id;
+      context->device_status_is_present = is_present;
+
+      event = EVENT_DEVICE_STATUS_CHANGE;
+      break;
+    }
     default:
       event = EVENT_UNKNOWN;
       break;
   }
 
   context->eventcb (event, context->userdata);
+}
+
+void
+gst_qmmf_context_get_static_meta ()
+{
+  ::qmmf::recorder::Recorder *recorder;
+  ::qmmf::recorder::RecorderCb cbs;
+  std::vector<::camera::CameraMetadata> infolist;
+  gint status = 0;
+
+  recorder = new ::qmmf::recorder::Recorder ();
+  status = recorder->Connect (cbs);
+  QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (NULL, status == 0,
+      delete recorder;, "QMMF Recorder Connect failed!");
+
+  int32_t ret = recorder->GetCamStaticInfo (infolist);
+  if (ret != 0)
+    GST_WARNING ("Failed to get camera static info !");
+
+  for (guint i = 0; i < infolist.size(); ++i) {
+    /* Allocate a new CameraMetadata entry */
+    ::camera::CameraMetadata *metadata = new ::camera::CameraMetadata(infolist[i]);
+    /* Insert the copy into the hash table; the key remains the same index */
+    g_hash_table_insert (gst_qmmf_get_static_metas (), GUINT_TO_POINTER (i), metadata);
+  }
+
+  if (gst_qmmf_get_static_metas () == NULL)
+    GST_WARNING ("\n\n static meta is not populated\n");
+
+  recorder->Disconnect ();
+  delete recorder;
 }
 
 GstQmmfContext *
@@ -1198,6 +1651,13 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->eventcb = eventcb;
   context->metacb = metacb;
   context->userdata = userdata;
+
+  g_mutex_init (&context->metadata_lock);
+  context->metadata_refcount_map =
+      std::make_unique<std::map<guint64, MetadataRefCount>> ();
+  context->pending_buffers =
+      std::make_unique<std::map<guint64, std::vector<PendingBuffer>>> ();
+  context->metadata_enabled_pads = std::make_unique<std::set<GstPad*>> ();
 
   // Register a events function which will call the EOS callback if necessary.
   cbs.event_cb =
@@ -1224,6 +1684,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->logical_cam_info.phy_cam_num = 0;
   context->camera_switch_info.input_req_id = -1;
 
+  context->superframerate = 60;
+
   status = gst_qmmf_context_get_cam_static_info (context);
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, status == 0,
       delete context->recorder; g_slice_free (GstQmmfContext, context);,
@@ -1236,6 +1698,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
 void
 gst_qmmf_context_free (GstQmmfContext * context)
 {
+  QMMFSRC_RETURN_IF_FAIL (NULL, context != NULL, "Context is NULL, skip free");
+
   context->recorder->Disconnect ();
   delete context->recorder;
 
@@ -1249,6 +1713,50 @@ gst_qmmf_context_free (GstQmmfContext * context)
     for (int i = 0; i < context->logical_cam_info.phy_cam_num; i++)
       g_free (context->logical_cam_info.phy_cam_name_list[i]);
   }
+
+  g_mutex_lock (&context->metadata_lock);
+
+  // Free pending buffers
+  if (!context->pending_buffers->empty ()) {
+    GST_WARNING ("Freeing %zu pending buffer entries during context cleanup",
+        context->pending_buffers->size ());
+
+    for (auto& pair : (*context->pending_buffers)) {
+      for (auto& pending : pair.second) {
+        if (pending.item)
+          pending.item->destroy (pending.item);
+      }
+    }
+    context->pending_buffers->clear ();
+  }
+
+  // Free metadata with reference counting
+  if (!context->metadata_refcount_map->empty ()) {
+    GST_WARNING ("Freeing %zu metadata entries during context cleanup",
+        context->metadata_refcount_map->size ());
+
+    for (auto& pair : (*context->metadata_refcount_map)) {
+      if (pair.second.metadata != NULL) {
+        GST_WARNING ("Freeing unreleased metadata for timestamp %" G_GUINT64_FORMAT
+            " with ref_count %u/%u", pair.first, pair.second.ref_count,
+            pair.second.total_pads);
+        ::camera::CameraMetadata meta_wrapper(pair.second.metadata);
+        meta_wrapper.clear();
+        pair.second.metadata = NULL;
+      }
+    }
+    context->metadata_refcount_map->clear ();
+  }
+
+  // Clear metadata enabled pads
+  if (!context->metadata_enabled_pads->empty ()) {
+    GST_WARNING ("Clearing %zu registered metadata pads during context cleanup",
+        context->metadata_enabled_pads->size ());
+    context->metadata_enabled_pads->clear ();
+  }
+
+  g_mutex_unlock (&context->metadata_lock);
+  g_mutex_clear (&context->metadata_lock);
 
   GST_INFO ("Destroyed QMMF context: %p", context);
   g_slice_free (GstQmmfContext, context);
@@ -1309,9 +1817,14 @@ gst_qmmf_context_parse_logical_cam_info (GstQmmfContext *context,
 gboolean
 gst_qmmf_context_open (GstQmmfContext * context)
 {
-  ::qmmf::recorder::Recorder *recorder = context->recorder;
+  ::qmmf::recorder::Recorder *recorder = NULL;
   gint status = 0;
-  uint32_t op_mode = context->op_mode;
+  uint32_t op_mode = 0;
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (NULL, context != NULL, FALSE, "Context is NULL");
+
+  recorder = context->recorder;
+  op_mode = context->op_mode;
 
   GST_TRACE ("Open QMMF context");
 
@@ -1336,21 +1849,21 @@ gst_qmmf_context_open (GstQmmfContext * context)
   xtraparam.Update (::qmmf::recorder::QMMF_LCAC, lcac);
 
   // EIS
-#ifndef EIS_MODES_ENABLE
-  ::qmmf::recorder::EISSetup eis;
-  eis.enable = context->eis;
-  xtraparam.Update (::qmmf::recorder::QMMF_EIS, eis);
-#else
-  ::qmmf::recorder::EISModeSetup eis;
-  if (context->eis == EIS_OFF) {
-    eis.mode = ::qmmf::recorder::EisMode::kEisOff;
-  } else if (context->eis == EIS_ON_SINGLE_STREAM) {
-    eis.mode = ::qmmf::recorder::EisMode::kEisSingleStream;
-  } else {
-    eis.mode = ::qmmf::recorder::EisMode::kEisDualStream;
+  if (!gst_qmmfsrc_check_eis_support ()) {
+    ::qmmf::recorder::EISSetup eis;
+    eis.enable = context->eis_bool;
+    xtraparam.Update (::qmmf::recorder::QMMF_EIS, eis);
+  } else if (gst_qmmfsrc_check_eis_support () > 0) {
+    ::qmmf::recorder::EISModeSetup eis;
+    if (context->eis_enum == EIS_OFF) {
+      eis.mode = ::qmmf::recorder::EisMode::kEisOff;
+    } else if (context->eis_enum == EIS_ON_SINGLE_STREAM) {
+      eis.mode = ::qmmf::recorder::EisMode::kEisSingleStream;
+    } else {
+      eis.mode = ::qmmf::recorder::EisMode::kEisDualStream;
+    }
+    xtraparam.Update (::qmmf::recorder::QMMF_EIS_MODE, eis);
   }
-  xtraparam.Update (::qmmf::recorder::QMMF_EIS_MODE, eis);
-#endif // EIS_MODES_ENABLE
 
   // SHDR
   ::qmmf::recorder::VideoHDRMode hdr;
@@ -1407,19 +1920,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
   qmmf_input_roi.enable = context->input_roi_enable;
   xtraparam.Update (::qmmf::recorder::QMMF_INPUT_ROI, qmmf_input_roi);
 
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-  // Offline IFE
-  ::qmmf::recorder::OfflineIFE qmmf_offline_ife;
-  qmmf_offline_ife.enable = context->multicamera_hint;
-  xtraparam.Update (::qmmf::recorder::QMMF_OFFLINE_IFE, qmmf_offline_ife);
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
-
-  // SW TNR
-#ifdef FEATURE_SW_TNR
-  ::qmmf::recorder::SWTNR sw_tnr;
-  sw_tnr.enable = context->sw_tnr;
-  xtraparam.Update (::qmmf::recorder::QMMF_SW_TNR, sw_tnr);
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
+  if (gst_qmmfsrc_check_sw_tnr_support ()) {
+    ::qmmf::recorder::SWTNR sw_tnr;
+    sw_tnr.enable = context->sw_tnr;
+    xtraparam.Update (::qmmf::recorder::QMMF_SW_TNR, sw_tnr);
+  }
 
   // Camera Operation Mode
   ::qmmf::recorder::CamOpModeControl cam_opmode;
@@ -1480,6 +1985,21 @@ gst_qmmf_context_open (GstQmmfContext * context)
         meta.find (ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE).data.i32[3];
   }
 
+  // update context from static metadata
+  {
+    gint tag_id;
+
+    tag_id = get_vendor_tag_by_name (
+        "org.codeaurora.qcamera3.platformCapabilities", "HFRPreviewFPS");
+
+    if (meta.exists(tag_id)) {
+      context->superframerate = meta.find(tag_id).data.i32[0];
+
+      GST_DEBUG ("update superframerate (%d) from static meta data",
+          context->superframerate);
+    }
+  }
+
   gst_qmmf_context_parse_logical_cam_info(context, meta);
 
   context->state = GST_STATE_READY;
@@ -1516,7 +2036,7 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
   ::qmmf::recorder::TrackCb track_cbs;
   ::qmmf::recorder::VideoExtraParam extraparam;
   ::qmmf::recorder::Rotation rotate;
-  ::qmmf::recorder::VideoColorimetry colorimetry;
+  ::qmmf::recorder::Colorimetry colorimetry;
   gint status = 0;
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   guchar streamhdrmode = 0;
@@ -1617,75 +2137,73 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 
   rotate = qmmfsrc_gst_get_stream_rotaion (vpad->rotate);
   colorimetry = qmmfsrc_gst_get_stream_colorimetry (vpad->colorimetry);
+  // Full range colorspace only support P010 or TP10
+  if ((colorimetry == ::qmmf::recorder::Colorimetry::kBT2100HLGFULL ||
+       colorimetry == ::qmmf::recorder::Colorimetry::kBT2100PQFULL) &&
+      !(vpad->format == GST_VIDEO_FORMAT_P010_10LE ||
+      vpad->format == GST_VIDEO_FORMAT_NV12_Q10LE32C)) {
+    GST_ERROR ("Video %s format is not 10bit, unsupported by BT2100HLG or PQ!",
+        gst_qmmf_video_format_to_string (vpad->format));
+    GST_QMMFSRC_VIDEO_PAD_UNLOCK (vpad);
+    return FALSE;
+  }
+
   ::qmmf::recorder::VideoTrackParam params (
       context->camera_id, vpad->width, vpad->height, vpad->framerate, format,
       colorimetry, rotate, vpad->xtrabufs
   );
 
-#ifdef ENABLE_RUNTIME_PARSER
-  void* qmmfsrc_parser = get_qmmfsrc_parser ();
-
-  gboolean gst_video_type_support = get_flag_as_bool (qmmfsrc_parser,
-      "GST_VIDEO_TYPE_SUPPORT");
-
-  if (gst_video_type_support && (vpad->type == VIDEO_TYPE_PREVIEW))
-    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
-
-#else
-#ifdef GST_VIDEO_TYPE_SUPPORT
-  if (vpad->type == VIDEO_TYPE_PREVIEW)
-    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
-#endif // GST_VIDEO_TYPE_SUPPORT
-#endif // ENABLE_RUNTIME_PARSER
-
   if (vpad->reprocess_enable)
     params.flags |= ::qmmf::recorder::VideoFlags::kReproc;
 
-#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
-  if (!context->logical_cam_info.is_logical_cam) {
-    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
-        "sense.", context->camera_id);
-  } else {
-    ::qmmf::recorder::StreamCameraId cam_id;
-    ::qmmf::recorder::StitchLayoutSelect layout;
-    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
-    gchar *info_name = NULL;
+  if (vpad->type == VIDEO_TYPE_PREVIEW)
+    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
 
-    if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
-      GST_ERROR ("Invalid logical stream type.");
-    } else if (vpad->log_stream_type <=
-        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
-      info_name = pinfo->phy_cam_name_list[vpad->log_stream_type -
-          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    if (!context->logical_cam_info.is_logical_cam) {
+      GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+          "sense.", context->camera_id);
+    } else {
+      ::qmmf::recorder::StreamCameraId cam_id;
+      ::qmmf::recorder::StitchLayoutSelect layout;
+      GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+      gchar *info_name = NULL;
 
-      if (!info_name) {
-        GST_ERROR ("Physical camera name is null.");
-      } else {
-        GST_DEBUG ("Physical camera name: %s", info_name);
+      if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+        GST_ERROR ("Invalid logical stream type.");
+      } else if (vpad->log_stream_type <=
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+        info_name = pinfo->phy_cam_name_list[vpad->log_stream_type -
+            GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+      } else if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        switch (vpad->log_stream_type) {
+          case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+            GST_DEBUG ("Stitch layout is selected: SideBySide.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+            break;
+          case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+            GST_DEBUG ("Stitch layout is selected: Panorama.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+            break;
+          default:
+            break;
+        }
+        extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+      } else if (vpad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            vpad->log_stream_type);
       }
-
-      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
-      extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
-    } else if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      switch (vpad->log_stream_type) {
-        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
-          GST_DEBUG ("Stitch layout is selected: SideBySide.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
-          break;
-        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
-          GST_DEBUG ("Stitch layout is selected: Panorama.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
-          break;
-        default:
-          break;
-      }
-      extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
-    } else if (vpad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
-          vpad->log_stream_type);
     }
   }
-#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   if (context->input_roi_enable && !vpad->reprocess_enable)
     context->input_roi_count++;
@@ -1715,7 +2233,7 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 
   if (vpad->super_buffer_mode) {
     ::qmmf::recorder::SuperFrames super_frames;
-    super_frames.n_frames = vpad->framerate / vpad->superframerate;
+    super_frames.n_frames = vpad->framerate / context->superframerate;
     extraparam.Update(::qmmf::recorder::QMMF_SUPER_FRAMES, super_frames);
   }
 
@@ -1779,9 +2297,9 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     tag_id = get_vendor_tag_by_name (
         "org.quic.camera2.streamconfigs", "HDRVideoMode");
-    if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
+    if (g_strcmp0 (vpad->colorimetry, "1:6:15:7") == 0)
       streamhdrmode = 1;
-    else if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
+    else if (g_strcmp0 (vpad->colorimetry, "1:6:14:7") == 0)
       streamhdrmode = 2;
     else
       streamhdrmode = 0;
@@ -1791,6 +2309,9 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 
     recorder->SetCameraParam (context->camera_id, meta);
   }
+
+  if (vpad->attach_metadata)
+    gst_qmmf_context_register_metadata_pad (context, pad);
 
   return TRUE;
 }
@@ -1803,6 +2324,9 @@ gst_qmmf_context_delete_video_stream (GstQmmfContext * context, GstPad * pad)
   gint status = 0;
 
   GST_TRACE ("Delete QMMF context video stream");
+
+  gst_qmmf_context_cleanup_pending_buffers_for_pad (context, pad);
+  gst_qmmf_context_unregister_metadata_pad (context, pad);
 
   status = recorder->DeleteVideoTrack (vpad->id);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
@@ -1826,11 +2350,15 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
   ::qmmf::recorder::Recorder *recorder = context->recorder;
   ::qmmf::recorder::ImageParam imgparam;
   ::qmmf::recorder::ImageExtraParam xtraparam;
+  ::qmmf::recorder::Colorimetry colorimetry;
   gint status = 0;
 
   GST_TRACE ("Create QMMF context image stream");
 
   GST_QMMFSRC_IMAGE_PAD_LOCK (ipad);
+  colorimetry = qmmfsrc_gst_get_stream_colorimetry (ipad->colorimetry);
+  imgparam.colorimetry = colorimetry;
+
   imgparam.mode = ::qmmf::recorder::ImageMode::kSnapshot;
   imgparam.width = ipad->width;
   imgparam.height = ipad->height;
@@ -1840,6 +2368,17 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
     imgparam.format = ::qmmf::recorder::ImageFormat::kJPEG;
     gst_structure_get_uint (ipad->params, "quality", &imgparam.quality);
   } else if (ipad->codec == GST_IMAGE_CODEC_NONE) {
+    // Full range colorspace only support P010 or TP10
+    if ((colorimetry == ::qmmf::recorder::Colorimetry::kBT2100HLGFULL ||
+         colorimetry == ::qmmf::recorder::Colorimetry::kBT2100PQFULL) &&
+        !(ipad->format == GST_VIDEO_FORMAT_P010_10LE ||
+        ipad->format == GST_VIDEO_FORMAT_NV12_Q10LE32C)) {
+      GST_ERROR ("Image %s format is not 10bit, unsupported by BT2100HLG or PQ!",
+          gst_qmmf_video_format_to_string (ipad->format));
+      GST_QMMFSRC_IMAGE_PAD_UNLOCK (ipad);
+      return FALSE;
+    }
+
     switch (ipad->format) {
       case GST_VIDEO_FORMAT_NV12:
         imgparam.format = (ipad->subformat == GST_IMAGE_SUBFORMAT_HEIF) ?
@@ -1848,6 +2387,15 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
         break;
       case GST_VIDEO_FORMAT_NV21:
         imgparam.format = ::qmmf::recorder::ImageFormat::kNV21;
+        break;
+      case GST_VIDEO_FORMAT_NV12_Q08C:
+        imgparam.format = ::qmmf::recorder::ImageFormat::kNV12UBWC;
+        break;
+      case GST_VIDEO_FORMAT_P010_10LE:
+        imgparam.format = ::qmmf::recorder::ImageFormat::kP010;
+        break;
+      case GST_VIDEO_FORMAT_NV12_Q10LE32C:
+        imgparam.format = ::qmmf::recorder::ImageFormat::kTP10UBWC;
         break;
       case GST_BAYER_FORMAT_BGGR:
       case GST_BAYER_FORMAT_RGGB:
@@ -1879,51 +2427,51 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
     }
   }
 
-#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
-  if (!context->logical_cam_info.is_logical_cam) {
-    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
-        "sense.", context->camera_id);
-  } else {
-    ::qmmf::recorder::StreamCameraId cam_id;
-    ::qmmf::recorder::StitchLayoutSelect layout;
-    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
-    gchar *info_name = NULL;
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    if (!context->logical_cam_info.is_logical_cam) {
+      GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+          "sense.", context->camera_id);
+    } else {
+      ::qmmf::recorder::StreamCameraId cam_id;
+      ::qmmf::recorder::StitchLayoutSelect layout;
+      GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+      gchar *info_name = NULL;
 
-    if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
-      GST_ERROR ("Invalid logical stream type.");
-    } else if (ipad->log_stream_type <=
-        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
-      info_name = pinfo->phy_cam_name_list[ipad->log_stream_type -
-          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+      if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+        GST_ERROR ("Invalid logical stream type.");
+      } else if (ipad->log_stream_type <=
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+        info_name = pinfo->phy_cam_name_list[ipad->log_stream_type -
+            GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
 
-      if (!info_name) {
-        GST_ERROR ("Physical camera name is null.");
-      } else {
-        GST_DEBUG ("Physical camera name: %s", info_name);
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+      } else if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        switch (ipad->log_stream_type) {
+          case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+            GST_DEBUG ("Stitch layout is selected: SideBySide.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+            break;
+          case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+            GST_DEBUG ("Stitch layout is selected: Panorama.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+            break;
+          default:
+            break;
+        }
+        xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+      } else if (ipad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            ipad->log_stream_type);
       }
-
-      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
-      xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
-    } else if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      switch (ipad->log_stream_type) {
-        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
-          GST_DEBUG ("Stitch layout is selected: SideBySide.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
-          break;
-        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
-          GST_DEBUG ("Stitch layout is selected: Panorama.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
-          break;
-        default:
-          break;
-      }
-      xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
-    } else if (ipad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
-          ipad->log_stream_type);
     }
   }
-#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   status = recorder->ConfigImageCapture (context->camera_id, ipad->index,
       imgparam, xtraparam);
@@ -1997,6 +2545,8 @@ gst_qmmf_context_stop_video_streams (GstQmmfContext * context, GArray * ids)
   gint status = 0;
 
   GST_TRACE ("Stopping QMMF context track");
+
+  gst_qmmf_context_cleanup_all_pending_buffers (context);
 
   for (idx = 0; idx < ids->len; idx++)
     track_ids.emplace(g_array_index (ids, guint, idx));
@@ -2209,11 +2759,32 @@ gst_qmmf_context_update_local_props (GstQmmfContext * context,
 }
 
 void
+gst_qmmf_context_update_local_session_params(GstQmmfContext * context,
+    ::camera::CameraMetadata *meta)
+{
+  gint temp = 0;
+  guint tag_id = 0;
+
+  tag_id = get_vendor_tag_by_name (
+      "org.codeaurora.qcamera3.sessionParameters", "PreviewFPSOnHFRMode");
+  if (meta->exists(tag_id)) {
+    context->superframerate = meta->find(tag_id).data.i32[0];
+
+    GST_DEBUG ("found PreviewFPSOnHFRMode (%d), update new value (%d)",
+        tag_id, context->superframerate);
+  }
+}
+
+void
 gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     const GValue * value)
 {
-  ::qmmf::recorder::Recorder *recorder = context->recorder;
+  ::qmmf::recorder::Recorder *recorder = NULL;
   ::camera::CameraMetadata meta;
+
+  QMMFSRC_RETURN_IF_FAIL (NULL, context != NULL, "Context is NULL");
+
+  recorder = context->recorder;
 
   switch (param_id) {
     case PARAM_CAMERA_ID:
@@ -2229,11 +2800,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       context->lcac = g_value_get_boolean (value);
       return;
     case PARAM_CAMERA_EIS:
-#ifndef EIS_MODES_ENABLE
-      context->eis = g_value_get_boolean (value);
-#else
-      context->eis = g_value_get_enum (value);
-#endif // EIS_MODES_ENABLE
+      if (!gst_qmmfsrc_check_eis_support ())
+        context->eis_bool = g_value_get_boolean (value);
+      else if (gst_qmmfsrc_check_eis_support () > 0)
+        context->eis_enum = g_value_get_enum (value);
       return;
 #ifndef VHDR_MODES_ENABLE
     case PARAM_CAMERA_SHDR: {
@@ -2254,7 +2824,6 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       }
     }
 #endif // VHDR_MODES_ENABLE
-
       return;
     case PARAM_CAMERA_SENSOR_MODE:
       context->sensormode = g_value_get_int (value);
@@ -2271,11 +2840,6 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     case PARAM_CAMERA_INPUT_ROI:
       context->input_roi_enable = g_value_get_boolean (value);
       return;
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-    case PARAM_CAMERA_MULTICAMERA_HINT:
-      context->multicamera_hint = g_value_get_boolean (value);
-      return;
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
     case PARAM_CAMERA_SW_TNR:
       context->sw_tnr = g_value_get_boolean (value);
       return;
@@ -2303,36 +2867,40 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->controlmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_control_mode_android_value (context->controlmode);
-      meta.update(ANDROID_CONTROL_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_control_mode_android_value (context->controlmode);
+        meta.update(ANDROID_CONTROL_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EFFECT_MODE:
     {
       guchar mode;
       context->effect = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_effect_mode_android_value (context->effect);
-      meta.update(ANDROID_CONTROL_EFFECT_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_effect_mode_android_value (context->effect);
+        meta.update(ANDROID_CONTROL_EFFECT_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SCENE_MODE:
     {
       guchar mode;
       context->scene = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_scene_mode_android_value (context->scene);
-      meta.update(ANDROID_CONTROL_SCENE_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_scene_mode_android_value (context->scene);
+        meta.update(ANDROID_CONTROL_SCENE_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ANTIBANDING_MODE:
     {
       guchar mode;
       context->antibanding = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_antibanding_android_value (context->antibanding);
-      meta.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_antibanding_android_value (context->antibanding);
+        meta.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SHARPNESS:
@@ -2413,18 +2981,20 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->expmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_exposure_mode_android_value (context->expmode);
-      meta.update(ANDROID_CONTROL_AE_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_exposure_mode_android_value (context->expmode);
+        meta.update(ANDROID_CONTROL_AE_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_LOCK:
     {
       guchar lock;
       context->explock = g_value_get_boolean (value);
-
-      lock = context->explock;
-      meta.update(ANDROID_CONTROL_AE_LOCK, &lock, 1);
+      if (context->state >= GST_STATE_READY) {
+        lock = context->explock;
+        meta.update(ANDROID_CONTROL_AE_LOCK, &lock, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_METERING:
@@ -2441,9 +3011,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       gint compensation;
       context->expcompensation = g_value_get_int (value);
-
-      compensation = context->expcompensation;
-      meta.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &compensation, 1);
+      if (context->state >= GST_STATE_READY) {
+        compensation = context->expcompensation;
+        meta.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &compensation, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_TIME:
@@ -2451,9 +3022,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       gint64 time;
 
       context->exptime = g_value_get_int64 (value);
-      time = context->exptime;
-
-      meta.update(ANDROID_SENSOR_EXPOSURE_TIME, &time, 1);
+      if (context->state >= GST_STATE_READY) {
+        time = context->exptime;
+        meta.update(ANDROID_SENSOR_EXPOSURE_TIME, &time, 1);
+      }
       break;
     }
     case PARAM_CAMERA_WHITE_BALANCE_MODE:
@@ -2483,9 +3055,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar lock;
       context->wblock = g_value_get_boolean (value);
-
-      lock = context->wblock;
-      meta.update(ANDROID_CONTROL_AWB_LOCK, &lock, 1);
+      if (context->state >= GST_STATE_READY) {
+        lock = context->wblock;
+        meta.update(ANDROID_CONTROL_AWB_LOCK, &lock, 1);
+      }
       break;
     }
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
@@ -2537,18 +3110,20 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->afmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_focus_mode_android_value (context->afmode);
-      meta.update(ANDROID_CONTROL_AF_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_focus_mode_android_value (context->afmode);
+        meta.update(ANDROID_CONTROL_AF_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_NOISE_REDUCTION:
     {
       guchar mode;
       context->nrmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_noise_reduction_android_value (context->nrmode);
-      meta.update(ANDROID_NOISE_REDUCTION_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_noise_reduction_android_value (context->nrmode);
+        meta.update(ANDROID_NOISE_REDUCTION_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_NOISE_REDUCTION_TUNING:
@@ -2836,6 +3411,9 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       ::camera::CameraMetadata *meta_ptr =
           (::camera::CameraMetadata *) g_value_get_pointer (value);
       recorder->SetCameraSessionParam (context->camera_id, *meta_ptr);
+
+      // Update local params from session metadata
+      gst_qmmf_context_update_local_session_params (context, meta_ptr);
     } else {
       recorder->SetCameraParam (context->camera_id, meta);
     }
@@ -2862,11 +3440,10 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       g_value_set_boolean (value, context->lcac);
       break;
     case PARAM_CAMERA_EIS:
-#ifndef EIS_MODES_ENABLE
-      g_value_set_boolean (value, context->eis);
-#else
-      g_value_set_enum (value, context->eis);
-#endif // EIS_MODES_ENABLE
+      if (!gst_qmmfsrc_check_eis_support ())
+        g_value_set_boolean (value, context->eis_bool);
+      else if (gst_qmmfsrc_check_eis_support () > 0)
+        g_value_set_enum (value, context->eis_enum);
       break;
 #ifndef VHDR_MODES_ENABLE
     case PARAM_CAMERA_SHDR:
@@ -2941,29 +3518,9 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
       break;
     case PARAM_CAMERA_SUPER_FRAMERATE:
     {
-      ::camera::CameraMetadata meta;
-      static gint superframerate;
-
-      if (superframerate != 0) {
-        g_value_set_int (value, superframerate);
-      } else {
-        if (context->state >= GST_STATE_READY)
-          recorder->GetCameraParam (context->camera_id, meta);
-
-        guint tag_id = get_vendor_tag_by_name(
-            "org.codeaurora.qcamera3.platformCapabilities", "HFRPreviewFPS");
-        if (tag_id > 0) {
-          superframerate = meta.find(tag_id).data.i32[0];
-          g_value_set_int (value, superframerate);
-        }
-      }
+      g_value_set_int (value, context->superframerate);
       break;
     }
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-    case PARAM_CAMERA_MULTICAMERA_HINT:
-      g_value_set_boolean (value, context->multicamera_hint);
-      break;
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
     case PARAM_CAMERA_SW_TNR:
       g_value_set_boolean (value, context->sw_tnr);
       break;
@@ -3264,4 +3821,18 @@ gst_qmmf_context_update_video_param (GstPad * pad, GParamSpec * pspec,
 
   QMMFSRC_RETURN_IF_FAIL (NULL, status == 0,
       "QMMF Recorder SetVideoTrackParam/SetCameraParam Failed!");
+}
+
+guint32
+gst_qmmf_context_get_device_status_camera_id (GstQmmfContext * context)
+{
+  g_return_val_if_fail (context != NULL, 0);
+  return context->device_status_camera_id;
+}
+
+gboolean
+gst_qmmf_context_get_device_status_is_present (GstQmmfContext * context)
+{
+  g_return_val_if_fail (context != NULL, FALSE);
+  return context->device_status_is_present;
 }

@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -44,14 +44,13 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <glib.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models path and labels path
@@ -1100,10 +1099,6 @@ main (gint argc, gchar * argv[])
   options.use_camera = FALSE;
 
   app_name = strrchr (argv[0], '/') ? (strrchr (argv[0], '/') + 1) : argv[0];
-
-  // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   gboolean camera_is_available = is_camera_available ();
   // Structure to define the user options selection

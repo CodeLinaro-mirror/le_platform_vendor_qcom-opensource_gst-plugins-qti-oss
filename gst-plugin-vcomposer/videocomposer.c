@@ -27,6 +27,7 @@
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+ *
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
@@ -156,26 +157,26 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
   GstVideoRectangle source = {0}, destination = {0};
   guint idx = 0;
 
-  outbuffer = composition->frame->buffer;
+  outbuffer = composition->buffer;
 
   for (idx = 0; idx < composition->n_blits; idx++) {
     vblit = &(composition->blits[idx]);
-    inbuffer = vblit->frame->buffer;
+    inbuffer = vblit->buffer;
 
     if (vblit->mask & GST_VCE_MASK_SOURCE) {
       gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
     } else {
       source.x = source.y = 0;
-      source.w = GST_VIDEO_FRAME_WIDTH (vblit->frame);
-      source.h = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
+      source.w = GST_VIDEO_INFO_WIDTH (vblit->info);
+      source.h = GST_VIDEO_INFO_HEIGHT (vblit->info);
     }
 
     if (vblit->mask & GST_VCE_MASK_DESTINATION) {
       destination = vblit->destination;
     } else {
       destination.x = destination.y = 0;
-      destination.w = GST_VIDEO_FRAME_WIDTH (composition->frame);
-      destination.h = GST_VIDEO_FRAME_HEIGHT (composition->frame);
+      destination.w = GST_VIDEO_INFO_WIDTH (composition->info);
+      destination.h = GST_VIDEO_INFO_HEIGHT (composition->info);
     }
 
     while ((meta = gst_buffer_iterate_meta (inbuffer, &state))) {
@@ -319,18 +320,20 @@ gst_video_composer_create_pool (GstVideoComposer * vcomposer, GstCaps * caps,
 
 static gboolean
 gst_video_composer_propose_allocation (GstAggregator * aggregator,
-    GstAggregatorPad * pad, GstQuery * inquery, GstQuery * outquery)
+    GstAggregatorPad * pad, GstQuery * decide_query, GstQuery * query)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER_CAST (aggregator);
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
+  GstStructure *config = NULL;
+  GstVideoAlignment align = { 0, };
   GstVideoInfo info;
   gboolean needpool = FALSE;
 
   GST_DEBUG_OBJECT (vcomposer, "Pad %s:%s", GST_DEBUG_PAD_NAME (pad));
 
   // Extract caps from the query.
-  gst_query_parse_allocation (outquery, &caps, &needpool);
+  gst_query_parse_allocation (query, &caps, &needpool);
 
   if (NULL == caps) {
     GST_ERROR_OBJECT (vcomposer, "Failed to extract caps from query!");
@@ -342,39 +345,42 @@ gst_video_composer_propose_allocation (GstAggregator * aggregator,
     return FALSE;
   }
 
-  if (needpool) {
-    GstStructure *structure = NULL;
-    GstAllocator *allocator = NULL;
-    GstVideoAlignment align = { 0, };
+  if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
+    GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
+    return FALSE;
+  }
 
-    if (!gst_video_retrieve_gpu_alignment (&info, &align)) {
-      GST_ERROR_OBJECT (vcomposer, "Failed to get alignment!");
-      return FALSE;
-    }
+  if (needpool) {
+    GstAllocator *allocator = NULL;
 
     pool = gst_video_composer_create_pool (vcomposer, caps, &align, NULL);
-    structure = gst_buffer_pool_get_config (pool);
+    config = gst_buffer_pool_get_config (pool);
 
     // Set caps and size in query.
-    gst_buffer_pool_config_set_params (structure, caps, info.size, 0, 0);
+    gst_buffer_pool_config_set_params (config, caps, info.size, 0, 0);
 
-    gst_buffer_pool_config_get_allocator (structure, &allocator, NULL);
-    gst_query_add_allocation_param (outquery, allocator, NULL);
+    gst_buffer_pool_config_get_allocator (config, &allocator, NULL);
+    gst_query_add_allocation_param (query, allocator, NULL);
 
-    if (!gst_buffer_pool_set_config (pool, structure)) {
+    if (!gst_buffer_pool_set_config (pool, config)) {
       GST_ERROR_OBJECT (vcomposer, "Failed to set buffer pool configuration!");
       gst_object_unref (pool);
       return FALSE;
     }
   }
 
-  // If upstream does't have a pool requirement, set only size in query.
-  gst_query_add_allocation_pool (outquery, pool, info.size, 0, 0);
+  // If upstream doesn't have a pool requirement, set only size in query.
+  gst_query_add_allocation_pool (query, pool, info.size, 0, 0);
 
   if (pool != NULL)
     gst_object_unref (pool);
 
-  gst_query_add_allocation_meta (outquery, GST_VIDEO_META_API_TYPE, NULL);
+  config = gst_structure_new_empty ("video-meta");
+  gst_buffer_pool_config_set_video_alignment (config, &align);
+
+  // Add video meta with alignment information for upstream.
+  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, config);
+
   return TRUE;
 }
 
@@ -456,8 +462,6 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
   else
     gst_query_add_allocation_pool (query, pool, size, minbuffers,
         maxbuffers);
-
-  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
 
   vcomposer->outpool = pool;
 
@@ -679,22 +683,6 @@ gst_video_composer_fixate_src_caps (GstAggregator * aggregator, GstCaps * caps)
 }
 
 static gboolean
-gst_video_composer_negotiated_src_caps (GstAggregator * aggregator,
-    GstCaps * caps)
-{
-  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
-
-  GST_DEBUG_OBJECT (vcomposer, "Negotiated caps %" GST_PTR_FORMAT, caps);
-
-  if (vcomposer->converter != NULL)
-    gst_video_converter_engine_free (vcomposer->converter);
-
-  vcomposer->converter = gst_video_converter_engine_new (vcomposer->backend, NULL);
-
-  return GST_AGGREGATOR_CLASS (parent_class)->negotiated_src_caps (aggregator, caps);
-}
-
-static gboolean
 gst_video_composer_stop (GstAggregator * aggregator)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (aggregator);
@@ -744,11 +732,11 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (vaggregator);
   GList *list = NULL;
-  GstVideoFrame outframe = {0,};
   GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
   GstClockTime time = GST_CLOCK_TIME_NONE;
   gboolean success = TRUE;
   guint idx = 0, n_inputs = 0;
+  const GstVideoMeta *meta = NULL;
 
   // Get start time for performance measurements.
   time = gst_util_get_timestamp ();
@@ -760,25 +748,34 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   for (list = GST_ELEMENT (vcomposer)->sinkpads; list != NULL; list = list->next) {
     GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (list->data);
-    GstVideoFrame *inframe = NULL;
+    GstBuffer *inbuffer = NULL;
     GstVideoBlit *vblit = NULL;
 
 #if GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
-    inframe = gst_video_aggregator_pad_get_prepared_frame (
+    inbuffer = gst_video_aggregator_pad_get_current_buffer  (
         GST_VIDEO_AGGREGATOR_PAD (sinkpad));
 #else
-    inframe = GST_VIDEO_AGGREGATOR_PAD (sinkpad)->aggregated_frame;
+    inbuffer = GST_VIDEO_AGGREGATOR_PAD (sinkpad)->buffer;
 #endif // GST_VERSION_MAJOR > 1 || (GST_VERSION_MAJOR == 1 && GST_VERSION_MINOR >= 16)
 
     // GAP input buffer, nothing to do.
-    if (inframe == NULL || inframe->buffer == NULL)
+    if (inbuffer == NULL)
       continue;
 
     // Index to the current blit object to be populated.
     idx = n_inputs;
 
     vblit = &(composition.blits[idx]);
-    vblit->frame = inframe;
+    vblit->buffer = inbuffer;
+
+    vblit->info = &GST_VIDEO_AGGREGATOR_PAD (sinkpad)->info;
+
+    meta = gst_buffer_get_video_meta (inbuffer);
+
+    success = gst_video_info_modify_with_meta (vblit->info, meta);
+
+    if (!success)
+      GST_ERROR_OBJECT (vcomposer, "Failed to derive info from meta");
 
     GST_VIDEO_COMPOSER_SINKPAD_LOCK (sinkpad);
 
@@ -810,8 +807,10 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     // Increase the number of populated blit objects.
     n_inputs++;
 
-    GST_TRACE_OBJECT (sinkpad, "Prepared %" GST_PTR_FORMAT, inframe->buffer);
+    GST_TRACE_OBJECT (sinkpad, "Prepared %" GST_PTR_FORMAT, inbuffer);
   }
+
+  composition.info = &GST_VIDEO_AGGREGATOR (vaggregator)->info;
 
   GST_OBJECT_UNLOCK (vaggregator);
 
@@ -828,17 +827,16 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   composition.n_blits = n_inputs;
 
-  success = gst_video_frame_map (&outframe, &(vaggregator->info), outbuffer,
-      GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
-
-  if (!success) {
-    GST_ERROR_OBJECT (vcomposer, "Failed to map output buffer!");
-    goto cleanup;
-  }
-
-  composition.frame = &outframe;
+  composition.buffer = outbuffer;
   composition.bgfill = TRUE;
   composition.datatype = 0;
+
+  meta = gst_buffer_get_video_meta (outbuffer);
+
+  success = gst_video_info_modify_with_meta (composition.info, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (vcomposer, "Failed to derive info from meta");
 
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
   composition.bgcolor = vcomposer->background;
@@ -863,9 +861,6 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
       (GST_TIME_AS_USECONDS (time) % 1000));
 
 cleanup:
-  if (outframe.buffer != NULL)
-    gst_video_frame_unmap (&outframe);
-
   if (composition.blits != NULL)
     g_free (composition.blits);
 
@@ -937,11 +932,56 @@ gst_video_composer_release_pad (GstElement * element, GstPad * pad)
   gst_pad_mark_reconfigure (GST_AGGREGATOR_SRC_PAD (vcomposer));
 }
 
+static GstStateChangeReturn
+gst_video_composer_change_state (GstElement * element, GstStateChange transition)
+{
+  GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (element);
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      if (vcomposer->converter != NULL)
+        gst_video_converter_engine_free (vcomposer->converter);
+
+      vcomposer->converter =
+          gst_video_converter_engine_new (vcomposer->backend, NULL);
+
+      if (vcomposer->converter == NULL) {
+        GST_ERROR_OBJECT (vcomposer, "Failed to create engine!");
+        return GST_STATE_CHANGE_FAILURE;
+      }
+      break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_video_converter_engine_free (vcomposer->converter);
+      vcomposer->converter = NULL;
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+}
+
 static void
 gst_video_composer_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (object);
+  const gchar *propname = g_param_spec_get_name (pspec);
+  GstState state = GST_STATE (vcomposer);
+
+  if (!GST_PROPERTY_IS_MUTABLE_IN_CURRENT_STATE (pspec, state)) {
+    GST_WARNING_OBJECT (vcomposer, "Property '%s' change not supported in %s "
+        "state!", propname, gst_element_state_get_name (state));
+    return;
+  }
 
   GST_VIDEO_COMPOSER_LOCK (vcomposer);
 
@@ -1020,7 +1060,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
       g_param_spec_enum ("engine", "Engine",
           "Engine backend used for the conversion operations",
           GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_BACKGROUND,
       g_param_spec_uint ("background", "Background",
           "Background color", 0, 0xFFFFFFFF, DEFAULT_PROP_BACKGROUND,
@@ -1038,6 +1078,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
 
   element->request_new_pad = GST_DEBUG_FUNCPTR (gst_video_composer_request_pad);
   element->release_pad = GST_DEBUG_FUNCPTR (gst_video_composer_release_pad);
+  element->change_state = GST_DEBUG_FUNCPTR (gst_video_composer_change_state);
 
   aggregator->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_video_composer_propose_allocation);
@@ -1046,8 +1087,6 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
   aggregator->sink_query = GST_DEBUG_FUNCPTR (gst_video_composer_sink_query);
   aggregator->fixate_src_caps =
       GST_DEBUG_FUNCPTR (gst_video_composer_fixate_src_caps);
-  aggregator->negotiated_src_caps =
-      GST_DEBUG_FUNCPTR (gst_video_composer_negotiated_src_caps);
   aggregator->stop = GST_DEBUG_FUNCPTR (gst_video_composer_stop);
   aggregator->flush = GST_DEBUG_FUNCPTR (gst_video_composer_flush);
 
@@ -1072,6 +1111,7 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
 
   vcomposer->backend = DEFAULT_PROP_ENGINE_BACKEND;
   vcomposer->background = DEFAULT_PROP_BACKGROUND;
+  vcomposer->converter = NULL;
 
   GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment.position =
       GST_CLOCK_TIME_NONE;

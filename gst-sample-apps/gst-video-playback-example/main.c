@@ -1,12 +1,10 @@
 /*
-* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #include <stdio.h>
 #include <glib-unix.h>
-#include <stdlib.h>
-
 
 #include <gst/gst.h>
 
@@ -637,10 +635,6 @@ main (gint argc, gchar * argv[])
   gint status = -1;
 
   g_set_prgname ("gst-video-playback-example");
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Initialize GST library.
   gst_init (&argc, &argv);

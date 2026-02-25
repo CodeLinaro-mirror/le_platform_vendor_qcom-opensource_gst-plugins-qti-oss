@@ -13,11 +13,10 @@
 #define EXTRACT_BLUE_COLOR(color)  ((color >> 8) & 0xFF)
 #define EXTRACT_ALPHA_COLOR(color) ((color) & 0xFF)
 
-#define NMS_INTERSECTION_THRESHOLD 0.5F
+static const float kNMSIntersectionTreshold = 0.5;
+static const float kDefaultThreshold        = 0.70;
 
-#define DEFAULT_THRESHOLD 0.5
-
-static const char* moduleCaps = R"(
+static const std::string kModuleCaps = R"(
 {
   "type": "image-segmentation",
   "tensors": [
@@ -28,7 +27,16 @@ static const char* moduleCaps = R"(
         [1, [21, 42840]],
         [1, [21, 42840], [1, 32]],
         [1, [21, 42840]],
-        [1, [1, 32], [32, 2048], [32, 2048]]
+        [1, [32, 2048], [32, 2048], [1, 32]]
+      ]
+    },
+    {
+      "format": ["FLOAT32"],
+      "dimensions": [
+        [1, [21, 42840], 4],
+        [1, [21, 42840]],
+        [1, [21, 42840], [1, 32]],
+        [1, [32, 2048], [32, 2048], [1, 32]]
       ]
     }
   ]
@@ -37,20 +45,20 @@ static const char* moduleCaps = R"(
 
 Module::Module(LogCallback cb)
     : logger_(cb),
-      threshold_(DEFAULT_THRESHOLD) {
+      threshold_(kDefaultThreshold) {
 
 }
 
 std::string Module::Caps() {
 
-  return std::string(moduleCaps);
+  return kModuleCaps;
 }
 
 bool Module::Configure(const std::string& labels_file,
                        const std::string& json_settings) {
 
   if (!labels_parser_.LoadFromFile(labels_file)) {
-    LOG (logger_, kError, "Failed to parse labels");
+    LOG(logger_, kError, "Failed to parse labels");
     return false;
   }
 
@@ -62,10 +70,10 @@ float Module::IntersectionScore(const ObjectDetection &l_box,
 
   // Figure out the width of the intersecting rectangle.
   // 1st: Find out the X axis coordinate of left most Top-Right point.
-  float width = fmin (l_box.right, r_box.right);
+  float width = std::min(l_box.right, r_box.right);
   // 2nd: Find out the X axis coordinate of right most Top-Left point
   // and substract from the previously found value.
-  width -= fmax (l_box.left, r_box.left);
+  width -= std::max(l_box.left, r_box.left);
 
   // Negative width means that there is no overlapping.
   if (width <= 0.0F)
@@ -73,10 +81,10 @@ float Module::IntersectionScore(const ObjectDetection &l_box,
 
   // Figure out the height of the intersecting rectangle.
   // 1st: Find out the Y axis coordinate of bottom most Left-Top point.
-  float height = fmin (l_box.bottom, r_box.bottom);
+  float height = std::min(l_box.bottom, r_box.bottom);
   // 2nd: Find out the Y axis coordinate of top most Left-Bottom point
   // and substract from the previously found value.
-  height -= fmax (l_box.top, r_box.top);
+  height -= std::max(l_box.top, r_box.top);
 
   // Negative height means that there is no overlapping.
   if (height <= 0.0F)
@@ -93,9 +101,8 @@ float Module::IntersectionScore(const ObjectDetection &l_box,
   return intersection / (l_area + r_area - intersection);
 }
 
-void
-Module::MlBoxRelativeTranslation (ObjectDetection * box,
-    const int width, const int height) {
+void Module::MlBoxRelativeTranslation(ObjectDetection * box, const int width,
+                                       const int height) {
 
   box->top /= height;
   box->bottom /= height;
@@ -113,10 +120,10 @@ int32_t Module::NonMaxSuppression(const ObjectDetection &l_box,
     if (l_box.name != r_box.name)
       continue;
 
-    double score = IntersectionScore (l_box, r_box);
+    double score = IntersectionScore(l_box, r_box);
 
     // If the score is below the threshold, continue with next list entry.
-    if (score <= NMS_INTERSECTION_THRESHOLD)
+    if (score <= kNMSIntersectionTreshold)
       continue;
 
     // If confidence of current box is higher, remove the old entry.
@@ -132,41 +139,42 @@ int32_t Module::NonMaxSuppression(const ObjectDetection &l_box,
   return -1;
 }
 
-std::vector<uint32_t> Module::ParseMonoblockTensor(
-    const Tensors& tensors,
-    std::vector<ObjectDetection>& bboxes,
-    std::vector<uint32_t>& mask_matrix_indices) {
+std::vector<uint32_t> Module::GenerateMaskFromProtos(const Tensors& tensors,
+                                                     std::vector<ObjectDetection>& bboxes,
+                                                     std::vector<uint32_t>& mask_matrix_indices,
+                                                     uint32_t proto_tensor_idx) {
 
-  uint32_t n_blocks = tensors[4].dimensions[3] * tensors[4].dimensions[2];
+  uint32_t mlheight = tensors[proto_tensor_idx].dimensions[1];
+  uint32_t mlwidth = tensors[proto_tensor_idx].dimensions[2];
+  uint32_t n_channels = tensors[proto_tensor_idx].dimensions[3];
+  const float* protos = reinterpret_cast<const float*>(tensors[proto_tensor_idx].data);
+  uint32_t n_blocks = mlheight * mlwidth;
   const float* masks = reinterpret_cast<const float*>(tensors[2].data);
-  const float* protos = reinterpret_cast<const float*>(tensors[4].data);
-
   std::vector<uint32_t> colormask(n_blocks);
 
   for (uint32_t idx = 0; idx < bboxes.size(); idx++) {
     ObjectDetection& bbox = bboxes[idx];
     uint32_t m_idx = mask_matrix_indices[idx];
-
-    uint32_t top = bbox.top * tensors[4].dimensions[2];
-    uint32_t left = bbox.left * tensors[4].dimensions[3];
-    uint32_t bottom = bbox.bottom * tensors[4].dimensions[2];
-    uint32_t right = bbox.right * tensors[4].dimensions[3];
+    uint32_t top = bbox.top * mlheight;
+    uint32_t left = bbox.left * mlwidth;
+    uint32_t bottom = bbox.bottom * mlheight;
+    uint32_t right = bbox.right * mlwidth;
 
     for (uint32_t row = top; row < bottom; row++) {
       for (uint32_t column = left; column < right; column++) {
-        uint32_t b_idx = column + (row * tensors[4].dimensions[3]);
-
+        uint32_t b_idx = (row * mlwidth + column) * n_channels;
         float confidence = 0.0f;
 
         for (uint32_t num = 0; num < tensors[2].dimensions[2]; num++) {
           float m_value = masks[m_idx + num];
-          float p_value = protos[b_idx + num * n_blocks];
+          float p_value = protos[b_idx + num];
           confidence += m_value * p_value;
         }
 
         confidence = 1.0f / (1.0f + expf(-confidence));
 
-        colormask[b_idx] = (confidence > threshold_) ? bbox.color.value() : 0x00000000;
+        uint32_t spatial_idx = row * mlwidth + column;
+        colormask[spatial_idx] = (confidence > threshold_) ? bbox.color.value() : 0x00000000;
       }
     }
   }
@@ -174,22 +182,23 @@ std::vector<uint32_t> Module::ParseMonoblockTensor(
   return colormask;
 }
 
-void Module::ParseTripleblockTensors (const Tensors& tensors,
-                                      std::vector<ObjectDetection>& bboxes,
-                                      std::vector<uint32_t>& mask_matrix_indices) {
+void Module::ParseBoundingBoxes(const Tensors& tensors,
+                                std::vector<ObjectDetection>& bboxes,
+                                std::vector<uint32_t>& mask_matrix_indices) {
 
   uint32_t n_paxels = tensors[0].dimensions[1];
   float confidence = 0.0f;
+  bool has_classes = (tensors.size() == 5);
 
   const float *mlboxes = reinterpret_cast<const float*>(tensors[0].data);
   const float *scores = reinterpret_cast<const float*>(tensors[1].data);
-  const float *classes = reinterpret_cast<const float*>(tensors[3].data);
+  const float *classes = has_classes ? reinterpret_cast<const float*>(tensors[3].data) : nullptr;
 
   for (uint32_t idx = 0; idx < n_paxels; idx++) {
     ObjectDetection bbox;
 
     confidence = scores[idx];
-    uint32_t class_idx = classes[idx];
+    uint32_t class_idx = has_classes ? static_cast<uint32_t>(classes[idx]) : 0;
 
     if (confidence < threshold_)
       continue;
@@ -199,14 +208,21 @@ void Module::ParseTripleblockTensors (const Tensors& tensors,
     bbox.right = mlboxes[idx * 4 + 2];
     bbox.bottom = mlboxes[idx * 4 + 3];
 
-    LOG (logger_, kTrace, "Class: %u Box[%f, %f, %f, %f] Confidence: %f",
+    LOG(logger_, kTrace, "Class: %u Box[%f, %f, %f, %f] Confidence: %f",
       class_idx, bbox.top, bbox.left, bbox.bottom, bbox.right, confidence);
 
     MlBoxRelativeTranslation(&bbox, source_width_, source_height_);
 
     bbox.confidence = confidence * 100.0f;
-    bbox.name = labels_parser_.GetLabel(class_idx);
-    bbox.color = labels_parser_.GetColor(class_idx);
+
+    if (has_classes) {
+      bbox.name = labels_parser_.GetLabel(class_idx);
+      bbox.color = labels_parser_.GetColor(class_idx);
+    } else {
+      uint32_t instance_idx = idx % labels_parser_.Size();
+      bbox.name = labels_parser_.GetLabel(instance_idx);
+      bbox.color = labels_parser_.GetColor(instance_idx);
+    }
 
     int nms = -1;
 
@@ -215,7 +231,7 @@ void Module::ParseTripleblockTensors (const Tensors& tensors,
     if (nms == (-2))
       continue;
 
-    LOG (logger_, kLog, "Label: %s  Box[%f, %f, %f, %f] Confidence: %f",
+    LOG(logger_, kLog, "Label: %s  Box[%f, %f, %f, %f] Confidence: %f",
         bbox.name.c_str(), bbox.top, bbox.left, bbox.bottom,
         bbox.right, bbox.confidence);
 
@@ -224,37 +240,22 @@ void Module::ParseTripleblockTensors (const Tensors& tensors,
       mask_matrix_indices.erase(mask_matrix_indices.begin() + nms);
     }
 
-    bboxes.push_back(bbox);
+    bboxes.emplace_back(std::move(bbox));
 
     uint32_t num = idx * tensors[2].dimensions[2];
-    mask_matrix_indices.push_back(num);
+    mask_matrix_indices.emplace_back(std::move(num));
   }
 }
 
-uint64_t Module::ScaleUint64Safe(const uint64_t val,
-                                 const int32_t num, const int32_t denom) {
-
-  if (denom == 0)
-    return UINT64_MAX;
-
-  // If multiplication won't overflow, perform it directly
-  if (val < (std::numeric_limits<uint32_t>::max() / num))
-    return (val * num) / denom;
-  else
-    // Use division first to avoid overflow
-    return (val / denom) * num + ((val % denom) * num) / denom;
-}
-
-bool Module::Process(const Tensors& tensors, Dictionary& mlparams,
-    std::any& output) {
+void Module::ParseSegmentationFrame(const Tensors& tensors, Dictionary& mlparams,
+                                     std::any& output, uint32_t proto_tensor_idx) {
 
   if (output.type() != typeid(VideoFrame)) {
     LOG (logger_, kError, "Unexpected output type!");
-    return false;
+    return;
   }
 
-  VideoFrame& frame =
-      std::any_cast<VideoFrame&>(output);
+  VideoFrame& frame = std::any_cast<VideoFrame&>(output);
 
   // Get video resolution
   Resolution& resolution =
@@ -266,30 +267,31 @@ bool Module::Process(const Tensors& tensors, Dictionary& mlparams,
   uint32_t width = frame.width;
   uint32_t height = frame.height;
 
-  // Retrive the video frame Bytes Per Pixel for later calculations.
-  uint32_t bpp = frame.bits *
-      frame.n_components / CHAR_BIT;
+  // Retrieve the video frame Bytes Per Pixel for later calculations.
+  uint32_t bpp = frame.bits * frame.n_components / CHAR_BIT;
 
   std::vector<uint32_t> mask_matrix_indices;
   std::vector<ObjectDetection> bboxes;
 
-  ParseTripleblockTensors(tensors, bboxes, mask_matrix_indices);
+  ParseBoundingBoxes(tensors, bboxes, mask_matrix_indices);
 
   if (bboxes.size() == 0)
-    return true;
+    return;
 
   // Get region
-  Region& region =
-      std::any_cast<Region&>(mlparams["input-tensor-region"]);
+  Region& region = std::any_cast<Region&>(mlparams["input-tensor-region"]);
+
+  uint32_t mlheight = tensors[proto_tensor_idx].dimensions[1];
+  uint32_t mlwidth = tensors[proto_tensor_idx].dimensions[2];
 
   // Transform source tensor region dimensions to dimensions in the color mask.
-  region.x *= (tensors[4].dimensions[3] / (float)source_width_);
-  region.y *= (tensors[4].dimensions[2] / (float)source_height_);
-  region.width *= (tensors[4].dimensions[3] / (float)source_width_);
-  region.height *= (tensors[4].dimensions[2] / (float)source_height_);
+  region.x *= (mlwidth / (float)source_width_);
+  region.y *= (mlheight / (float)source_height_);
+  region.width *= (mlwidth / (float)source_width_);
+  region.height *= (mlheight / (float)source_height_);
 
   std::vector<uint32_t> colormask =
-     ParseMonoblockTensor(tensors, bboxes, mask_matrix_indices);
+      GenerateMaskFromProtos(tensors, bboxes, mask_matrix_indices, proto_tensor_idx);
 
   uint8_t *outdata = frame.planes[0].data;
 
@@ -297,23 +299,41 @@ bool Module::Process(const Tensors& tensors, Dictionary& mlparams,
     uint32_t outidx = row * frame.planes[0].stride;
 
     for (uint32_t column = 0; column < width; column++, outidx += bpp) {
-      uint32_t num = tensors[4].dimensions[3] *
-          (region.y + ScaleUint64Safe (row, region.height, height));
+      uint32_t num = mlwidth * (region.y + (row * region.height) / height);
 
-      num += region.x + ScaleUint64Safe (column, region.width, width);
+      num += region.x + (column * region.width) / width;
 
-      outdata[outidx] = EXTRACT_RED_COLOR (colormask[num]);
-      outdata[outidx + 1] = EXTRACT_GREEN_COLOR (colormask[num]);
-      outdata[outidx + 2] = EXTRACT_BLUE_COLOR (colormask[num]);
+      outdata[outidx] = EXTRACT_RED_COLOR(colormask[num]);
+      outdata[outidx + 1] = EXTRACT_GREEN_COLOR(colormask[num]);
+      outdata[outidx + 2] = EXTRACT_BLUE_COLOR(colormask[num]);
 
       if (bpp == 4)
-        outdata[outidx + 3] = EXTRACT_ALPHA_COLOR (colormask[num]);
+        outdata[outidx + 3] = EXTRACT_ALPHA_COLOR(colormask[num]);
     }
+  }
+}
+
+bool Module::Process(const Tensors& tensors, Dictionary& mlparams,
+    std::any& output) {
+
+  if (tensors.size() == 5)
+    // For 5-tensor model, proto tensor is at index 4
+    ParseSegmentationFrame(tensors, mlparams, output, 4);
+  else if (tensors.size() == 4)
+    // For 4-tensor model, proto tensor is at index 3
+    ParseSegmentationFrame(tensors, mlparams, output, 3);
+  else {
+    LOG(logger_, kError,
+        "ML frame with unsupported number of tensors: %zu. "
+        "Expected 4 or 5 tensors for segmentation models!",
+        tensors.size());
+    return false;
   }
 
   return true;
 }
 
 IModule* NewModule(LogCallback logger) {
+
   return new Module(logger);
 }

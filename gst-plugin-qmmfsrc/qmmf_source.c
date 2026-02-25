@@ -26,39 +26,10 @@
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
-* Changes from Qualcomm Innovation Center are provided under the following license:
+* Changes from Qualcomm Technologies, Inc. are provided under the following license:
 *
-* Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-*
-* Redistribution and use in source and binary forms, with or without
-* modification, are permitted (subject to the limitations in the
-* disclaimer below) provided that the following conditions are met:
-*
-*     * Redistributions of source code must retain the above copyright
-*       notice, this list of conditions and the following disclaimer.
-*
-*     * Redistributions in binary form must reproduce the above
-*       copyright notice, this list of conditions and the following
-*       disclaimer in the documentation and/or other materials provided
-*       with the distribution.
-*
-*     * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
-*       contributors may be used to endorse or promote products derived
-*       from this software without specific prior written permission.
-*
-* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
-* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
-* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
-* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+* SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifdef HAVE_CONFIG_H
@@ -74,13 +45,10 @@
 #include <gst/gstelementfactory.h>
 #include <gst/allocators/allocators.h>
 #include <gst/video/video-utils.h>
-#ifdef ENABLE_RUNTIME_PARSER
-#include <gst/utils/runtime-flags-parser-c-api.h>
-#endif // ENABLE_RUNTIME_PARSER
-
 #include "qmmf_source_utils.h"
 #include "qmmf_source_image_pad.h"
 #include "qmmf_source_video_pad.h"
+#include "qmmf_source_context.h"
 
 // Declare static GstDebugCategory variable for qmmfsrc.
 GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
@@ -90,11 +58,7 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_SLAVE                     FALSE
 #define DEFAULT_PROP_CAMERA_LDC_MODE                  FALSE
 #define DEFAULT_PROP_CAMERA_LCAC_MODE                 FALSE
-#ifndef EIS_MODES_ENABLE
-#define DEFAULT_PROP_CAMERA_EIS_MODE                  FALSE
-#else
-#define DEFAULT_PROP_CAMERA_EIS_MODE                  EIS_OFF
-#endif // EIS_MODES_ENABLE
+#define DEFAULT_PROP_CAMERA_EIS_MODE                  0
 #ifndef VHDR_MODES_ENABLE
 #define DEFAULT_PROP_CAMERA_SHDR_MODE                 FALSE
 #else
@@ -132,9 +96,6 @@ GST_DEBUG_CATEGORY_STATIC (qmmfsrc_debug);
 #define DEFAULT_PROP_CAMERA_MULTI_ROI                 FALSE
 #define DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH    -1
 #define DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE        GST_PAD_ACTIVATION_MODE_NORMAL
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-#define DEFAULT_PROP_CAMERA_MULTICAMERA_HINT          FALSE
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
 #define DEFAULT_PROP_CAMERA_SW_TNR                    FALSE
 
 static void gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data);
@@ -152,6 +113,7 @@ enum
   SIGNAL_RESULT_METADATA,
   SIGNAL_URGENT_METADATA,
   SIGNAL_VIDEO_PADS_ACTIVATION,
+  SIGNAL_DEVICE_STATUS_CHANGE,
   LAST_SIGNAL
 };
 
@@ -210,244 +172,10 @@ enum
   PROP_CAMERA_INPUT_ROI_INFO,
   PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
   PROP_CAMERA_PAD_ACTIVATION_MODE,
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-  PROP_CAMERA_MULTICAMERA_HINT,
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
   PROP_CAMERA_SW_TNR,
   PROP_CAMERA_STATIC_METADATAS,
 };
 
-#ifdef ENABLE_RUNTIME_PARSER
-
-#define CAPS_SIZE 255
-
-static GstStaticPadTemplate qmmfsrc_video_src_template;
-static GstStaticPadTemplate qmmfsrc_image_src_template;
-
-static void
-qmmfsrc_deinit_src_templates ()
-{
-  if (NULL != qmmfsrc_video_src_template.static_caps.string) {
-    g_free (qmmfsrc_video_src_template.static_caps.string);
-    qmmfsrc_video_src_template.static_caps.string = NULL;
-  }
-
-  if (NULL != qmmfsrc_image_src_template.static_caps.string) {
-    g_free (qmmfsrc_image_src_template.static_caps.string);
-    qmmfsrc_image_src_template.static_caps.string = NULL;
-  }
-}
-
-static void
-qmmfsrc_init_src_templates ()
-{
-  void* qmmfsrc_parser = get_qmmfsrc_parser ();
-
-  gint video_max_width  = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_WIDTH");
-  gint video_max_height = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_HEIGHT");
-  gint video_max_fps    = get_flag_as_int (qmmfsrc_parser, "GST_VIDEO_MAX_FPS");
-
-  gchar* common_video_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (common_video_caps, CAPS_SIZE,
-      "width = (int) [ 16, " "%d" " ], "
-      "height = (int) [ 16," "%d" " ], "
-      "framerate = (fraction) [ 0/1, " "%d" " ] ; ",
-      video_max_width,
-      video_max_height,
-      video_max_fps
-  );
-
-  gchar* video_jpeg_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (video_jpeg_caps, CAPS_SIZE,
-      "image/jpeg,"
-      "%s",
-      common_video_caps
-  );
-
-  gchar* video_raw_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (video_raw_caps, CAPS_SIZE,
-      "video/x-raw, "
-      "format = (string) "
-      "{ NV12, NV16"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-      ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-      ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-      ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      ", NV12_Q10LE32C"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      " }" ", "
-      "%s",
-      common_video_caps
-  );
-
-  gchar* video_raw_caps_with_features = (gchar *) g_malloc (
-      CAPS_SIZE * sizeof (gchar));
-
-  snprintf (video_raw_caps_with_features, CAPS_SIZE,
-      "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
-      "format = (string) "
-      "{ NV12, NV16"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-      ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-      ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-      ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      ", NV12_Q10LE32C"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-      " }" ", "
-      "%s",
-      common_video_caps
-  );
-
-  gchar* video_bayer_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (video_bayer_caps, CAPS_SIZE,
-      "video/x-bayer, "
-      "format = (string) " "{ bggr, rggb, gbrg, grbg, mono }" ", "
-      "bpp = (string) " "{ 8, 10, 12, 16 }" ", "
-      "%s",
-      common_video_caps
-  );
-
-  g_free (common_video_caps);
-
-  const gchar* qmmfsrc_all_video_caps = (const gchar *) g_malloc (
-      4 * CAPS_SIZE * sizeof (gchar));
-
-  snprintf ((gchar *) qmmfsrc_all_video_caps, 4 * CAPS_SIZE,
-      "%s"
-      "%s"
-      "%s"
-      "%s",
-      video_jpeg_caps,
-      video_raw_caps,
-      video_raw_caps_with_features,
-      video_bayer_caps
-  );
-
-  g_free (video_jpeg_caps);
-  g_free (video_raw_caps);
-  g_free (video_raw_caps_with_features);
-  g_free (video_bayer_caps);
-
-  GstStaticCaps static_video_caps = {
-    .caps = NULL,
-    .string = qmmfsrc_all_video_caps,
-    ._gst_reserved = { NULL }
-  };
-
-  qmmfsrc_video_src_template.name_template = "video_%u";
-  qmmfsrc_video_src_template.direction = GST_PAD_SRC;
-  qmmfsrc_video_src_template.presence = GST_PAD_REQUEST;
-  qmmfsrc_video_src_template.static_caps = static_video_caps;
-
-  gint image_max_width  = get_flag_as_int (qmmfsrc_parser, "GST_IMAGE_MAX_WIDTH");
-  gint image_max_height = get_flag_as_int (qmmfsrc_parser, "GST_IMAGE_MAX_HEIGHT");
-
-  gchar* common_image_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (common_image_caps, CAPS_SIZE,
-      "width = (int) [ 16, " "%d" " ], "
-      "height = (int) [ 16," "%d" " ], "
-      "framerate = (fraction) [ 0/1, 30/1 ] ; ",
-      image_max_width,
-      image_max_height
-  );
-
-  gchar* image_jpeg_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (image_jpeg_caps, CAPS_SIZE,
-      "image/jpeg,"
-      "%s",
-      common_image_caps
-  );
-
-  gchar* image_raw_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (image_raw_caps, CAPS_SIZE,
-      "video/x-raw, "
-      "format = (string) "
-      "{ NV21"
-#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-      ", NV12"
-#endif // GST_IMAGE_NV12_FORMAT_ENABLE
-      " }" ", "
-      "%s",
-      common_image_caps
-  );
-
-  gchar* image_raw_caps_with_features = (gchar *) g_malloc (
-      CAPS_SIZE * sizeof (gchar));
-
-  snprintf (image_raw_caps_with_features, CAPS_SIZE,
-      "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
-      "format = (string) "
-      "{ NV21"
-#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-      ", NV12"
-#endif // GST_IMAGE_NV12_FORMAT_ENABLE
-      " }" ", "
-      "%s",
-      common_image_caps
-  );
-
-  gchar* image_bayer_caps = (gchar *) g_malloc (CAPS_SIZE * sizeof (gchar));
-
-  snprintf (image_bayer_caps, CAPS_SIZE,
-      "video/x-bayer, "
-      "format = (string) " "{ bggr, rggb, gbrg, grbg, mono }" ", "
-      "bpp = (string) " "{ 8, 10, 12, 16 }" ", "
-      "%s",
-      common_image_caps
-  );
-
-  g_free (common_image_caps);
-
-  const gchar* qmmfsrc_all_image_caps = (const gchar *) g_malloc (
-      4 * CAPS_SIZE * sizeof (gchar));
-
-  snprintf ((gchar *) qmmfsrc_all_image_caps, 4 * CAPS_SIZE,
-      "%s"
-      "%s"
-      "%s"
-      "%s",
-      image_jpeg_caps,
-      image_raw_caps,
-      image_raw_caps_with_features,
-      image_bayer_caps
-  );
-
-  g_free (image_jpeg_caps);
-  g_free (image_raw_caps);
-  g_free (image_raw_caps_with_features);
-  g_free (image_bayer_caps);
-
-  GstStaticCaps static_image_caps = {
-    .caps = NULL,
-    .string = qmmfsrc_all_image_caps,
-    ._gst_reserved = { NULL }
-  };
-
-  qmmfsrc_image_src_template.name_template = "image_%u";
-  qmmfsrc_image_src_template.direction = GST_PAD_SRC;
-  qmmfsrc_image_src_template.presence = GST_PAD_REQUEST;
-  qmmfsrc_image_src_template.static_caps = static_image_caps;
-}
-#endif // ENABLE_RUNTIME_PARSER
 
 static gboolean
 qmmfsrc_pad_push_event (GstElement * element, GstPad * pad, gpointer data)
@@ -754,72 +482,168 @@ qmmfsrc_release_pad (GstElement * element, GstPad * pad)
   GST_QMMFSRC_UNLOCK (qmmfsrc);
 }
 
-static GstStaticCaps gst_qmmfsrc_video_static_src_caps =
-    GST_STATIC_CAPS (QMMFSRC_VIDEO_JPEG_CAPS "; "
-        QMMFSRC_VIDEO_RAW_CAPS (
-                "{ NV12, NV16, NV12_Q08C, RGB"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-                ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-                ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-                ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ", NV12_Q10LE32C"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_VIDEO_BAYER_CAPS (
-                "{ bggr, rggb, gbrg, grbg, mono }",
-                "{ 8, 10, 12, 16 }"));
+static GString *
+gst_qmmfsrc_create_video_static_src_caps () {
+  GString *static_src_caps = g_string_new (NULL);
+  GstQmmfSrcResolutionRange jpeg_res;
+  GstQmmfSrcResolutionRange bayer_res;
+  GstQmmfSrcResolutionRange raw_res;
 
-static GstStaticCaps gst_qmmfsrc_image_static_src_caps =
-    GST_STATIC_CAPS (QMMFSRC_IMAGE_JPEG_CAPS "; "
-        QMMFSRC_IMAGE_RAW_CAPS (
-                "{ NV21"
-#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
-#endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }") "; "
-            QMMFSRC_IMAGE_BAYER_CAPS (
-                "{ bggr, rggb, gbrg, grbg, mono }",
-                "{ 8, 10, 12, 16 }"));
+  // Get JPEG resolution range
+  gst_qmmfsrc_get_jpeg_resolution_range(&jpeg_res);
+  // Get Bayer resolution range
+  gst_qmmfsrc_get_bayer_resolution_range(&bayer_res);
+  // Get video/x-raw resolution range
+
+  gst_qmmfsrc_get_raw_resolution_range(&raw_res);
+
+  g_string_append_printf (static_src_caps, "image/jpeg, "        \
+      "width = (int) [ %u, %u ], "   \
+      "height = (int) [ %u, %u ], "  \
+      "framerate = (fraction) [ 0/1, %u/1 ]; ",
+      jpeg_res.min_width, jpeg_res.max_width,
+      jpeg_res.min_height, jpeg_res.max_height,
+      gst_qmmfsrc_get_max_fps ());
+
+  g_string_append (static_src_caps, "video/x-raw, format = (string) " \
+      "{ NV12, NV16, NV12_Q08C, RGB");
+
+  if (gst_qmmfsrc_check_format (FORMAT_YUY2))
+    g_string_append (static_src_caps, ", YUY2");
+
+  if (gst_qmmfsrc_check_format (FORMAT_UYVY))
+    g_string_append (static_src_caps, ", UYVY");
+
+  if (gst_qmmfsrc_check_format (FORMAT_P010_10LE))
+    g_string_append (static_src_caps, ", P010_10LE");
+
+  if (gst_qmmfsrc_check_format (FORMAT_NV12_Q10LE32C))
+    g_string_append (static_src_caps, ", NV12_Q10LE32C");
+
+  g_string_append_printf (static_src_caps,
+    " }, "
+    "width = (int) [ %u, %u ], "
+    "height = (int) [ %u, %u ], "
+    "framerate = (fraction) [ 0/1, %u/1 ]; ",
+    raw_res.min_width, raw_res.max_width,
+    raw_res.min_height, raw_res.max_height,
+    gst_qmmfsrc_get_max_fps ());
+
+  g_string_append_printf (static_src_caps, "video/x-bayer, "         \
+      "format = (string) { bggr, rggb, gbrg, grbg, mono }, "  \
+      "bpp = (string) { 8, 10, 12, 16 }, "                    \
+      "width = (int) [ %u, %u ], "                          \
+      "height = (int) [ %u, %u ], "                         \
+      "framerate = (fraction) [ 0/1, %u/1 ]",
+      raw_res.min_width, bayer_res.max_width,
+      raw_res.min_height, bayer_res.max_height,
+      gst_qmmfsrc_get_max_fps ());
+
+  return static_src_caps;
+}
+
+static GString *
+gst_qmmfsrc_create_image_static_src_caps () {
+  GString *static_src_caps = g_string_new (NULL);
+  GstQmmfSrcResolutionRange jpeg_res;
+  GstQmmfSrcResolutionRange bayer_res;
+  GstQmmfSrcResolutionRange raw_res;
+
+  // Get JPEG resolution range
+  gst_qmmfsrc_get_jpeg_resolution_range (&jpeg_res);
+  // Get Bayer resolution range
+  gst_qmmfsrc_get_bayer_resolution_range (&bayer_res);
+  // Get video/x-raw resolution range
+  gst_qmmfsrc_get_raw_resolution_range (&raw_res);
+
+  g_string_append_printf (static_src_caps, "image/jpeg, "        \
+      "width = (int) [ %u, %u ], "   \
+      "height = (int) [ %u, %u ], "  \
+      "framerate = (fraction) [ 0/1, %u/1 ]; ",
+      jpeg_res.min_width, jpeg_res.max_width,
+      jpeg_res.min_height, jpeg_res.max_height,
+      gst_qmmfsrc_get_max_fps ());
+
+  g_string_append (static_src_caps, "video/x-raw, format = (string) " \
+      "{ NV21");
+
+  if (gst_qmmfsrc_check_format (FORMAT_NV12))
+    g_string_append (static_src_caps, ", NV12");
+
+  if (gst_qmmfsrc_check_format (FORMAT_P010_10LE))
+    g_string_append (static_src_caps, ", P010_10LE");
+
+  if (gst_qmmfsrc_check_format (FORMAT_NV12_Q10LE32C))
+    g_string_append (static_src_caps, ", NV12_Q10LE32C");
+
+  g_string_append_printf (static_src_caps,
+    " }, "
+    "width = (int) [ %u, %u ], "
+    "height = (int) [ %u, %u ], "
+    "framerate = (fraction) [ 0/1, %u/1 ]; ",
+    raw_res.min_width, raw_res.max_width,
+    raw_res.min_height, raw_res.max_height,
+    gst_qmmfsrc_get_max_fps ());
+
+  g_string_append_printf (static_src_caps, "video/x-bayer, "         \
+      "format = (string) { bggr, rggb, gbrg, grbg, mono }, "  \
+      "bpp = (string) { 8, 10, 12, 16 }, "                    \
+      "width = (int) [ %u, %u ], "                          \
+      "height = (int) [ %u, %u ], "                         \
+      "framerate = (fraction) [ 0/1, %u/1 ]",
+      raw_res.min_width, bayer_res.max_width,
+      raw_res.min_height, bayer_res.max_height,
+      gst_qmmfsrc_get_max_fps ());
+
+  return static_src_caps;
+}
 
 static GstCaps *
 gst_qmmfsrc_video_src_caps (void)
 {
   static GstCaps *caps = NULL;
   static gsize inited = 0;
+  GstQmmfSrcResolutionRange raw_res;
+  GString *video_src_caps = gst_qmmfsrc_create_video_static_src_caps ();
+  GstStaticCaps gst_qmmfsrc_video_static_src_caps =
+      GST_STATIC_CAPS (video_src_caps->str);
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_qmmfsrc_video_static_src_caps);
 
     if (gst_gbm_qcom_backend_is_supported ()) {
-      GstCaps *tmplcaps = gst_caps_from_string (
-          GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
-              "{ NV12, NV16, NV12_Q08C"
-#ifdef GST_VIDEO_YUY2_FORMAT_ENABLE
-                ", YUY2"
-#endif // GST_VIDEO_YUY2_FORMAT_ENABLE
-#ifdef GST_VIDEO_UYVY_FORMAT_ENABLE
-                ", UYVY"
-#endif // GST_VIDEO_UYVY_FORMAT_ENABLE
-#ifdef GST_VIDEO_P010_10LE_FORMAT_ENABLE
-                ", P010_10LE"
-#endif // GST_VIDEO_P010_10LE_FORMAT_ENABLE
-#ifdef GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                ",  NV12_Q10LE32C"
-#endif // GST_VIDEO_NV12_10LE32_FORMAT_ENABLE
-                " }"));
+      gst_qmmfsrc_get_raw_resolution_range(&raw_res);
+      GString *gbm_caps_str = g_string_new (
+          "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
+          "format = (string) { NV12, NV16, NV12_Q08C");
 
+      if (gst_qmmfsrc_check_format (FORMAT_YUY2))
+        g_string_append (gbm_caps_str, ", YUY2");
+      if (gst_qmmfsrc_check_format (FORMAT_UYVY))
+        g_string_append (gbm_caps_str, ", UYVY");
+      if (gst_qmmfsrc_check_format (FORMAT_P010_10LE))
+        g_string_append (gbm_caps_str, ", P010_10LE");
+      if (gst_qmmfsrc_check_format (FORMAT_NV12_Q10LE32C))
+        g_string_append (gbm_caps_str, ", NV12_Q10LE32C");
+
+      g_string_append_printf (gbm_caps_str,
+          " }, "
+          "width = (int) [ %u, %u ], "
+          "height = (int) [ %u, %u ], "
+          "framerate = (fraction) [ 0/1, %u/1 ]",
+          raw_res.min_width, raw_res.max_width,
+          raw_res.min_height, raw_res.max_height,
+          gst_qmmfsrc_get_max_fps ());
+
+      GstCaps *tmplcaps = gst_caps_from_string (gbm_caps_str->str);
+      g_string_free (gbm_caps_str, TRUE);
       caps = gst_caps_make_writable (caps);
       gst_caps_append (caps, tmplcaps);
     }
 
     g_once_init_leave (&inited, 1);
   }
+  g_string_free (video_src_caps, TRUE);
   return caps;
 }
 
@@ -828,18 +652,38 @@ gst_qmmfsrc_image_src_caps (void)
 {
   static GstCaps *caps = NULL;
   static gsize inited = 0;
+  GstQmmfSrcResolutionRange raw_res;
+  GString *image_src_caps = gst_qmmfsrc_create_image_static_src_caps ();
+  GstStaticCaps gst_qmmfsrc_image_static_src_caps =
+      GST_STATIC_CAPS (image_src_caps->str);
 
   if (g_once_init_enter (&inited)) {
     caps = gst_static_caps_get (&gst_qmmfsrc_image_static_src_caps);
 
     if (gst_gbm_qcom_backend_is_supported ()) {
-      GstCaps *tmplcaps = gst_caps_from_string (
-          QMMFSRC_IMAGE_RAW_CAPS_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GBM,
-                "{ NV21"
-#ifdef GST_IMAGE_NV12_FORMAT_ENABLE
-                ", NV12"
-#endif // GST_IMAGE_NV12_FORMAT_ENABLE
-                " }"));
+      gst_qmmfsrc_get_raw_resolution_range(&raw_res);
+      GString *gbm_caps_str = g_string_new (
+          "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GBM "), "
+          "format = (string) { NV21");
+
+      if (gst_qmmfsrc_check_format (FORMAT_NV12))
+        g_string_append (gbm_caps_str, ", NV12, NV12_Q08C");
+      if (gst_qmmfsrc_check_format (FORMAT_P010_10LE))
+        g_string_append (gbm_caps_str, ", P010_10LE");
+      if (gst_qmmfsrc_check_format (FORMAT_NV12_Q10LE32C))
+        g_string_append (gbm_caps_str, ", NV12_Q10LE32C");
+
+      g_string_append_printf (gbm_caps_str,
+          " }, "
+          "width = (int) [ %u, %u ], "
+          "height = (int) [ %u, %u ], "
+          "framerate = (fraction) [ 0/1, %u/1 ]",
+          raw_res.min_width, raw_res.max_width,
+          raw_res.min_height, raw_res.max_height,
+          gst_qmmfsrc_get_max_fps ());
+
+      GstCaps *tmplcaps = gst_caps_from_string (gbm_caps_str->str);
+      g_string_free (gbm_caps_str, TRUE);
 
       caps = gst_caps_make_writable (caps);
       gst_caps_append (caps, tmplcaps);
@@ -847,6 +691,7 @@ gst_qmmfsrc_image_src_caps (void)
 
     g_once_init_leave (&inited, 1);
   }
+  g_string_free (image_src_caps, TRUE);
   return caps;
 }
 
@@ -868,6 +713,8 @@ static void
 qmmfsrc_event_callback (guint event, gpointer userdata)
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (userdata);
+  GstStructure *event_msg = NULL;
+  GstMessage *message = NULL;
 
   switch (event) {
     case EVENT_SERVICE_DIED:
@@ -905,9 +752,51 @@ qmmfsrc_event_callback (guint event, gpointer userdata)
       GST_WARNING_OBJECT (qmmfsrc, "Camera device has encountered non-fatal "
           "metadata drop error !");
       break;
+    case EVENT_SOF_FREEZE:
+      GST_LOG_OBJECT (qmmfsrc, "SOF Freeze occured");
+      break;
+    case EVENT_RECOVERYFAILURE:
+      GST_LOG_OBJECT (qmmfsrc, "Recovery Failure occured");
+      break;
+    case EVENT_FATAL:
+      GST_LOG_OBJECT (qmmfsrc, "Fatal Error occured");
+      break;
+    case EVENT_RECOVERYSUCCESS:
+      GST_LOG_OBJECT (qmmfsrc, "Recovery success occured");
+      break;
+    case EVENT_INTERNAL_RECOVERY:
+      GST_LOG_OBJECT (qmmfsrc, "Internal Recovery occured");
+      break;
+    case EVENT_DEVICE_STATUS_CHANGE:
+      GST_LOG_OBJECT (qmmfsrc, "Camera device status change event received");
+      g_signal_emit_by_name (qmmfsrc, "device-status-change",
+          gst_qmmf_context_get_device_status_camera_id (qmmfsrc->context),
+          gst_qmmf_context_get_device_status_is_present (qmmfsrc->context));
+      break;
     default:
       GST_WARNING_OBJECT (qmmfsrc, "Unknown camera device event");
       break;
+  }
+
+  event_msg = gst_structure_new ("qmmfsrc-event",
+      "event-type", G_TYPE_UINT, event,
+      NULL);
+
+  if (!event_msg) {
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to create structure for event %d", event);
+    return;
+  }
+
+  message = gst_message_new_element (GST_OBJECT (qmmfsrc), event_msg);
+  if (!message) {
+    gst_structure_free (event_msg);
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to create message for event %d", event);
+    return;
+  }
+
+  if (!gst_element_post_message (GST_ELEMENT (qmmfsrc), message)) {
+    gst_message_unref(message);
+    GST_WARNING_OBJECT (qmmfsrc, "Failed to post message for event %d", event);
   }
 }
 
@@ -917,10 +806,12 @@ qmmfsrc_metadata_callback (gint camera_id, gconstpointer metadata,
 {
   GstQmmfSrc *qmmfsrc = GST_QMMFSRC (userdata);
 
-  if (isurgent)
+  if (isurgent) {
     g_signal_emit_by_name (qmmfsrc, "urgent-metadata", metadata);
-  else
+  } else {
     g_signal_emit_by_name (qmmfsrc, "result-metadata", metadata);
+    gst_qmmf_context_store_metadata (qmmfsrc->context, metadata);
+  }
 }
 
 static gboolean
@@ -930,10 +821,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
   gpointer key = NULL;
   GstPad *pad = NULL;
   GList *list = NULL;
-  GValue isslave = G_VALUE_INIT, sframerate = G_VALUE_INIT;
-
-  g_value_init (&isslave, G_TYPE_BOOLEAN);
-  g_value_init (&sframerate, G_TYPE_INT);
 
   GST_TRACE_OBJECT (qmmfsrc, "Create stream");
 
@@ -941,17 +828,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
   for (list = qmmfsrc->vidindexes; list != NULL; list = list->next) {
     key = list->data;
     pad = GST_PAD (g_hash_table_lookup (qmmfsrc->srcpads, key));
-
-    gst_qmmf_context_get_camera_param (qmmfsrc->context,
-        PARAM_CAMERA_SLAVE, &isslave);
-
-    if (!g_value_get_boolean (&isslave)) {
-      GstQmmfSrcVideoPad *vpad = GST_QMMFSRC_VIDEO_PAD (pad);
-
-      gst_qmmf_context_get_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_SUPER_FRAMERATE, &sframerate);
-      vpad->superframerate = g_value_get_int (&sframerate);
-    }
 
     success = qmmfsrc_video_pad_fixate_caps (pad);
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
@@ -961,9 +837,6 @@ qmmfsrc_create_stream (GstQmmfSrc * qmmfsrc)
     QMMFSRC_RETURN_VAL_IF_FAIL (qmmfsrc, success, FALSE,
         "Video stream creation failed!");
   }
-
-  g_value_unset (&isslave);
-  g_value_unset (&sframerate);
 
   // Iterate over the image pads, fixate caps and create streams.
   for (list = qmmfsrc->imgindexes; list != NULL; list = list->next) {
@@ -998,6 +871,10 @@ qmmfsrc_delete_stream (GstQmmfSrc * qmmfsrc)
   GList *list = NULL;
 
   GST_TRACE_OBJECT (qmmfsrc, "Delete stream");
+
+  // No source pads, nothing to do but return.
+  if (g_hash_table_size (qmmfsrc->srcpads) == 0)
+    return TRUE;
 
   success = gst_element_foreach_src_pad (GST_ELEMENT (qmmfsrc),
       qmmfsrc_pad_flush_buffers, GUINT_TO_POINTER (TRUE));
@@ -1052,6 +929,13 @@ qmmfsrc_start_stream (GstQmmfSrc * qmmfsrc)
     if (gst_pad_get_task_state (pad) != GST_TASK_STARTED) {
       GST_INFO_OBJECT (qmmfsrc, "Pad %s is not activated", GST_PAD_NAME (pad));
       continue;
+    }
+
+    // Register pad for metadata if attach_metadata is enabled
+    if (GST_QMMFSRC_VIDEO_PAD (pad)->attach_metadata) {
+      GST_INFO_OBJECT (qmmfsrc, "Registering pad %s for metadata attachment",
+          GST_PAD_NAME (pad));
+      gst_qmmf_context_register_metadata_pad (qmmfsrc->context, pad);
     }
 
     ids = g_array_append_val (ids, GST_QMMFSRC_VIDEO_PAD (pad)->id);
@@ -1565,12 +1449,6 @@ qmmfsrc_set_property (GObject * object, guint property_id,
     case PROP_CAMERA_PAD_ACTIVATION_MODE:
       qmmfsrc->pad_activation_mode = g_value_get_enum(value);
       break;
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-    case PROP_CAMERA_MULTICAMERA_HINT:
-      gst_qmmf_context_set_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_MULTICAMERA_HINT, value);
-      break;
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
     case PROP_CAMERA_SW_TNR:
       gst_qmmf_context_set_camera_param (qmmfsrc->context,
            PARAM_CAMERA_SW_TNR, value);
@@ -1775,12 +1653,6 @@ qmmfsrc_get_property (GObject * object, guint property_id, GValue * value,
     case PROP_CAMERA_PAD_ACTIVATION_MODE:
       g_value_set_enum(value, qmmfsrc->pad_activation_mode);
       break;
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-    case PROP_CAMERA_MULTICAMERA_HINT:
-      gst_qmmf_context_get_camera_param (qmmfsrc->context,
-          PARAM_CAMERA_MULTICAMERA_HINT, value);
-      break;
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
     case PROP_CAMERA_SW_TNR:
       gst_qmmf_context_get_camera_param (qmmfsrc->context,
           PARAM_CAMERA_SW_TNR, value);
@@ -1822,10 +1694,6 @@ qmmfsrc_finalize (GObject * object)
     qmmfsrc->context = NULL;
   }
 
-#ifdef ENABLE_RUNTIME_PARSER
-  qmmfsrc_deinit_src_templates ();
-#endif // ENABLE_RUNTIME_PARSER
-
   G_OBJECT_CLASS (qmmfsrc_parent_class)->finalize (object);
 }
 
@@ -1836,17 +1704,14 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   GObjectClass *gobject = G_OBJECT_CLASS (klass);
   GstElementClass *gstelement = GST_ELEMENT_CLASS (klass);
 
+   // Initializes a new qmmfsrc GstDebugCategory with the given properties.
+  GST_DEBUG_CATEGORY_INIT (qmmfsrc_debug, "qtiqmmfsrc", 0, "QTI QMMF Source");
+
+  gst_qmmf_context_get_static_meta ();
+
   gobject->set_property = GST_DEBUG_FUNCPTR (qmmfsrc_set_property);
   gobject->get_property = GST_DEBUG_FUNCPTR (qmmfsrc_get_property);
   gobject->finalize     = GST_DEBUG_FUNCPTR (qmmfsrc_finalize);
-
-#ifdef ENABLE_RUNTIME_PARSER
-  qmmfsrc_init_src_templates ();
-  gst_element_class_add_static_pad_template_with_gtype (gstelement,
-      &qmmfsrc_video_src_template, GST_TYPE_QMMFSRC_VIDEO_PAD);
-  gst_element_class_add_static_pad_template_with_gtype (gstelement,
-      &qmmfsrc_image_src_template, GST_TYPE_QMMFSRC_IMAGE_PAD);
-#endif // ENABLE_RUNTIME_PARSER
 
   gst_element_class_add_pad_template (gstelement,
       gst_qmmfsrc_video_src_template ());
@@ -1862,50 +1727,51 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_param_spec_uint ("camera", "Camera ID",
           "Camera device ID to be used by video/image pads",
           0, 32, DEFAULT_PROP_CAMERA_ID,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_SLAVE,
       g_param_spec_boolean ("slave", "Slave mode",
           "Set camera as slave device", DEFAULT_PROP_CAMERA_SLAVE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_LDC,
       g_param_spec_boolean ("ldc", "LDC",
           "Lens Distortion Correction", DEFAULT_PROP_CAMERA_LDC_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_LCAC,
       g_param_spec_boolean ("lcac", "LCAC",
           "Lateral Chromatic Aberration Correction", DEFAULT_PROP_CAMERA_LCAC_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-#ifndef EIS_MODES_ENABLE
-  g_object_class_install_property (gobject, PROP_CAMERA_EIS,
-      g_param_spec_boolean ("eis", "EIS",
-          "Electronic Image Stabilization mode to reduce the effects of camera shake",
-          DEFAULT_PROP_CAMERA_EIS_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-#else
-  g_object_class_install_property (gobject, PROP_CAMERA_EIS,
-      g_param_spec_enum ("eis", "EIS",
-          "Electronic Image Stabilization mode to reduce the effects of camera shake",
-          GST_TYPE_QMMFSRC_EIS_MODE, DEFAULT_PROP_CAMERA_EIS_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-#endif // EIS_MODES_ENABLE
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  if (!gst_qmmfsrc_check_eis_support ()) {
+    g_object_class_install_property (gobject, PROP_CAMERA_EIS,
+        g_param_spec_boolean ("eis", "EIS",
+            "Electronic Image Stabilization mode to reduce the effects of camera shake",
+            DEFAULT_PROP_CAMERA_EIS_MODE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  } else if (gst_qmmfsrc_check_eis_support () > 0) {
+    g_object_class_install_property (gobject, PROP_CAMERA_EIS,
+        g_param_spec_enum ("eis", "EIS",
+            "Electronic Image Stabilization mode to reduce the effects of camera shake",
+            GST_TYPE_QMMFSRC_EIS_MODE, DEFAULT_PROP_CAMERA_EIS_MODE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  }
 #ifndef VHDR_MODES_ENABLE
-  g_object_class_install_property (gobject, PROP_CAMERA_SHDR,
-      g_param_spec_boolean ("shdr", "SHDR",
-          "Super High Dynamic Range Imaging", DEFAULT_PROP_CAMERA_SHDR_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
+    g_object_class_install_property (gobject, PROP_CAMERA_SHDR,
+        g_param_spec_boolean ("shdr", "SHDR",
+            "Super High Dynamic Range Imaging", DEFAULT_PROP_CAMERA_SHDR_MODE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PLAYING));
 #else
-  g_object_class_install_property (gobject, PROP_CAMERA_VHDR,
-      g_param_spec_enum ("vhdr", "VHDR",
-          "Video High Dynamic Range Imaging Modes",
-          GST_TYPE_QMMFSRC_VHDR_MODE, DEFAULT_PROP_CAMERA_VHDR_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
+    g_object_class_install_property (gobject, PROP_CAMERA_VHDR,
+        g_param_spec_enum ("vhdr", "VHDR",
+            "Video High Dynamic Range Imaging Modes",
+            GST_TYPE_QMMFSRC_VHDR_MODE, DEFAULT_PROP_CAMERA_VHDR_MODE,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PLAYING));
 #endif // VHDR_MODES_ENABLE
   g_object_class_install_property (gobject, PROP_CAMERA_ADRC,
       g_param_spec_boolean ("adrc", "ADRC",
           "Automatic Dynamic Range Compression", DEFAULT_PROP_CAMERA_ADRC,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_CONTROL_MODE,
       g_param_spec_enum ("control-mode", "Control Mode",
@@ -1913,85 +1779,85 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
            "control routines. This is a top-level 3A control switch. When set "
            "to OFF, all 3A control by the camera device is disabled.",
            GST_TYPE_QMMFSRC_CONTROL_MODE, DEFAULT_PROP_CAMERA_CONTROL_MODE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EFFECT_MODE,
       g_param_spec_enum ("effect", "Effect",
            "Effect applied on the camera frames",
            GST_TYPE_QMMFSRC_EFFECT_MODE, DEFAULT_PROP_CAMERA_EFFECT_MODE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_SCENE_MODE,
       g_param_spec_enum ("scene", "Scene",
            "Camera optimizations depending on the scene",
            GST_TYPE_QMMFSRC_SCENE_MODE, DEFAULT_PROP_CAMERA_SCENE_MODE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_ANTIBANDING_MODE,
       g_param_spec_enum ("antibanding", "Antibanding",
            "Camera antibanding routine for the current illumination condition",
            GST_TYPE_QMMFSRC_ANTIBANDING, DEFAULT_PROP_CAMERA_ANTIBANDING,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_SHARPNESS,
       g_param_spec_int ("sharpness", "Sharpness",
           "Image Sharpness Strength", 0, 6, DEFAULT_PROP_CAMERA_SHARPNESS,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_CONTRAST,
       g_param_spec_int ("contrast", "Contrast",
           "Image Contrast Strength", 1, 10, DEFAULT_PROP_CAMERA_CONTRAST,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_SATURATION,
       g_param_spec_int ("saturation", "Saturation",
           "Image Saturation Strength", 0, 10, DEFAULT_PROP_CAMERA_SATURATION,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_ISO_MODE,
       g_param_spec_enum ("iso-mode", "ISO Mode",
           "ISO exposure mode",
           GST_TYPE_QMMFSRC_ISO_MODE, DEFAULT_PROP_CAMERA_ISO_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_ISO_VALUE,
       g_param_spec_int ("manual-iso-value", "Manual ISO Value",
            "Manual exposure ISO value. Used when the ISO mode is set to 'manual'",
            100, 3200, DEFAULT_PROP_CAMERA_ISO_VALUE,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_MODE,
       g_param_spec_enum ("exposure-mode", "Exposure Mode",
           "The desired mode for the camera's exposure routine.",
           GST_TYPE_QMMFSRC_EXPOSURE_MODE, DEFAULT_PROP_CAMERA_EXPOSURE_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_LOCK,
       g_param_spec_boolean ("exposure-lock", "Exposure Lock",
           "Locks current camera exposure routine values from changing.",
           DEFAULT_PROP_CAMERA_EXPOSURE_LOCK,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_METERING,
       g_param_spec_enum ("exposure-metering", "Exposure Metering",
           "The desired mode for the camera's exposure metering routine.",
           GST_TYPE_QMMFSRC_EXPOSURE_METERING,
           DEFAULT_PROP_CAMERA_EXPOSURE_METERING,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_COMPENSATION,
       g_param_spec_int ("exposure-compensation", "Exposure Compensation",
           "Adjust (Compensate) camera images target brightness. Adjustment is "
           "measured as a count of steps.",
           -12, 12, DEFAULT_PROP_CAMERA_EXPOSURE_COMPENSATION,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_TIME,
       g_param_spec_int64 ("manual-exposure-time", "Manual Exposure Time",
            "Manual exposure time in nanoseconds. Used when the Exposure mode"
            " is set to 'off'.",
            0, G_MAXINT64, DEFAULT_PROP_CAMERA_EXPOSURE_TIME,
-           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
            GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_EXPOSURE_TABLE,
       g_param_spec_string ("custom-exposure-table", "Custom Exposure Table",
@@ -2004,14 +1870,14 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "The desired mode for the camera's white balance routine.",
           GST_TYPE_QMMFSRC_WHITE_BALANCE_MODE,
           DEFAULT_PROP_CAMERA_WHITE_BALANCE_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_WHITE_BALANCE_LOCK,
       g_param_spec_boolean ("white-balance-lock", "White Balance Lock",
           "Locks current White Balance values from changing. Affects only "
           "non-manual white balance modes.",
           DEFAULT_PROP_CAMERA_WHITE_BALANCE_LOCK,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_MANUAL_WB_SETTINGS,
       g_param_spec_string ("manual-wb-settings", "Manual WB Settings",
@@ -2024,13 +1890,13 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_param_spec_enum ("focus-mode", "Focus Mode",
           "Whether auto-focus is currently enabled, and in what mode it is.",
           GST_TYPE_QMMFSRC_FOCUS_MODE, DEFAULT_PROP_CAMERA_FOCUS_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_NOISE_REDUCTION,
       g_param_spec_enum ("noise-reduction", "Noise Reduction",
           "Noise reduction filter mode",
           GST_TYPE_QMMFSRC_NOISE_REDUCTION, DEFAULT_PROP_CAMERA_NOISE_REDUCTION,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_NOISE_REDUCTION_TUNING,
       g_param_spec_string ("noise-reduction-tuning", "Noise Reduction Tuning",
@@ -2063,7 +1929,7 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
   g_object_class_install_property (gobject, PROP_CAMERA_IR_MODE,
       g_param_spec_enum ("infrared-mode", "IR Mode", "Infrared Mode",
           GST_TYPE_QMMFSRC_IR_MODE, DEFAULT_PROP_CAMERA_IR_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CAMERA_ACTIVE_SENSOR_SIZE,
       gst_param_spec_array ("active-sensor-size", "Active Sensor Size",
@@ -2078,7 +1944,7 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_param_spec_int ("sensor-mode", "Sensor Mode",
           "Force set Sensor Mode index (0-15). -1 for Auto selection",
           -1, 15, DEFAULT_PROP_CAMERA_SENSOR_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_VIDEO_METADATA,
       g_param_spec_pointer ("video-metadata", "Video Metadata",
           "Settings and parameters used for submitting capture requests for "
@@ -2109,27 +1975,21 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
     g_param_spec_enum ("frc-mode", "Frame rate control",
           "Stream frame rate control mode.",
           GST_TYPE_QMMFSRC_FRC_MODE, DEFAULT_PROP_CAMERA_FRC_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_IFE_DIRECT_STREAM,
       g_param_spec_boolean ("ife-direct-stream", "IFE direct stream",
           "IFE direct stream support, with this param, ISP will generate"
           "output stream from IFE directly and skip others ISP modules"
           "like IPE",
           DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_STATIC_METADATAS,
       g_param_spec_boxed ("static-metas", "Static Metadata's",
           "It contains the map of each connected camera and its metadata",
           G_TYPE_HASH_TABLE,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
-#ifdef ENABLE_RUNTIME_PARSER
-  void* qmmfsrc_parser = get_qmmfsrc_parser ();
-
-  gboolean multi_camera_enable = get_flag_as_bool (qmmfsrc_parser,
-      "MULTI_CAMERA_ENABLE");
-
-  if (multi_camera_enable) {
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
     g_object_class_install_property (gobject, PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
         gst_param_spec_array ("multi-camera-exp-time", "Multi Camera Exposure Time",
             "The exposure time (in nano-seconds) for each camera in multi camera"
@@ -2141,35 +2001,20 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
             GST_PARAM_MUTABLE_PLAYING));
   }
-#else
-#ifdef MULTI_CAMERA_ENABLE // MULTI_CAMERA_ENABLE
-  g_object_class_install_property (gobject, PROP_CAMERA_MULTI_CAM_EXPOSURE_TIME,
-      gst_param_spec_array ("multi-camera-exp-time", "Multi Camera Exposure Time",
-          "The exposure time (in nano-seconds) for each camera in multi camera"
-          " setup ('<exp-time-1, exp-time-2>') and it is used only when"
-          " exposure-mode is OFF",
-          g_param_spec_int ("exp-time", "Exposure Time",
-              "One of exp-time-1, exp-time-2 value.", 0, G_MAXINT, 0,
-              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
-#endif  // MULTI_CAMERA_ENABLE
-#endif // ENABLE_RUNTIME_PARSER
-
   g_object_class_install_property (gobject, PROP_CAMERA_OPERATION_MODE,
       g_param_spec_flags ("op-mode", "Camera operation mode",
           "provide camera operation mode to support specified camera function "
           "support mode : none, frameselection and fastswitch"
           "by default camera operation mode is none.",
           GST_TYPE_QMMFSRC_CAM_OPMODE, DEFAULT_PROP_CAMERA_OPERATION_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 
   g_object_class_install_property (gobject, PROP_CAMERA_INPUT_ROI,
       g_param_spec_boolean ("input-roi-enable", "Input ROI reprocess enable",
           "Input ROI if enabled, Input ROI reprocess usecase will be selected",
           DEFAULT_PROP_CAMERA_MULTI_ROI,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_CAMERA_INPUT_ROI_INFO,
       gst_param_spec_array ("input-roi-info", "Input ROI info",
           "Applicable only if input-roi-enable property is set."
@@ -2179,25 +2024,26 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           " in playing state",
           g_param_spec_int ("value", "Input ROI coordinates",
               "One of X, Y, WIDTH, HEIGHT values.", 0, G_MAXINT, 0,
-              G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
-#if defined (FEATURE_LOGICAL_CAMERA_SUPPORT) && \
-  defined (FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH)
-  g_object_class_install_property (gobject, PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
-      g_param_spec_int ("camera-switch-index", "set camera index for "
-          "logical camera", "logica camera is a camera having a group of two"
-          "or more physical sensors. logical camera includes several modes, "
-          "SAT mode is where logical camera output the same size as any one of "
-          "the physical sensor. the property is used to switch physical sensor's "
-          "index within logical camera's all available physical sensors in SAT mode"
-          "this property can be used to switch between different physical camera"
-          "by their indexes. for example, camera-index=-1 will set "
-          "next valid physical camera index, and camera-index=2 will select"
-          "physical camera index 2", -1, 10,
-          DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
+#ifdef FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    g_object_class_install_property (gobject, PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
+        g_param_spec_int ("camera-switch-index", "set camera index for "
+            "logical camera", "logica camera is a camera having a group of two"
+            "or more physical sensors. logical camera includes several modes, "
+            "SAT mode is where logical camera output the same size as any one of "
+            "the physical sensor. the property is used to switch physical sensor's "
+            "index within logical camera's all available physical sensors in SAT mode"
+            "this property can be used to switch between different physical camera"
+            "by their indexes. for example, camera-index=-1 will set "
+            "next valid physical camera index, and camera-index=2 will select"
+            "physical camera index 2", -1, 10,
+            DEFAULT_PROP_CAMERA_PHYSICAL_CAMERA_SWITCH,
+            G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+            GST_PARAM_MUTABLE_PLAYING));
+  }
 #endif
   g_object_class_install_property (gobject, PROP_CAMERA_PAD_ACTIVATION_MODE,
       g_param_spec_enum ("video-pads-activation-mode", "Video Pad Activation Mode",
@@ -2206,24 +2052,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
           "together with gst_pad_set_active() ",
           GST_TYPE_QMMFSRC_PAD_ACTIVATION_MODE,
           DEFAULT_PROP_CAMERA_PAD_ACTIVAION_MODE,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
-#ifdef FEATURE_OFFLINE_IFE_SUPPORT
-  g_object_class_install_property (gobject, PROP_CAMERA_MULTICAMERA_HINT,
-      g_param_spec_boolean ("multicamera-hint", "multicamera-hint",
-          "multicamera-hint if enabled, this flag will make camera hardwares "
-          "to work in offline which is useful when camera sensors are more then "
-          "camera hardwares, it has impact on memory usage and latency.",
-          DEFAULT_PROP_CAMERA_MULTICAMERA_HINT,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
-#ifdef FEATURE_SW_TNR
-  g_object_class_install_property (gobject, PROP_CAMERA_SW_TNR,
-      g_param_spec_boolean ("sw-tnr", "SW TNR",
-          "this flag will enable sw based TNR.",
-          DEFAULT_PROP_CAMERA_SW_TNR,
-          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-#endif // FEATURE_SW_TNR
+  if (gst_qmmfsrc_check_sw_tnr_support ()) {
+    g_object_class_install_property (gobject, PROP_CAMERA_SW_TNR,
+        g_param_spec_boolean ("sw-tnr", "SW TNR",
+            "this flag will enable sw based TNR.",
+            DEFAULT_PROP_CAMERA_SW_TNR,
+            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  }
 
   signals[SIGNAL_CAPTURE_IMAGE] =
       g_signal_new_class_handler ("capture-image", G_TYPE_FROM_CLASS (klass),
@@ -2249,14 +2086,15 @@ qmmfsrc_class_init (GstQmmfSrcClass * klass)
       g_signal_new ("urgent-metadata", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_POINTER);
 
+  signals[SIGNAL_DEVICE_STATUS_CHANGE] =
+      g_signal_new ("device-status-change", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_BOOLEAN);
+
   gstelement->request_new_pad = GST_DEBUG_FUNCPTR (qmmfsrc_request_pad);
   gstelement->release_pad = GST_DEBUG_FUNCPTR (qmmfsrc_release_pad);
 
   gstelement->send_event = GST_DEBUG_FUNCPTR (qmmfsrc_send_event);
   gstelement->change_state = GST_DEBUG_FUNCPTR (qmmfsrc_change_state);
-
-  // Initializes a new qmmfsrc GstDebugCategory with the given properties.
-  GST_DEBUG_CATEGORY_INIT (qmmfsrc_debug, "qtiqmmfsrc", 0, "QTI QMMF Source");
 }
 
 // GObject element initialization function.
@@ -2264,7 +2102,7 @@ static void
 qmmfsrc_init (GstQmmfSrc * qmmfsrc)
 {
   GST_DEBUG_OBJECT (qmmfsrc, "Initializing");
-
+  GValue value = G_VALUE_INIT;
   qmmfsrc->srcpads = g_hash_table_new (NULL, NULL);
   qmmfsrc->nextidx = 0;
 
@@ -2274,7 +2112,189 @@ qmmfsrc_init (GstQmmfSrc * qmmfsrc)
 
   qmmfsrc->context = gst_qmmf_context_new (qmmfsrc_event_callback,
       qmmfsrc_metadata_callback, qmmfsrc);
-  g_return_if_fail (qmmfsrc->context != NULL);
+  QMMFSRC_RETURN_IF_FAIL (qmmfsrc, qmmfsrc->context != NULL,
+      "Failed to create context");
+
+  // Camera ID
+  g_value_init (&value, G_TYPE_UINT);
+  g_value_set_uint (&value, DEFAULT_PROP_CAMERA_ID);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_ID, &value);
+  g_value_unset (&value);
+
+  // Slave Mode
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_SLAVE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_SLAVE, &value);
+  g_value_unset (&value);
+
+  // LDC
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_LDC_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_LDC, &value);
+  g_value_unset (&value);
+
+  // LCAC
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_LCAC_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_LCAC, &value);
+  g_value_unset (&value);
+
+  // EIS
+  if (!gst_qmmfsrc_check_eis_support ()) {
+    g_value_init (&value, G_TYPE_BOOLEAN);
+    g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_EIS_MODE);
+    gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EIS, &value);
+    g_value_unset (&value);
+  } else if (gst_qmmfsrc_check_eis_support () > 0) {
+    g_value_init (&value, GST_TYPE_QMMFSRC_EIS_MODE);
+    g_value_set_enum (&value, DEFAULT_PROP_CAMERA_EIS_MODE);
+    gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EIS, &value);
+    g_value_unset (&value);
+  }
+
+  // ADRC (default: FALSE)
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_ADRC);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_ADRC, &value);
+  g_value_unset (&value);
+
+  // Control Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_CONTROL_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_CONTROL_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_CONTROL_MODE, &value);
+  g_value_unset (&value);
+
+  // Effect Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_EFFECT_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_EFFECT_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EFFECT_MODE, &value);
+  g_value_unset (&value);
+
+  // Scene Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_SCENE_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_SCENE_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_SCENE_MODE, &value);
+  g_value_unset (&value);
+
+  // Antibanding
+  g_value_init (&value, GST_TYPE_QMMFSRC_ANTIBANDING);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_ANTIBANDING);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_ANTIBANDING_MODE, &value);
+  g_value_unset (&value);
+
+  // Sharpness
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_SHARPNESS);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_SHARPNESS, &value);
+  g_value_unset (&value);
+
+  // Contrast
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_CONTRAST);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_CONTRAST, &value);
+  g_value_unset (&value);
+
+  // Saturation
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_SATURATION);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_SATURATION, &value);
+  g_value_unset (&value);
+
+  // ISO Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_ISO_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_ISO_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_ISO_MODE, &value);
+  g_value_unset (&value);
+
+  // ISO Value
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_ISO_VALUE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_ISO_VALUE, &value);
+  g_value_unset (&value);
+
+  // Exposure Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_EXPOSURE_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_EXPOSURE_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EXPOSURE_MODE, &value);
+  g_value_unset (&value);
+
+  // Exposure Lock (default: FALSE)
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_EXPOSURE_LOCK);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EXPOSURE_LOCK, &value);
+  g_value_unset (&value);
+
+  // Exposure Metering
+  g_value_init (&value, GST_TYPE_QMMFSRC_EXPOSURE_METERING);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_EXPOSURE_METERING);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EXPOSURE_METERING, &value);
+  g_value_unset (&value);
+
+  // Exposure Compensation (default: 0)
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_EXPOSURE_COMPENSATION);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EXPOSURE_COMPENSATION, &value);
+  g_value_unset (&value);
+
+  // Exposure Time
+  g_value_init (&value, G_TYPE_INT64);
+  g_value_set_int64 (&value, DEFAULT_PROP_CAMERA_EXPOSURE_TIME);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_EXPOSURE_TIME, &value);
+  g_value_unset (&value);
+
+  // White Balance Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_WHITE_BALANCE_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_WHITE_BALANCE_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_WHITE_BALANCE_MODE, &value);
+  g_value_unset (&value);
+
+  // White Balance Lock (default: FALSE)
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_WHITE_BALANCE_LOCK);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_WHITE_BALANCE_LOCK, &value);
+  g_value_unset (&value);
+
+  // Focus Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_FOCUS_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_FOCUS_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_FOCUS_MODE, &value);
+  g_value_unset (&value);
+
+  // Noise Reduction
+  g_value_init (&value, GST_TYPE_QMMFSRC_NOISE_REDUCTION);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_NOISE_REDUCTION);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_NOISE_REDUCTION, &value);
+  g_value_unset (&value);
+
+  // IR Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_IR_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_IR_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_IR_MODE, &value);
+  g_value_unset (&value);
+
+  // Sensor Mode
+  g_value_init (&value, G_TYPE_INT);
+  g_value_set_int (&value, DEFAULT_PROP_CAMERA_SENSOR_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_SENSOR_MODE, &value);
+  g_value_unset (&value);
+
+  // FRC Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_FRC_MODE);
+  g_value_set_enum (&value, DEFAULT_PROP_CAMERA_FRC_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_FRC_MODE, &value);
+  g_value_unset (&value);
+
+  // IFE Direct Stream (default: FALSE)
+  g_value_init (&value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&value, DEFAULT_PROP_CAMERA_IFE_DIRECT_STREAM);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_IFE_DIRECT_STREAM, &value);
+  g_value_unset (&value);
+
+  // Operation Mode
+  g_value_init (&value, GST_TYPE_QMMFSRC_CAM_OPMODE);
+  g_value_set_flags (&value, DEFAULT_PROP_CAMERA_OPERATION_MODE);
+  gst_qmmf_context_set_camera_param (qmmfsrc->context, PARAM_CAMERA_OPERATION_MODE, &value);
+  g_value_unset (&value);
 
   GST_OBJECT_FLAG_SET (qmmfsrc, GST_ELEMENT_FLAG_SOURCE);
 }
@@ -2321,6 +2341,14 @@ gst_qmmfsrc_child_proxy_init (gpointer g_iface, gpointer data)
 
   iface->get_child_by_index = gst_qmmsrc_child_proxy_get_child_by_index;
   iface->get_children_count = gst_qmmsrc_child_proxy_get_children_count;
+}
+
+static void __attribute__((destructor))
+qmmfsrc_plugin_cleanup(void)
+{
+  // Clean up the static metadata table
+  GST_INFO ("Cleanup of static metadata table");
+  gst_qmmf_cleanup_static_metas();
 }
 
 static gboolean

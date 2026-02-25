@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -38,7 +38,6 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <glib.h>
@@ -46,7 +45,7 @@
 #include <sys/ioctl.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
@@ -1219,10 +1218,6 @@ main (gint argc, gchar * argv[])
   guint intrpt_watch_id = 0;
   GstAppOptions options = {};
   gchar *config_file = NULL;
-
-  // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Set default value
   options.model_path = NULL;

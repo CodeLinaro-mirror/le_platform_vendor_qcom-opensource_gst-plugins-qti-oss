@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
 * Application:
@@ -26,12 +26,11 @@
 */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
 #include <pthread.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define GST_APP_SUMMARY \
   "This application demonstrates two major usecases i.e Basic and Full." \
@@ -1141,10 +1140,6 @@ main (gint argc, gchar * argv[])
   GstBus *bus = NULL;
   guint intrpt_watch_id = 0;
   gboolean ret = -1;
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // Create the application context
   appctx = gst_app_context_new ();

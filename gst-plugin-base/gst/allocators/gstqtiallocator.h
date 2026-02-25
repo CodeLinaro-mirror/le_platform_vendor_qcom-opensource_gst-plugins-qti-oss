@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -34,14 +34,14 @@ typedef struct _GstQtiAllocatorPrivate GstQtiAllocatorPrivate;
 
 struct _GstQtiAllocator
 {
-  GstFdAllocator parent;
+  GstDmaBufAllocator parent;
 
   GstQtiAllocatorPrivate *priv;
 };
 
 struct _GstQtiAllocatorClass
 {
-  GstFdAllocatorClass parent;
+  GstDmaBufAllocatorClass parent;
 };
 
 GST_EXPORT

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -2120,8 +2120,6 @@ main (gint argc, gchar *argv[])
   if (pipeline == NULL && display)
     pipeline = g_strdup (GST_CAMERA_PIPELINE);
   else if (pipeline == NULL) {
-    setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-    setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
     pipeline = g_strdup (GST_CAMERA_PIPELINE_DISPLAY);
   }
 
