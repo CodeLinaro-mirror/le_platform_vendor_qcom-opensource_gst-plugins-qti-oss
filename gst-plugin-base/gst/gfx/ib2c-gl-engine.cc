@@ -1010,6 +1010,11 @@ std::vector<GraphicTuple> Engine::ImportSurface(const Surface& surface,
       attribs[index++] = std::get<1>(internal) >> 32;
     }
 
+    if (flags & SurfaceFlags::kSecure) {
+      attribs[index++] = EGL_PROTECTED_CONTENT_EXT;
+      attribs[index++] = EGL_TRUE;
+    }
+
     attribs[index] = EGL_NONE;
 
     EGLImageKHR image =
@@ -1017,7 +1022,8 @@ std::vector<GraphicTuple> Engine::ImportSurface(const Surface& surface,
                                     EGL_LINUX_DMA_BUF_EXT, NULL, attribs);
 
     if (image == EGL_NO_IMAGE) {
-      throw Exception("Failed to create EGL image, error: ", std::hex,
+      const char *str_extra = (flags & SurfaceFlags::kSecure) ? " with PROTECTED" : "";
+      throw Exception("Failed to create EGL image",  str_extra, ", error: ", std::hex,
                       env_->Egl()->GetError(), "!");
     }
 

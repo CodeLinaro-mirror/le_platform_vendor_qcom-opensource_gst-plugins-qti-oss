@@ -75,6 +75,10 @@ gst_gbm_qcom_backend_is_supported (void)
 
     // Load GBM library and symbols.
     libhandle = dlopen ("libgbm.so.1", RTLD_NOW);
+    if (NULL == libhandle) {
+      libhandle = dlopen ("libgbm.so", RTLD_NOW);
+    }
+
     if (libhandle != NULL) {
       success = load_symbol ((gpointer*)&gbm_create_device, libhandle,
           "gbm_create_device");

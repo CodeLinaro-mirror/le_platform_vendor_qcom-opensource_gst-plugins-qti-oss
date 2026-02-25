@@ -71,8 +71,12 @@ int32_t QueryAlignment() {
       void *handle = dlopen("libadreno_utils.so.1", RTLD_NOW);
 
       if (nullptr == handle) {
-        throw Exception(e.what(), "Fallback to Adreno utils. Failed to load "
-                        "library, error: ", dlerror());
+        handle = dlopen("libadreno_utils.so", RTLD_NOW);
+
+        if (nullptr == handle) {
+          throw Exception(e.what(), "Fallback to Adreno utils. Failed to load "
+                          "library, error: ", dlerror());
+        }
       }
 
       get_gpu_pixel_alignment GetGpuPixelAlignment =

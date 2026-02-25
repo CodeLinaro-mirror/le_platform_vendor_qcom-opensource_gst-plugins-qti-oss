@@ -31,10 +31,10 @@ GST_DEBUG_CATEGORY_EXTERN (gst_video_converter_engine_debug);
 #define GST_VCE_FLAG_F32_FORMAT      (7)
 
 #define GST_VCE_BLIT_INIT \
-    { NULL, 0, {{0, 0}, {0, 0}, {0, 0}, {0, 0}}, {0, 0, 0, 0}, 255, GST_VCE_ROTATE_0 }
+    { NULL, 0, NULL, {0, }, {{0, 0}, {0, 0}, {0, 0}, {0, 0}}, {0, 0, 0, 0}, 255, GST_VCE_ROTATE_0 }
 #define GST_VCE_COMPOSITION_INIT \
-    { NULL, 0, NULL, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
-        { 1.0, 1.0, 1.0, 1.0 }, 0 }
+    { NULL, 0, NULL, NULL, {0, }, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
+        { 1.0, 1.0, 1.0, 1.0 }, 0, 0 }
 
 // Maximum number of image channels, used for normalization offsets and scales.
 #define GST_VCE_MAX_CHANNELS         4
@@ -126,6 +126,8 @@ struct _GstVideoQuadrilateral
  * GstVideoBlit:
  * @inframe: Input video frame.
  * @mask: Bitwise configuration mask.
+ * @buffer: Input video buffer
+ * @vinfo: Input video info
  * @source: Source quadrilateral in the input frame.
  * @destination: Destination rectangle in the output frame.
  * @alpha: Global alpha, 0 = fully transparent, 255 = fully opaque.
@@ -140,6 +142,9 @@ struct _GstVideoBlit
   GstVideoFrame         *frame;
   guint32               mask;
 
+  GstBuffer             *buffer;
+  GstVideoInfo          vinfo;
+
   GstVideoQuadrilateral source;
   GstVideoRectangle     destination;
 
@@ -152,11 +157,14 @@ struct _GstVideoBlit
  * @blits: Array of blit objects.
  * @n_blits: Number of blit objects.
  * @frame: Output video frame where the blit objects will be placed.
+ * @buffer: Input video buffer
+ * @vinfo: Input video info
  * @bgcolor: Background color to be applied if bgfill is set to TRUE.
  * @bgfill: Whether to fill the background of the frame image with bgcolor.
  * @offsets: Channel offset factors, used in normalize float operation.
  * @scales: Channel scale factors, used in normalize float operation.
  * @flags: Bitwise configuration mask for the output.
+ * @is_secure: Use secure buffer.
  *
  * Blit composition.
  */
@@ -167,6 +175,9 @@ struct _GstVideoComposition
 
   GstVideoFrame *frame;
 
+  GstBuffer     *buffer;
+  GstVideoInfo  vinfo;
+
   guint32       bgcolor;
   gboolean      bgfill;
 
@@ -174,6 +185,7 @@ struct _GstVideoComposition
   gdouble       scales[GST_VCE_MAX_CHANNELS];
 
   guint64       flags;
+  gboolean      is_secure;
 };
 
 /**
