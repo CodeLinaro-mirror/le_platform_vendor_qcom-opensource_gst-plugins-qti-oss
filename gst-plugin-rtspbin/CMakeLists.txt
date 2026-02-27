@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGINS_QTI_OSS_RTSP_BIN
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C
@@ -23,7 +23,7 @@ pkg_check_modules(GST_VIDEO
 pkg_check_modules(GST_RTSP
   REQUIRED gstreamer-rtsp-server-1.0>=${GST_VERSION_REQUIRED})
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

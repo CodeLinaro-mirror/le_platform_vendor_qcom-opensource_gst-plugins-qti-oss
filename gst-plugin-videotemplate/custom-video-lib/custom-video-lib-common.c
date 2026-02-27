@@ -1,7 +1,7 @@
 /*
- Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
- SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #include "custom-video-lib-common.h"
 
@@ -150,7 +150,6 @@ CustomCmdStatus
 custom_lib_process_buffer (CustomLib * custom_lib,
     GstBuffer * inbuffer, GstBuffer * outbuffer)
 {
-  GstVideoFrame inframe = { 0, }, outframe = { 0, };
   gboolean success = FALSE;
 
   if (NULL == custom_lib) {
@@ -158,52 +157,21 @@ custom_lib_process_buffer (CustomLib * custom_lib,
     return CUSTOM_STATUS_FAIL;
   }
 
-  if (!gst_video_frame_map (&inframe, &custom_lib->ininfo_, inbuffer,
-      GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR ("Failed to map input buffer!");
-    return CUSTOM_STATUS_FAIL;
-  }
-
-  (*custom_lib->cb_.lock_buf_for_writing) (outbuffer);
-
-  if (!gst_video_frame_map (&outframe, &custom_lib->outinfo_, outbuffer,
-      GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR ("Failed to map output buffer!");
-    gst_video_frame_unmap (&inframe);
-    return CUSTOM_STATUS_FAIL;
-  }
-  // reference functionality: flip the image
   {
     GstVideoBlit blit = GST_VCE_BLIT_INIT;
     GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
     GstClockTime time = GST_CLOCK_TIME_NONE;
-    GstVideoRectangle in_rect, out_rect;
-
-    in_rect.x = 0;
-    in_rect.y = 0;
-    in_rect.w = GST_VIDEO_INFO_WIDTH (&custom_lib->ininfo_);
-    in_rect.h = GST_VIDEO_INFO_HEIGHT (&custom_lib->ininfo_);
-
-    out_rect.x = 0;
-    out_rect.y = 0;
-    out_rect.w = GST_VIDEO_INFO_WIDTH (&custom_lib->outinfo_);
-    out_rect.h = GST_VIDEO_INFO_HEIGHT (&custom_lib->outinfo_);
 
     time = gst_util_get_timestamp ();
 
-    blit.frame = &inframe;
-
-    blit.source = in_rect;
-    blit.destination = out_rect;
-
-    blit.flip = GST_VCE_FLIP_VERTICAL;
-    blit.rotate = 0;
+    blit.buffer = inbuffer;
+    blit.mask |= GST_VCE_MASK_FLIP_VERTICAL;
 
     composition.blits = &blit;
     composition.n_blits = 1;
 
-    composition.frame = &outframe;
-    composition.flags = 0;
+    composition.buffer = outbuffer;
+    composition.datatype = 0;
 
     composition.bgcolor = 0;
     composition.bgfill = FALSE;
@@ -217,9 +185,6 @@ custom_lib_process_buffer (CustomLib * custom_lib,
         G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
         (GST_TIME_AS_USECONDS (time) % 1000));
   }
-
-  gst_video_frame_unmap (&outframe);
-  gst_video_frame_unmap (&inframe);
 
   (*custom_lib->cb_.unlock_buf_for_writing) (outbuffer);
 

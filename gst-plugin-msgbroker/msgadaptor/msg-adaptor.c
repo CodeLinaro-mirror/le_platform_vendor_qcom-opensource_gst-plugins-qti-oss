@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 #include "msg-adaptor.h"
 
@@ -114,7 +114,8 @@ gst_msg_protocol_new (gchar *protocol, const gchar *role)
   adaptor->role = g_strdup (role);
   adaptor->protocol = g_strdup (protocol);
 
-  snprintf (filename, 50, "libgstqti%sadaptor.so", protocol);
+  snprintf (filename, 50, "libgstqti%sadaptor.so.%d",
+      protocol, GST_QTI_ADAPTOR_SOVERSION);
   GST_DEBUG ("Trying to dlopen, filename: %s.", filename);
   adaptor->libhandle = dlopen (filename, RTLD_NOW);
   if (adaptor->libhandle == NULL) {

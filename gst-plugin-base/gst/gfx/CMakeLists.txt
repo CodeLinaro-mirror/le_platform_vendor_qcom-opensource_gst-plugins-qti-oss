@@ -26,6 +26,11 @@ set_target_properties(${TARGET_NAME} PROPERTIES
   PUBLIC_HEADER "${TARGET_HEADERS}"
 )
 
+target_include_directories(${TARGET_NAME} INTERFACE
+  $<BUILD_INTERFACE:${QTI_PLUGINS_BASE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
+)
+
 target_include_directories(${TARGET_NAME} PRIVATE
   ${GST_INCLUDE_DIRS}
 )
@@ -47,8 +52,11 @@ install(
   PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/gfx/
 )
 
+# Add destination of compiletime pkg-config file to PKG_CONFIG_PATH
+set(ENV{PKG_CONFIG_PATH} "${CMAKE_CURRENT_BINARY_DIR}:$ENV{PKG_CONFIG_PATH}")
+
 configure_file(
-  ${CMAKE_SOURCE_DIR}/gst/common.pc.in
+  ${BASE_COMMON_PC_IN}
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
   @ONLY
 )

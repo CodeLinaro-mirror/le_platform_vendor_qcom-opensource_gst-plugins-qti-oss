@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGINS_QTI_OSS_SMART_ENCODE_BIN
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION} LANGUAGES C CXX
 )
@@ -22,8 +22,10 @@ pkg_check_modules(GST_VIDEO
 pkg_check_modules(GST_PBUTILS
   REQUIRED gstreamer-pbutils-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(QCOM_VIDEO_CTRL REQUIRED qcom-video-ctrl)
+pkg_check_modules(GST_QCOM_VIDEO
+  REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -44,6 +46,7 @@ add_library(${GST_SMART_VENC_BIN} SHARED
 
 target_include_directories(${GST_SMART_VENC_BIN} PUBLIC
   ${GST_INCLUDE_DIRS}
+  ${GST_QCOM_VIDEO_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_SMART_VENC_BIN} PRIVATE
@@ -51,7 +54,7 @@ target_link_libraries(${GST_SMART_VENC_BIN} PRIVATE
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
   ${GST_PBUTILS_LIBRARIES}
-  gstqtivideobase
+  ${GST_QCOM_VIDEO_LIBRARIES}
 )
 
 string(REGEX MATCH "^[0-9]+" QCOM_VIDEO_CTRL_VERSION_MAJOR ${QCOM_VIDEO_CTRL_VERSION})

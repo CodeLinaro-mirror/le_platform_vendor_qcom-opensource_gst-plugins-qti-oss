@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_VIDEOTRANSFORM
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C
@@ -18,8 +18,14 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_QCOM_UTILS
+  REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_VIDEO
+  REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_ALLOC
+  REQUIRED gstreamer-qcom-oss-allocators-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -47,15 +53,18 @@ target_compile_definitions(${GST_QTI_VIDEO_TRANSFORM} PRIVATE
 
 target_include_directories(${GST_QTI_VIDEO_TRANSFORM} PUBLIC
   ${GST_INCLUDE_DIRS}
+  ${GST_QCOM_UTILS_INCLUDE_DIRS}
+  ${GST_QCOM_VIDEO_INCLUDE_DIRS}
+  ${GST_QCOM_ALLOC_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_QTI_VIDEO_TRANSFORM} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
   ${GST_VIDEO_LIBRARIES}
-  gstqtivideobase
-  gstqtiallocatorsbase
-  gstqtiutilsbase
+  ${GST_QCOM_VIDEO_LIBRARIES}
+  ${GST_QCOM_ALLOC_LIBRARIES}
+  ${GST_QCOM_UTILS_LIBRARIES}
 )
 
 install(

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -8,26 +8,37 @@
 
 #include <gst/video/video.h>
 #include <gst/allocators/allocators.h>
+#include <gst/video/video-utils.h>
 
 G_BEGIN_DECLS
 
 GST_DEBUG_CATEGORY_EXTERN (gst_video_converter_engine_debug);
 
+// Bitwise flags for the configuration mask in #GstVideoBlit.
+#define GST_VCE_MASK_SOURCE          (1 << 0)
+#define GST_VCE_MASK_DESTINATION     (1 << 1)
+#define GST_VCE_MASK_FLIP_VERTICAL   (1 << 2)
+#define GST_VCE_MASK_FLIP_HORIZONTAL (1 << 3)
+#define GST_VCE_MASK_ROTATION        (1 << 4)
 
-// Composition flags valid only for the output frame.
-#define GST_VCE_FLAG_I8_FORMAT       (1)
-#define GST_VCE_FLAG_I16_FORMAT      (2)
-#define GST_VCE_FLAG_U16_FORMAT      (3)
-#define GST_VCE_FLAG_I32_FORMAT      (4)
-#define GST_VCE_FLAG_U32_FORMAT      (5)
-#define GST_VCE_FLAG_F16_FORMAT      (6)
-#define GST_VCE_FLAG_F32_FORMAT      (7)
+// Composition data types valid only for the output RGB(A) frame.
+#define GST_VCE_DATA_TYPE_U8         (0)
+#define GST_VCE_DATA_TYPE_I8         (1)
+#define GST_VCE_DATA_TYPE_U16        (2)
+#define GST_VCE_DATA_TYPE_I16        (3)
+#define GST_VCE_DATA_TYPE_U32        (4)
+#define GST_VCE_DATA_TYPE_I32        (5)
+#define GST_VCE_DATA_TYPE_U64        (6)
+#define GST_VCE_DATA_TYPE_I64        (7)
+#define GST_VCE_DATA_TYPE_F16        (8)
+#define GST_VCE_DATA_TYPE_F32        (9)
 
 #define GST_VCE_BLIT_INIT \
-    { NULL, {0, 0, 0, 0}, {0, 0, 0, 0}, 255, GST_VCE_ROTATE_0, GST_VCE_FLIP_NONE }
+    { NULL, NULL, 0, {{0, 0}, {0, 0}, {0, 0}, {0, 0}}, \
+        {0, 0, 0, 0}, 255, GST_VCE_ROTATE_0 }
 #define GST_VCE_COMPOSITION_INIT \
-    { NULL, 0, NULL, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
-        { 1.0, 1.0, 1.0, 1.0 }, 0 }
+    { NULL, 0, NULL, NULL, 0, FALSE, { 0.0, 0.0, 0.0, 0.0 }, \
+      { 1.0, 1.0, 1.0, 1.0 }, 0 }
 
 // Maximum number of image channels, used for normalization offsets and scales.
 #define GST_VCE_MAX_CHANNELS         4
@@ -41,6 +52,7 @@ GST_DEBUG_CATEGORY_EXTERN (gst_video_converter_engine_debug);
 #define GST_VCE_OPT_FCV_OP_MODE "fcv-op-mode"
 
 typedef struct _GstVideoConvEngine GstVideoConvEngine;
+typedef struct _GstVideoQuadrilateral GstVideoQuadrilateral;
 typedef struct _GstVideoBlit GstVideoBlit;
 typedef struct _GstVideoComposition GstVideoComposition;
 
@@ -66,6 +78,7 @@ typedef enum {
  * @GST_VCE_BACKEND_C2D: Use C2D based video converter.
  * @GST_VCE_BACKEND_GLES: Use OpenGLES based video converter.
  * @GST_VCE_BACKEND_FCV: Use FastCV based video converter.
+ * @GST_VCE_BACKEND_OCV: Use OpenCV based video converter.
  *
  * The backend of the video converter engine.
  */
@@ -74,10 +87,14 @@ typedef enum {
   GST_VCE_BACKEND_C2D,
   GST_VCE_BACKEND_GLES,
   GST_VCE_BACKEND_FCV,
+  GST_VCE_BACKEND_OCV,
 } GstVideoConvBackend;
 
 GST_VIDEO_API GType gst_video_converter_backend_get_type (void);
 #define GST_TYPE_VCE_BACKEND (gst_video_converter_backend_get_type())
+
+GST_API GType gst_fcv_op_mode_get_type (void);
+#define GST_TYPE_FCV_OP_MODE (gst_fcv_op_mode_get_type())
 
 /**
  * GstVideoConvRotate:
@@ -96,73 +113,125 @@ typedef enum {
 } GstVideoConvRotate;
 
 /**
- * GstVideoConvFlip:
- * @GST_VCE_FLIP_NONE: No flip.
- * @GST_VCE_FLIP_HORIZONTAL: Flip frame horizontally.
- * @GST_VCE_FLIP_VERTICAL: Flip frame vertically.
- * @GST_VCE_FLIP_BOTH: Flip frame both horizontally and vertically.
+ * GstVideoQuadrilateral:
+ * @a: Upper-left point coordinate.
+ * @b: Bottom-left point coordinate.
+ * @c: Upper-right point coordinate.
+ * @d: Bottom-right point coordinate.
  *
- * Flip direction.
+ * Quadrilateral defined with the coordinates of its 4 points.
  */
-typedef enum {
-  GST_VCE_FLIP_NONE       = 0,
-  GST_VCE_FLIP_HORIZONTAL = 1,
-  GST_VCE_FLIP_VERTICAL   = 2,
-  GST_VCE_FLIP_BOTH       = 3,
-} GstVideoConvFlip;
+struct _GstVideoQuadrilateral
+{
+  GstVideoPoint a;
+  GstVideoPoint b;
+  GstVideoPoint c;
+  GstVideoPoint d;
+};
 
 /**
  * GstVideoBlit:
- * @inframe: Input video frame.
- * @source: Source region in the input frame.
- * @destination: Destination region in the output frame.
+ * @buffer: Input buffer.
+ * @info: GstVideoInfo for mapping.
+ * @mask: Bitwise configuration mask.
+ * @source: Source quadrilateral in the input frame.
+ * @destination: Destination rectangle in the output frame.
  * @alpha: Global alpha, 0 = fully transparent, 255 = fully opaque.
  * @rotate: The degrees at which the frame will be rotatte.
  * @flip: The directions at which the frame will be flipped.
  *
- * Blit object. Input frame along with a possible crop and destination
- * rectangles and configuration mask.
+ * Blit object. Input buffer along with a possible crop and destination
+ * rectangles, configuration mask and info for mapping.
  */
 struct _GstVideoBlit
 {
-  GstVideoFrame      *frame;
+  GstBuffer             *buffer;
+  GstVideoInfo          *info;
 
-  GstVideoRectangle  source;
-  GstVideoRectangle  destination;
+  guint32               mask;
 
-  guint8             alpha;
-  GstVideoConvRotate rotate;
-  GstVideoConvFlip   flip;
+  GstVideoQuadrilateral source;
+  GstVideoRectangle     destination;
+
+  guint8                alpha;
+  GstVideoConvRotate    rotate;
 };
 
 /**
  * GstVideoComposition:
  * @blits: Array of blit objects.
  * @n_blits: Number of blit objects.
- * @frame: Output video frame where the blit objects will be placed.
+ * @buffer: Output buffer.
+ * @info: GstVideoInfo for mapping.
  * @bgcolor: Background color to be applied if bgfill is set to TRUE.
  * @bgfill: Whether to fill the background of the frame image with bgcolor.
- * @offsets: Channel offset factors, used in normalize float operation.
- * @scales: Channel scale factors, used in normalize float operation.
- * @flags: Bitwise configuration mask for the output.
+ * @offsets: Component offset factors, used in normalize operation.
+ * @scales: Component scale factors, used in normalize operation.
+ * @datatype: The data type of the pixels in the output frame.
  *
  * Blit composition.
  */
 struct _GstVideoComposition
 {
-  GstVideoBlit   *blits;
-  guint         n_blits;
+  GstVideoBlit       *blits;
+  guint              n_blits;
 
-  GstVideoFrame *frame;
+  GstBuffer          *buffer;
+  GstVideoInfo       *info;
 
-  guint32       bgcolor;
-  gboolean      bgfill;
+  guint32            bgcolor;
+  gboolean           bgfill;
 
-  gdouble       offsets[GST_VCE_MAX_CHANNELS];
-  gdouble       scales[GST_VCE_MAX_CHANNELS];
+  gdouble            offsets[GST_VCE_MAX_CHANNELS];
+  gdouble            scales[GST_VCE_MAX_CHANNELS];
 
-  guint64       flags;
+  guint64            datatype;
 };
+
+/**
+ * gst_video_quadrilateral_is_rectangle:
+ *
+ * Helper function for checking whether a #GstVideoQuadrilateral is rectangular.
+ *
+ * return: NONE
+ */
+GST_VIDEO_API gboolean
+gst_video_quadrilateral_is_rectangle (const GstVideoQuadrilateral * quadrilateral);
+
+/**
+ * gst_video_rectangle_to_quadrilateral:
+ *
+ * Helper function for converting a rectangle into a #GstVideoQuadrilateral struct.
+ *
+ * return: NONE
+ */
+GST_VIDEO_API void
+gst_video_rectangle_to_quadrilateral (const GstVideoRectangle * rectangle,
+                                      GstVideoQuadrilateral * quadrilateral);
+
+/**
+ * gst_video_quadrilateral_to_rectangle:
+ *
+ * Helper function for converting a rectangular quadrilateral into the more
+ * convinient #GstVideoRectangle struct.
+ *
+ * return: NONE
+ */
+GST_VIDEO_API void
+gst_video_quadrilateral_to_rectangle (const GstVideoQuadrilateral * quadrilateral,
+                                      GstVideoRectangle * rectangle);
+
+/**
+ * gst_video_frame_normalize_ip:
+ *
+ * Helper function for normalizing video frame inplace.
+ *
+ * return: TRUE on success or FALSE on failure
+ */
+GST_VIDEO_API gboolean
+gst_video_frame_normalize_ip (GstVideoFrame * vframe, guint64 flags,
+                              gdouble offsets[GST_VCE_MAX_CHANNELS],
+                              gdouble scales[GST_VCE_MAX_CHANNELS]);
 
 /**
  * gst_video_converter_default_backend:

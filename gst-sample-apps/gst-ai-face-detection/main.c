@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -48,14 +48,14 @@
 #include <glib.h>
 #include <json-glib/json-glib.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 /**
  * Default models and labels path, if not provided by user
  */
 #define DEFAULT_QNN_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.bin"
 #define DEFAULT_TFLITE_FACE_DETECTION_MODEL "/etc/models/face_det_lite_quantized.tflite"
-#define DEFAULT_FACE_DETECTION_LABELS "/etc/labels/face_detection.labels"
+#define DEFAULT_FACE_DETECTION_LABELS "/etc/labels/face_detection.json"
 
 /**
  * Default settings of camera output resolution, Scaling of camera output

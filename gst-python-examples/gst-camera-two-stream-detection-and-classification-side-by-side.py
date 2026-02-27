@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 ################################################################################
-# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
 ################################################################################
 
@@ -157,7 +157,7 @@ def construct_pipeline(pipe):
         elements["capsfilter_0"],
         "caps",
         "video/x-raw,format=NV12_Q08C,\
-        width=640,height=360,framerate=30/1",
+        width=1280,height=720,framerate=30/1",
     )
 
     Gst.util_set_object_arg(elements["mltflite_0"], "delegate", "external")

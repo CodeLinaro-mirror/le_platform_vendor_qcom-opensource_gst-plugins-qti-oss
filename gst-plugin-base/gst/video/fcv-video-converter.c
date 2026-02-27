@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -90,10 +90,6 @@ enum {
   GST_FCV_FLAG_RGB    = (1 << 1),
   GST_FCV_FLAG_YUV    = (1 << 2),
   GST_FCV_FLAG_STAGED = (1 << 3),
-  GST_FCV_FLAG_I32    = (1 << 4),
-  GST_FCV_FLAG_U32    = (1 << 5),
-  GST_FCV_FLAG_F16    = (1 << 6),
-  GST_FCV_FLAG_F32    = (1 << 7),
 };
 
 /**
@@ -393,17 +389,62 @@ load_symbol (gpointer* method, gpointer handle, const gchar* name)
   return TRUE;
 }
 
+GType
+gst_fcv_op_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { GST_FCV_OP_MODE_LOW_POWER,
+        "Uses lowest power consuming implementation", "low-power"
+    },
+    { GST_FCV_OP_MODE_PERFORMANCE,
+        "Uses highest performance implementation", "performance"
+    },
+    {
+      GST_FCV_OP_MODE_CPU_OFFLOAD,
+        "Uses highest performance implementation", "cpu-offload"
+    },
+    {
+      GST_FCV_OP_MODE_CPU_PERFORMANCE,
+        "Uses CPU highest performance implementation", "cpu-performance"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+      gtype = g_enum_register_static ("GstFcvOpMode", variants);
+
+  return gtype;
+}
+
 static inline gint
 gst_fcv_get_opmode (const GstStructure * settings)
 {
-  gint value = GST_FCV_OP_MODE_PERFORMANCE;
+  const GValue *value = NULL;
+  const gchar *string = NULL;
+  GValue newvalue = G_VALUE_INIT;
+  gint mode = GST_FCV_OP_MODE_PERFORMANCE;
 
   if ((settings == NULL) ||
       !gst_structure_has_field (settings, GST_VCE_OPT_FCV_OP_MODE))
-    return value;
+    return mode;
 
-  gst_structure_get_enum (settings, GST_VCE_OPT_FCV_OP_MODE, G_TYPE_ENUM, &value);
-  return value;
+  value = gst_structure_get_value (settings, GST_VCE_OPT_FCV_OP_MODE);
+
+  if (G_VALUE_TYPE (value) == gst_fcv_op_mode_get_type ())
+    return g_value_get_enum (value);
+
+  // Try to reinitialize the settings value if expected type does not match.
+  string = g_value_get_string (value);
+  g_value_init (&newvalue, gst_fcv_op_mode_get_type ());
+
+  if (!gst_value_deserialize (&newvalue, string))
+    GST_ERROR ("Failed to decipher mode, using default: PERFORMANCE");
+  else
+    mode = g_value_get_enum (&newvalue);
+
+  g_value_unset (&newvalue);
+  return mode;
 }
 
 static inline void
@@ -411,23 +452,6 @@ gst_fcv_stage_buffer_free (gpointer data)
 {
   GstFcvStageBuffer *buffer = (GstFcvStageBuffer *) data;
   g_free (buffer->data);
-}
-
-static inline guint
-gst_fcv_translate_flip (const GstVideoConvFlip flip)
-{
-  switch (flip) {
-    case GST_VCE_FLIP_HORIZONTAL:
-      return FASTCV_FLIP_HORIZ;
-    case GST_VCE_FLIP_VERTICAL:
-      return FASTCV_FLIP_VERT;
-    case GST_VCE_FLIP_BOTH:
-      return FASTCV_FLIP_BOTH;
-    default:
-      break;
-  }
-
-  return 0;
 }
 
 static inline guint
@@ -525,44 +549,40 @@ gst_fcv_copy_object (GstFcvObject * l_object, GstFcvObject * r_object)
 static inline void
 gst_fcv_update_object (GstFcvObject * object, const gchar * type,
     const GstVideoFrame * frame, const GstVideoRectangle * region,
-    const GstVideoConvFlip flip, const GstVideoConvRotate rotate,
-    const guint64 flags)
+    const guint flip, const guint rotate, const guint64 datatype)
 {
   const gchar *mode = NULL;
-  gint x = 0, y = 0, width = 0, height = 0;
+  gint x = 0, y = 0, width = 0, height = 0, bpp = 0;
 
   width = GST_VIDEO_FRAME_WIDTH (frame);
   height = GST_VIDEO_FRAME_HEIGHT (frame);
 
-  // Take the region values only if they are valid.
-  if ((region->w != 0) && (region->h != 0) &&
-      (width >= (region->x + region->w)) && (height >= (region->y + region->h))) {
-    x = region->x;
-    y = region->y;
-    width = region->w;
-    height = region->h;
-  }
+  // Clip out of bounds regions so they don't go outside the full frame.
+  x = MAX (region->x, 0);
+  y = MAX (region->y, 0);
+  width = MIN (((region->x + region->w) - x), (width - x));
+  height = MIN (((region->y + region->h) - y), (height - y));
 
-  switch (flags) {
-    case GST_VCE_FLAG_F16_FORMAT:
-      object->flags = GST_FCV_FLAG_F16;
-      mode = "FLOAT16";
-      break;
-    case GST_VCE_FLAG_F32_FORMAT:
-      object->flags = GST_FCV_FLAG_F32;
-      mode = "FLOAT32";
-      break;
-    case GST_VCE_FLAG_I32_FORMAT:
-      object->flags = GST_FCV_FLAG_I32;
-      mode = "INT32";
-      break;
-    case GST_VCE_FLAG_U32_FORMAT:
-      object->flags = GST_FCV_FLAG_U32;
-      mode = "UINT32";
-      break;
-    default:
-      break;
-  }
+  if (datatype == GST_VCE_DATA_TYPE_I8)
+    mode = " INT8";
+  else if (datatype == GST_VCE_DATA_TYPE_U16)
+    mode = " UINT16";
+  else if (datatype == GST_VCE_DATA_TYPE_I16)
+    mode = " INT16";
+  else if (datatype == GST_VCE_DATA_TYPE_U32)
+    mode = " UINT32";
+  else if (datatype == GST_VCE_DATA_TYPE_I32)
+    mode = " INT32";
+  else if (datatype == GST_VCE_DATA_TYPE_U64)
+    mode = " UINT64";
+  else if (datatype == GST_VCE_DATA_TYPE_I64)
+    mode = " INT64";
+  else if (datatype == GST_VCE_DATA_TYPE_F16)
+    mode = " FLOAT16";
+  else if (datatype == GST_VCE_DATA_TYPE_F32)
+    mode = " FLOAT32";
+  else
+    mode = " UINT8";
 
   GST_TRACE ("%s Buffer %p - %ux%u %s%s", type, frame->buffer,
       GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
@@ -583,8 +603,8 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
   else if (GST_VIDEO_INFO_IS_GRAY (&(frame->info)))
     object->flags |= GST_FCV_FLAG_GRAY;
 
-  object->flip = gst_fcv_translate_flip (flip);
-  object->rotate = gst_fcv_translate_rotation (rotate);
+  object->flip = flip;
+  object->rotate = rotate;
 
   object->format = GST_VIDEO_FRAME_FORMAT (frame);
   object->n_planes = GST_VIDEO_FRAME_N_PLANES (frame);
@@ -592,13 +612,26 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
   // Initialize the mandatory first plane.
   object->planes[0].stride = GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0);
 
+  // Reduce object stride to equivalent UINT8 as engine cannot operate otherwise.
+  // Normalization to end pixel type will be done after all other operations.
+  if (datatype == GST_VCE_DATA_TYPE_U16 || datatype == GST_VCE_DATA_TYPE_I16 ||
+      datatype == GST_VCE_DATA_TYPE_F16)
+    object->planes[0].stride /= 2;
+  else if (datatype == GST_VCE_DATA_TYPE_U32 || datatype == GST_VCE_DATA_TYPE_I32 ||
+      datatype == GST_VCE_DATA_TYPE_F32)
+    object->planes[0].stride /= 4;
+  else if (datatype == GST_VCE_DATA_TYPE_U64 || datatype == GST_VCE_DATA_TYPE_I64)
+    object->planes[0].stride /= 8;
+
   object->planes[0].width = width;
   object->planes[0].height = height;
+
+  bpp = GST_VIDEO_INFO_COMP_PSTRIDE(&(frame->info), 0);
 
   // Add the offset to the region of interest to the data pointer.
   object->planes[0].data =
       (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 0) +
-          (y * object->planes[0].stride) + x);
+          (y * object->planes[0].stride) + x * bpp);
   object->planes[0].stgid = GST_FCV_INVALID_STAGE_ID;
 
   // Initialize the secondary plane depending on the format.
@@ -1841,11 +1874,10 @@ gst_fcv_video_converter_flip (GstFcvVideoConverter * convert,
 
 static inline gboolean
 gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
-    GstVideoFrame * frame, guint32 color)
+    GstVideoFrame * frame, guint32 color, guint64 flags)
 {
-  guint8 red = 0x00, green = 0x00, blue = 0x00, alpha = 0x00;
-  guint8 luma = 0x00, cb = 0x00, cr = 0x00;
-  guint32 luma10bit = 0x0, cbcr10bit = 0x0;
+  guint8 red = 0, green = 0, blue = 0, alpha = 0, luma = 0, cb = 0, cr = 0;
+  guint32 luma10bit = 0, cbcr10bit = 0, bytedepth = 1;
 
   red = EXTRACT_RED_VALUE (color);
   green = EXTRACT_GREEN_VALUE (color);
@@ -1872,6 +1904,17 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
     cbcr10bit = (((guint32) (cb * (1023 / 255))) << 16) |
         ((guint32) (cr * (1023 / 255)));
   }
+
+  // Reduce object stride to equivalent UINT8 as engine cannot operate otherwise.
+  // Normalization to end pixel type will be done after all other operations.
+  if (flags == GST_VCE_DATA_TYPE_U16 || flags == GST_VCE_DATA_TYPE_I16 ||
+      flags == GST_VCE_DATA_TYPE_F16)
+    bytedepth = 2;
+  else if (flags == GST_VCE_DATA_TYPE_U32 || flags == GST_VCE_DATA_TYPE_I32 ||
+      flags == GST_VCE_DATA_TYPE_F32)
+    bytedepth = 4;
+  else if (flags == GST_VCE_DATA_TYPE_U64 || flags == GST_VCE_DATA_TYPE_I64)
+    bytedepth = 8;
 
   GST_TRACE ("Fill buffer %p with 0x%X - %ux%u %s", frame->buffer, color,
       GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
@@ -1928,27 +1971,28 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
     case GST_VIDEO_FORMAT_RGB:
       convert->SetElementsc3u8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
           GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
-          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), red, green, blue, NULL, 0);
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0) / bytedepth, red, green, blue,
+          NULL, 0);
       break;
     case GST_VIDEO_FORMAT_BGR:
       convert->SetElementsc3u8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
           GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
-          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), blue,
-          green, red, NULL, 0);
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0) / bytedepth, blue, green, red,
+          NULL, 0);
       break;
     case GST_VIDEO_FORMAT_RGBA:
     case GST_VIDEO_FORMAT_RGBx:
       convert->SetElementsc4u8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
           GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
-          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), red, green, blue, alpha,
-          NULL, 0);
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0) / bytedepth, red, green, blue,
+          alpha, NULL, 0);
       break;
     case GST_VIDEO_FORMAT_BGRA:
     case GST_VIDEO_FORMAT_BGRx:
       convert->SetElementsc4u8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
           GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
-          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), blue, green, red, alpha,
-          NULL, 0);
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0) / bytedepth, blue, green, red,
+          alpha, NULL, 0);
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
       convert->SetElementss32 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
@@ -2045,7 +2089,6 @@ gst_fcv_video_converter_process (GstFcvVideoConverter * convert,
   guint idx = 0, flip = 0, rotate = 0;
   gfloat w_scale = 0.0, h_scale = 0.0, scale = 0.0;
   gboolean downscale = FALSE, upscale = FALSE, aligned = FALSE, add = FALSE;
-  gboolean normalize = FALSE;
 
   for (idx = 0; idx < n_objects; idx += 2) {
     s_obj = &(objects[idx]);
@@ -2086,11 +2129,6 @@ gst_fcv_video_converter_process (GstFcvVideoConverter * convert,
     // Unaligned output RGB formats require additional processing at the end.
     aligned = ((d_obj->planes[0].width % GST_FCV_WIDTH_ALIGN) == 0) ?
         TRUE : FALSE;
-
-    // None 8-bit unsigned integer RGB formats require normalization.
-    normalize = (d_obj->flags & GST_FCV_FLAG_F16) ||
-        (d_obj->flags & GST_FCV_FLAG_F32) || (d_obj->flags & GST_FCV_FLAG_I32) ||
-        (d_obj->flags & GST_FCV_FLAG_U32);
 
     // First, check if we need to do color conversion to YUV on the source.
     // Upcscale/Downscale/Rotate/Flip require non-RGB input and output.
@@ -2140,9 +2178,9 @@ gst_fcv_video_converter_process (GstFcvVideoConverter * convert,
       return FALSE;
     }
 
-    // Lastly, perform unaligned conversion or normalization if necessary.
+    // Lastly, perform unaligned conversion if necessary.
     if ((d_obj->flags & GST_FCV_FLAG_RGB || d_obj->flags & GST_FCV_FLAG_GRAY) &&
-        (!aligned || normalize))
+        !aligned)
       gst_fcv_video_converter_compute_conversion (convert, s_obj, d_obj);
   }
 
@@ -2155,61 +2193,147 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
 {
   GstFcvObject objects[GST_FCV_MAX_DRAW_OBJECTS] = { 0, };
   guint32 idx = 0, num = 0, n_objects = 0, area = 0;
+  GArray *inframes = NULL;
+  GstVideoFrame outframe = {0,};
+  GstVideoComposition *composition = NULL;
+
 
   // TODO: Implement async operations via threads.
   if (fence != NULL)
     GST_WARNING ("Asynchronous composition operations are not supported!");
 
   for (idx = 0; idx < n_compositions; idx++) {
-    GstVideoFrame *outframe = compositions[idx].frame;
-    GstVideoBlit *blits = compositions[idx].blits;
-    guint n_blits = compositions[idx].n_blits;
+    composition = &(compositions[idx]);
 
-    // Sanity checks, output frame and blit entries must not be NULL.
-    g_return_val_if_fail (outframe != NULL, FALSE);
+    inframes = g_array_sized_new(FALSE, FALSE, sizeof(GstVideoFrame),
+        composition->n_blits);
+    g_array_set_size (inframes, composition->n_blits);
+
+    GstVideoBlit *blits = composition->blits;
+    guint n_blits = composition->n_blits;
+    gboolean success = FALSE;
+
+    // Sanity checks, blit entries must not be NULL.
+    g_return_val_if_fail (composition->buffer != NULL, FALSE);
     g_return_val_if_fail ((blits != NULL) && (n_blits != 0), FALSE);
+
+    success = gst_video_frame_map (&outframe, composition->info,
+        composition->buffer, GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+    if (!success) {
+      GST_ERROR ("Failed to map output buffer!");
+      return FALSE;
+    }
 
     // Total area of the output frame that is to be used in later calculations
     // to determine whether there are unoccupied background pixels to be filled.
-    area = GST_VIDEO_FRAME_WIDTH (outframe) * GST_VIDEO_FRAME_HEIGHT (outframe);
+    area = GST_VIDEO_FRAME_WIDTH (&outframe) * GST_VIDEO_FRAME_HEIGHT (&outframe);
 
     // Iterate over the input blit entries and update each FCV object.
     for (num = 0; num < n_blits; num++) {
       GstVideoBlit *blit = &(blits[num]);
       GstFcvObject *object = NULL;
+      GstVideoRectangle rectangle = {0, 0, 0, 0};
+      guint flip = 0, rotate = 0;
+      GstVideoFrame *inframe = &g_array_index(inframes, GstVideoFrame, num);
+
+      success = gst_video_frame_map (inframe, blit->info, blit->buffer,
+          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+      if (!success) {
+        GST_ERROR ("Failed to map input buffer!");
+        return FALSE;
+      }
 
       if (n_objects >= GST_FCV_MAX_DRAW_OBJECTS) {
         GST_ERROR ("Number of objects exceeds %d!", GST_FCV_MAX_DRAW_OBJECTS);
         return FALSE;
       }
 
+      if ((blit->mask & GST_VCE_MASK_FLIP_VERTICAL) &&
+          (blit->mask & GST_VCE_MASK_FLIP_HORIZONTAL))
+        flip = FASTCV_FLIP_BOTH;
+      else if (blit->mask & GST_VCE_MASK_FLIP_VERTICAL)
+        flip = FASTCV_FLIP_VERT;
+      else if (blit->mask & GST_VCE_MASK_FLIP_HORIZONTAL)
+        flip = FASTCV_FLIP_HORIZ;
+
+      if (blit->mask & GST_VCE_MASK_ROTATION)
+        rotate = gst_fcv_translate_rotation (blit->rotate);
+
       // Intialization of the source FCV object.
       object = &(objects[n_objects]);
 
-      gst_fcv_update_object (object, "Source", blit->frame, &(blit->source),
-          blit->flip, blit->rotate, 0);
+      if (blit->mask & GST_VCE_MASK_SOURCE) {
+        if (!gst_video_quadrilateral_is_rectangle (&(blit->source))) {
+          GST_ERROR ("Composition %u: Blit %u: Source quadrilateral is not a "
+              "rectangle! A(%f, %f) B(%f, %f) C(%fd, %f) D(%f, %f)", idx, num,
+              blit->source.a.x, blit->source.a.y, blit->source.b.x,
+              blit->source.b.y, blit->source.c.x, blit->source.c.y,
+              blit->source.d.x, blit->source.d.y);
+          return FALSE;
+        }
+
+        rectangle.x = blit->source.a.x;
+        rectangle.y = blit->source.a.y;
+        rectangle.w = blit->source.d.x - blit->source.a.x;
+        rectangle.h = blit->source.d.y - blit->source.a.y;
+      } else {
+        rectangle.x = rectangle.y = 0;
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (inframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (inframe);
+      }
+
+      gst_fcv_update_object (object, "Source", inframe, &rectangle,
+          flip, rotate, 0);
 
       // Intialization of the destination FCV object.
       object = &(objects[n_objects + 1]);
 
-      gst_fcv_update_object (object, "Destination", outframe, &(blit->destination),
-          GST_VCE_FLIP_NONE, GST_VCE_ROTATE_0, compositions[idx].flags);
+      // Setup the source quadrilateral.
+      if (blit->mask & GST_VCE_MASK_DESTINATION) {
+        rectangle = blit->destination;
+      } else {
+        rectangle.x = rectangle.y = 0;
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (&outframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (&outframe);
+      }
+
+      gst_fcv_update_object (object, "Destination", &outframe, &rectangle,
+          0, 0, composition->datatype);
 
       // Subtract blit area from total area.
       if (area != 0)
-        area -= gst_fcv_composition_blit_area (outframe, blits, num);
+        area -= gst_fcv_composition_blit_area (&outframe, blits, num);
 
       // Increment the objects counter by 2 for for Source/Destination pair.
       n_objects += 2;
     }
 
-    if (compositions[idx].bgfill && (area > 0)) {
-      guint32 color = compositions[idx].bgcolor;
-      gst_fcv_video_converter_fill_background (convert, outframe, color);
-    }
+    if (composition->bgfill && (area > 0))
+      gst_fcv_video_converter_fill_background (convert, &outframe,
+          composition->bgcolor, composition->datatype);
 
     if (!gst_fcv_video_converter_process (convert, objects, n_objects)) {
       GST_ERROR ("Failed to process frames for composition %u!", idx);
+      return FALSE;
+    }
+
+    success = gst_video_frame_normalize_ip (&outframe,
+        composition->datatype, composition->offsets, composition->scales);
+
+    for (num = 0; num < inframes->len; num++) {
+      GstVideoFrame *inframe = &g_array_index (inframes, GstVideoFrame, num);
+
+      gst_video_frame_unmap (inframe);
+    }
+
+    g_array_free (inframes, TRUE);
+
+    gst_video_frame_unmap (&outframe);
+
+    if (!success) {
+      GST_ERROR ("Failed to normalize output frame for composition %u!", idx);
       return FALSE;
     }
   }

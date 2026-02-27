@@ -49,6 +49,9 @@ class Engine : public IEngine {
                          bool synchronous) override;
   void Finish(std::uintptr_t fence) override;
 
+  const char* GetVendor() const { return vendor_.c_str(); }
+  const char* GetRenderer() const { return renderer_.c_str(); }
+
  private:
   std::string BindContext(EGLSurface draw, EGLSurface read, EGLContext context);
   std::string UnbindContext(EGLContext context);
@@ -95,6 +98,10 @@ class Engine : public IEngine {
 
   /// Map of surface_id and its GL textures, EGL images and Surface.
   std::map<uint64_t, SurfaceTuple> surfaces_;
+
+  std::string                      vendor_;
+
+  std::string                      renderer_;
 };
 
 } // namespace gl

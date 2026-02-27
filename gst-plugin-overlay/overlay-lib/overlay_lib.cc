@@ -752,9 +752,10 @@ int32_t Overlay::Init (OverlayBlitType blit_type)
 #endif // ENABLE_C2D
   } else if (blit_type_ == OverlayBlitType::kGLES) {
 #ifdef ENABLE_GLES
+    const char *vendor = NULL, *renderer = NULL;
+
     ib2c_engine_ = std::shared_ptr<::ib2c::IEngine>(
-        ::ib2c::NewGlEngine(), [](::ib2c::IEngine* e) { delete e; }
-    );
+        ::ib2c::NewGlEngine(&vendor, &renderer));
 #else
     GST_ERROR ("GLES converter is not supported!");
     return -1;
@@ -1194,10 +1195,16 @@ int32_t Overlay::ApplyOverlay_GLES (const OverlayTargetBuffer& buffer)
 
         object.id = draw_infos[i].ib2cSurfaceId;
         if (draw_infos[i].in_width) {
-          object.source.x = draw_infos[i].in_x;
-          object.source.y = draw_infos[i].in_y;
-          object.source.w = draw_infos[i].in_width;
-          object.source.h = draw_infos[i].in_height;
+          object.source.a.x = draw_infos[i].in_x;
+          object.source.a.y = draw_infos[i].in_y;
+          object.source.b.x = draw_infos[i].in_x;
+          object.source.b.y = draw_infos[i].in_y + draw_infos[i].in_height;
+          object.source.c.x = draw_infos[i].in_x + draw_infos[i].in_width;
+          object.source.c.y = draw_infos[i].in_y;
+          object.source.d.x = draw_infos[i].in_x + draw_infos[i].in_width;
+          object.source.d.y = draw_infos[i].in_y + draw_infos[i].in_height;
+
+          object.mask |= ::ib2c::ConfigMask::kSource;
         }
         object.destination.x = draw_infos[i].x;
         object.destination.y = draw_infos[i].y;

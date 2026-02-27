@@ -1,7 +1,7 @@
 /*
-* Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
-* SPDX-License-Identifier: BSD-3-Clause-Clear
-*/
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
 
 /*
 * Gstreamer Application:
@@ -30,7 +30,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define DEFAULT_OUTPUT_FILENAME "/etc/media/video.mp4"
 #define DEFAULT_WIDTH 1280

@@ -27,13 +27,14 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *
 * Changes from Qualcomm Technologies, Inc. are provided under the following license:
+*
 * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #pragma once
 
-#include "qti-ml-post-proccess.h"
+#include "qti-ml-post-process.h"
 #include "qti-labels-parser.h"
 
 #include <cstdio>
@@ -54,15 +55,12 @@ class Module : public IModule {
 
   bool Process(const Tensors& tensors, Dictionary& mlparams,
                std::any& output) override;
-
  private:
   int32_t CompareValues(const float *data,
                         const uint32_t& l_idx, const uint32_t& r_idx);
-  uint64_t ScaleUint64Safe(const uint64_t val, const int32_t num,
-                           const int32_t denom);
 
   // Logging callback.
-  LogCallback logger_;
+  LogCallback  logger_;
   // Labels parser.
   LabelsParser labels_parser_;
 };
