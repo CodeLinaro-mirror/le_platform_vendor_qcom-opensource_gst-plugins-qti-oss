@@ -41,7 +41,6 @@ set(GST_QTI_DRM_DECRYPTOR gstqtidrmdecryptor)
 
 add_library(${GST_QTI_DRM_DECRYPTOR} SHARED
   drmdecryptor.cc
-  drmdecryptor-engine.cc
 )
 
 target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
@@ -51,8 +50,8 @@ target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
 target_link_libraries(${GST_QTI_DRM_DECRYPTOR} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
-  cutils
   gstqtimemorybase
+  vmmem
   $<$<BOOL:${HAVE_CDM_H}>:widevine_ce_cdm_shared>
   $<$<BOOL:${HAVE_CDM_H}>:oemcrypto>
 )

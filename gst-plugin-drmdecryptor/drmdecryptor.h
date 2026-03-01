@@ -7,8 +7,10 @@
 #define __GST_DRM_DECRYPTOR_H__
 
 #include <gst/gst.h>
+#include <gst/allocators/allocators.h>
+#include <gst/video/video.h>
 
-#include "drmdecryptor-engine.h"
+// #include "drmdecryptor-engine.h"
 
 G_BEGIN_DECLS
 
@@ -33,7 +35,7 @@ struct _GstDrmDecryptor {
   GstPad                  *srcpad;
   GstPad                  *sinkpad;
 
-  GstDrmDecryptorEngine   *engine;
+  // GstDrmDecryptorEngine   *engine;
 
   GstBufferPool           *pool;
 
@@ -41,6 +43,8 @@ struct _GstDrmDecryptor {
   gchar                   *session_id;
 
   gpointer                cdm_instance;
+  gint                    devfd;
+  GstAllocator            *allocator;
 };
 
 struct _GstDrmDecryptorClass {
