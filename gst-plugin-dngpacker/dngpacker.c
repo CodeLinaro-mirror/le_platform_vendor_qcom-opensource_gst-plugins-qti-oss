@@ -222,7 +222,7 @@ gst_dngpacker_task (gpointer userdata)
     goto free_raw_item;
   }
 
-  GST_DEBUG_OBJECT (packer, "mapped raw buffer:data(%zu) size=%ld",
+  GST_DEBUG_OBJECT (packer, "mapped image buffer:data(%zu) size=%" G_GSIZE_FORMAT "",
       (size_t) raw_map_info.data, raw_map_info.size);
 
   if (packer->img_sink_pad) {
@@ -239,7 +239,7 @@ gst_dngpacker_task (gpointer userdata)
         image_data = NULL;
         image_data_size = 0;
       } else {
-        GST_DEBUG_OBJECT (packer, "mapped image buffer:data(%zu) size=%ld",
+            GST_DEBUG_OBJECT (packer, "mapped image buffer:data(%zu) size=%" G_GSIZE_FORMAT "",
             (size_t) image_map_info.data, image_map_info.size);
 
         image_data = image_map_info.data;

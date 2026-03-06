@@ -419,7 +419,7 @@ gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * directio
 
   try {
     surface_id = convert->engine->CreateSurface (surface, type);
-    GST_DEBUG ("Created %s surface with id %llx", direction, (unsigned long long) surface_id);
+    GST_DEBUG ("Created %s surface with id %" G_GINT64_MODIFIER "x", direction, surface_id);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to create %s surface, error: '%s'!", direction, e.what());
     return 0;
@@ -435,8 +435,8 @@ gst_gles_destroy_surface (gpointer key, gpointer value, gpointer userdata)
   GstGlesSurface *glsurface = (GstGlesSurface*) value;
 
   try {
-    convert->engine->DestroySurface(glsurface->id);
-    GST_DEBUG ("Destroying surface with id %llx", (unsigned long long) glsurface->id);
+    convert->engine->DestroySurface (glsurface->id);
+    GST_DEBUG ("Destroying surface with id %" G_GINT64_MODIFIER "x", glsurface->id);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to destroy IB2C surface, error: '%s'!", e.what());
     return;
@@ -466,7 +466,7 @@ gst_gles_remove_input_surfaces (GstGlesVideoConverter * convert, GArray * fds)
       continue;
 
     try {
-      GST_DEBUG ("Destroying surface with id %llx", (unsigned long long) glsurface->id);
+      GST_DEBUG ("Destroying surface with id %" G_GINT64_MODIFIER "x", glsurface->id);
       convert->engine->DestroySurface(glsurface->id);
     } catch (std::exception& e) {
       GST_ERROR ("Failed to destroy IB2C surface, error: '%s'!", e.what());
@@ -489,7 +489,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
   object->mask = 0;
 
   object->alpha = vblit->alpha;
-  GST_TRACE ("Input surface %llx - Global alpha: %u", (unsigned long long) surface_id, object->alpha);
+  GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - Global alpha: %u", surface_id, object->alpha);
 
   // Setup the source quadrilateral.
   if (vblit->mask & GST_VCE_MASK_SOURCE) {
@@ -503,12 +503,12 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
 
   if (vblit->mask & GST_VCE_MASK_FLIP_VERTICAL) {
     object->mask |= ::ib2c::ConfigMask::kVFlip;
-    GST_TRACE ("Input surface %llx - Flip Vertically", (unsigned long long) surface_id);
+    GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - Flip Vertically", surface_id);
   }
 
   if (vblit->mask & GST_VCE_MASK_FLIP_HORIZONTAL) {
     object->mask |= ::ib2c::ConfigMask::kHFlip;
-    GST_TRACE ("Input surface %llx - Flip Horizontally", (unsigned long long) surface_id);
+    GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - Flip Horizontally", surface_id);
   }
 
   // Setup the target rectangle.
@@ -530,41 +530,19 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
   // Setup rotation angle and adjustments.
   switch (rotate) {
     case GST_VCE_ROTATE_90:
-    {
-      gint dar_n = 0, dar_d = 0;
-
-      gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
-          &dar_n, &dar_d
-      );
-
-      GST_TRACE ("Input surface %llx - rotate 90° clockwise", (unsigned long long) surface_id);
+      GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - rotate 90° clockwise", surface_id);
 
       object->rotation = 90.0;
       object->mask |= ::ib2c::ConfigMask::kRotation;
       break;
     case GST_VCE_ROTATE_180:
-      GST_TRACE ("Input surface %llx - rotate 180°", (unsigned long long) surface_id);
+      GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - rotate 180°", surface_id);
 
       object->rotation = 180.0;
       object->mask |= ::ib2c::ConfigMask::kRotation;
       break;
     case GST_VCE_ROTATE_270:
-    {
-      gint dar_n = 0, dar_d = 0;
-
-      gst_util_fraction_multiply (
-          GST_VIDEO_FRAME_WIDTH (vblit->frame),
-          GST_VIDEO_FRAME_HEIGHT (vblit->frame),
-          GST_VIDEO_INFO_PAR_N (&(vblit->frame)->info),
-          GST_VIDEO_INFO_PAR_D (&(vblit->frame)->info),
-          &dar_n, &dar_d
-      );
-
-      GST_TRACE ("Input surface %llx - rotate 90° counter-clockwise", (unsigned long long) surface_id);
+      GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - rotate 90° counter-clockwise", surface_id);
 
       object->rotation = 270.0;
       object->mask |= ::ib2c::ConfigMask::kRotation;
@@ -574,13 +552,13 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       break;
   }
 
-  GST_TRACE ("Input surface %llx - Source rectangle: x(%d) y(%d) w(%d) h(%d)",
-      (unsigned long long) surface_id, object->source.x, object->source.y,
-      object->source.w, object->source.h);
+  GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - Source quadrilateral: A(%f, %f) B(%f, %f) "
+      "C(%f, %f) D(%f, %f)", surface_id, object->source.a.x, object->source.a.y,
+      object->source.b.x, object->source.b.y, object->source.c.x,
+      object->source.c.y, object->source.d.x, object->source.d.y);
 
-  GST_TRACE ("Input surface %llx - Target rectangle: x(%d) y(%d) w(%d) h(%d)",
-     (unsigned long long) surface_id, object->destination.x, object->destination.y,
-      object->destination.w, object->destination.h);
+  GST_TRACE ("Input surface %" G_GINT64_MODIFIER "x - Target rectangle: x(%d) y(%d) w(%d) h(%d)",
+      surface_id, x, y, width, height);
 }
 
 static guint64
