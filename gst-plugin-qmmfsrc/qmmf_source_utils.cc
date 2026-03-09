@@ -1039,7 +1039,7 @@ gst_qmmf_cleanup_static_metas (void) {
 
 guint
 gst_qmmfsrc_check_sw_tnr_support () {
-  guint tag_id = get_vendor_tag_by_name ("org.quic.camera.swcapabilities", "SWTNREnable");
+  guint tag_id = get_vendor_tag_by_name ("org.quic.camera.swcapabilities", "SWMCTFEnable");
 
   if (tag_id == 0) {
     GST_INFO ("SW_TNR not supported: tag_id is 0");
@@ -1427,7 +1427,7 @@ gst_qmmfsrc_get_raw_resolution_range (GstQmmfSrcResolutionRange *range)
 }
 
 gboolean
-gst_qmmfsrc_check_format (PixFormat format) {
+gst_qmmfsrc_check_format (Formats format) {
   GList *keys = g_hash_table_get_keys (gst_qmmf_get_static_metas ());
 
   // If keys are NULL, return TRUE to support all formats

@@ -101,7 +101,9 @@ G_BEGIN_DECLS
 #define GST_TYPE_QMMFSRC_FRC_MODE (gst_qmmfsrc_frc_mode_get_type())
 #define GST_TYPE_QMMFSRC_ROTATE (gst_qmmfsrc_rotate_get_type())
 #define GST_TYPE_QMMFSRC_CAM_OPMODE (gst_qmmfsrc_cam_opmode_get_type())
+#ifdef EIS_MODES_ENABLE
 #define GST_TYPE_QMMFSRC_EIS_MODE (gst_qmmfsrc_eis_mode_get_type())
+#endif // EIS_MODES_ENABLE
 #ifdef VHDR_MODES_ENABLE
 #define GST_TYPE_QMMFSRC_VHDR_MODE (gst_qmmfsrc_vhdr_mode_get_type())
 #endif // VHDR_MODES_ENABLE
@@ -141,22 +143,16 @@ typedef enum {
   GST_BAYER_FORMAT_MONO,
 } GstBayerFormat;
 
-typedef enum pixformats {
-  FORMAT_NV12 = 0x22,
-  FORMAT_YUY2 = 0x14,
-  FORMAT_UYVY = 0x120,
-  FORMAT_P010_10LE = 0x4C595559,
-  FORMAT_NV12_Q10LE32C = 0x7FA30C09
-} PixFormat;
-
 typedef enum formats {
+  HAL_PIXEL_FORMAT_YUY2 = 0x14,
+  HAL_PIXEL_FORMAT_UYVY = 0x120,
+  HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED = 34,
   HAL_PIXEL_FORMAT_BLOB = 33,
   HAL_PIXEL_FORMAT_RAW10 = 37,
   HAL_PIXEL_FORMAT_RAW16 = 32,
   HAL_PIXEL_FORMAT_RAW12 = 38,
-  HAL_PIXEL_FORMAT_RAW8 = 0x123,
-  HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED = 34
-} formats;
+  HAL_PIXEL_FORMAT_RAW8 = 0x123
+} Formats;
 
 enum
 {
@@ -420,9 +416,11 @@ void gst_qmmf_cleanup_static_metas(void);
 
 GST_API gboolean gst_qmmfsrc_check_logical_cam_support ();
 
-GST_API gboolean gst_qmmfsrc_check_format (PixFormat format);
+GST_API gboolean gst_qmmfsrc_check_format (Formats format);
 
 guint gst_qmmfsrc_check_sw_tnr_support ();
+
+guint gst_qmmfsrc_check_eis_support ();
 
 void gst_qmmfsrc_get_jpeg_resolution_range (GstQmmfSrcResolutionRange *range);
 
@@ -431,8 +429,6 @@ void gst_qmmfsrc_get_bayer_resolution_range (GstQmmfSrcResolutionRange *range);
 void gst_qmmfsrc_get_raw_resolution_range (GstQmmfSrcResolutionRange *range);
 
 guint gst_qmmfsrc_get_max_fps ();
-
-guint gst_qmmfsrc_check_eis_support ();
 
 /// org.quic.camera.defog
 static const gchar * gst_camera_defog_table[] =
