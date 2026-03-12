@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <dlfcn.h>
 
+#include <vector>
+
 #include "ib2c-gl-environment.h"
 #include "ib2c-utils.h"
 
@@ -198,11 +200,19 @@ std::string Environment::Initialize() {
 
   refcnt_++;
 
-  const EGLint attribs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+  std::vector<EGLint> attribs = {
+    EGL_CONTEXT_CLIENT_VERSION, 3,
+  };
+
+  if (QueryExtension("EGL_EXT_protected_content")) {
+    attribs.push_back(EGL_PROTECTED_CONTENT_EXT);
+    attribs.push_back(EGL_TRUE);
+  }
+  attribs.push_back(EGL_NONE);
 
   // Create Main/Primary EGL rendering context.
   m_context_ = egl_lib_->CreateContext(display_, EGL_NO_CONFIG_KHR,
-                                       EGL_NO_CONTEXT, attribs);
+                                       EGL_NO_CONTEXT, attribs.data());
 
   if (m_context_ == EGL_NO_CONTEXT) {
     throw Exception("Failed to create primary EGL context, error: ", std::hex,
@@ -211,7 +221,7 @@ std::string Environment::Initialize() {
 
   // Create Secondary/Auxilary EGL rendering context.
   s_context_ = egl_lib_->CreateContext(display_, EGL_NO_CONFIG_KHR, m_context_,
-                                       attribs);
+                                       attribs.data());
 
   if (s_context_ == EGL_NO_CONTEXT) {
     throw Exception("Failed to create secondary EGL context, error: ", std::hex,

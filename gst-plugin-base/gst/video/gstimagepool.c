@@ -107,6 +107,9 @@ struct _GstImageBufferPoolPrivate
   gboolean            addmeta;
   GstFdMemoryFlags    memflags;
 
+  // secure
+  gboolean            is_secure;
+
   GstAllocator        *allocator;
   GstAllocationParams params;
 
@@ -231,8 +234,11 @@ gbm_device_open (GstImageBufferPool * vpool)
   // Load GBM library.
   priv->gbmhandle = dlopen ("libgbm.so.1", RTLD_NOW);
   if (NULL == priv->gbmhandle) {
-    GST_ERROR ("Failed to open GBM library, error: %s!", dlerror());
-    return FALSE;
+    priv->gbmhandle = dlopen ("libgbm.so", RTLD_NOW);
+    if (NULL == priv->gbmhandle) {
+      GST_ERROR ("Failed to open GBM library, error: %s!", dlerror());
+      return FALSE;
+    }
   }
 
   // Load GBM library symbols.
@@ -317,6 +323,12 @@ gbm_device_alloc (GstImageBufferPool * vpool)
     usage |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
   }
 #endif // HAVE_GBM_PRIV_H
+
+  if (priv->is_secure) {
+    usage |= GBM_BO_USAGE_PROTECTED_QTI;
+    usage |= GBM_BO_ALLOC_SECURE_DISPLAY_HEAP_QTI;
+    GST_DEBUG_OBJECT (vpool, "Add flags for secure buffer");
+  }
 
   bo = priv->gbm_bo_create (priv->gbmdevice, GST_VIDEO_INFO_WIDTH (&priv->info),
        GST_VIDEO_INFO_HEIGHT (&priv->info), format, usage);
@@ -698,6 +710,7 @@ gst_image_buffer_pool_init (GstImageBufferPool * vpool)
   vpool->priv = gst_image_buffer_pool_get_instance_private (vpool);
   vpool->priv->gbmfd = -1;
   vpool->priv->memflags = GST_FD_MEMORY_FLAG_DONT_CLOSE;
+  vpool->priv->is_secure = FALSE;
 
   gst_video_alignment_reset (&vpool->priv->align);
   g_mutex_init (&vpool->priv->lock);
@@ -724,4 +737,16 @@ gst_image_buffer_pool_get_info (GstBufferPool * pool)
   g_return_val_if_fail (vpool != NULL, NULL);
 
   return &vpool->priv->info;
+}
+
+gboolean
+gst_image_buffer_set_secure (GstBufferPool * pool, gboolean is_secure)
+{
+  GstImageBufferPool *vpool = GST_IMAGE_BUFFER_POOL (pool);
+
+  g_return_val_if_fail (vpool != NULL, false);
+
+  vpool->priv->is_secure = is_secure;
+
+  return true;
 }

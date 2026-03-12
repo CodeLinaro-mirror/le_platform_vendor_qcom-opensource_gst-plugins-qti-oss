@@ -265,33 +265,50 @@ gst_video_format_to_ib2c_format (GstVideoFormat format, const guint64 flags)
 
 static guint64
 gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * direction,
-    const GstVideoFrame * frame, const guint64 flags)
+    GstBuffer * buffer, const GstVideoInfo *vinfo, const guint64 flags, gboolean is_secure)
+
 {
   GstMemory *memory = NULL;
   const gchar *format = NULL, *mode = "";
   ::ib2c::Surface surface;
   uint32_t type = 0;
   guint64 surface_id = 0;
+  GstVideoMeta *meta = NULL;
 
   type |= (g_quark_from_static_string (direction) == GST_GLES_INPUT_QUARK) ?
       ::ib2c::SurfaceFlags::kInput : ::ib2c::SurfaceFlags::kOutput;
 
-  memory = gst_buffer_peek_memory (frame->buffer, 0);
+  if(is_secure) {
+    type |= ::ib2c::SurfaceFlags::kSecure;
+  }
+
+  memory = gst_buffer_peek_memory (buffer, 0);
 
   if ((memory == NULL) || !gst_is_fd_memory (memory)) {
     GST_ERROR ("%s buffer memory is not FD backed!", direction);
     return 0;
   }
 
-  format = gst_video_format_to_string (GST_VIDEO_FRAME_FORMAT (frame));
+  meta = gst_buffer_get_video_meta(buffer);
+  if (NULL == meta) {
+    GST_ERROR ("%s buffer memory have no meta!", direction);
+    return 0;
+  }
+
+  if (meta->n_planes == 0 || meta->n_planes > 3) {
+    GST_ERROR ("%s buffer has invalid number of planes: %u", direction, meta->n_planes);
+    return 0;
+  }
+
+  format = gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (vinfo));
 
   surface.fd = gst_fd_memory_get_fd (memory);
-  surface.width = GST_VIDEO_FRAME_WIDTH (frame);
-  surface.height = GST_VIDEO_FRAME_HEIGHT (frame);
-  surface.size = gst_buffer_get_size (frame->buffer);
+  surface.width = meta->width;
+  surface.height = meta->height;
+  surface.size = gst_buffer_get_size (buffer);
 
   surface.format =
-      gst_video_format_to_ib2c_format (GST_VIDEO_FRAME_FORMAT (frame), flags);
+      gst_video_format_to_ib2c_format (GST_VIDEO_INFO_FORMAT (vinfo), flags);
 
   if (flags == GST_VCE_FLAG_F16_FORMAT)
     mode = " FLOAT16";
@@ -308,28 +325,28 @@ gst_gles_create_surface (GstGlesVideoConverter * convert, const gchar * directio
 
   GST_TRACE ("%s surface FD[%d] - Width[%u] Height[%u] Format[%s%s] Planes[%u]",
       direction, surface.fd, surface.width, surface.height, format, mode,
-      GST_VIDEO_FRAME_N_PLANES (frame));
+      meta->n_planes);
 
-  surface.planes.resize (GST_VIDEO_FRAME_N_PLANES (frame));
+  surface.planes.resize (meta->n_planes);
 
-  surface.planes[0].stride = GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0);
-  surface.planes[0].offset = GST_VIDEO_FRAME_PLANE_OFFSET (frame, 0);
+  surface.planes[0].stride = meta->stride[0];
+  surface.planes[0].offset = meta->offset[0];
 
   GST_TRACE ("%s surface FD[%d] - Stride0[%u] Offset0[%u]", direction,
       surface.fd, surface.planes[0].stride, surface.planes[0].offset);
 
-  surface.planes[1].stride = (surface.planes.size() >= 2) ?
-      GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1) : 0;
-  surface.planes[1].offset = (surface.planes.size() >= 2) ?
-      GST_VIDEO_FRAME_PLANE_OFFSET (frame, 1) : 0;
+  surface.planes[1].stride = (surface.planes.size()>= 2) ?
+      meta->stride[1] : 0;
+  surface.planes[1].offset = (surface.planes.size()>= 2) ?
+      meta->offset[1] : 0;
 
   GST_TRACE ("%s surface FD[%d] - Stride1[%u] Offset1[%u]", direction,
       surface.fd, surface.planes[1].stride, surface.planes[1].offset);
 
   surface.planes[2].stride = (surface.planes.size() >= 3) ?
-      GST_VIDEO_FRAME_PLANE_STRIDE (frame, 2) : 0;
+      meta->stride[2] : 0;
   surface.planes[2].offset = (surface.planes.size() >= 3) ?
-      GST_VIDEO_FRAME_PLANE_OFFSET (frame, 2) : 0;
+      meta->offset[2] : 0;
 
   GST_TRACE ("%s surface FD[%d] - Stride2[%u] Offset2[%u]", direction,
       surface.fd, surface.planes[2].stride, surface.planes[2].offset);
@@ -405,7 +422,7 @@ gst_gles_free_cache (gpointer key, gpointer value, gpointer userdata)
 
 static void
 gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
-    const GstVideoBlit * vblit, const GstVideoFrame * outframe)
+    const GstVideoBlit * vblit, const GstVideoInfo* out_info)
 {
   GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
   gint x = 0, y = 0, width = 0, height = 0;
@@ -445,8 +462,8 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
 
     object->mask |= ::ib2c::ConfigMask::kDestination;
   } else {
-    width = GST_VIDEO_FRAME_WIDTH (outframe);
-    height = GST_VIDEO_FRAME_HEIGHT (outframe);
+    width = GST_VIDEO_INFO_WIDTH (out_info);
+    height = GST_VIDEO_INFO_HEIGHT (out_info);
   }
 
   if (vblit->mask & GST_VCE_MASK_ROTATION)
@@ -489,7 +506,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
 static guint64
 gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
     GHashTable * surfaces, const gchar * direction,
-    const GstVideoFrame * vframe, const guint64 flags)
+    GstBuffer * vbuffer, const GstVideoInfo vinfo, const guint64 flags, gboolean is_secure)
 {
   GstMemory *memory = NULL;
   GstGlesSurface *glsurface = NULL;
@@ -497,10 +514,10 @@ gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
   guint64 surface_id = 0;
 
   // Get the 1st (and only) memory block from the input GstBuffer.
-  memory = gst_buffer_peek_memory (vframe->buffer, 0);
+  memory = gst_buffer_peek_memory (vbuffer, 0);
 
   if ((memory == NULL) || !gst_is_fd_memory (memory)) {
-    GST_ERROR ("Buffer %p does not have FD memory!", vframe->buffer);
+    GST_ERROR ("Buffer %p does not have FD memory!", vbuffer);
     return 0;
   }
 
@@ -510,7 +527,7 @@ gst_gles_retrieve_surface_id (GstGlesVideoConverter * convert,
   if (!g_hash_table_contains (surfaces, GUINT_TO_POINTER (fd))) {
     // Create an input surface and add its ID to the input hash table.
     surface_id =
-        gst_gles_create_surface (convert, direction, vframe, flags);
+        gst_gles_create_surface (convert, direction, vbuffer, &vinfo, flags, is_secure);
 
     if (surface_id == 0) {
       GST_ERROR ("Failed to create surface!");
@@ -549,13 +566,14 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
   g_return_val_if_fail (fds != NULL, FALSE);
 
   for (idx = 0; idx < n_compositions; idx++) {
-    GstVideoFrame *outframe = compositions[idx].frame;
+    GstBuffer *outbuffer = compositions[idx].buffer;
     GstVideoBlit *blits = compositions[idx].blits;
+    gboolean is_secure = compositions[idx].is_secure;
 
     n_blits = compositions[idx].n_blits;
 
-    // Sanity checks, output frame and blit entries must not be NULL.
-    g_return_val_if_fail (outframe != NULL, FALSE);
+    // Sanity checks, output buffer and blit entries must not be NULL.
+    g_return_val_if_fail (outbuffer != NULL, FALSE);
     g_return_val_if_fail ((blits != NULL) && (n_blits != 0), FALSE);
 
     std::vector<::ib2c::Object> objects;
@@ -567,41 +585,41 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
       GST_GLES_LOCK (convert);
 
       surface_id = gst_gles_retrieve_surface_id (convert, convert->insurfaces,
-          "Input", blit->frame, 0);
+          "Input", blit->buffer, blit->vinfo, 0, is_secure);
 
       GST_GLES_UNLOCK (convert);
 
       if (surface_id == 0) {
         GST_ERROR ("Failed to get surface ID for input buffer %p at index %u "
-            "in composition %u!", blit->frame->buffer, num, idx);
+            "in composition %u!", blit->buffer, num, idx);
         return FALSE;
       }
 
-      if (blit->frame->buffer->pool == NULL) {
+      if (blit->buffer->pool == NULL) {
         GstMemory *memory = NULL;
         guint fd = 0;
 
-        memory = gst_buffer_peek_memory (blit->frame->buffer, 0);
+        memory = gst_buffer_peek_memory (blit->buffer, 0);
         fd = gst_fd_memory_get_fd (memory);
         g_array_append_val (fds, fd);
       }
 
       ::ib2c::Object object;
 
-      gst_gles_update_object (&object, surface_id, blit, outframe);
+      gst_gles_update_object (&object, surface_id, blit, &compositions[idx].vinfo);
       objects.push_back(object);
     }
 
     GST_GLES_LOCK (convert);
 
     surface_id = gst_gles_retrieve_surface_id (convert, convert->outsurfaces,
-        "Output", outframe, compositions[idx].flags);
+        "Output", outbuffer, compositions[idx].vinfo, compositions[idx].flags, is_secure);
 
     GST_GLES_UNLOCK (convert);
 
     if (surface_id == 0) {
       GST_ERROR ("Failed to get surface ID for output buffer %p in "
-          "composition %u!", outframe->buffer, idx);
+          "composition %u!", outbuffer, idx);
       return FALSE;
     }
 

@@ -98,6 +98,7 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define DEFAULT_PROP_DESTINATION_WIDTH  0
 #define DEFAULT_PROP_DESTINATION_HEIGHT 0
 #define DEFAULT_PROP_BACKGROUND         0xFF808080
+#define DEFAULT_PROP_IS_SECURE          FALSE
 
 #define DEFAULT_PROP_MIN_BUFFERS      2
 #define DEFAULT_PROP_MAX_BUFFERS      24
@@ -124,6 +125,7 @@ enum
   PROP_CROP,
   PROP_DESTINATION,
   PROP_BACKGROUND,
+  PROP_IS_SECURE,
 };
 
 static GType
@@ -283,6 +285,12 @@ gst_video_transform_create_pool (GstVideoTransform * vtrans, GstCaps * caps,
 
   if ((pool = gst_image_buffer_pool_new ()) == NULL) {
     GST_ERROR_OBJECT (vtrans, "Failed to create image pool!");
+    return NULL;
+  }
+
+  if (!gst_image_buffer_set_secure (pool, vtrans->is_secure)) {
+    GST_ERROR_OBJECT (vtrans, "Failed to secure buffer:%d !", vtrans->is_secure);
+    gst_clear_object (&pool);
     return NULL;
   }
 
@@ -1579,10 +1587,23 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
-  if (!gst_video_frame_map (&inframe, vtrans->ininfo, inbuffer,
-          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map input buffer!");
-    return GST_FLOW_OK;
+  // GLES is supported only in secure mode,
+  // while all non-GLES backends are limited to non-secure mode.
+  if ((vtrans->backend == GST_VCE_BACKEND_GLES && !vtrans->is_secure)  ||
+      (vtrans->backend != GST_VCE_BACKEND_GLES && vtrans->is_secure)) {
+    GST_ERROR_OBJECT (vtrans, "Only support secure mode in GLES engine.");
+    return GST_FLOW_EOS;
+  }
+
+  if (vtrans->backend == GST_VCE_BACKEND_GLES) {
+    blit.buffer = inbuffer;
+    blit.vinfo = *(vtrans->ininfo);
+  } else {
+    if (!gst_video_frame_map (&inframe, vtrans->ininfo, inbuffer,
+        GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
+      GST_ERROR_OBJECT (vtrans, "Failed to map input buffer!");
+      return GST_FLOW_OK;
+    }
   }
 
 #ifdef HAVE_LINUX_DMA_BUF_H
@@ -1597,11 +1618,20 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   }
 #endif // HAVE_LINUX_DMA_BUF_H
 
-  if (!gst_video_frame_map (&outframe, vtrans->outinfo, outbuffer,
-          GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map output buffer!");
-    gst_video_frame_unmap (&inframe);
-    return GST_FLOW_OK;
+  if (vtrans->backend == GST_VCE_BACKEND_GLES) {
+    composition.buffer = outbuffer;
+    composition.vinfo = *(vtrans->outinfo);
+    composition.is_secure = vtrans->is_secure;
+  } else {
+    // The secure mode is available only on GLES
+    composition.is_secure = FALSE;
+
+    if (!gst_video_frame_map (&outframe, vtrans->outinfo, outbuffer,
+        GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
+      GST_ERROR_OBJECT (vtrans, "Failed to map output buffer!");
+      gst_video_frame_unmap (&inframe);
+      return GST_FLOW_OK;
+    }
   }
 
   time = gst_util_get_timestamp ();
@@ -1652,8 +1682,10 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
       (GST_TIME_AS_USECONDS (time) % 1000));
 
-  gst_video_frame_unmap (&outframe);
-  gst_video_frame_unmap (&inframe);
+  if (vtrans->backend != GST_VCE_BACKEND_GLES) {
+    gst_video_frame_unmap (&outframe);
+    gst_video_frame_unmap (&inframe);
+  }
 
 #ifdef HAVE_LINUX_DMA_BUF_H
   if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
@@ -1751,6 +1783,9 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_BACKGROUND:
       vtrans->background = g_value_get_uint (value);
       break;
+    case PROP_IS_SECURE:
+      vtrans->is_secure = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1818,6 +1853,9 @@ gst_video_transform_get_property (GObject * object, guint prop_id,
     }
     case PROP_BACKGROUND:
       g_value_set_uint (value, vtrans->background);
+      break;
+    case PROP_IS_SECURE:
+      g_value_set_boolean (value, vtrans->is_secure);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1904,6 +1942,11 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
           "Background color", 0, 0xFFFFFFFF, DEFAULT_PROP_BACKGROUND,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_PLAYING));
+  g_object_class_install_property (gobject, PROP_IS_SECURE,
+      g_param_spec_boolean ("secure", "Secure",
+          "use secure buffers", DEFAULT_PROP_IS_SECURE,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
 
   // TODO: Temporary solution to flush cached buffers in the video converter
   // until proper solution is implemented using flush start/stop
@@ -1951,6 +1994,7 @@ gst_video_transform_init (GstVideoTransform * vtrans)
   vtrans->destination.y = DEFAULT_PROP_DESTINATION_Y;
   vtrans->destination.w = DEFAULT_PROP_DESTINATION_WIDTH;
   vtrans->destination.h = DEFAULT_PROP_DESTINATION_HEIGHT;
+  vtrans->is_secure = DEFAULT_PROP_IS_SECURE;
 
   vtrans->ininfo = NULL;
   vtrans->outinfo = NULL;

@@ -185,6 +185,7 @@ enum ConfigMask : uint32_t {
 enum SurfaceFlags : uint32_t {
   kInput  = (1 << 0),
   kOutput = (1 << 1),
+  kSecure = (1 << 2),
 };
 
 /** Plane

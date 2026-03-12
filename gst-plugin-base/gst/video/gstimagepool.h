@@ -116,6 +116,9 @@ GstBufferPool * gst_image_buffer_pool_new (void);
 /// Retrieve current set video configuration.
 const GstVideoInfo * gst_image_buffer_pool_get_info (GstBufferPool * pool);
 
+/// Set a secure flag for the buffer pool
+gboolean gst_image_buffer_set_secure (GstBufferPool * pool, gboolean is_secure);
+
 G_END_DECLS
 
 #endif /* __GST_IMAGE_POOL_H__ */
