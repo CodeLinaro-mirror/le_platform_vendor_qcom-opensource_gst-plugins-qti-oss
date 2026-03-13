@@ -10,6 +10,14 @@
 #include "drmdecryptor.h"
 
 #include <gst/memory/gstmempool.h>
+#include <dlfcn.h>
+#include <cstdint>
+#include <linux/dma-heap.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <memory>
+#include <vmmem/vmmem.h>
 
 #define GST_CAT_DEFAULT decryptor_debug
 GST_DEBUG_CATEGORY_STATIC (decryptor_debug);
@@ -24,33 +32,36 @@ G_DEFINE_TYPE (GstDrmDecryptor, gst_drm_decryptor, GST_TYPE_ELEMENT);
 #define DEFAULT_MIN_BUFFERS       2
 #define DEFAULT_MAX_BUFFERS       10
 
+#define SAMPLECLIENT_COPY_NONSECURE_TO_SECURE 0
+
+struct QSEECom_handle {
+  unsigned char *ion_sbuffer;
+};
+
+long (*Content_Protection_Set_AppName)(const char*) = NULL;
+long (*Content_Protection_Copy_Init)(struct QSEECom_handle**) = NULL;
+long (*Content_Protection_Copy_Terminate)(struct QSEECom_handle**) = NULL;
+long (*Content_Protection_Copy)(struct QSEECom_handle*, uint8_t*,
+    const uint32_t, uint32_t, uint32_t, uint32_t*, uint32_t) = NULL;
+
+long res = 0;
+
+std::unique_ptr<VmMem> mVmInst;
+VmHandle mVmHandle;
+
 static GstStaticPadTemplate gst_drm_decryptor_sink_pad_template =
 GST_STATIC_PAD_TEMPLATE (
   "sink",
   GST_PAD_SINK,
   GST_PAD_ALWAYS,
-  GST_STATIC_CAPS ("application/x-cenc, "
-      "protection-system = (string) " PLAYREADY_SYSTEM_ID
-#ifdef ENABLE_WIDEVINE
-      ";"
-      "application/x-cenc, "
-      "protection-system = (string) " WIDEVINE_SYSTEM_ID
-      ";"
-      "application/x-webm-enc"
-#endif
-  )
-);
+  GST_STATIC_CAPS_ANY);
 
 static GstStaticPadTemplate gst_drm_decryptor_src_pad_template =
 GST_STATIC_PAD_TEMPLATE (
   "src",
   GST_PAD_SRC,
   GST_PAD_ALWAYS,
-  GST_STATIC_CAPS ("video/x-h264;"
-      "video/x-h265;"
-      "video/x-vp8;"
-      "video/x-vp9")
-);
+  GST_STATIC_CAPS_ANY);
 
 enum {
   PROP_0,
@@ -58,171 +69,74 @@ enum {
   PROP_CDM_INSTANCE
 };
 
-static gboolean
-gst_drm_decryptor_update_srccaps (GstDrmDecryptor *decryptor, GstCaps *caps)
+static GstMemory *
+gst_drm_decryptor_allocate_dma_buf (GstDrmDecryptor *decryptor,
+    GstBuffer *in_buffer, gint size)
 {
-  GstStructure *structure;
-  GstCaps *src_caps, *updated_caps;
-  const gchar *media_type;
+  GstMapInfo minfo;
+  struct dma_heap_allocation_data alloc_data;
+  gint result = 0, fd = -1;
+  gchar *data;
 
-  GST_INFO_OBJECT (decryptor, "Sink caps: %" GST_PTR_FORMAT, caps);
+  alloc_data.fd = 0;
+  alloc_data.len = size;
+  alloc_data.fd_flags = O_RDWR | O_CLOEXEC;
+  alloc_data.heap_flags = 0;
 
-  structure = gst_caps_get_structure (caps, 0);
+  result = ioctl (decryptor->devfd, DMA_HEAP_IOCTL_ALLOC, &alloc_data);
 
-  media_type = gst_structure_get_string (structure, "original-media-type");
-  if (!media_type) {
-    GST_ERROR_OBJECT (decryptor, "Original media type not found !");
-    return FALSE;
-  }
+  fd = alloc_data.fd;
 
-  structure = gst_structure_copy (structure);
-  gst_structure_set_name (structure, media_type);
-  gst_structure_remove_fields (structure, "original-media-type",
-      "protection-system",
-      NULL);
+  GST_DEBUG_OBJECT (decryptor, "Allocated DMA memory FD %d of size %d", fd, size);
 
-  src_caps = gst_pad_get_pad_template_caps (decryptor->srcpad);
-
-  updated_caps = gst_caps_new_empty();
-  gst_caps_append_structure (updated_caps, structure);
-
-  if (gst_caps_can_intersect (updated_caps, src_caps)) {
-    gst_pad_set_caps (decryptor->srcpad, updated_caps);
-    GST_INFO_OBJECT (decryptor, "Src caps: %" GST_PTR_FORMAT, updated_caps);
-  } else {
-    GST_ERROR_OBJECT (decryptor, "No intersection between new caps and allowed caps");
-    gst_caps_unref (updated_caps);
-    gst_caps_unref (src_caps);
-    return FALSE;
-  }
-
-  gst_caps_unref (updated_caps);
-  gst_caps_unref (src_caps);
-
-  return TRUE;
-}
-
-static GstBufferPool*
-gst_drm_decryptor_create_pool (GstDrmDecryptor *decryptor)
-{
-  GstStructure *config = NULL;
-  GstBufferPool *pool = NULL;
-  GstAllocator *allocator = NULL;
-
-  if (!(pool = gst_mem_buffer_pool_new (GST_MEMORY_BUFFER_POOL_TYPE_SECURE))) {
-    GST_ERROR_OBJECT (decryptor, "Failed to create new buffer pool !");
+  data = (char *)mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (data == MAP_FAILED) {
+    close (fd);
+    GST_ERROR_OBJECT (decryptor, "mmap failed for allocated dma memory");
     return NULL;
   }
 
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_set_params (config, NULL, DEFAULT_BUFFER_SIZE,
-      DEFAULT_MIN_BUFFERS, DEFAULT_MAX_BUFFERS);
+  gst_buffer_map (in_buffer, &minfo, GST_MAP_READ);
 
-  if (!(allocator = gst_fd_allocator_new ())) {
-    GST_ERROR_OBJECT (decryptor, "Failed to create fd allocator !");
-    g_clear_object (&pool);
-    return NULL;
-  }
-  gst_buffer_pool_config_set_allocator (config, allocator, NULL);
+  GST_DEBUG_OBJECT (decryptor, "copying content from input to output buffer size: %zu", minfo.maxsize);
+  memcpy (data, minfo.data, minfo.maxsize);
 
-  if (!gst_buffer_pool_set_config (pool, config)) {
-    GST_ERROR_OBJECT (decryptor, "Failed to set pool configuration !");
-    g_clear_object (&pool);
-  }
+  gst_buffer_unmap (in_buffer, &minfo);
+  if (munmap (data, size))
+    GST_ERROR_OBJECT (decryptor, "munmap failed !!");
 
-  g_object_unref (allocator);
-  return pool;
+  return gst_fd_allocator_alloc (decryptor->allocator, fd, size,
+      GST_FD_MEMORY_FLAG_NONE);
 }
 
 static GstFlowReturn
 gst_drm_decryptor_sinkpad_chain (GstPad *pad, GstObject *parent, GstBuffer *in_buffer)
 {
   GstDrmDecryptor *decryptor = GST_DRM_DECRYPTOR (parent);
-  GstBuffer *out_buffer = NULL;
+  GstBuffer *out_buffer = gst_buffer_new ();
+  GstMemory *mem = NULL;
+  GstMapInfo  inbuff_map_info;
+  gsize max_size = 0;
+  gsize inbuf_size = gst_buffer_get_sizes (in_buffer, NULL, &max_size);
+  gint fd = -1;
 
-  // TODO: Video backend is failing to handle vp9 clear content on secure path.
-  // Added this temporary check to skip clear content until the issue is fixed.
-  GstProtectionMeta *pmeta = gst_buffer_get_protection_meta (in_buffer);
-  if (pmeta == NULL) {
-    GstCaps *caps = gst_pad_get_current_caps (decryptor->srcpad);
-    const gchar *name = gst_structure_get_name (
-        gst_caps_get_structure (caps, 0));
-    gst_caps_unref (caps);
-    if (g_str_equal (name, "video/x-vp9")) {
-      GST_WARNING_OBJECT (decryptor, "No protection metadata found for vp9 "
-      "content. Dropping buffer !");
-      gst_buffer_unref (in_buffer);
-      return GST_FLOW_OK;
-    }
-  }
+  max_size = GST_ROUND_UP_N (max_size, 4096);
 
-  if (gst_buffer_pool_acquire_buffer (decryptor->pool, &out_buffer, NULL)
-      != GST_FLOW_OK) {
-    GST_ERROR_OBJECT (decryptor, "Failed to acquire secure buffer from pool!");
-    return GST_FLOW_ERROR;
-  }
-
-  if (gst_drm_decryptor_engine_execute (decryptor->engine, in_buffer,
-      out_buffer) != 0) {
-    gst_buffer_unref (out_buffer);
-    gst_buffer_unref (in_buffer);
-    return GST_FLOW_OK;
-  }
-
-  GST_DEBUG_OBJECT (decryptor, "Decryption successful !");
+  mem = gst_drm_decryptor_allocate_dma_buf (decryptor, in_buffer, max_size);
+  fd = gst_fd_memory_get_fd (mem);
+  gst_buffer_append_memory (out_buffer, mem);
 
   gst_buffer_copy_into (out_buffer, in_buffer,
-      GstBufferCopyFlags (GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS), 0, -1);
+      (GstBufferCopyFlags) (GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS), 0, -1);
+
+
+  res = mVmInst->LendDmabuf(fd, {{mVmHandle, VMMEM_READ | VMMEM_WRITE}});
+  if (res == 0)
+    GST_DEBUG_OBJECT (decryptor, "Lend Dma buf successful !");
+
+  gst_buffer_unref (in_buffer);
 
   return gst_pad_push (decryptor->srcpad, out_buffer);
-}
-
-static gboolean
-gst_drm_decryptor_sinkpad_event (GstPad *pad, GstObject *parent, GstEvent *event)
-{
-  GstDrmDecryptor *decryptor = GST_DRM_DECRYPTOR (parent);
-  gboolean success = TRUE;
-
-  switch (GST_EVENT_TYPE(event)) {
-    case GST_EVENT_CAPS:
-    {
-      GstCaps *caps = NULL;
-
-      gst_event_parse_caps (event, &caps);
-      success = gst_drm_decryptor_update_srccaps (decryptor, caps);
-      gst_event_unref (event);
-
-      if (success && !decryptor->pool &&
-          !(decryptor->pool = gst_drm_decryptor_create_pool (decryptor))) {
-        GST_ERROR_OBJECT (decryptor, "Failed to create buffer pool!");
-        return FALSE;
-      }
-
-      if (success && !gst_buffer_pool_is_active (decryptor->pool) &&
-          !gst_buffer_pool_set_active (decryptor->pool, TRUE)) {
-        GST_ERROR_OBJECT (decryptor, "Failed to activate buffer pool!");
-        return FALSE;
-      }
-      break;
-    }
-    case GST_EVENT_PROTECTION:
-    {
-      const gchar *system_id;
-
-      gst_event_parse_protection (event, &system_id, NULL, NULL);
-      gst_event_unref (event);
-
-      decryptor->engine = gst_drm_decryptor_engine_new (system_id,
-          (gpointer) decryptor->session_id, decryptor->cdm_instance);
-      g_return_val_if_fail (decryptor->engine != NULL, FALSE);
-      break;
-    }
-    default:
-      success = gst_pad_event_default (pad, parent, event);
-      break;
-  }
-
-  return success;
 }
 
 static void
@@ -269,11 +183,8 @@ gst_drm_decryptor_finalize (GObject *object)
 {
   GstDrmDecryptor *decryptor = GST_DRM_DECRYPTOR (object);
 
-  if (decryptor->engine != NULL)
-    delete decryptor->engine;
-
-  if (decryptor->pool)
-    gst_object_unref (decryptor->pool);
+  close (decryptor->devfd);
+  g_object_unref (decryptor->allocator);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (decryptor));
 }
@@ -281,24 +192,38 @@ gst_drm_decryptor_finalize (GObject *object)
 static void
 gst_drm_decryptor_init (GstDrmDecryptor *decryptor)
 {
-  decryptor->engine = NULL;
   decryptor->session_id = DEFAULT_PROP_SESSION_ID;
   decryptor->cdm_instance = NULL;
   decryptor->pool = NULL;
 
   decryptor->sinkpad = gst_pad_new_from_static_template (
-      &gst_drm_decryptor_sink_pad_template, "sink");
+    &gst_drm_decryptor_sink_pad_template, "sink");
+  GST_PAD_SET_PROXY_CAPS (decryptor->sinkpad);
 
   decryptor->srcpad = gst_pad_new_from_static_template (
-      &gst_drm_decryptor_src_pad_template, "src");
+    &gst_drm_decryptor_src_pad_template, "src");
+  GST_PAD_SET_PROXY_CAPS (decryptor->srcpad);
 
   gst_pad_set_chain_function (decryptor->sinkpad,
       GST_DEBUG_FUNCPTR (gst_drm_decryptor_sinkpad_chain));
-  gst_pad_set_event_function (decryptor->sinkpad,
-      GST_DEBUG_FUNCPTR (gst_drm_decryptor_sinkpad_event));
+
 
   gst_element_add_pad (GST_ELEMENT (decryptor), decryptor->sinkpad);
   gst_element_add_pad (GST_ELEMENT (decryptor), decryptor->srcpad);
+
+  decryptor->allocator = gst_fd_allocator_new ();
+  decryptor->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
+
+  mVmInst = VmMem::CreateVmMem();
+  if (mVmInst) {
+    mVmHandle = mVmInst->FindVmByName("qcom,cp_bitstream");
+    if (mVmHandle < 0)  {
+        GST_ERROR("Failed to find the qcom,cp_bitstream VM!\n");
+    } else {
+        GST_DEBUG("VmMem handle %x!", mVmHandle);
+    }
+  }
+
 }
 
 static void
