@@ -107,7 +107,7 @@ gst_vesdeliver_secure_mode_get_type (void)
     static const GEnumValue values[] = {
       {SECURE_DISABLE, "Non-secure mode", "disable"},
       {SECURE_COPY, "Secure copy mode", "secure-copy"},
-      {LEND_DMABUF, "Lend dmabuf mode", "lend-dmabuf"},
+      {LEND_DMABUF, "Lend dmabuf or ionbuf mode", "lend-dmabuf"},
       {0, NULL, NULL}
     };
 
@@ -610,6 +610,24 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
         }
       } else {
         GST_WARNING_OBJECT (vesdeliver, "The dmabuf is not exclusive owned");
+      }
+    }
+#else
+    if (LEND_DMABUF == vesdeliver->secure) {
+      if (vesdeliver->allocator) {
+        int ret = -1;
+        GstVesDeliverAllocator *alloc = GST_VESDELIVER_ALLOCATOR (vesdeliver->allocator);
+        ret = alloc->ion_lend_buf(alloc->ion_fd, buf_fd,
+                          ION_VMID_CP_BITSTREAM, ION_PERM_READ | ION_PERM_WRITE);
+        if (ret != 0) {
+          GST_ERROR_OBJECT(vesdeliver, "Failed to lend ionbuf, buf_fd=%d ret=%d",
+              buf_fd, ret);
+        } else {
+          GST_DEBUG_OBJECT (vesdeliver, "Lend ionbuf with buf_fd=%d successfully.",
+              buf_fd);
+        }
+      } else {
+        GST_ERROR_OBJECT(vesdeliver, "There is no allocator to do buffer lending.");
       }
     }
 #endif

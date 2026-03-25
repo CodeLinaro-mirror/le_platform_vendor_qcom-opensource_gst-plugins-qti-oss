@@ -75,11 +75,13 @@ gst_vesdeliver_allocator_init (GstVesDeliverAllocator * alloc)
   alloc->ion_open = dlsym (alloc->lib_handle, "ion_open");
   alloc->ion_close = dlsym (alloc->lib_handle, "ion_close");
   alloc->ion_alloc_fd = dlsym (alloc->lib_handle, "ion_alloc_fd");
+  alloc->ion_lend_buf = dlsym (alloc->lib_handle, "ion_lend_buf");
+  alloc->ion_reclaim_buf = dlsym (alloc->lib_handle, "ion_reclaim_buf");
 
-  if (!alloc->ion_open || !alloc->ion_close || !alloc->ion_alloc_fd) {
+  if (!alloc->ion_open || !alloc->ion_close || !alloc->ion_alloc_fd || !alloc->ion_lend_buf || !alloc->ion_reclaim_buf) {
     GST_ERROR_OBJECT
-        (alloc, "dlsym failed with ion_open: %p, ion_close: %p, ion_alloc_fd: %p",
-        alloc->ion_open, alloc->ion_close, alloc->ion_alloc_fd);
+        (alloc, "dlsym failed with ion_open: %p, ion_close: %p, ion_alloc_fd: %p, ion_lend_buf:%p, ion_reclaim_buf:%p",
+        alloc->ion_open, alloc->ion_close, alloc->ion_alloc_fd, alloc->ion_lend_buf, alloc->ion_reclaim_buf);
     dlclose (alloc->lib_handle);
     alloc->lib_handle = NULL;
     return;
@@ -327,7 +329,8 @@ _alloc_buffer (GstAllocator * allocator, gsize alloc_size)
     GST_DEBUG_OBJECT (alloc, "allocate buf fd successfully, dma fd = %d", buf_fd);
   }
 #else
-  guint heap_mask = ION_HEAP (ION_SYSTEM_HEAP_ID);
+  guint heap_mask = (alloc->param.secure_mode == LEND_DMABUF
+      && alloc->param.buf_contiguous) ? ION_HEAP (ION_DISPLAY_HEAP_ID) : ION_HEAP (ION_SYSTEM_HEAP_ID);
   guint flags = 0;
   int rc = -EINVAL;
 
@@ -424,8 +427,20 @@ _recycle_buffer (GstAllocator * allocator, GstMemory * mem)
           GST_DEBUG_OBJECT (alloc,
               "Reclaim the dmabuf with fd=%d successfully", buf->fd);
         } else {
-          GST_ERROR_OBJECT (alloc, "Failed to reclaim the dmabuf with fd=%d",
-              buf->fd);
+          GST_ERROR_OBJECT (alloc, "Failed to reclaim the dmabuf with fd=%d ret=%d",
+              buf->fd, ret);
+        }
+      }
+#else
+      if (param->secure_mode == LEND_DMABUF && alloc->ion_reclaim_buf) {
+        int ret = -1;
+        ret = alloc->ion_reclaim_buf(alloc->ion_fd, buf->fd, ION_VMID_CP_BITSTREAM);
+        if (0 == ret) {
+          GST_DEBUG_OBJECT (alloc,
+              "Reclaim the ionbuf with fd=%d successfully.", buf->fd);
+        } else {
+          GST_ERROR_OBJECT (alloc, "Failed to reclaim the ionbuf with fd=%d ret=%d",
+              buf->fd, ret);
         }
       }
 #endif

@@ -44,6 +44,11 @@ typedef int (*ion_open_func) (void);
 typedef int (*ion_close_func) (int fd);
 typedef int (*ion_alloc_fd_func) (int fd, size_t len, size_t align,
     unsigned int heap_mask, unsigned int flags, int *handle_fd);
+typedef int (*ion_lend_buf_func) (int ion_fd, int buf_fd,
+    uint32_t dst_vmid, uint32_t dst_perm);
+typedef int (*ion_reclaim_buf_func) (int ion_fd, int buf_fd,
+    uint32_t src_vmid);
+
 #endif
 
 typedef enum
@@ -93,6 +98,8 @@ struct _GstVesDeliverAllocator
   ion_open_func ion_open;
   ion_close_func ion_close;
   ion_alloc_fd_func ion_alloc_fd;
+  ion_lend_buf_func ion_lend_buf;
+  ion_reclaim_buf_func ion_reclaim_buf;
 #endif
 };
 
