@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_QTI_OSS_ML_SNPE
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
@@ -23,7 +23,7 @@ pkg_check_modules(GST_QCOM_UTILS
 pkg_check_modules(GST_QCOM_ML
   REQUIRED gstreamer-qcom-oss-ml-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -31,6 +31,8 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 add_definitions(-DHAVE_CONFIG_H)
 
 include(CheckIncludeFileCXX)
+
+list(APPEND CMAKE_REQUIRED_INCLUDES "${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/SNPE")
 
 # Check whether the C API header for the SNPE library is present.
 check_include_file_cxx("SNPE/SNPE.h" HAVE_SNPE_H)
@@ -51,6 +53,7 @@ add_library(${GST_QTI_ML_SNPE} SHARED
 )
 
 target_include_directories(${GST_QTI_ML_SNPE} PUBLIC
+  ${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/SNPE
   ${GST_INCLUDE_DIRS}
   ${GST_QCOM_ML_INCLUDE_DIRS}
   ${GST_QCOM_UTILS_INCLUDE_DIRS}

@@ -57,6 +57,7 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define GST_TYPE_VIDEO_TRANSFORM_ROTATE (gst_video_trasform_rotate_get_type())
 
 #define DEFAULT_PROP_ENGINE_BACKEND     (gst_video_converter_default_backend())
+#define DEFAULT_PROP_BACKEND_PARAM      NULL
 #define DEFAULT_PROP_FLIP_HORIZONTAL    FALSE
 #define DEFAULT_PROP_FLIP_VERTICAL      FALSE
 #define DEFAULT_PROP_ROTATE             GST_VIDEO_TRANSFORM_ROTATE_NONE
@@ -89,6 +90,7 @@ enum
 {
   PROP_0,
   PROP_ENGINE_BACKEND,
+  PROP_BACKEND_PARAM,
   PROP_FLIP_HORIZONTAL,
   PROP_FLIP_VERTICAL,
   PROP_ROTATE,
@@ -670,7 +672,8 @@ gst_video_transform_set_caps (GstBaseTransform * base, GstCaps * incaps,
   if (vtrans->converter != NULL)
     gst_video_converter_engine_free (vtrans->converter);
 
-  vtrans->converter = gst_video_converter_engine_new (vtrans->backend, NULL);
+  vtrans->converter = gst_video_converter_engine_new (vtrans->backend,
+      vtrans->backendparam);
 
   // Disable passthrough in order to decide output allocation.
   gst_base_transform_set_passthrough (base, FALSE);
@@ -1545,10 +1548,10 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
-  GstVideoFrame inframe = { 0, }, outframe = { 0, };
   GstVideoBlit blit = GST_VCE_BLIT_INIT;
   GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
   GstClockTime time = GST_CLOCK_TIME_NONE;
+  const GstVideoMeta *meta = NULL;
   gboolean success = FALSE;
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
@@ -1556,37 +1559,20 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
-  if (!gst_video_frame_map (&inframe, vtrans->ininfo, inbuffer,
-          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map input buffer!");
-    return GST_FLOW_OK;
-  }
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC START failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
-
-  if (!gst_video_frame_map (&outframe, vtrans->outinfo, outbuffer,
-          GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map output buffer!");
-    gst_video_frame_unmap (&inframe);
-    return GST_FLOW_OK;
-  }
-
   time = gst_util_get_timestamp ();
 
   GST_VIDEO_TRANSFORM_LOCK (vtrans);
 
-  blit.frame = &inframe;
+  meta = gst_buffer_get_video_meta (inbuffer);
+
+  success = gst_video_info_modify_with_meta (vtrans->ininfo, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
+
+  blit.buffer = inbuffer;
   blit.mask = 0;
+  blit.info = vtrans->ininfo;
 
   if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
     gst_video_rectangle_to_quadrilateral (&(vtrans->crop), &(blit.source));
@@ -1609,10 +1595,18 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     blit.mask |= GST_VCE_MASK_ROTATION;
   }
 
+  meta = gst_buffer_get_video_meta (outbuffer);
+
+  success = gst_video_info_modify_with_meta (vtrans->outinfo, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
+
   composition.blits = &blit;
   composition.n_blits = 1;
 
-  composition.frame = &outframe;
+  composition.buffer = outbuffer;
+  composition.info = vtrans->outinfo;
   composition.datatype = 0;
 
   composition.bgcolor = vtrans->background;
@@ -1628,21 +1622,6 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GST_LOG_OBJECT (vtrans, "Conversion took %" G_GINT64_FORMAT ".%03"
       G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
       (GST_TIME_AS_USECONDS (time) % 1000));
-
-  gst_video_frame_unmap (&outframe);
-  gst_video_frame_unmap (&inframe);
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC END failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   if (!success) {
     GST_ERROR_OBJECT (vtrans, "Failed to process composition!");
@@ -1672,6 +1651,24 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       vtrans->backend = g_value_get_enum (value);
       break;
+    case PROP_BACKEND_PARAM:
+    {
+      GValue structure = G_VALUE_INIT;
+
+      g_value_init (&structure, GST_TYPE_STRUCTURE);
+
+      if (!gst_parse_string_property_value (value, &structure)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to parse backend paramters!");
+        break;
+      }
+
+      if (vtrans->backendparam != NULL)
+        gst_structure_free (vtrans->backendparam);
+
+      vtrans->backendparam = GST_STRUCTURE (g_value_dup_boxed (&structure));
+      g_value_unset (&structure);
+      break;
+    }
     case PROP_FLIP_HORIZONTAL:
       vtrans->flip_h = g_value_get_boolean (value);
       break;
@@ -1748,6 +1745,16 @@ gst_video_transform_get_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       g_value_set_enum (value, vtrans->backend);
       break;
+    case PROP_BACKEND_PARAM:
+    {
+      gchar *string = NULL;
+
+      if (vtrans->backendparam != NULL)
+        string = gst_structure_to_string (vtrans->backendparam);
+
+      g_value_take_string (value, string);
+      break;
+    }
     case PROP_FLIP_HORIZONTAL:
       g_value_set_boolean (value, vtrans->flip_h);
       break;
@@ -1821,6 +1828,9 @@ gst_video_transform_finalize (GObject * object)
   if (vtrans->outpool != NULL)
     gst_object_unref (vtrans->outpool);
 
+  if (vtrans->backendparam != NULL)
+    gst_structure_free (vtrans->backendparam);
+
   g_mutex_clear (&(vtrans)->lock);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (vtrans));
@@ -1845,6 +1855,11 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
           "Engine backend used for the conversion operations",
           GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject, PROP_BACKEND_PARAM,
+      g_param_spec_string ("engine-param", "Engine Parameters",
+          "Parameters setting for each convert engine",
+          DEFAULT_PROP_BACKEND_PARAM,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_FLIP_HORIZONTAL,
       g_param_spec_boolean ("flip-horizontal", "Flip horizontally",
           "Flip video image horizontally", DEFAULT_PROP_FLIP_HORIZONTAL,
@@ -1917,6 +1932,7 @@ gst_video_transform_init (GstVideoTransform * vtrans)
   g_mutex_init (&(vtrans)->lock);
 
   vtrans->backend = DEFAULT_PROP_ENGINE_BACKEND;
+  vtrans->backendparam = DEFAULT_PROP_BACKEND_PARAM;
   vtrans->flip_h = DEFAULT_PROP_FLIP_HORIZONTAL;
   vtrans->flip_v = DEFAULT_PROP_FLIP_VERTICAL;
   vtrans->rotation = DEFAULT_PROP_ROTATE;

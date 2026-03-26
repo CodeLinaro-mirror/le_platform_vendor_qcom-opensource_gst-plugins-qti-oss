@@ -51,18 +51,12 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
 
 target_include_directories(${TARGET_NAME} PRIVATE
   ${GST_INCLUDE_DIRS}
-  ${KERNEL_BUILDDIR}/usr/include
   $<$<BOOL:${OPEN_CV_FOUND}>:${OPEN_CV_INCLUDE_DIRS}>
 )
 
-# Path for some headers in msm-5.4 kernel.
-target_include_directories(${TARGET_NAME} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include/vidc
-)
-
-# Path for some headers in msm-5.15 kernel.
-target_include_directories(${TARGET_NAME} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include/uapi
+target_include_directories(${TARGET_NAME} INTERFACE
+  $<BUILD_INTERFACE:${QTI_PLUGINS_BASE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
 )
 
 target_link_libraries(${TARGET_NAME} PRIVATE
@@ -82,6 +76,9 @@ install(
               WORLD_EXECUTE WORLD_READ
   PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/video/
 )
+
+# Add destination of compiletime pkg-config file to PKG_CONFIG_PATH
+set(ENV{PKG_CONFIG_PATH} "${CMAKE_CURRENT_BINARY_DIR}:$ENV{PKG_CONFIG_PATH}")
 
 configure_file(
   ${BASE_COMMON_PC_IN}

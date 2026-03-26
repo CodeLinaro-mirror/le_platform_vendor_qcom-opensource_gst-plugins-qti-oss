@@ -36,7 +36,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define DEFAULT_OUTPUT_FILENAME_CAM1 "/etc/media/cam1_vid.mp4"
 #define DEFAULT_OUTPUT_FILENAME_CAM2 "/etc/media/cam2_vid.mp4"
@@ -439,10 +439,6 @@ main (gint argc, gchar *argv[])
   GstMultiCamAppContext *appctx = NULL;
   gboolean ret = FALSE;
   guint intrpt_watch_id = 0;
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   // create the application context
   appctx = gst_app_context_new ();

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8.2)
+cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGINS_QTI_OSS_CV_OPTCLFLOW
   VERSION ${GST_PLUGINS_QTI_OSS_VERSION}
   LANGUAGES C CXX
@@ -30,7 +30,7 @@ check_include_file_cxx("cvp/v2.0/cvpOpticalFlow.h" HAVE_CVP_OPTICALFLOW_H)
 # Check whether EVA OpticalFlow header is present.
 check_include_file_cxx("evaOpticalFlow.h" HAVE_EVA_OPTICALFLOW_H)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

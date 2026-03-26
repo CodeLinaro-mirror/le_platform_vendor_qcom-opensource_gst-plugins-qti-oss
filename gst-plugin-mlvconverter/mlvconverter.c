@@ -156,7 +156,6 @@ enum
 static GstStaticCaps gst_ml_video_converter_static_src_caps =
     GST_STATIC_CAPS (GST_ML_VIDEO_CONVERTER_SRC_CAPS);
 
-
 static GstCaps *
 gst_ml_video_converter_sink_caps (void)
 {
@@ -295,19 +294,19 @@ gst_ml_video_pixel_layout_get_type (void)
 }
 
 static inline gboolean
-is_conversion_required (GstVideoFrame * inframe, GstVideoFrame * outframe)
+is_conversion_required (const GstVideoInfo * ininfo, const GstVideoInfo * outinfo)
 {
   gboolean conversion = FALSE;
 
   // Conversion is required if input and output formats are different.
-  conversion |=  GST_VIDEO_FRAME_FORMAT (inframe) !=
-      GST_VIDEO_FRAME_FORMAT (outframe);
+  conversion |=  GST_VIDEO_INFO_FORMAT (ininfo) !=
+      GST_VIDEO_INFO_FORMAT (outinfo);
   // Conversion is required if input and output strides are different.
-  conversion |= GST_VIDEO_FRAME_PLANE_STRIDE (inframe, 0) !=
-      GST_VIDEO_FRAME_PLANE_STRIDE (outframe, 0);
+  conversion |=  GST_VIDEO_INFO_PLANE_STRIDE (ininfo, 0) !=
+       GST_VIDEO_INFO_PLANE_STRIDE (outinfo, 0);
   // Conversion is required if input and output heights are different.
-  conversion |= GST_VIDEO_FRAME_HEIGHT (inframe) !=
-      GST_VIDEO_FRAME_HEIGHT (outframe);
+  conversion |= GST_VIDEO_INFO_HEIGHT (ininfo) !=
+      GST_VIDEO_INFO_HEIGHT (outinfo);
 
   return conversion;
 }
@@ -504,22 +503,6 @@ gst_buffer_new_from_parent_memory (GstBuffer * buffer, guint index, guint depth)
   return newbuffer;
 }
 
-static inline void
-gst_video_frame_unmap_and_reset (GstVideoFrame * frame)
-{
-  gst_video_frame_unmap (frame);
-
-  frame->buffer = NULL;
-  frame->id = 0;
-  frame->flags = 0;
-  frame->meta = NULL;
-
-  memset (frame->data, 0, sizeof (gpointer) * GST_VIDEO_MAX_PLANES);
-  memset (frame->map, 0, sizeof (GstMapInfo) * GST_VIDEO_MAX_PLANES);
-
-  gst_video_info_init (&(frame->info));
-}
-
 static gboolean
 gst_matrix_inverse (const gdouble matrix[MATRIX_MAX_SIZE][MATRIX_MAX_SIZE],
     const guint size, gdouble inverse[MATRIX_MAX_SIZE][MATRIX_MAX_SIZE])
@@ -705,10 +688,10 @@ gst_ml_video_converter_update_source (GstMLVideoConverter * mlconverter,
   source = &(vblit->source);
   vblit->mask |= GST_VCE_MASK_SOURCE;
 
-  // Initialize the source region with full dimensions of the blit frame.
+  // Initialize the source region with full dimensions of the blit buffer.
   source->a.x = source->a.y = source->b.x = source->c.y = 0;
-  source->c.x = source->d.x = GST_VIDEO_FRAME_WIDTH (vblit->frame);
-  source->b.y = source->d.y = GST_VIDEO_FRAME_HEIGHT (vblit->frame);
+  source->c.x = source->d.x = GST_VIDEO_INFO_WIDTH (vblit->info);
+  source->b.y = source->d.y = GST_VIDEO_INFO_HEIGHT (vblit->info);
 
   if (roimeta == NULL)
     return TRUE;
@@ -820,8 +803,8 @@ gst_ml_video_converter_update_destination (GstMLVideoConverter * mlconverter,
   depth = GST_ML_INFO_TENSOR_DIM_D (mlconverter->tensorlayout,
       mlconverter->mlinfo);
 
-  maxwidth = GST_VIDEO_FRAME_WIDTH (mlconverter->composition.frame);
-  maxheight = GST_VIDEO_FRAME_HEIGHT (mlconverter->composition.frame) /
+  maxwidth = GST_VIDEO_INFO_WIDTH (mlconverter->composition.info);
+  maxheight = GST_VIDEO_INFO_HEIGHT (mlconverter->composition.info) /
       (n_batch * depth);
 
   destination->y = destination->x = 0;
@@ -873,12 +856,13 @@ gst_ml_video_converter_update_blit_params (GstMLVideoConverter * mlconverter,
   GstProtectionMeta *pmeta = NULL;
   GstVideoQuadrilateral *source = NULL;
   GstVideoRectangle *destination = NULL;
+  const GstVideoMeta *meta = NULL;
+  gboolean success = TRUE;
   gpointer state = NULL;
   guint idx = 0, num = 0, depth = 0, n_batch = 0, n_regions = 1, n_positions = 0;
-  gboolean success = FALSE;
 
   composition = &(mlconverter->composition);
-  outbuffer = composition->frame->buffer;
+  outbuffer = composition->buffer;
 
   // Expected tensor batch size and depth.
   n_batch = GST_ML_INFO_TENSOR_DIM_N (mlconverter->tensorlayout,
@@ -921,13 +905,16 @@ gst_ml_video_converter_update_blit_params (GstMLVideoConverter * mlconverter,
     // Index and convinient pointer to the current blit object.
     idx = composition->n_blits;
     vblit = &(composition->blits[idx]);
+    vblit->buffer = inbuffer;
 
-    success = gst_video_frame_map (vblit->frame, mlconverter->ininfo, inbuffer,
-        GST_MAP_READ);
-    if (!success) {
-      GST_ERROR_OBJECT (mlconverter, "Failed to map input frame!");
-      return -1;
-    }
+    meta = gst_buffer_get_video_meta (inbuffer);
+
+    success = gst_video_info_modify_with_meta (mlconverter->ininfo, meta);
+
+    if (!success)
+      GST_WARNING_OBJECT (mlconverter, "Failed to derive info from meta");
+
+    vblit->info = mlconverter->ininfo;
 
     if (GST_CONVERSION_MODE_IS_ROI (mlconverter->mode)) {
       roimeta = GST_BUFFER_ITERATE_ROI_METAS (inbuffer, state);
@@ -964,7 +951,7 @@ gst_ml_video_converter_update_blit_params (GstMLVideoConverter * mlconverter,
 
     // Add the Y axis offset for this ROI meta in the output buffer.
     destination->y += (mlconverter->batch_idx * depth + mlconverter->depth_idx) *
-        (GST_VIDEO_FRAME_HEIGHT (composition->frame) / (n_batch * depth));
+        (GST_VIDEO_INFO_HEIGHT (composition->info) / (n_batch * depth));
 
     // Increment the tracker for the current depth position and if this is the
     // end of a new batch of depth positions then increment the batch index.
@@ -1023,16 +1010,13 @@ gst_ml_video_converter_cleanup_composition (GstMLVideoConverter * mlconverter)
 
   composition->n_blits = n_batch * depth;
 
-  // Deallocate region rectangles, unmap frames and unreference buffers.
   for (idx = 0; idx < composition->n_blits; idx++) {
     blit = &(composition->blits[idx]);
 
-    if (blit->frame->buffer != NULL)
-      gst_video_frame_unmap_and_reset (blit->frame);
+    blit->buffer = NULL;
   }
 
-  if (composition->frame->buffer != NULL)
-    gst_video_frame_unmap_and_reset (composition->frame);
+  composition->buffer = NULL;
 }
 
 static gboolean
@@ -1045,16 +1029,20 @@ gst_ml_video_converter_setup_composition (GstMLVideoConverter * mlconverter,
   guint n_batch = 0, depth = 0, n_positions = 0;
   gint n_memory = 0, mem_idx = 0, n_roi_meta = 0, n_filled_positions = 0;
   gboolean success = FALSE;
+  const GstVideoMeta *meta = NULL;
 
   composition = &(mlconverter->composition);
+  composition->buffer = outbuffer;
   composition->n_blits = 0;
 
-  success = gst_video_frame_map (composition->frame, mlconverter->vinfo,
-      outbuffer, GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
-  if (!success) {
-    GST_ERROR_OBJECT (mlconverter, "Failed to map output frame!");
-    return FALSE;
-  }
+  meta = gst_buffer_get_video_meta (outbuffer);
+
+  success = gst_video_info_modify_with_meta (mlconverter->vinfo, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (mlconverter, "Failed to derive info from meta");
+
+  composition->info = mlconverter->vinfo;
 
   mview_mode = GST_VIDEO_INFO_MULTIVIEW_MODE (mlconverter->ininfo);
 
@@ -1154,7 +1142,7 @@ gst_ml_video_converter_setup_composition (GstMLVideoConverter * mlconverter,
   mlconverter->batch_idx = mlconverter->depth_idx = 0;
 
   GST_TRACE_OBJECT (mlconverter, "Output %" GST_PTR_FORMAT,
-      composition->frame->buffer);
+      composition->buffer);
 
 cleanup:
   if (!success && (buffer != NULL) && (buffer != inbuffer))
@@ -1289,71 +1277,96 @@ gst_ml_video_converter_prepare_buffer_queues (GstMLVideoConverter * mlconverter,
 }
 
 static gboolean
-gst_ml_video_converter_normalize (GstMLVideoConverter * mlconverter,
-    GstVideoBlit * vblit, GstVideoFrame * outframe)
+gst_ml_video_converter_normalize (GstMLVideoConverter * mlconverter)
 {
   guint8 *indata = NULL;
   gpointer outdata = NULL;
+  GstVideoBlit *vblit = NULL;
+  GstVideoFrame inframe = {0,}, outframe = {0,};
   GstVideoRectangle source = {0};
-  GstMLType mltype = GST_ML_TYPE_UNKNOWN;
-  gdouble mean[4] = {0}, sigma[4] = {0};
-  gint inidx = 0, instride = 0, row = 0, column = 0, outwidth = 0, outheight = 0;
-  guint idx = 0, outidx = 0, num = 0, bpp = 0;
+  gdouble mean[4] = {0}, sigma[4] = {0}, value = 0;
+  guint idx = 0, blit_idx = 0;
+  gint outidx = 0, outwidth = 0, outheight = 0, offset = 1, row = 0;
+  gint column = 0, instride = 0, num = 0, outbpp = 0, n_components = 0;
+  gboolean success = FALSE;
+  const GstVideoInfo *outinfo = NULL;
+  GstBuffer *outbuffer = NULL;
 
-  gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
+  outinfo = mlconverter->composition.info;
+  outbuffer = mlconverter->composition.buffer;
 
-  // Sanity checks, input and output frame must differ only in type.
-  g_return_val_if_fail (GST_VIDEO_FRAME_FORMAT (vblit->frame) ==
-      GST_VIDEO_FRAME_FORMAT (outframe), FALSE);
+  success = gst_video_frame_map (&outframe, outinfo, outbuffer,
+      GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
 
-  g_return_val_if_fail (source.w == vblit->destination.w, FALSE);
-  g_return_val_if_fail (source.h == vblit->destination.h, FALSE);
+  if (!success) {
+    GST_ERROR_OBJECT (mlconverter, "Failed to map buffer!");
+    return GST_FLOW_ERROR;
+  }
 
-  // Retrive the input frame Bytes Per Pixel for later calculations.
-  bpp = GST_VIDEO_FORMAT_INFO_BITS (vblit->frame->info.finfo) *
-      GST_VIDEO_FORMAT_INFO_N_COMPONENTS (vblit->frame->info.finfo);
-  bpp /= 8;
+  n_components = GST_VIDEO_FRAME_N_COMPONENTS (&outframe);
 
   // Convinient local variables for per channel mean and sigma values.
-  for (idx = 0; idx < bpp; idx++) {
+  for (idx = 0; idx < (guint)n_components; idx++) {
     mean[idx] = GET_MEAN_VALUE (mlconverter->mean, idx);
     sigma[idx] = GET_SIGMA_VALUE (mlconverter->sigma, idx);
   }
 
-  indata = GST_VIDEO_FRAME_PLANE_DATA (vblit->frame, 0);
-  outdata = GST_VIDEO_FRAME_PLANE_DATA (outframe, 0);
-  mltype = GST_ML_INFO_TYPE (mlconverter->mlinfo);
+  outdata = GST_VIDEO_FRAME_PLANE_DATA (&outframe, 0);
 
-  outwidth = GST_VIDEO_FRAME_WIDTH (outframe);
-  outheight = GST_VIDEO_FRAME_HEIGHT (outframe);
-  instride = GST_VIDEO_FRAME_PLANE_STRIDE (vblit->frame, 0);
+  outwidth = GST_VIDEO_FRAME_WIDTH (&outframe);
+  outheight = GST_VIDEO_FRAME_HEIGHT (&outframe);
 
-  for (row = 0; row < outheight; row++) {
-    outidx = row * outwidth * bpp;
+  outbpp = GST_VIDEO_FRAME_COMP_PSTRIDE (&outframe, 0);
 
-    for (column = 0; column < outwidth; column++, inidx = -1) {
-      // Take the value from source only if it is within its coordinates.
-      if ((row >= vblit->destination.y) && (column >= vblit->destination.x) &&
-          (row < (vblit->destination.y + vblit->destination.h)) &&
-          (column < (vblit->destination.x + vblit->destination.w))) {
-        inidx = (source.y + (row - vblit->destination.y)) * instride;
-        inidx += (source.x + (column - vblit->destination.x)) * bpp;
-      }
+  for (blit_idx = 0; blit_idx < mlconverter->composition.n_blits; blit_idx++) {
+    vblit = &mlconverter->composition.blits[blit_idx];
 
-      // Assign a normalized value for each byte in the pixel.
-      for (num = 0; num < bpp; num++, outidx++) {
-        gdouble value = (inidx != -1) ? indata[inidx++] : 0;
+    success = gst_video_frame_map (&inframe, vblit->info, vblit->buffer,
+        GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
 
-        // Convert value to actual tensor type and apply normalization.
-        value = gst_ml_convert_uint8_to_mltype (mltype, value);
-        value = (value - mean[num]) * sigma[num];
+    if (!success) {
+      GST_ERROR_OBJECT (mlconverter, "Failed to map buffer!");
+      goto cleanup;
+    }
 
-        gst_ml_tensor_assign_value (mltype, outdata, outidx, value);
+    indata =  GST_VIDEO_FRAME_PLANE_DATA (&inframe, 0);
+    instride = GST_VIDEO_FRAME_PLANE_STRIDE (&inframe, 0);
+
+    gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
+
+    // Overwrite increment value when output is planar RGB.
+    if (mlconverter->tensorlayout.c == GST_ML_TENSOR_LAYOUT_NCHW.c)
+      offset = outwidth * outheight;
+
+    for (row = source.x; row < source.h; row++) {
+      for (column = source.y; column < source.w; column++) {
+        // Assign a normalized value for each byte in the pixel.
+        for (num = 0; num < n_components; num++) {
+          value = indata[(row * instride) + column * n_components + num];
+
+          // Convert value to actual tensor type
+          value = gst_ml_convert_uint8_to_mltype (
+              GST_ML_INFO_TYPE (mlconverter->mlinfo), value);
+
+          // Apply normalization
+          value = (value - mean[num]) * sigma[num];
+
+          outidx = ((row + vblit->destination.y) * outwidth +
+              (column + vblit->destination.x)) * outbpp + num * offset;
+
+          gst_ml_tensor_assign_value (
+              GST_ML_INFO_TYPE (mlconverter->mlinfo), outdata, outidx, value);
+        }
       }
     }
+
+    gst_video_frame_unmap (&inframe);
   }
 
-  return TRUE;
+cleanup:
+  gst_video_frame_unmap (&outframe);
+
+  return success;
 }
 
 static GstCaps *
@@ -1413,12 +1426,12 @@ gst_ml_video_converter_translate_ml_caps (GstMLVideoConverter * mlconverter,
     } else if (GST_ML_INFO_TENSOR_DIM_C (tensorlayout, &mlinfo) == 3) {
       if (mlconverter->pixlayout == GST_ML_VIDEO_PIXEL_LAYOUT_REGULAR) {
         if (tensorlayout.c == GST_ML_TENSOR_LAYOUT_NCHW.c)
-          init_formats (&formats, "RGBP", NULL);
+          init_formats (&formats, "RGBP", "RGB", NULL);
         else
           init_formats (&formats, "RGB", NULL);
       } else if (mlconverter->pixlayout == GST_ML_VIDEO_PIXEL_LAYOUT_REVERSE) {
         if (tensorlayout.c == GST_ML_TENSOR_LAYOUT_NCHW.c)
-          init_formats (&formats, "BGRP", NULL);
+          init_formats (&formats, "BGRP", "BGR", NULL);
         else
           init_formats (&formats, "BGR", NULL);
       }
@@ -1575,7 +1588,7 @@ gst_ml_video_converter_create_pool (GstMLVideoConverter * mlconverter,
   gst_buffer_pool_config_set_params (config, caps, size,
       DEFAULT_PROP_MIN_BUFFERS, DEFAULT_PROP_MAX_BUFFERS);
 
-  allocator = gst_fd_allocator_new ();
+  allocator = gst_qti_allocator_new (GST_FD_MEMORY_FLAG_KEEP_MAPPED);
 
   gst_buffer_pool_config_set_allocator (config, allocator, NULL);
   gst_buffer_pool_config_add_option (
@@ -1982,9 +1995,9 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
 {
   GstMLVideoConverter *mlconverter = GST_ML_VIDEO_CONVERTER (base);
   GstCaps *othercaps = NULL;
-  GstVideoInfo ininfo, outinfo;
-  GstMLInfo mlinfo;
-  guint idx = 0, bpp = 0, padding = 0, n_bytes = 0, n_planes = 0, size = 0;
+  GstVideoInfo ininfo = { 0, }, outinfo = { 0, };
+  GstMLInfo mlinfo = { 0, };
+  guint idx = 0, bpp = 0, padding = 0, n_bytes = 0, size = 0;
   gboolean passthrough = FALSE;
 
   if (!gst_video_info_from_caps (&ininfo, incaps)) {
@@ -2023,9 +2036,14 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   // Get the number of bytes that represent a give ML type.
   n_bytes = gst_ml_type_get_size (mlinfo.type);
 
-  n_planes = GST_VIDEO_FORMAT_INFO_N_PLANES (outinfo.finfo);
+  // Adjust height with the depth number of the tensor.
+  GST_VIDEO_INFO_HEIGHT (&outinfo) *= GST_ML_INFO_TENSOR_DIM_D (
+      mlconverter->tensorlayout, &mlinfo);
+  // Adjust height with the batch number of the tensor (1st dimension).
+  GST_VIDEO_INFO_HEIGHT (&outinfo) *= GST_ML_INFO_TENSOR_DIM_N (
+      mlconverter->tensorlayout, &mlinfo);
 
-  for (idx = 0; idx < n_planes; idx++) {
+  for (idx = 0; idx < GST_VIDEO_INFO_N_PLANES (&outinfo); idx++) {
     // Retrieve the Bytes Per Pixel in order to calculate the line padding.
     bpp = GST_VIDEO_INFO_COMP_PSTRIDE (&outinfo, idx);
 
@@ -2043,7 +2061,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
         GST_VIDEO_INFO_COMP_HEIGHT (&outinfo, idx);
 
     // Update the offset to the next plane with adjusted size of current plane.
-    if ((idx + 1) < n_planes) {
+    if ((idx + 1) < GST_VIDEO_INFO_N_PLANES (&outinfo)) {
       size = GST_VIDEO_INFO_PLANE_STRIDE (&outinfo, idx) *
           GST_VIDEO_INFO_COMP_HEIGHT (&outinfo, idx);
 
@@ -2058,16 +2076,20 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   // Additionally adjust the total size depending on the depth size.
   GST_VIDEO_INFO_SIZE (&outinfo) *= GST_ML_INFO_TENSOR_DIM_D (
       mlconverter->tensorlayout, &mlinfo);
-  // Adjust height with the depth number of the tensor.
-  GST_VIDEO_INFO_HEIGHT (&outinfo) *= GST_ML_INFO_TENSOR_DIM_D (
-      mlconverter->tensorlayout, &mlinfo);
-
   // Additionally adjust the total size depending on the batch size.
   GST_VIDEO_INFO_SIZE (&outinfo) *= GST_ML_INFO_TENSOR_DIM_N (
       mlconverter->tensorlayout, &mlinfo);
-  // Adjust height with the batch number of the tensor (1st dimension).
-  GST_VIDEO_INFO_HEIGHT (&outinfo) *= GST_ML_INFO_TENSOR_DIM_N (
+
+  // Adjust number of views with the depth number of the tensor.
+  GST_VIDEO_INFO_VIEWS (&outinfo) *= GST_ML_INFO_TENSOR_DIM_D (
       mlconverter->tensorlayout, &mlinfo);
+  // Adjust number of views with the batch number of the tensor (1st dimension).
+  GST_VIDEO_INFO_VIEWS (&outinfo) *= GST_ML_INFO_TENSOR_DIM_N (
+      mlconverter->tensorlayout, &mlinfo);
+
+  if ((GST_ML_INFO_TENSOR_DIM_N (mlconverter->tensorlayout, &mlinfo) > 1) ||
+      (GST_ML_INFO_TENSOR_DIM_D (mlconverter->tensorlayout, &mlinfo) > 1))
+    GST_VIDEO_INFO_MULTIVIEW_MODE (&outinfo) |= GST_VIDEO_MULTIVIEW_MODE_MONO;
 
   passthrough =
       GST_VIDEO_INFO_SIZE (&ininfo) == GST_VIDEO_INFO_SIZE (&outinfo) &&
@@ -2108,14 +2130,12 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   for (idx = 0; idx < mlconverter->composition.n_blits; idx++) {
     GstVideoBlit *blit = &(mlconverter->composition.blits[idx]);
 
-    blit->frame = g_slice_new0 (GstVideoFrame);
     blit->mask = 0;
 
     blit->alpha = G_MAXUINT8;
     blit->rotate = GST_VCE_ROTATE_0;
   }
 
-  mlconverter->composition.frame = g_slice_new0 (GstVideoFrame);
   mlconverter->composition.datatype = 0;
 
   mlconverter->composition.bgcolor = 0x00000000;
@@ -2284,7 +2304,7 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
     GstBuffer * inbuffer, GstBuffer * outbuffer)
 {
   GstMLVideoConverter *mlconverter = GST_ML_VIDEO_CONVERTER (base);
-  GstVideoFrame *inframe = NULL, *outframe = NULL;
+  const GstVideoInfo *ininfo = NULL, *outinfo = NULL;
   GstClockTime time = GST_CLOCK_TIME_NONE;
   guint n_blits = 0;
   gboolean success = TRUE;
@@ -2307,47 +2327,22 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
     return GST_FLOW_ERROR;
   }
 
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (mlconverter, "DMA IOCTL SYNC START failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
-
   n_blits = mlconverter->composition.n_blits;
-  inframe = mlconverter->composition.blits[0].frame;
-  outframe = mlconverter->composition.frame;
+  ininfo = mlconverter->composition.blits[0].info;
+  outinfo = mlconverter->composition.info;
 
   // Perform transformation only when custom normalization coefficients are set,
   // when there are multiple blit elements (buffers), or when there is only a
   // single blit element which does not have the required parameters for output.
   if (mlconverter->backend != GST_VCE_BACKEND_NONE &&
-      ((n_blits > 1) || is_conversion_required (inframe, outframe) ||
+      ((n_blits > 1) || is_conversion_required (ininfo, outinfo) ||
           ((mlconverter->mean->len != 0) && (mlconverter->sigma->len != 0)))) {
     success = gst_video_converter_engine_compose (mlconverter->converter,
         &(mlconverter->composition), 1, NULL);
   } else {
     // There is not need for frame conversion, apply only normalization.
-    success = gst_ml_video_converter_normalize (mlconverter,
-        &(mlconverter->composition.blits[0]), outframe);
+    success = gst_ml_video_converter_normalize (mlconverter);
   }
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (mlconverter, "DMA IOCTL SYNC END failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   gst_ml_video_converter_cleanup_composition (mlconverter);
   time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
@@ -2468,7 +2463,6 @@ static void
 gst_ml_video_converter_finalize (GObject * object)
 {
   GstMLVideoConverter *mlconverter = GST_ML_VIDEO_CONVERTER (object);
-  guint idx = 0;
 
   g_queue_free_full (mlconverter->bufqueue, (GDestroyNotify) gst_buffer_unref);
 
@@ -2478,11 +2472,7 @@ gst_ml_video_converter_finalize (GObject * object)
   if (mlconverter->mean != NULL)
     g_array_free (mlconverter->mean, TRUE);
 
-  for (idx = 0; idx < mlconverter->composition.n_blits; idx++)
-    g_slice_free (GstVideoFrame, mlconverter->composition.blits[idx].frame);
-
   g_free (mlconverter->composition.blits);
-  g_slice_free (GstVideoFrame, mlconverter->composition.frame);
 
   if (mlconverter->converter != NULL)
     gst_video_converter_engine_free (mlconverter->converter);

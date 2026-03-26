@@ -389,17 +389,62 @@ load_symbol (gpointer* method, gpointer handle, const gchar* name)
   return TRUE;
 }
 
+GType
+gst_fcv_op_mode_get_type (void)
+{
+  static GType gtype = 0;
+  static const GEnumValue variants[] = {
+    { GST_FCV_OP_MODE_LOW_POWER,
+        "Uses lowest power consuming implementation", "low-power"
+    },
+    { GST_FCV_OP_MODE_PERFORMANCE,
+        "Uses highest performance implementation", "performance"
+    },
+    {
+      GST_FCV_OP_MODE_CPU_OFFLOAD,
+        "Uses highest performance implementation", "cpu-offload"
+    },
+    {
+      GST_FCV_OP_MODE_CPU_PERFORMANCE,
+        "Uses CPU highest performance implementation", "cpu-performance"
+    },
+    {0, NULL, NULL},
+  };
+
+  if (!gtype)
+      gtype = g_enum_register_static ("GstFcvOpMode", variants);
+
+  return gtype;
+}
+
 static inline gint
 gst_fcv_get_opmode (const GstStructure * settings)
 {
-  gint value = GST_FCV_OP_MODE_PERFORMANCE;
+  const GValue *value = NULL;
+  const gchar *string = NULL;
+  GValue newvalue = G_VALUE_INIT;
+  gint mode = GST_FCV_OP_MODE_PERFORMANCE;
 
   if ((settings == NULL) ||
       !gst_structure_has_field (settings, GST_VCE_OPT_FCV_OP_MODE))
-    return value;
+    return mode;
 
-  gst_structure_get_enum (settings, GST_VCE_OPT_FCV_OP_MODE, G_TYPE_ENUM, &value);
-  return value;
+  value = gst_structure_get_value (settings, GST_VCE_OPT_FCV_OP_MODE);
+
+  if (G_VALUE_TYPE (value) == gst_fcv_op_mode_get_type ())
+    return g_value_get_enum (value);
+
+  // Try to reinitialize the settings value if expected type does not match.
+  string = g_value_get_string (value);
+  g_value_init (&newvalue, gst_fcv_op_mode_get_type ());
+
+  if (!gst_value_deserialize (&newvalue, string))
+    GST_ERROR ("Failed to decipher mode, using default: PERFORMANCE");
+  else
+    mode = g_value_get_enum (&newvalue);
+
+  g_value_unset (&newvalue);
+  return mode;
 }
 
 static inline void
@@ -2148,25 +2193,41 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
 {
   GstFcvObject objects[GST_FCV_MAX_DRAW_OBJECTS] = { 0, };
   guint32 idx = 0, num = 0, n_objects = 0, area = 0;
-  gboolean success = FALSE;
+  GArray *inframes = NULL;
+  GstVideoFrame outframe = {0,};
+  GstVideoComposition *composition = NULL;
+
 
   // TODO: Implement async operations via threads.
   if (fence != NULL)
     GST_WARNING ("Asynchronous composition operations are not supported!");
 
   for (idx = 0; idx < n_compositions; idx++) {
-    GstVideoComposition *composition = &compositions[idx];
-    GstVideoFrame *outframe = composition->frame;
+    composition = &(compositions[idx]);
+
+    inframes = g_array_sized_new(FALSE, FALSE, sizeof(GstVideoFrame),
+        composition->n_blits);
+    g_array_set_size (inframes, composition->n_blits);
+
     GstVideoBlit *blits = composition->blits;
     guint n_blits = composition->n_blits;
+    gboolean success = FALSE;
 
-    // Sanity checks, output frame and blit entries must not be NULL.
-    g_return_val_if_fail (outframe != NULL, FALSE);
+    // Sanity checks, blit entries must not be NULL.
+    g_return_val_if_fail (composition->buffer != NULL, FALSE);
     g_return_val_if_fail ((blits != NULL) && (n_blits != 0), FALSE);
+
+    success = gst_video_frame_map (&outframe, composition->info,
+        composition->buffer, GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+    if (!success) {
+      GST_ERROR ("Failed to map output buffer!");
+      return FALSE;
+    }
 
     // Total area of the output frame that is to be used in later calculations
     // to determine whether there are unoccupied background pixels to be filled.
-    area = GST_VIDEO_FRAME_WIDTH (outframe) * GST_VIDEO_FRAME_HEIGHT (outframe);
+    area = GST_VIDEO_FRAME_WIDTH (&outframe) * GST_VIDEO_FRAME_HEIGHT (&outframe);
 
     // Iterate over the input blit entries and update each FCV object.
     for (num = 0; num < n_blits; num++) {
@@ -2174,6 +2235,15 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
       GstFcvObject *object = NULL;
       GstVideoRectangle rectangle = {0, 0, 0, 0};
       guint flip = 0, rotate = 0;
+      GstVideoFrame *inframe = &g_array_index(inframes, GstVideoFrame, num);
+
+      success = gst_video_frame_map (inframe, blit->info, blit->buffer,
+          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+      if (!success) {
+        GST_ERROR ("Failed to map input buffer!");
+        return FALSE;
+      }
 
       if (n_objects >= GST_FCV_MAX_DRAW_OBJECTS) {
         GST_ERROR ("Number of objects exceeds %d!", GST_FCV_MAX_DRAW_OBJECTS);
@@ -2210,11 +2280,11 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
         rectangle.h = blit->source.d.y - blit->source.a.y;
       } else {
         rectangle.x = rectangle.y = 0;
-        rectangle.w = GST_VIDEO_FRAME_WIDTH (blit->frame);
-        rectangle.h = GST_VIDEO_FRAME_HEIGHT (blit->frame);
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (inframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (inframe);
       }
 
-      gst_fcv_update_object (object, "Source", blit->frame, &rectangle,
+      gst_fcv_update_object (object, "Source", inframe, &rectangle,
           flip, rotate, 0);
 
       // Intialization of the destination FCV object.
@@ -2225,33 +2295,42 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
         rectangle = blit->destination;
       } else {
         rectangle.x = rectangle.y = 0;
-        rectangle.w = GST_VIDEO_FRAME_WIDTH (outframe);
-        rectangle.h = GST_VIDEO_FRAME_HEIGHT (outframe);
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (&outframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (&outframe);
       }
 
-      gst_fcv_update_object (object, "Destination", outframe, &rectangle,
+      gst_fcv_update_object (object, "Destination", &outframe, &rectangle,
           0, 0, composition->datatype);
 
       // Subtract blit area from total area.
       if (area != 0)
-        area -= gst_fcv_composition_blit_area (outframe, blits, num);
+        area -= gst_fcv_composition_blit_area (&outframe, blits, num);
 
       // Increment the objects counter by 2 for for Source/Destination pair.
       n_objects += 2;
     }
 
-    if (composition->bgfill && (area > 0)) {
-      gst_fcv_video_converter_fill_background (convert, outframe,
+    if (composition->bgfill && (area > 0))
+      gst_fcv_video_converter_fill_background (convert, &outframe,
           composition->bgcolor, composition->datatype);
-    }
 
     if (!gst_fcv_video_converter_process (convert, objects, n_objects)) {
       GST_ERROR ("Failed to process frames for composition %u!", idx);
       return FALSE;
     }
 
-    success = gst_video_frame_normalize_ip (composition->frame,
+    success = gst_video_frame_normalize_ip (&outframe,
         composition->datatype, composition->offsets, composition->scales);
+
+    for (num = 0; num < inframes->len; num++) {
+      GstVideoFrame *inframe = &g_array_index (inframes, GstVideoFrame, num);
+
+      gst_video_frame_unmap (inframe);
+    }
+
+    g_array_free (inframes, TRUE);
+
+    gst_video_frame_unmap (&outframe);
 
     if (!success) {
       GST_ERROR ("Failed to normalize output frame for composition %u!", idx);

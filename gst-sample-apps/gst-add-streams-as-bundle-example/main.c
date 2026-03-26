@@ -28,7 +28,7 @@
 
 #include <gst/gst.h>
 
-#include <gst/sampleapps/gst_sample_apps_utils.h>
+#include <gst_sample_apps_utils.h>
 
 #define GST_APP_SUMMARY "This application demonstrate the ability of the " \
   "add/remove the streams runtime with once camera reconfiguration \n " \
@@ -679,10 +679,6 @@ main (gint argc, gchar * argv[])
 
   appctx.stream_cnt = 0;
   appctx.use_display = FALSE;
-
-  // Setting Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   GOptionEntry entries[] = {
     { "output", 'o', 0, G_OPTION_ARG_STRING,
