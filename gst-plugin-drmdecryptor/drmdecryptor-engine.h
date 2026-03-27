@@ -25,8 +25,19 @@ G_BEGIN_DECLS
 #define WIDEVINE_SYSTEM_ID        "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 
 struct GstDrmDecryptorEngine {
-  GstDrmDecryptorEngine () {}
-  virtual ~GstDrmDecryptorEngine () {}
+  // Default CBCS pattern block counts
+  static constexpr guint32 kDefaultCbcsEncryptBlocks = 1;
+  static constexpr guint32 kDefaultCbcsSkipBlocks = 9;
+
+  GstDrmDecryptorEngine ()
+      : cipher_mode (nullptr),
+        encrypt_blocks (kDefaultCbcsEncryptBlocks),
+        skip_blocks (kDefaultCbcsSkipBlocks) {}
+  virtual ~GstDrmDecryptorEngine () { g_free (cipher_mode); }
+
+  gchar *cipher_mode;
+  guint32 encrypt_blocks;
+  guint32 skip_blocks;
 
   virtual gboolean drm_plugin_init (gpointer session_id, gpointer instance) = 0;
   virtual gint decrypt (gboolean secure, GstMapInfo keyid_map_info,

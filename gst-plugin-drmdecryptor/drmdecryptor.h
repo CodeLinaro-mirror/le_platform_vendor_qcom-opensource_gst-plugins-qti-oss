@@ -44,6 +44,7 @@ struct _GstDrmDecryptor {
 
   gint                    output_buf_size;
   gchar                   *original_media_type;
+  gchar                   *cipher_mode;
 };
 
 struct _GstDrmDecryptorClass {

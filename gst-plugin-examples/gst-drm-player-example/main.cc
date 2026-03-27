@@ -1129,7 +1129,7 @@ main (gint argc, gchar *argv[])
   GThread *mthread = NULL;
   GError *err = NULL;
   gchar **args = NULL;
-  gchar *mp4_pro_header = NULL, *header = NULL, *manifest_url = NULL;
+  gchar *mp4_pro_header = NULL, *mp4_wv_pssh = NULL, *header = NULL, *manifest_url = NULL;
   DrmLicense license = LICENSE_INVALID;
   guint bus_watch_id = 0, intrpt_watch_id = 0, stdin_watch_id = 0;
   gint status = -1;
@@ -1139,7 +1139,9 @@ main (gint argc, gchar *argv[])
 
   GOptionEntry options[] = {
       {"pro-header", 'p', 0, G_OPTION_ARG_STRING, &mp4_pro_header,
-          "MP4 content PlayReady header", NULL},
+          "MP4 content PlayReady PRO header (base64 encoded)", NULL},
+      {"widevine-pssh", 'w', 0, G_OPTION_ARG_STRING, &mp4_wv_pssh,
+          "MP4 content Widevine complete PSSH box (base64 encoded)", NULL},
       {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY, &args, NULL},
       {NULL}
   };
@@ -1177,15 +1179,29 @@ main (gint argc, gchar *argv[])
     goto exit;
   }
 
-  // If MP4 content is provided, PRO header is mandatory.
-  if (mp4_content && mp4_pro_header == NULL) {
-    g_print ("You must give PlayReady header with MP4 content.\n");
-    g_print ("\nFor help: gst-drm-player-example [-h | --help]\n\n");
-
-    goto exit;
-  } else if (mp4_content) {
-    license = LICENSE_PLAYREADY;
-    header = g_strdup (mp4_pro_header);
+  // If MP4 content is provided, either a PlayReady PRO header or a Widevine
+  // PSSH must be supplied.
+  if (mp4_content) {
+    if (mp4_pro_header != NULL && mp4_wv_pssh != NULL) {
+      g_print ("Please provide only one of --pro-header or --widevine-pssh.\n");
+      goto exit;
+    } else if (mp4_pro_header != NULL) {
+      license = LICENSE_PLAYREADY;
+      header = g_strdup (mp4_pro_header);
+    } else if (mp4_wv_pssh != NULL) {
+#ifdef ENABLE_WIDEVINE
+      license = LICENSE_WIDEVINE;
+      header = g_strdup (mp4_wv_pssh);
+#else
+      g_print ("Widevine CDM libs not present, can't proceed!\n");
+      goto exit;
+#endif
+    } else {
+      g_print ("MP4 content requires either --pro-header (PlayReady) or "
+          "--widevine-pssh (Widevine).\n");
+      g_print ("\nFor help: gst-drm-player-example [-h | --help]\n\n");
+      goto exit;
+    }
   }
 
   // Download manifest from the given url using libcurl.
@@ -1265,6 +1281,7 @@ main (gint argc, gchar *argv[])
 exit:
   gst_app_context_free (appctx);
   g_free (mp4_pro_header);
+  g_free (mp4_wv_pssh);
   g_free (manifest_url);
 
   gst_deinit ();

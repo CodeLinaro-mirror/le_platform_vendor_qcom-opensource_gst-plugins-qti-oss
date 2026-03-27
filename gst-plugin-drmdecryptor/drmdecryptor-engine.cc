@@ -168,14 +168,24 @@ GstDrmPREngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
     GstMapInfo inbuff_map_info, GstMapInfo subsample_map_info, guint subsample_count,
     const guint8 *iv_arr, native_handle_t *nh, gboolean is_clear)
 {
-  android::CryptoPlugin::Pattern pattern;
+  android::CryptoPlugin::Pattern pattern = {};
   android::AString *error_detail_msg = nullptr;
   gint status = 0;
 
-  android::CryptoPlugin::Mode mode = (is_clear ?
-      android::CryptoPlugin::kMode_Unencrypted : android::CryptoPlugin::kMode_AES_CTR);
+  android::CryptoPlugin::Mode mode;
+  if (is_clear) {
+    mode = android::CryptoPlugin::kMode_Unencrypted;
+  } else if (cipher_mode && g_ascii_strcasecmp (cipher_mode, "cbcs") == 0) {
+    mode = android::CryptoPlugin::kMode_AES_CBC;
+    pattern.mEncryptBlocks = encrypt_blocks;
+    pattern.mSkipBlocks = skip_blocks;
+  } else {
+    mode = android::CryptoPlugin::kMode_AES_CTR;
+  }
+
+  const guint effective_count = MAX (subsample_count, 1u);
   android::CryptoPlugin::SubSample *subsample = g_new0 (
-      android::CryptoPlugin::SubSample, (subsample_count | 1u));
+      android::CryptoPlugin::SubSample, effective_count);
 
   subsample_parse (subsample, subsample_count, inbuff_map_info.size,
       subsample_map_info, is_clear);
@@ -188,7 +198,7 @@ GstDrmPREngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
     pattern,
     inbuff_map_info.data,
     subsample,
-    (subsample_count | 1u),
+    effective_count,
     static_cast<void*>(nh),
     error_detail_msg
   );
@@ -277,8 +287,9 @@ GstDrmWVEngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
     GstMapInfo inbuff_map_info, GstMapInfo subsample_map_info, guint subsample_count,
     const guint8 *iv_arr, native_handle_t *nh, gboolean is_clear)
 {
+  const guint effective_count = MAX (subsample_count, 1u);
   widevine::Cdm::Subsample *subsample = g_new0 (widevine::Cdm::Subsample,
-      (subsample_count | 1u));
+      effective_count);
 
   subsample_parse (subsample, subsample_count, inbuff_map_info.size,
       subsample_map_info, is_clear);
@@ -291,7 +302,7 @@ GstDrmWVEngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
   in_buf->data = static_cast<const uint8_t*> (inbuff_map_info.data);
   in_buf->data_length = inbuff_map_info.size;
   in_buf->subsamples = static_cast<const widevine::Cdm::Subsample*> (subsample);
-  in_buf->subsamples_length = (subsample_count | 1u);
+  in_buf->subsamples_length = effective_count;
 
   widevine::Cdm::OutputBuffer *out_buf = g_new0 (widevine::Cdm::OutputBuffer, 1);
   out_buf->data = nh;
@@ -302,7 +313,7 @@ GstDrmWVEngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
   sample->input = *in_buf;
   sample->output = *out_buf;
 
-  widevine::Cdm::Pattern pattern;
+  widevine::Cdm::Pattern pattern = {};
   widevine::Cdm::DecryptionBatch *batch = g_new0 (widevine::Cdm::DecryptionBatch, 1);
   batch->samples = static_cast<const widevine::Cdm::Sample*> (sample);
   batch->samples_length = 1;
@@ -310,10 +321,17 @@ GstDrmWVEngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
     batch->key_id = static_cast<const uint8_t*> (keyid_map_info.data);
     batch->key_id_length = keyid_map_info.size;
   }
-  batch->pattern = pattern;
   batch->is_secure = secure;
-  batch->encryption_scheme = (is_clear ? widevine::Cdm::kClear :
-      widevine::Cdm::kAesCtr);
+  if (is_clear) {
+    batch->encryption_scheme = widevine::Cdm::kClear;
+  } else if (cipher_mode && g_ascii_strcasecmp (cipher_mode, "cbcs") == 0) {
+    batch->encryption_scheme = widevine::Cdm::kAesCbc;
+    pattern.encrypted_blocks = encrypt_blocks;
+    pattern.clear_blocks = skip_blocks;
+  } else {
+    batch->encryption_scheme = widevine::Cdm::kAesCtr;
+  }
+  batch->pattern = pattern;
 
   widevine::Cdm::Status status = drm_plugin->decrypt (session_id,
       static_cast<const widevine::Cdm::DecryptionBatch> (*batch));
@@ -410,39 +428,76 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
     GstBuffer *in_buffer,  GstBuffer *out_buffer)
 {
   GstProtectionMeta *pmeta = gst_buffer_get_protection_meta (in_buffer);
-  GstMapInfo inbuff_map_info, keyid_map_info, iv_map_info, subsample_map_info;
+  GstMapInfo inbuff_map_info = {}, keyid_map_info = {}, iv_map_info = {},
+      subsample_map_info = {};
   GstBuffer *key_id_buf = nullptr, *iv_buf = nullptr, *subsample_buf = nullptr;
   guint subsample_count = 0;
-  gboolean secure, is_clear = false;
-  guint8 iv_arr[IV_SIZE];
+  // Decryptor currently always uses secure output buffers.
+  const gboolean secure = TRUE;
+  gboolean is_encrypted = FALSE;
+  gboolean is_clear = FALSE;
+  guint8 iv_arr[IV_SIZE] = {};
 
   if (pmeta) {
-    gst_structure_get_boolean (pmeta->info, "encrypted", &secure);
+    gst_structure_get_boolean (pmeta->info, "encrypted", &is_encrypted);
     gst_structure_get_uint (pmeta->info, "subsample_count", &subsample_count);
 
-    key_id_buf = gst_value_get_buffer (
-        gst_structure_get_value (pmeta->info, "kid"));
-    gst_buffer_map (key_id_buf, &keyid_map_info, GST_MAP_READ);
-    iv_buf = gst_value_get_buffer (
-        gst_structure_get_value (pmeta->info, "iv"));
-    gst_buffer_map (iv_buf, &iv_map_info, GST_MAP_READ);
-    if (subsample_count > 0) {
-      subsample_buf = gst_value_get_buffer (
-          gst_structure_get_value (pmeta->info, "subsamples"));
-      gst_buffer_map (subsample_buf, &subsample_map_info, GST_MAP_READ);
-    }
+    if (!is_encrypted) {
+      GST_DEBUG_OBJECT (engine, "GstProtectionMeta present but encrypted=false, "
+          "treating as clear content");
+      is_clear = TRUE;
+      subsample_count = 1;
+    } else {
+      key_id_buf = gst_value_get_buffer (
+          gst_structure_get_value (pmeta->info, "kid"));
+      gst_buffer_map (key_id_buf, &keyid_map_info, GST_MAP_READ);
+      iv_buf = gst_value_get_buffer (
+          gst_structure_get_value (pmeta->info, "iv"));
+      gst_buffer_map (iv_buf, &iv_map_info, GST_MAP_READ);
+      if (subsample_count > 0) {
+        subsample_buf = gst_value_get_buffer (
+            gst_structure_get_value (pmeta->info, "subsamples"));
+        gst_buffer_map (subsample_buf, &subsample_map_info, GST_MAP_READ);
+      }
 
-    // Playready/Widevine API expects IV of size 16 bytes. If the IV of input is
-    // of 8 bytes, the remaining 8 bytes should be appended as 0.
-    memset (iv_arr, 0x00, IV_SIZE);
-    for (gint idx = 0; idx < iv_map_info.size; idx++) {
-      iv_arr[idx] = iv_map_info.data[idx];
+      // Playready/Widevine API expects IV of size 16 bytes. If the IV of input
+      // is of 8 bytes, the remaining 8 bytes are already 0
+      // Clamp copy length to IV_SIZE to prevent buffer overflow
+      gsize iv_copy_size = MIN (iv_map_info.size, (gsize) IV_SIZE);
+      memcpy (iv_arr, iv_map_info.data, iv_copy_size);
+
+      // Dynamically extract CBCS encryption pattern from protection metadata
+      if (engine->cipher_mode &&
+          g_ascii_strcasecmp (engine->cipher_mode, "cbcs") == 0) {
+        engine->encrypt_blocks = GstDrmDecryptorEngine::kDefaultCbcsEncryptBlocks;
+        engine->skip_blocks = GstDrmDecryptorEngine::kDefaultCbcsSkipBlocks;
+
+        guint crypt_byte_block = 0, skip_byte_block = 0;
+        gboolean has_crypt = gst_structure_get_uint (pmeta->info,
+            "crypt_byte_block", &crypt_byte_block);
+        gboolean has_skip = gst_structure_get_uint (pmeta->info,
+            "skip_byte_block",  &skip_byte_block);
+
+        if (has_crypt && has_skip) {
+          engine->encrypt_blocks = (guint32) crypt_byte_block;
+          engine->skip_blocks = (guint32) skip_byte_block;
+          GST_DEBUG_OBJECT (engine, "CBCS pattern from metadata: "
+              "encrypt_blocks=%u, skip_blocks=%u",
+              engine->encrypt_blocks, engine->skip_blocks);
+        } else {
+          GST_WARNING_OBJECT (engine, "CBCS pattern fields missing from "
+              "protection metadata (crypt_byte_block=%s, skip_byte_block=%s), "
+              "using defaults: encrypt_blocks=%u, skip_blocks=%u",
+              has_crypt ? "found" : "missing",
+              has_skip  ? "found" : "missing",
+              engine->encrypt_blocks, engine->skip_blocks);
+        }
+      }
     }
   } else {
     GST_WARNING_OBJECT (engine, "No protection metadata found! Passing data as "
         "clear content");
-    is_clear = true;
-    secure = true;
+    is_clear = TRUE;
     subsample_count = 1;
   }
 
@@ -465,8 +520,10 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
   if (pmeta) {
     if (subsample_buf != nullptr)
       gst_buffer_unmap (subsample_buf, &subsample_map_info);
-    gst_buffer_unmap (key_id_buf, &keyid_map_info);
-    gst_buffer_unmap (iv_buf, &iv_map_info);
+    if (key_id_buf != nullptr)
+      gst_buffer_unmap (key_id_buf, &keyid_map_info);
+    if (iv_buf != nullptr)
+      gst_buffer_unmap (iv_buf, &iv_map_info);
   }
   native_handle_delete (nh);
 

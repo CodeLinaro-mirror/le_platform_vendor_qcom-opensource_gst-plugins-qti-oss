@@ -56,7 +56,8 @@ GST_STATIC_PAD_TEMPLATE (
   GST_STATIC_CAPS ("video/x-h264;"
       "video/x-h265;"
       "video/x-vp8;"
-      "video/x-vp9")
+      "video/x-vp9;"
+      "video/x-av1")
 );
 
 enum {
@@ -203,6 +204,12 @@ gst_drm_decryptor_sinkpad_chain (GstPad *pad, GstObject *parent, GstBuffer *in_b
   GstBuffer *out_buffer = NULL;
   GstFlowReturn result = GST_FLOW_OK;
 
+  if (decryptor->engine == NULL) {
+    GST_ERROR_OBJECT (decryptor, "Engine not initialized yet");
+    gst_buffer_unref (in_buffer);
+    return GST_FLOW_ERROR;
+  }
+
   // TODO: Video backend is failing to handle vp9 clear content on secure path.
   // Added this temporary check to skip clear content until the issue is fixed.
   GstProtectionMeta *pmeta = gst_buffer_get_protection_meta (in_buffer);
@@ -255,10 +262,29 @@ gst_drm_decryptor_sinkpad_event (GstPad *pad, GstObject *parent, GstEvent *event
     case GST_EVENT_CAPS:
     {
       GstCaps *caps = NULL;
+      GstStructure *s = NULL;
+      const gchar *cipher_mode = NULL;
 
       gst_event_parse_caps (event, &caps);
+
+      /* Extract and cache cipher-mode */
+      s = gst_caps_get_structure (caps, 0);
+      cipher_mode = gst_structure_get_string (s, "cipher-mode");
+      g_free (decryptor->cipher_mode);
+      decryptor->cipher_mode = cipher_mode ? g_strdup (cipher_mode) : NULL;
+      GST_INFO_OBJECT (decryptor, "Cached cipher-mode: %s",
+          decryptor->cipher_mode ? decryptor->cipher_mode : "NULL");
+
       success = gst_drm_decryptor_update_srccaps (decryptor, caps);
       gst_event_unref (event);
+
+      if (success && decryptor->engine) {
+        g_free (decryptor->engine->cipher_mode);
+        decryptor->engine->cipher_mode = decryptor->cipher_mode ?
+            g_strdup (decryptor->cipher_mode) : NULL;
+        GST_INFO_OBJECT (decryptor, "Updated engine cipher-mode: %s",
+            decryptor->engine->cipher_mode ? decryptor->engine->cipher_mode : "NULL");
+      }
 
       if (success && !decryptor->pool &&
           !(decryptor->pool = gst_drm_decryptor_create_pool (decryptor))) {
@@ -278,11 +304,26 @@ gst_drm_decryptor_sinkpad_event (GstPad *pad, GstObject *parent, GstEvent *event
       const gchar *system_id;
 
       gst_event_parse_protection (event, &system_id, NULL, NULL);
-      gst_event_unref (event);
+
+      if (decryptor->engine != NULL) {
+        GST_INFO_OBJECT (decryptor, "Engine already initialized, ignoring "
+            "protection event for system: %s", system_id);
+        gst_event_unref (event);
+        break;
+      }
 
       decryptor->engine = gst_drm_decryptor_engine_new (system_id,
           (gpointer) decryptor->session_id, decryptor->cdm_instance);
+      gst_event_unref (event);
       g_return_val_if_fail (decryptor->engine != NULL, FALSE);
+
+      /* Propagate the cached cipher-mode */
+      if (decryptor->cipher_mode) {
+        g_free (decryptor->engine->cipher_mode);
+        decryptor->engine->cipher_mode = g_strdup (decryptor->cipher_mode);
+        GST_INFO_OBJECT (decryptor, "Applied cached cipher-mode to new engine: %s",
+            decryptor->engine->cipher_mode);
+      }
       break;
     }
     case GST_EVENT_FLUSH_START:
@@ -370,6 +411,11 @@ gst_drm_decryptor_finalize (GObject *object)
     decryptor->original_media_type = NULL;
   }
 
+  if (decryptor->cipher_mode) {
+    g_free (decryptor->cipher_mode);
+    decryptor->cipher_mode = NULL;
+  }
+
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (decryptor));
 }
 
@@ -382,6 +428,7 @@ gst_drm_decryptor_init (GstDrmDecryptor *decryptor)
   decryptor->pool = NULL;
   decryptor->output_buf_size = OUTPUT_BUF_SIZE_PROP_DEFAULT;
   decryptor->original_media_type = NULL;
+  decryptor->cipher_mode = NULL;
 
   decryptor->sinkpad = gst_pad_new_from_static_template (
       &gst_drm_decryptor_sink_pad_template, "sink");

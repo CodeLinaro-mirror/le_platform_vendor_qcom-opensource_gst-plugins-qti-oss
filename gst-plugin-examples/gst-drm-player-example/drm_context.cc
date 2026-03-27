@@ -256,10 +256,16 @@ PlayreadyContext::FetchLicense ()
 {
   struct curl_slist *http_header = NULL;
   gchar *content_type = (gchar *) CONTENT_TYPE;
-  gchar *url = (gchar *) LA_URL;
   gchar *req_buf = NULL;
   size_t req_buf_size;
   gint result = PRDRM_FAILED;
+
+  // Use the LA URL from environment variable if set, otherwise
+  // fall back to the default test license server URL
+  gchar *la_url = std::getenv ("PR_LA_URL");
+  if (la_url == NULL || strlen (la_url) == 0) {
+    la_url = (gchar *) LA_URL;
+  }
 
   http_header = curl_slist_append (http_header, SOAP_ACTION);
   http_header = curl_slist_append (http_header, content_type);
@@ -272,7 +278,7 @@ PlayreadyContext::FetchLicense ()
   req_buf_size = license_request_.length();
   req_buf = g_strndup (license_request_.c_str(), req_buf_size);
 
-  if ((result = perform_curl (url, http_header, &req_buf, &req_buf_size))
+  if ((result = perform_curl (la_url, http_header, &req_buf, &req_buf_size))
       == PRDRM_SUCCESS) {
     g_print ("License acquired from license server successfully.\n");
     license_response_.assign (req_buf, req_buf + req_buf_size);
@@ -429,10 +435,31 @@ WidevineContext::CreateLicenseRequest ()
   std::string wv_header;
   gsize out_len;
 
-  // Decode base64 encoded Widevine object.
+  // Decode base64 encoded Widevine PSSH box.
   decoded_str = g_base64_decode (init_data_, &out_len);
   if (decoded_str) {
-    wv_header.assign (decoded_str, decoded_str + out_len);
+    // Validate: must have at least 8 bytes, bytes [4..7] must be "pssh",
+    // and the box_size field at bytes [0..3] must equal the total length.
+    uint32_t box_size_field = (out_len >= 8) ?
+        (((uint32_t)(decoded_str[0]) << 24) |
+         ((uint32_t)(decoded_str[1]) << 16) |
+         ((uint32_t)(decoded_str[2]) <<  8) |
+          (uint32_t)(decoded_str[3])) : 0;
+    bool is_pssh_box = (out_len >= 8 &&
+        decoded_str[4] == 'p' && decoded_str[5] == 's' &&
+        decoded_str[6] == 's' && decoded_str[7] == 'h' &&
+        box_size_field == (uint32_t) out_len);
+
+    if (!is_pssh_box) {
+      g_printerr ("ERROR: Input is not a valid PSSH box "
+          "(expected complete PSSH box, got %zu bytes). "
+          "Use --widevine-pssh with a base64-encoded complete PSSH box.\n",
+          out_len);
+      g_free (decoded_str);
+      return widevine::Cdm::kTypeError;
+    }
+
+    wv_header.assign (reinterpret_cast<char *> (decoded_str), out_len);
     g_free (decoded_str);
   }
 
