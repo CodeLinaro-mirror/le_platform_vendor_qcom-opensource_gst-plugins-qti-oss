@@ -273,6 +273,11 @@ gst_c2_venc_trigger_iframe (GstC2VEncoder * c2venc)
 {
   gboolean success = FALSE, enable = TRUE;
 
+  if (c2venc->engine == NULL) {
+    GST_WARNING_OBJECT (c2venc, "Engine not initialized, cannot trigger I-frame");
+    return FALSE;
+  }
+
   GST_DEBUG_OBJECT (c2venc, "Trigger I frame insertion");
 
   success = gst_c2_engine_set_parameter (c2venc->engine,
