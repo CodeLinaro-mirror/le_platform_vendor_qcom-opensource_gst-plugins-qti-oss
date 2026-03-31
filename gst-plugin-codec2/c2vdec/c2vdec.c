@@ -244,6 +244,14 @@ gst_c2_vdec_event_handler (guint type, gpointer payload, gpointer userdata)
   } else if (type == GST_C2_EVENT_ERROR) {
     guint32 error = *((guint32*) payload);
     GST_ERROR_OBJECT (c2vdec, "Received engine ERROR: '%u'", error);
+    GST_ELEMENT_ERROR (c2vdec, STREAM, DECODE,
+        ("Hardware decoder error"), ("Codec2 error code: %u", error));
+  } else if (type == GST_C2_EVENT_DROP) {
+    guint64 index = *((guint64*) payload);
+    GstVideoCodecFrame *frame = gst_video_decoder_get_frame (
+        GST_VIDEO_DECODER (c2vdec), index);
+    if (frame)
+      gst_video_decoder_drop_frame (GST_VIDEO_DECODER (c2vdec), frame);
   }
 }
 
@@ -257,6 +265,12 @@ gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
 
   // Get the frame index from the buffer offset field.
   index = GST_BUFFER_OFFSET (buffer);
+
+  if (g_atomic_int_get (&c2vdec->flushing) ||
+      !gst_pad_is_active (GST_VIDEO_DECODER_SRC_PAD (c2vdec))) {
+    gst_buffer_unref (buffer);
+    return;
+  }
 
   frame = gst_video_decoder_get_frame (GST_VIDEO_DECODER (c2vdec), index);
   if (frame == NULL) {
@@ -308,6 +322,8 @@ gst_c2_vdec_stop (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Stop engine");
 
+  g_atomic_int_set (&c2vdec->flushing, TRUE);
+
   // Properly clean up the output state
   if (c2vdec->outstate) {
     gst_video_codec_state_unref (c2vdec->outstate);
@@ -337,6 +353,8 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Flush engine");
 
+  g_atomic_int_set (&c2vdec->flushing, TRUE);
+
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
   if ((c2vdec->engine != NULL) && !gst_c2_engine_flush (c2vdec->engine)) {
@@ -345,6 +363,8 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   }
 
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+
+  g_atomic_int_set (&c2vdec->flushing, FALSE);
 
   GST_DEBUG_OBJECT (c2vdec, "Engine flushed");
   return TRUE;
@@ -370,11 +390,13 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
   caps = gst_pad_get_allowed_caps (GST_VIDEO_DECODER_SRC_PAD (c2vdec));
 
-  structure = gst_caps_get_structure (caps, 0);
-  c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
+  if (caps != NULL) {
+    structure = gst_caps_get_structure (caps, 0);
+    c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
 
-  if ((string = gst_structure_get_string (structure, "format")) != NULL)
-    format = gst_video_format_from_string (string);
+    if ((string = gst_structure_get_string (structure, "format")) != NULL)
+      format = gst_video_format_from_string (string);
+  }
 
   if ((caps != NULL) && !gst_caps_is_empty (caps) && gst_caps_is_fixed (caps)) {
     success = (format != GST_VIDEO_FORMAT_UNKNOWN) ? TRUE : FALSE;
@@ -464,6 +486,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
     if ((c2vdec->engine != NULL) && !gst_c2_engine_stop (c2vdec->engine)) {
       GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
+      GST_VIDEO_DECODER_STREAM_LOCK (decoder);
       return FALSE;
     }
 
@@ -572,6 +595,12 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     g_return_val_if_fail (c2vdec->engine != NULL, FALSE);
   }
 
+  // Free immediately after engine takes its own copy:
+  if (c2vdec->secure) {
+    g_free (name);
+    name = NULL;
+  }
+
   if (!gst_c2_vdec_setup_parameters (c2vdec, state, c2vdec->outstate)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to setup parameters!");
     return FALSE;
@@ -581,9 +610,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     GST_ERROR_OBJECT (c2vdec, "Failed to start engine!");
     return FALSE;
   }
-
-  if (c2vdec->secure)
-    g_free (name);
 
   return TRUE;
 }
@@ -603,9 +629,12 @@ gst_c2_vdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   if (!gst_c2_engine_queue (c2vdec->engine, frame)) {
     GST_ERROR_OBJECT(c2vdec, "Failed to send input frame to be emptied!");
+    gst_video_decoder_release_frame (decoder, frame);
+    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
     return GST_FLOW_ERROR;
   }
 
+  gst_video_codec_frame_unref (frame);
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
   GST_TRACE_OBJECT (c2vdec, "Queued %" GST_PTR_FORMAT, frame->input_buffer);

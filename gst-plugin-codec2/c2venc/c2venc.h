@@ -100,7 +100,7 @@ struct _GstC2VEncoder {
 };
 
 struct _GstC2VEncoderClass {
-  GstVideoEncoderClass parent;
+  GstVideoEncoder parent;
 };
 
 G_GNUC_INTERNAL GType gst_c2_venc_get_type (void);
