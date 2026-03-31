@@ -15,6 +15,7 @@ find_package(PkgConfig)
 pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_JSON REQUIRED json-glib-1.0)
 pkg_check_modules(FASTCV qcom-fastcv-binaries)
 pkg_check_modules(EGL egl)
 pkg_check_modules(GLES glesv2)
@@ -22,14 +23,6 @@ pkg_check_modules(OPEN_CV opencv4)
 
 include(CheckIncludeFile)
 include(CheckIncludeFileCXX)
-
-# These will be the only header search paths used by check_include_file,
-# the contents of the include_directories property will be ignored.
-set(CMAKE_REQUIRED_INCLUDES
-  ${KERNEL_BUILDDIR}/usr/include
-  ${KERNEL_BUILDDIR}/usr/include/vidc
-  ${KERNEL_BUILDDIR}/usr/include/uapi
-)
 
 # Check whether MMM color format header is present.
 check_include_file("display/media/mmm_color_fmt.h" HAVE_MMM_COLOR_FMT_H)

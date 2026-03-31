@@ -9,20 +9,17 @@ Build-Depends:
  cmake,
  libgstreamer1.0-dev,
  libgstreamer-plugins-qcom-base1.0-dev,
- qcom-syslog-plumber-dev,
  libgbm-dev,
  qcom-fastcv-binaries-dev,
  linux-libc-dev-qcom,
  libgstrtspserver-1.0-dev,
  libcairo2-dev,
- qcom-property-vault-dev,
  libjson-glib-dev,
  librdkafka-dev,
  libmosquitto-dev,
  libhiredis-dev,
  qcom-video-ctrl-dev,
  libsoup2.4-dev,
- libgstreamer-plugins-bad1.0-dev,
  libeigen3-dev,
  libopencv-dev,
  opencl-c-headers,
@@ -30,6 +27,7 @@ Build-Depends:
  libtensorflow-lite-qcom-dev,
  libsnpe-dev,
  libqnn-dev,
+ libqmmf-dev,
 Standards-Version: 4.6.2
 
 Package: gstreamer1.0-plugins-qcom
@@ -56,6 +54,7 @@ Depends:
  gstreamer1.0-plugins-qcom-mlqnn,
  gstreamer1.0-plugins-qcom-msgbroker,
  gstreamer1.0-plugins-qcom-objtracker,
+ gstreamer1.0-plugins-qcom-qmmfsrc,
  gstreamer1.0-plugins-qcom-redissink,
  gstreamer1.0-plugins-qcom-restricted-zone,
  gstreamer1.0-plugins-qcom-rtspbin,
@@ -232,6 +231,15 @@ Depends:
  ${misc:Depends},
 Description: GStreamer plugin for Qualcomm: objtracker.
 
+Package: gstreamer1.0-plugins-qcom-qmmfsrc
+Section: video
+Architecture: arm64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ qcom-camera-server,
+Description: GStreamer plugin for Qualcomm: qmmfsrc.
+
 Package: gstreamer1.0-plugins-qcom-redissink
 Section: libs
 Architecture: arm64
@@ -363,7 +371,6 @@ Depends:
  ${misc:Depends},
  gstreamer1.0-plugins-qcom,
 Description: Sample applications or utilities for Qualcomm GStreamer (sample apps).
-Build-Profiles: <sample_apps>
 
 Package: gstreamer1.0-qcom-python-examples
 Section: utils
