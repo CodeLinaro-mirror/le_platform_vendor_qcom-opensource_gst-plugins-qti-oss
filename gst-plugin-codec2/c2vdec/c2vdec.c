@@ -361,7 +361,10 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   const gchar *string = NULL;
   gint width = 0, height = 0;
   GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
+  gboolean resolution_changed = FALSE;
+  gboolean format_changed = FALSE;
   gboolean success = FALSE;
+  gboolean previous_isubwc = c2vdec->isubwc;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
 
@@ -394,36 +397,65 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     return FALSE;
   }
 
-  if (c2vdec->outstate &&
-      (width != c2vdec->outstate->info.width ||
-          height != c2vdec->outstate->info.height)) {
+  resolution_changed = c2vdec->outstate &&
+      (width != c2vdec->outstate->info.width || height != c2vdec->outstate->info.height);
+
+  format_changed = c2vdec->outstate &&
+      (format != c2vdec->outstate->info.finfo->format ||
+      c2vdec->isubwc != previous_isubwc);
+
+  /*
+   * Qualcomm's proprietary codec2 backend currently trips the VIDC state
+   * machine if we keep one decoder instance alive across in-stream
+   * resolution-only changes. Work around that by draining downstream and
+   * fully recreating the decoder component for the new dimensions instead of
+   * attempting a live in-place reconfigure.
+  */
+  if (resolution_changed && !format_changed) {
     GstQuery *query = gst_query_new_drain ();
-    gboolean success;
+    gboolean drain_success = FALSE;
 
-    GST_INFO_OBJECT (c2vdec, "Resolution changed from %dx%d to %dx%d",
-        c2vdec->outstate->info.width, c2vdec->outstate->info.height, width, height);
-
-    success = gst_pad_peer_query (decoder->srcpad, query);
+    drain_success = gst_pad_peer_query (decoder->srcpad, query);
     gst_query_unref (query);
 
-    if (!success) {
-      GST_ERROR_OBJECT (c2vdec, "Drain query failed !");
+    if (!drain_success) {
+      GST_ERROR_OBJECT (c2vdec, "Drain query failed during deferred resolution change!");
       return FALSE;
     }
+
+    GST_INFO_OBJECT (c2vdec,
+        "Restarting decoder for resolution change from %dx%d to %dx%d",
+        c2vdec->outstate->info.width, c2vdec->outstate->info.height,
+        width, height);
 
     // This mutex was locked in the base class before call to this function.
     // Needs to be unlocked when waiting for any pending buffers during drain.
+    // and decoder teardown.
     GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
-    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE)) {
-      GST_ERROR_OBJECT (c2vdec, "Failed to Drain engine");
-      return FALSE;
-    }
+    if (c2vdec->engine != NULL) {
+      if (!gst_c2_engine_drain (c2vdec->engine, FALSE)) {
+        if (caps != NULL)
+          gst_caps_unref (caps);
+        GST_ERROR_OBJECT (c2vdec, "Failed to drain engine before decoder restart");
+        GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+        return FALSE;
+      }
 
+      if (!gst_c2_engine_stop (c2vdec->engine)) {
+        if (caps != NULL)
+          gst_caps_unref (caps);
+        GST_ERROR_OBJECT (c2vdec, "Failed to stop engine before decoder restart");
+        GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+        return FALSE;
+      }
+
+      g_clear_pointer (&(c2vdec->engine), gst_c2_engine_free);
+    }
     GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 
-  if (c2vdec->outstate && (format != c2vdec->outstate->info.finfo->format)) {
+  if (format_changed) {
     GST_INFO_OBJECT (c2vdec, "Format changed from %s to %s",
         gst_video_format_to_string (c2vdec->outstate->info.finfo->format),
         gst_video_format_to_string (format));
