@@ -56,6 +56,22 @@ G_BEGIN_DECLS
     "application/x-cenc, " \
     "original-media-type=(string)video/x-h265, " \
     "protection-system = (string) " WIDEVINE_PROTECTION_SYSTEM_ID
+#define PLAYREADY_CENC_VP9_CAPS \
+    "application/x-cenc, " \
+    "original-media-type=(string)video/x-vp9, " \
+    "protection-system = (string) " PLAYREADY_PROTECTION_SYSTEM_ID
+#define WIDEVINE_CENC_VP9_CAPS \
+    "application/x-cenc, " \
+    "original-media-type=(string)video/x-vp9, " \
+    "protection-system = (string) " WIDEVINE_PROTECTION_SYSTEM_ID
+#define PLAYREADY_CENC_AV1_CAPS \
+    "application/x-cenc, " \
+    "original-media-type=(string)video/x-av1, " \
+    "protection-system = (string) " PLAYREADY_PROTECTION_SYSTEM_ID
+#define WIDEVINE_CENC_AV1_CAPS \
+    "application/x-cenc, " \
+    "original-media-type=(string)video/x-av1, " \
+    "protection-system = (string) " WIDEVINE_PROTECTION_SYSTEM_ID
 #define VIDEO_RAW_CAPS \
     "video/x-raw"
 #define VIDEO_RAW_DMABUF_CAPS \
