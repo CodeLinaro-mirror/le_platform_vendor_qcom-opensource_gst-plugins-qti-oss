@@ -357,6 +357,9 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
 
     if (structure != NULL) {
       structure = gst_structure_copy (structure);
+      gst_structure_set (structure,
+          "label", G_TYPE_STRING, g_quark_to_string (roimeta->roi_type), NULL);
+
       gst_video_region_of_interest_meta_add_param (rmeta, structure);
     }
   }
@@ -847,6 +850,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 {
   GList *list = NULL;
   GstVideoInfo info = { 0, };
+  gboolean reconfigure = FALSE;
 
   GST_DEBUG_OBJECT (vsplit, "Setting caps %" GST_PTR_FORMAT, caps);
 
@@ -865,6 +869,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 
   for (list = vsplit->srcpads; list != NULL; list = g_list_next (list)) {
     GstVideoSplitSrcPad *srcpad = GST_VIDEO_SPLIT_SRCPAD (list->data);
+    GstBufferPool *pool = srcpad->pool;
 
     if (!gst_video_split_srcpad_setcaps (srcpad, caps)) {
       GST_ELEMENT_ERROR (GST_ELEMENT (vsplit), CORE, NEGOTIATION, (NULL),
@@ -873,7 +878,14 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
       GST_VIDEO_SPLIT_UNLOCK (vsplit);
       return FALSE;
     }
+
+    // Check whether the output pool was invalidated for this pad.
+    reconfigure |= (pool == srcpad->pool) ? FALSE : TRUE;
   }
+
+  // Flush video converter if at least one output pool was invalidated.
+  if (reconfigure)
+    gst_video_converter_engine_flush (vsplit->converter);
 
   GST_VIDEO_SPLIT_UNLOCK (vsplit);
 
