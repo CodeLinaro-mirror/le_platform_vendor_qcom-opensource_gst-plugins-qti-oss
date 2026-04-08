@@ -331,7 +331,7 @@ gst_qtih264secparser_start (GstBaseTransform *trans)
     return FALSE;
   }
 
-  res = qtih264secparser->hsp.H264_Secure_Parser_Set_AppName ("h264secparser64");
+  res = qtih264secparser->hsp.H264_Secure_Parser_Set_AppName ("h264sp64");
   if (res != SEC_PARSER_SUCCESS) {
     GST_ERROR ("H264_Secure_Parser_Set_AppName failed! err:0x%08lx", res);
     if (qtih264secparser->lib_handle) {
