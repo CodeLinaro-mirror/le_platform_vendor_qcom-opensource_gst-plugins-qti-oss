@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_VIDEO_TEMPLATE
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -39,7 +36,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter")
 
 # GStreamer plugin.
-set(GST_QTI_VIDEO_TEMPLATE qtivideotemplate)
+set(GST_QTI_VIDEO_TEMPLATE gstqtivideotemplate)
 
 add_library(${GST_QTI_VIDEO_TEMPLATE} SHARED
   qtivideotemplate.c

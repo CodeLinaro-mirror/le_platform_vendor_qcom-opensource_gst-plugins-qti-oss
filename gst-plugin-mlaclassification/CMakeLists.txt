@@ -6,12 +6,7 @@ project(GST_PLUGIN_QTI_OSS_ML_AUDIO_CLASSIFICATION
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
-
-set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:${SYSROOT_LIBDIR}/pkgconfig")
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
@@ -62,7 +57,6 @@ target_compile_definitions(${GST_QTI_ML_AUDIO_CLASSIFICATION} PRIVATE
 
 target_include_directories(${GST_QTI_ML_AUDIO_CLASSIFICATION} PUBLIC
   ${GST_INCLUDE_DIRS}
-  ${KERNEL_BUILDDIR}/usr/include
   ${GST_QCOM_UTILS_INCLUDE_DIRS}
   ${GST_QCOM_VIDEO_INCLUDE_DIRS}
   ${GST_QCOM_ML_INCLUDE_DIRS}

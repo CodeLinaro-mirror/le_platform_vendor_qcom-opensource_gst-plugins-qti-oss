@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_ML_SNPE
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -32,6 +29,8 @@ add_definitions(-DHAVE_CONFIG_H)
 
 include(CheckIncludeFileCXX)
 
+list(APPEND CMAKE_REQUIRED_INCLUDES "${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/SNPE")
+
 # Check whether the C API header for the SNPE library is present.
 check_include_file_cxx("SNPE/SNPE.h" HAVE_SNPE_H)
 
@@ -51,6 +50,7 @@ add_library(${GST_QTI_ML_SNPE} SHARED
 )
 
 target_include_directories(${GST_QTI_ML_SNPE} PUBLIC
+  ${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/SNPE
   ${GST_INCLUDE_DIRS}
   ${GST_QCOM_ML_INCLUDE_DIRS}
   ${GST_QCOM_UTILS_INCLUDE_DIRS}

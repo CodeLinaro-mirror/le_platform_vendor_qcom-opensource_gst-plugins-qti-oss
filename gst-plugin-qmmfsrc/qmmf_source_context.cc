@@ -37,10 +37,6 @@
 #endif
 
 #include "qmmf_source_context.h"
-
-#ifdef ENABLE_RUNTIME_PARSER
-#include <gst/utils/runtime-flags-parser-c-api.h>
-#endif // ENABLE_RUNTIME_PARSER
 #include <gst/allocators/allocators.h>
 #include <qmmf-sdk/qmmf_recorder.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param_tags.h>
@@ -143,6 +139,8 @@ struct _GstQmmfContext {
   /// Camera property to select Electronic Image Stabilization mode.
   gint              eis;
 #endif // EIS_MODES_ENABLE
+  /// Camera property to select Electronic Image Stabilization mode.
+  gint              eis_enum;
 #ifndef VHDR_MODES_ENABLE
   /// Camera property to Enable or Disable Super High Dynamic Range.
   gboolean          shdr;
@@ -235,10 +233,10 @@ struct _GstQmmfContext {
   std::unique_ptr<std::set<GstPad*>> metadata_enabled_pads;
   /// Mutex for thread-safe access
   GMutex metadata_lock;
-  /// Logical Camera Information
-  GstQmmfLogicalCamInfo logical_cam_info;
   /// Sensor Switch Information
   GstQmmfCameraSwitchInfo camera_switch_info;
+  /// Logical Camera Information
+  GstQmmfLogicalCamInfo logical_cam_info;
 
   /// Super FrameRate Base
   gint32            superframerate;
@@ -357,7 +355,7 @@ validate_bayer_params (GstQmmfContext * context, GstPad * pad)
   return TRUE;
 }
 
-static guint
+guint
 get_vendor_tag_by_name (const gchar * section, const gchar * name)
 {
   std::shared_ptr<VendorTagDescriptor> vtags;
@@ -1001,7 +999,8 @@ gst_qmmf_context_unregister_metadata_pad (GstQmmfContext * context, GstPad * pad
               " after pad unregistration", meta_pair.first);
 
           if (ref_info.metadata) {
-            free_camera_metadata (ref_info.metadata);
+            ::camera::CameraMetadata meta_wrapper(ref_info.metadata);
+            meta_wrapper.clear();
             ref_info.metadata = NULL;
           }
         }
@@ -1087,7 +1086,9 @@ gst_qmmf_context_store_metadata (GstQmmfContext * context, gpointer metadata)
     return;
   }
 
-  camerameta = clone_camera_metadata (buffer);
+  ::camera::CameraMetadata cloned_meta;
+  cloned_meta = buffer;
+  camerameta = cloned_meta.release();
 
   MetadataRefCount ref_count_info;
   ref_count_info.metadata = camerameta;
@@ -1136,12 +1137,12 @@ qmmfsrc_gst_buffer_new_wrapped (GstQmmfContext * context, GstPad * pad,
   g_return_val_if_fail (gstbuffer != NULL, NULL);
 
   // Create a FD backed allocator.
-  allocator = gst_fd_allocator_new ();
+  allocator = gst_dmabuf_allocator_new ();
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, allocator != NULL,
       gst_buffer_unref (gstbuffer), NULL, "Failed to create FD allocator!");
 
   // Wrap our buffer memory block in FD backed memory.
-  gstmemory = gst_fd_allocator_alloc (
+  gstmemory = gst_dmabuf_allocator_alloc_with_flags (
       allocator, buffer->fd, buffer->capacity,
       GST_FD_MEMORY_FLAG_DONT_CLOSE
   );
@@ -1227,13 +1228,13 @@ qmmfsrc_gst_get_stream_colorimetry (gchar *colorimetry)
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601) == 0)
     return ::qmmf::recorder::Colorimetry::kBT601;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
+  else if (g_strcmp0 (colorimetry, "1:6:15:7") == 0)
     return ::qmmf::recorder::Colorimetry::kBT2100HLGFULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
+  else if (g_strcmp0 (colorimetry, "1:6:14:7") == 0)
     return ::qmmf::recorder::Colorimetry::kBT2100PQFULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT601_FULL) == 0)
+  else if (g_strcmp0 (colorimetry, "1:4:16:4") == 0)
     return ::qmmf::recorder::Colorimetry::kBT601FULL;
-  else if (g_strcmp0 (colorimetry, GST_VIDEO_COLORIMETRY_BT709_FULL) == 0)
+  else if (g_strcmp0 (colorimetry, "1:3:5:1") == 0)
     return ::qmmf::recorder::Colorimetry::kBT709FULL;
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   else {
@@ -1607,6 +1608,37 @@ camera_event_callback (GstQmmfContext * context,
   context->eventcb (event, context->userdata);
 }
 
+void
+gst_qmmf_context_get_static_meta ()
+{
+  ::qmmf::recorder::Recorder *recorder;
+  ::qmmf::recorder::RecorderCb cbs;
+  std::vector<::camera::CameraMetadata> infolist;
+  gint status = 0;
+
+  recorder = new ::qmmf::recorder::Recorder ();
+  status = recorder->Connect (cbs);
+  QMMFSRC_RETURN_IF_FAIL_WITH_CLEAN (NULL, status == 0,
+      delete recorder;, "QMMF Recorder Connect failed!");
+
+  int32_t ret = recorder->GetCamStaticInfo (infolist);
+  if (ret != 0)
+    g_warning ("Failed to get camera static info !");
+
+  for (guint i = 0; i < infolist.size(); ++i) {
+    /* Allocate a new CameraMetadata entry */
+    ::camera::CameraMetadata *metadata = new ::camera::CameraMetadata(infolist[i]);
+    /* Insert the copy into the hash table; the key remains the same index */
+    g_hash_table_insert (gst_qmmf_get_static_metas (), GUINT_TO_POINTER (i), metadata);
+  }
+
+  if (gst_qmmf_get_static_metas () == NULL)
+    GST_WARNING ("\n\n static meta is not populated\n");
+
+  recorder->Disconnect ();
+  delete recorder;
+}
+
 GstQmmfContext *
 gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
     gpointer userdata)
@@ -1674,6 +1706,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
 void
 gst_qmmf_context_free (GstQmmfContext * context)
 {
+  QMMFSRC_RETURN_IF_FAIL (NULL, context != NULL, "Context is NULL, skip free");
+
   context->recorder->Disconnect ();
   delete context->recorder;
 
@@ -1714,7 +1748,8 @@ gst_qmmf_context_free (GstQmmfContext * context)
         GST_WARNING ("Freeing unreleased metadata for timestamp %" G_GUINT64_FORMAT
             " with ref_count %u/%u", pair.first, pair.second.ref_count,
             pair.second.total_pads);
-        free_camera_metadata (pair.second.metadata);
+        ::camera::CameraMetadata meta_wrapper(pair.second.metadata);
+        meta_wrapper.clear();
         pair.second.metadata = NULL;
       }
     }
@@ -1790,9 +1825,14 @@ gst_qmmf_context_parse_logical_cam_info (GstQmmfContext *context,
 gboolean
 gst_qmmf_context_open (GstQmmfContext * context)
 {
-  ::qmmf::recorder::Recorder *recorder = context->recorder;
+  ::qmmf::recorder::Recorder *recorder = NULL;
   gint status = 0;
-  uint32_t op_mode = context->op_mode;
+  uint32_t op_mode = 0;
+
+  QMMFSRC_RETURN_VAL_IF_FAIL (NULL, context != NULL, FALSE, "Context is NULL");
+
+  recorder = context->recorder;
+  op_mode = context->op_mode;
 
   GST_TRACE ("Open QMMF context");
 
@@ -1887,7 +1927,6 @@ gst_qmmf_context_open (GstQmmfContext * context)
   ::qmmf::recorder::InputROISetup qmmf_input_roi;
   qmmf_input_roi.enable = context->input_roi_enable;
   xtraparam.Update (::qmmf::recorder::QMMF_INPUT_ROI, qmmf_input_roi);
-
 #ifdef FEATURE_OFFLINE_IFE_SUPPORT
   // Offline IFE
   ::qmmf::recorder::OfflineIFE qmmf_offline_ife;
@@ -1895,12 +1934,11 @@ gst_qmmf_context_open (GstQmmfContext * context)
   xtraparam.Update (::qmmf::recorder::QMMF_OFFLINE_IFE, qmmf_offline_ife);
 #endif // FEATURE_OFFLINE_IFE_SUPPORT
 
-  // SW TNR
-#ifdef FEATURE_SW_TNR
-  ::qmmf::recorder::SWTNR sw_tnr;
-  sw_tnr.enable = context->sw_tnr;
-  xtraparam.Update (::qmmf::recorder::QMMF_SW_TNR, sw_tnr);
-#endif // FEATURE_OFFLINE_IFE_SUPPORT
+  if (gst_qmmfsrc_check_sw_tnr_support ()) {
+    ::qmmf::recorder::SWTNR sw_tnr;
+    sw_tnr.enable = context->sw_tnr;
+    xtraparam.Update (::qmmf::recorder::QMMF_SW_TNR, sw_tnr);
+  }
 
   // Camera Operation Mode
   ::qmmf::recorder::CamOpModeControl cam_opmode;
@@ -2129,70 +2167,57 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
       colorimetry, rotate, vpad->xtrabufs
   );
 
-#ifdef ENABLE_RUNTIME_PARSER
-  void* qmmfsrc_parser = get_qmmfsrc_parser ();
-
-  gboolean gst_video_type_support = get_flag_as_bool (qmmfsrc_parser,
-      "GST_VIDEO_TYPE_SUPPORT");
-
-  if (gst_video_type_support && (vpad->type == VIDEO_TYPE_PREVIEW))
-    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
-
-#else
-#ifdef GST_VIDEO_TYPE_SUPPORT
-  if (vpad->type == VIDEO_TYPE_PREVIEW)
-    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
-#endif // GST_VIDEO_TYPE_SUPPORT
-#endif // ENABLE_RUNTIME_PARSER
-
   if (vpad->reprocess_enable)
     params.flags |= ::qmmf::recorder::VideoFlags::kReproc;
 
-#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
-  if (!context->logical_cam_info.is_logical_cam) {
-    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
-        "sense.", context->camera_id);
-  } else {
-    ::qmmf::recorder::StreamCameraId cam_id;
-    ::qmmf::recorder::StitchLayoutSelect layout;
-    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
-    gchar *info_name = NULL;
+  if (vpad->type == VIDEO_TYPE_PREVIEW)
+    params.flags |= ::qmmf::recorder::VideoFlags::kPreview;
 
-    if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
-      GST_ERROR ("Invalid logical stream type.");
-    } else if (vpad->log_stream_type <=
-        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
-      info_name = pinfo->phy_cam_name_list[vpad->log_stream_type -
-          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    if (!context->logical_cam_info.is_logical_cam) {
+      GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+          "sense.", context->camera_id);
+    } else {
+      ::qmmf::recorder::StreamCameraId cam_id;
+      ::qmmf::recorder::StitchLayoutSelect layout;
+      GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+      gchar *info_name = NULL;
 
-      if (!info_name) {
-        GST_ERROR ("Physical camera name is null.");
-      } else {
-        GST_DEBUG ("Physical camera name: %s", info_name);
+      if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+        GST_ERROR ("Invalid logical stream type.");
+      } else if (vpad->log_stream_type <=
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+        info_name = pinfo->phy_cam_name_list[vpad->log_stream_type -
+            GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+      } else if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        switch (vpad->log_stream_type) {
+          case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+            GST_DEBUG ("Stitch layout is selected: SideBySide.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+            break;
+          case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+            GST_DEBUG ("Stitch layout is selected: Panorama.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+            break;
+          default:
+            break;
+        }
+        extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+      } else if (vpad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            vpad->log_stream_type);
       }
-
-      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
-      extraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
-    } else if (vpad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      switch (vpad->log_stream_type) {
-        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
-          GST_DEBUG ("Stitch layout is selected: SideBySide.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
-          break;
-        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
-          GST_DEBUG ("Stitch layout is selected: Panorama.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
-          break;
-        default:
-          break;
-      }
-      extraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
-    } else if (vpad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
-          vpad->log_stream_type);
     }
   }
-#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   if (context->input_roi_enable && !vpad->reprocess_enable)
     context->input_roi_count++;
@@ -2286,9 +2311,9 @@ gst_qmmf_context_create_video_stream (GstQmmfContext * context, GstPad * pad)
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     tag_id = get_vendor_tag_by_name (
         "org.quic.camera2.streamconfigs", "HDRVideoMode");
-    if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_HLG_FULL) == 0)
+    if (g_strcmp0 (vpad->colorimetry, "1:6:15:7") == 0)
       streamhdrmode = 1;
-    else if (g_strcmp0 (vpad->colorimetry, GST_VIDEO_COLORIMETRY_BT2100_PQ_FULL) == 0)
+    else if (g_strcmp0 (vpad->colorimetry, "1:6:14:7") == 0)
       streamhdrmode = 2;
     else
       streamhdrmode = 0;
@@ -2416,51 +2441,51 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
     }
   }
 
-#ifdef FEATURE_LOGICAL_CAMERA_SUPPORT
-  if (!context->logical_cam_info.is_logical_cam) {
-    GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
-        "sense.", context->camera_id);
-  } else {
-    ::qmmf::recorder::StreamCameraId cam_id;
-    ::qmmf::recorder::StitchLayoutSelect layout;
-    GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
-    gchar *info_name = NULL;
+  if (gst_qmmfsrc_check_logical_cam_support ()) {
+    if (!context->logical_cam_info.is_logical_cam) {
+      GST_WARNING ("Non logical multi camera(%u), logical-stream-type makes no "
+          "sense.", context->camera_id);
+    } else {
+      ::qmmf::recorder::StreamCameraId cam_id;
+      ::qmmf::recorder::StitchLayoutSelect layout;
+      GstQmmfLogicalCamInfo *pinfo = &context->logical_cam_info;
+      gchar *info_name = NULL;
 
-    if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
-      GST_ERROR ("Invalid logical stream type.");
-    } else if (ipad->log_stream_type <=
-        GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
-      info_name = pinfo->phy_cam_name_list[ipad->log_stream_type -
-          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
+      if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN) {
+        GST_ERROR ("Invalid logical stream type.");
+      } else if (ipad->log_stream_type <=
+          GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MAX) {
+        info_name = pinfo->phy_cam_name_list[ipad->log_stream_type -
+            GST_PAD_LOGICAL_STREAM_TYPE_CAMERA_INDEX_MIN];
 
-      if (!info_name) {
-        GST_ERROR ("Physical camera name is null.");
-      } else {
-        GST_DEBUG ("Physical camera name: %s", info_name);
+        if (!info_name) {
+          GST_ERROR ("Physical camera name is null.");
+        } else {
+          GST_DEBUG ("Physical camera name: %s", info_name);
+        }
+
+        g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
+        xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
+      } else if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        switch (ipad->log_stream_type) {
+          case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
+            GST_DEBUG ("Stitch layout is selected: SideBySide.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
+            break;
+          case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
+            GST_DEBUG ("Stitch layout is selected: Panorama.");
+            layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
+            break;
+          default:
+            break;
+        }
+        xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
+      } else if (ipad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
+        GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
+            ipad->log_stream_type);
       }
-
-      g_strlcpy (cam_id.stream_camera_id, info_name, MAX_CAM_NAME_SIZE);
-      xtraparam.Update(::qmmf::recorder::QMMF_STREAM_CAMERA_ID, cam_id);
-    } else if (ipad->log_stream_type < GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      switch (ipad->log_stream_type) {
-        case GST_PAD_LOGICAL_STREAM_TYPE_SIDEBYSIDE:
-          GST_DEBUG ("Stitch layout is selected: SideBySide.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kSideBySide;
-          break;
-        case GST_PAD_LOGICAL_STREAM_TYPE_PANORAMA:
-          GST_DEBUG ("Stitch layout is selected: Panorama.");
-          layout.stitch_layout = ::qmmf::recorder::StitchLayout::kPanorama;
-          break;
-        default:
-          break;
-      }
-      xtraparam.Update(::qmmf::recorder::QMMF_STITCH_LAYOUT, layout);
-    } else if (ipad->log_stream_type > GST_PAD_LOGICAL_STREAM_TYPE_NONE) {
-      GST_ERROR ("Unknown logical-stream-type(%ld) of stream.",
-          ipad->log_stream_type);
     }
   }
-#endif // FEATURE_LOGICAL_CAMERA_SUPPORT
 
   status = recorder->ConfigImageCapture (context->camera_id, ipad->index,
       imgparam, xtraparam);
@@ -2768,8 +2793,12 @@ void
 gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     const GValue * value)
 {
-  ::qmmf::recorder::Recorder *recorder = context->recorder;
+  ::qmmf::recorder::Recorder *recorder = NULL;
   ::camera::CameraMetadata meta;
+
+  QMMFSRC_RETURN_IF_FAIL (NULL, context != NULL, "Context is NULL");
+
+  recorder = context->recorder;
 
   switch (param_id) {
     case PARAM_CAMERA_ID:
@@ -2810,7 +2839,6 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       }
     }
 #endif // VHDR_MODES_ENABLE
-
       return;
     case PARAM_CAMERA_SENSOR_MODE:
       context->sensormode = g_value_get_int (value);
@@ -2859,36 +2887,40 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->controlmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_control_mode_android_value (context->controlmode);
-      meta.update(ANDROID_CONTROL_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_control_mode_android_value (context->controlmode);
+        meta.update(ANDROID_CONTROL_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EFFECT_MODE:
     {
       guchar mode;
       context->effect = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_effect_mode_android_value (context->effect);
-      meta.update(ANDROID_CONTROL_EFFECT_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_effect_mode_android_value (context->effect);
+        meta.update(ANDROID_CONTROL_EFFECT_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SCENE_MODE:
     {
       guchar mode;
       context->scene = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_scene_mode_android_value (context->scene);
-      meta.update(ANDROID_CONTROL_SCENE_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_scene_mode_android_value (context->scene);
+        meta.update(ANDROID_CONTROL_SCENE_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_ANTIBANDING_MODE:
     {
       guchar mode;
       context->antibanding = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_antibanding_android_value (context->antibanding);
-      meta.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_antibanding_android_value (context->antibanding);
+        meta.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_SHARPNESS:
@@ -2969,18 +3001,20 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->expmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_exposure_mode_android_value (context->expmode);
-      meta.update(ANDROID_CONTROL_AE_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_exposure_mode_android_value (context->expmode);
+        meta.update(ANDROID_CONTROL_AE_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_LOCK:
     {
       guchar lock;
       context->explock = g_value_get_boolean (value);
-
-      lock = context->explock;
-      meta.update(ANDROID_CONTROL_AE_LOCK, &lock, 1);
+      if (context->state >= GST_STATE_READY) {
+        lock = context->explock;
+        meta.update(ANDROID_CONTROL_AE_LOCK, &lock, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_METERING:
@@ -2997,9 +3031,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       gint compensation;
       context->expcompensation = g_value_get_int (value);
-
-      compensation = context->expcompensation;
-      meta.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &compensation, 1);
+      if (context->state >= GST_STATE_READY) {
+        compensation = context->expcompensation;
+        meta.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &compensation, 1);
+      }
       break;
     }
     case PARAM_CAMERA_EXPOSURE_TIME:
@@ -3007,9 +3042,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
       gint64 time;
 
       context->exptime = g_value_get_int64 (value);
-      time = context->exptime;
-
-      meta.update(ANDROID_SENSOR_EXPOSURE_TIME, &time, 1);
+      if (context->state >= GST_STATE_READY) {
+        time = context->exptime;
+        meta.update(ANDROID_SENSOR_EXPOSURE_TIME, &time, 1);
+      }
       break;
     }
     case PARAM_CAMERA_WHITE_BALANCE_MODE:
@@ -3039,9 +3075,10 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar lock;
       context->wblock = g_value_get_boolean (value);
-
-      lock = context->wblock;
-      meta.update(ANDROID_CONTROL_AWB_LOCK, &lock, 1);
+      if (context->state >= GST_STATE_READY) {
+        lock = context->wblock;
+        meta.update(ANDROID_CONTROL_AWB_LOCK, &lock, 1);
+      }
       break;
     }
     case PARAM_CAMERA_MANUAL_WB_SETTINGS:
@@ -3093,18 +3130,20 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
     {
       guchar mode;
       context->afmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_focus_mode_android_value (context->afmode);
-      meta.update(ANDROID_CONTROL_AF_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_focus_mode_android_value (context->afmode);
+        meta.update(ANDROID_CONTROL_AF_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_NOISE_REDUCTION:
     {
       guchar mode;
       context->nrmode = g_value_get_enum (value);
-
-      mode = gst_qmmfsrc_noise_reduction_android_value (context->nrmode);
-      meta.update(ANDROID_NOISE_REDUCTION_MODE, &mode, 1);
+      if (context->state >= GST_STATE_READY) {
+        mode = gst_qmmfsrc_noise_reduction_android_value (context->nrmode);
+        meta.update(ANDROID_NOISE_REDUCTION_MODE, &mode, 1);
+      }
       break;
     }
     case PARAM_CAMERA_NOISE_REDUCTION_TUNING:

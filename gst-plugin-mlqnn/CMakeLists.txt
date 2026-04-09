@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_ML_QNN
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -46,6 +43,7 @@ add_library(${GST_QTI_ML_QNN} SHARED
 )
 
 target_include_directories(${GST_QTI_ML_QNN} PUBLIC
+  ${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/QNN
   ${GST_INCLUDE_DIRS}
   ${GST_QCOM_UTILS_INCLUDE_DIRS}
   ${GST_QCOM_ML_INCLUDE_DIRS}

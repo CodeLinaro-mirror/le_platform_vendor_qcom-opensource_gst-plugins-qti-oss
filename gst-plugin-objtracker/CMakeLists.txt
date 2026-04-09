@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_OBJTRACKER
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -56,7 +53,7 @@ target_include_directories(${GST_QTI_OBJTRACKER} PUBLIC
 )
 
 target_compile_definitions(${GST_QTI_OBJTRACKER} PRIVATE
-  GST_QTI_OBJTRACKER_ALGORITHM="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/algorithm"
+  GST_QTI_OBJTRACKER_ALGORITHM="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtiobjtracker/modules"
 )
 
 target_link_libraries(${GST_QTI_OBJTRACKER} PRIVATE

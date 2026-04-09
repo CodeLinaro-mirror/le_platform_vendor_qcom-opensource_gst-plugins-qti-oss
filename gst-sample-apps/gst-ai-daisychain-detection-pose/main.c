@@ -149,20 +149,6 @@ typedef enum {
 } GstVideoSplitMode;
 
 /**
- * GstVideoConvBackend:
- * @C2D    : Use C2D based video converter
- * @GLES   : Use OpenGLES based video converter.
- * @FCV    : Use FastCV based video converter.
- *
- * The backend of the video converter engine.
- */
-typedef enum {
-  C2D,
-  GLES,
-  FCV
-} GstVideoConvBackend;
-
-/**
  * Structure for various application specific options
  */
 typedef struct {
@@ -938,7 +924,7 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
     if (module_id != -1) {
       snprintf (settings, 127, "{\"confidence\": %.1f}", 75.0);
       g_object_set (G_OBJECT (qtimlvdetection[i]),
-          "results", 4, "module", module_id, "labels", options->yolox_labels_path,
+          "results", 2, "module", module_id, "labels", options->yolox_labels_path,
           "settings", settings, NULL);
       }
     else {
@@ -962,12 +948,6 @@ create_pipe (GstAppContext * appctx, const GstAppOptions *options)
       goto error_clean_elements;
     }
   }
-
-  // 2.10 Set properties backend engine
-  g_value_init (&value, G_TYPE_INT);
-  g_value_set_int (&value, GLES);
-  g_object_set_property (G_OBJECT (qtivoverlay), "engine", &value);
-  g_value_unset (&value);
 
   if (options->sink_type == GST_WAYLANDSINK) {
     // 2.11 Set the properties of Wayland compositor
@@ -1639,10 +1619,6 @@ main (gint argc, gchar * argv[])
   options.framerate = DEFAULT_CAMERA_FRAME_RATE;
   options.output_ip_address = NULL;
   options.port_num = NULL;
-
-  // Set Display environment variables
-  setenv ("XDG_RUNTIME_DIR", "/dev/socket/weston", 0);
-  setenv ("WAYLAND_DISPLAY", "wayland-1", 0);
 
   gboolean camera_is_available = is_camera_available ();
 

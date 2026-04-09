@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_META_TRANSFORM
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -52,7 +49,7 @@ target_link_libraries(${GST_QTI_META_TRANSFORM} PRIVATE
 )
 
 target_compile_definitions(${GST_QTI_META_TRANSFORM} PRIVATE
-  GST_META_TRANSFORM_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/meta/modules"
+  GST_META_TRANSFORM_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtimetatransform/modules"
 )
 
 install(

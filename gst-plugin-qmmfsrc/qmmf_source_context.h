@@ -202,6 +202,12 @@ gst_qmmf_context_get_device_status_camera_id (GstQmmfContext * context);
 GST_API gboolean
 gst_qmmf_context_get_device_status_is_present (GstQmmfContext * context);
 
+GST_API void
+gst_qmmf_context_get_static_meta ();
+
+guint
+get_vendor_tag_by_name (const gchar * section, const gchar * name);
+
 G_END_DECLS
 
 #endif // __GST_QMMFSRC_CONTEXT_H__
