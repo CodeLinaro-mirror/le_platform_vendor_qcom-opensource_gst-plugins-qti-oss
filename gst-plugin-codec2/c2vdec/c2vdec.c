@@ -72,8 +72,6 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         "video/x-h265,"
         "stream-format = (string) { byte-stream },"
         "alignment = (string) { au };"
-        "video/mpeg,"
-        "mpegversion = (int)2;"
         "video/x-vp9")
 );
 
@@ -520,8 +518,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     name = "c2.qti.hevc.decoder";
   else if (gst_structure_has_name (structure, "video/x-vp9"))
     name = "c2.qti.vp9.decoder";
-  else if (gst_structure_has_name (structure, "video/mpeg"))
-    name = "c2.qti.mpeg2.decoder";
 
   if (name == NULL) {
     GST_ERROR_OBJECT (c2vdec, "Unknown component!");
@@ -676,8 +672,8 @@ gst_c2_vdec_class_init (GstC2VDecoderClass * klass)
   gobject->get_property = GST_DEBUG_FUNCPTR (gst_c2_vdec_get_property);
 
   gst_element_class_set_static_metadata (element,
-      "Codec2 H.264/H.265/VP9/MPEG Video Decoder", "Codec/Decoder/Video",
-      "Decode H.264/H.265/VP9/MPEG video streams", "QTI");
+      "Codec2 H.264/H.265/VP9 Video Decoder", "Codec/Decoder/Video",
+      "Decode H.264/H.265/VP9 video streams", "QTI");
 
   gst_element_class_add_static_pad_template (element,
       &gst_c2_vdec_sink_pad_template);
