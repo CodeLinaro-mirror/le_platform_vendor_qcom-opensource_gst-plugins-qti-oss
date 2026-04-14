@@ -6,10 +6,6 @@ project(GST_PLUGIN_QTI_OSS_MSGQUEUE
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -18,7 +14,7 @@ pkg_check_modules(GST
 pkg_check_modules(GST_BASE
   REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

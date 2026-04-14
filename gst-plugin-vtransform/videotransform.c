@@ -376,22 +376,15 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstStructure *config = NULL;
-  GstAllocator *allocator = NULL;
-  guint size = 0, minbuffers = 0, maxbuffers = 0;
-  GstAllocationParams params = { 0, };
-  GstVideoInfo info;
+  GstVideoInfo info = {};
   GstVideoAlignment align = { 0, }, ds_align = { 0, };
+  GstAllocationParams params = { 0, };
+  guint size = 0, minbuffers = 0, maxbuffers = 0;
 
   gst_query_parse_allocation (query, &caps, NULL);
-  if (!caps) {
+  if (caps == NULL) {
     GST_ERROR_OBJECT (vtrans, "Failed to parse the decide_allocation caps!");
     return FALSE;
-  }
-
-  // Invalidate the cached pool if there is an allocation_query.
-  if (vtrans->outpool) {
-    gst_buffer_pool_set_active (vtrans->outpool, FALSE);
-    gst_clear_object (&vtrans->outpool);
   }
 
   if (!gst_video_info_from_caps (&info, caps)) {
@@ -426,27 +419,69 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
 
   // Create a new buffer pool.
   pool = gst_video_transform_create_pool (vtrans, caps, &align, &params);
+
+  if (pool == NULL)
+    return FALSE;
+
+  // Check whether the previous buffer pool can be reused.
+  if (vtrans->outpool != NULL) {
+    GstStructure *oldconfig = NULL, *newconfig = NULL;
+    GstCaps *oldcaps = NULL;
+    guint oldsize = 0, newsize = 0;
+
+    // Get the confuration of the new and old buffer pools for comparison.
+    newconfig = gst_buffer_pool_get_config (pool);
+    oldconfig = gst_buffer_pool_get_config (vtrans->outpool);
+
+    gst_buffer_pool_config_get_params (newconfig, &caps, &newsize, NULL, NULL);
+    gst_buffer_pool_config_get_params (oldconfig, &oldcaps, &oldsize, NULL, NULL);
+
+    GST_DEBUG_OBJECT (vtrans, "New buffer pool size %u and caps %"
+        GST_PTR_FORMAT ", old buffer pool size %u and caps %" GST_PTR_FORMAT,
+        newsize, caps, oldsize, oldcaps);
+
+    // If reconfiguration is not needed invalidate the new pool.
+    if (gst_caps_is_equal (oldcaps, caps) && (newsize == oldsize))
+      gst_clear_object (&pool);
+
+    g_clear_pointer (&oldconfig, gst_structure_free);
+    g_clear_pointer (&newconfig, gst_structure_free);
+
+    GST_DEBUG_OBJECT (vtrans, "%s previous output pool %p",
+        pool ? "Invalidate" : "Reuse", vtrans->outpool);
+  }
+
+  // If new pool was previously invalidated there is nothing further to do.
+  if (pool == NULL)
+    goto exit;
+
+  if (vtrans->converter != NULL)
+    gst_video_converter_engine_flush (vtrans->converter);
+
+  if (vtrans->outpool != NULL)
+    gst_buffer_pool_set_active (vtrans->outpool, FALSE);
+
+  gst_clear_object (&vtrans->outpool);
   vtrans->outpool = pool;
 
+exit:
   // Get the configured pool properties in order to set in query.
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_get_params (config, &caps, &size, &minbuffers,
-      &maxbuffers);
-
-  if (gst_buffer_pool_config_get_allocator (config, &allocator, &params))
-    gst_query_add_allocation_param (query, allocator, &params);
+  config = gst_buffer_pool_get_config (vtrans->outpool);
+  gst_buffer_pool_config_get_params (config, NULL, &size, &minbuffers, &maxbuffers);
 
   gst_structure_free (config);
   size = MAX (size, info.size);
 
+  if (gst_query_get_n_allocation_params (query) > 0)
+    gst_query_set_nth_allocation_param (query, 0, NULL, NULL);
+
   // Check whether the query has pool.
   if (gst_query_get_n_allocation_pools (query) > 0)
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, minbuffers,
-        maxbuffers);
+    gst_query_set_nth_allocation_pool (query, 0, NULL, size, minbuffers, maxbuffers);
   else
-    gst_query_add_allocation_pool (query, pool, size, minbuffers,
-        maxbuffers);
+    gst_query_add_allocation_pool (query, NULL, size, minbuffers, maxbuffers);
 
+  GST_DEBUG_OBJECT (vtrans, "Output pool: %" GST_PTR_FORMAT, vtrans->outpool);
   return TRUE;
 }
 
@@ -1548,10 +1583,10 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
-  GstVideoFrame inframe = { 0, }, outframe = { 0, };
   GstVideoBlit blit = GST_VCE_BLIT_INIT;
   GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
   GstClockTime time = GST_CLOCK_TIME_NONE;
+  const GstVideoMeta *meta = NULL;
   gboolean success = FALSE;
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
@@ -1559,37 +1594,20 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
-  if (!gst_video_frame_map (&inframe, vtrans->ininfo, inbuffer,
-          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map input buffer!");
-    return GST_FLOW_OK;
-  }
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC START failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
-
-  if (!gst_video_frame_map (&outframe, vtrans->outinfo, outbuffer,
-          GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF)) {
-    GST_ERROR_OBJECT (vtrans, "Failed to map output buffer!");
-    gst_video_frame_unmap (&inframe);
-    return GST_FLOW_OK;
-  }
-
   time = gst_util_get_timestamp ();
 
   GST_VIDEO_TRANSFORM_LOCK (vtrans);
 
-  blit.frame = &inframe;
+  meta = gst_buffer_get_video_meta (inbuffer);
+
+  success = gst_video_info_modify_with_meta (vtrans->ininfo, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
+
+  blit.buffer = inbuffer;
   blit.mask = 0;
+  blit.info = vtrans->ininfo;
 
   if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
     gst_video_rectangle_to_quadrilateral (&(vtrans->crop), &(blit.source));
@@ -1612,10 +1630,18 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     blit.mask |= GST_VCE_MASK_ROTATION;
   }
 
+  meta = gst_buffer_get_video_meta (outbuffer);
+
+  success = gst_video_info_modify_with_meta (vtrans->outinfo, meta);
+
+  if (!success)
+    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
+
   composition.blits = &blit;
   composition.n_blits = 1;
 
-  composition.frame = &outframe;
+  composition.buffer = outbuffer;
+  composition.info = vtrans->outinfo;
   composition.datatype = 0;
 
   composition.bgcolor = vtrans->background;
@@ -1631,21 +1657,6 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GST_LOG_OBJECT (vtrans, "Conversion took %" G_GINT64_FORMAT ".%03"
       G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
       (GST_TIME_AS_USECONDS (time) % 1000));
-
-  gst_video_frame_unmap (&outframe);
-  gst_video_frame_unmap (&inframe);
-
-#ifdef HAVE_LINUX_DMA_BUF_H
-  if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
-    struct dma_buf_sync bufsync;
-    gint fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (outbuffer, 0));
-
-    bufsync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_RW;
-
-    if (ioctl (fd, DMA_BUF_IOCTL_SYNC, &bufsync) != 0)
-      GST_WARNING_OBJECT (vtrans, "DMA IOCTL SYNC END failed!");
-  }
-#endif // HAVE_LINUX_DMA_BUF_H
 
   if (!success) {
     GST_ERROR_OBJECT (vtrans, "Failed to process composition!");

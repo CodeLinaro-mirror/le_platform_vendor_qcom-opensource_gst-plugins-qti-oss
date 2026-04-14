@@ -3,15 +3,15 @@ include(CheckIncludeFileCXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Prefer the prebuilt TFLite package.
 pkg_check_modules(TFLITE tensorflow-lite-prebuilt)
 if(NOT TFLITE_FOUND)
   pkg_check_modules(TFLITE tensorflow-lite)
+endif()
+if(NOT TFLITE_FOUND)
+  pkg_check_modules(TFLITE tensorflowlite_c)
 endif()
 
 # Check whether the C API header for the TFLITE library is present.
@@ -27,8 +27,8 @@ list(APPEND TARGET_COMPILE_DEFINITIONS
 )
 
 list(APPEND TARGET_INCS
-  $<$<VERSION_LESS_EQUAL:${TFLITE_VERSION},2.2.0>:${SYSROOT_INCDIR}/tflite>
-  $<$<VERSION_GREATER:${TFLITE_VERSION},2.2.0>:${SYSROOT_INCDIR}/tensorflow>
+  $<$<VERSION_LESS_EQUAL:${TFLITE_VERSION},2.2.0>:${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/tflite>
+  $<$<VERSION_GREATER:${TFLITE_VERSION},2.2.0>:${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/tensorflow>
 )
 
 list(APPEND TARGET_LIBRARIES

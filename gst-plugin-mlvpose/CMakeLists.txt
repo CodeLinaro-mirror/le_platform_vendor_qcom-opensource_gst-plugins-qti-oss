@@ -6,12 +6,7 @@ project(GST_PLUGIN_QTI_OSS_ML_VIDEO_POSE
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
-
-set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:${SYSROOT_LIBDIR}/pkgconfig")
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
@@ -32,7 +27,7 @@ pkg_check_modules(GST_QCOM_ALLOC
 pkg_check_modules(GST_QCOM_ML
   REQUIRED gstreamer-qcom-oss-ml-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

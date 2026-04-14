@@ -47,8 +47,8 @@ typedef struct _GstQmmfLogicalCamInfo     GstQmmfLogicalCamInfo;
 typedef struct _GstQmmfCameraSwitchInfo   GstQmmfCameraSwitchInfo;
 
 typedef struct _CameraDeviceStatus {
-  gint camera_id;
-  gboolean is_present;
+  guint32 camera_id;
+  guint8 is_present;
 } CameraDeviceStatus;
 
 typedef void (*GstCameraEventCb) (guint event, gpointer userdata);
@@ -201,6 +201,12 @@ gst_qmmf_context_get_device_status_camera_id (GstQmmfContext * context);
 
 GST_API gboolean
 gst_qmmf_context_get_device_status_is_present (GstQmmfContext * context);
+
+GST_API void
+gst_qmmf_context_get_static_meta ();
+
+guint
+get_vendor_tag_by_name (const gchar * section, const gchar * name);
 
 G_END_DECLS
 

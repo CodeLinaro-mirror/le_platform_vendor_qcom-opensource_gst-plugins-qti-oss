@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_VIDEO_COMPOSER
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -27,7 +24,7 @@ if(GST_VERSION VERSION_LESS 1.16.0)
   pkg_check_modules(GST_BAD_VIDEO REQUIRED gstreamer-bad-video-1.0>=${GST_VERSION_REQUIRED})
 endif()
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

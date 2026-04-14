@@ -7,6 +7,7 @@
 
 #include <unistd.h>
 #include <dlfcn.h>
+#include <gst/utils/common-utils.h>
 
 #include <fastcv/fastcv.h>
 
@@ -26,6 +27,10 @@
     c->ColorYCbCr##in##PseudoPlanarTo##out##u8 (                       \
         s_luma->data, s_chroma->data, s_luma->width, s_luma->height,   \
         s_luma->stride, s_chroma->stride, d_rgb->data,  d_rgb->stride)
+#define GST_FCV_RGB_TO_GRAY(c, in, out, s_rgb, d_grayscale) \
+    c->Color##in##To##out##u8 (                        \
+        s_rgb->data, s_rgb->width, s_rgb->height,      \
+        s_rgb->stride, d_grayscale->data,  d_grayscale->stride)
 #define GST_FCV_RGB_TO_YUV(c, in, out, s_rgb, d_luma, d_chroma)         \
     c->Color##in##ToYCbCr##out##PseudoPlanaru8 (                        \
         s_rgb->data, s_rgb->width, s_rgb->height, s_rgb->stride,        \
@@ -289,6 +294,10 @@ struct _GstFcvVideoConverter
       const uint8_t *__restrict s_luma, const uint8_t *__restrict s_chroma,
       uint32_t s_width, uint32_t s_height, uint32_t s_luma_stride,
       uint32_t s_chroma_stride, uint8_t *__restrict destination, uint32_t d_stride);
+
+  FASTCV_API void (*ColorRGB888ToGrayu8) (
+      const uint8_t *__restrict s, uint32_t s_width, uint32_t s_height,
+      uint32_t s_stride, uint8_t *__restrict destination, uint32_t d_stride);
 
   FASTCV_API void (*ColorRGB565ToYCbCr444PseudoPlanaru8) (
       const uint8_t *__restrict source, uint32_t s_width, uint32_t s_height,
@@ -1272,6 +1281,37 @@ gst_fcv_video_converter_yuv_to_rgb (GstFcvVideoConverter * convert,
 }
 
 static inline gboolean
+gst_fcv_video_converter_rgb_to_gray (GstFcvVideoConverter * convert,
+    GstFcvObject * s_obj, GstFcvObject * d_obj)
+{
+  GstFcvPlane *s_rgb = NULL, *d_grayscale = NULL;
+
+  // Convenient local pointers to the source and destination planes.
+  s_rgb = &(s_obj->planes[0]);
+  d_grayscale = &(d_obj->planes[0]);
+
+  GST_LOG ("Source %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (s_obj->format), GST_FCV_PLANE_ARGS (s_rgb));
+
+  GST_LOG ("Destination %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_grayscale));
+
+  // Form a unique ID based on the formats for the conversion lookup cases.
+  switch (s_obj->format + (d_obj->format << 16)) {
+    case GST_VIDEO_FORMAT_RGB + (GST_VIDEO_FORMAT_GRAY8 << 16):
+      GST_FCV_RGB_TO_GRAY (convert, RGB888, Gray, s_rgb, d_grayscale);
+      break;
+    default:
+      GST_ERROR ("Unsupported format conversion from '%s' to '%s'!",
+          gst_video_format_to_string (s_obj->format),
+          gst_video_format_to_string (d_obj->format));
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static inline gboolean
 gst_fcv_video_converter_rgb_to_yuv (GstFcvVideoConverter * convert,
     GstFcvObject * s_obj, GstFcvObject * d_obj)
 {
@@ -1391,6 +1431,46 @@ gst_fcv_video_converter_rgb_to_yuv (GstFcvVideoConverter * convert,
 
     // Free the intermediary local chroma plane.
     gst_fcv_video_converter_release_stage_buffer (convert, l_chroma.stgid);
+  }
+
+  return TRUE;
+}
+
+static inline gboolean
+gst_fcv_video_converter_yuv_to_gray (GstFcvVideoConverter * convert,
+    GstFcvObject * s_obj, GstFcvObject * d_obj)
+{
+  GstFcvPlane *s_luma = NULL, *d_grayscale = NULL;
+
+  // Convenient local pointers to the source and destination planes.
+  s_luma = &(s_obj->planes[0]);
+  d_grayscale = &(d_obj->planes[0]);
+
+  GST_LOG ("Source %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (s_obj->format), GST_FCV_PLANE_ARGS (s_luma));
+
+  GST_LOG ("Destination %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_grayscale));
+
+  switch (s_obj->format + (d_obj->format << 16)) {
+    case GST_VIDEO_FORMAT_NV24 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV21 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV12 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV16 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV61 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+      for (guint idx = 0; idx < d_grayscale->height; idx++) {
+        d_grayscale->data =  GUINT8_PTR_CAST (d_grayscale->data) +
+            (idx * d_grayscale->stride);
+        s_luma->data = GUINT8_PTR_CAST (s_luma->data) + (idx * s_luma->stride);
+
+        memcpy (d_grayscale->data, s_luma->data, d_grayscale->width);
+      }
+      break;
+    default:
+      GST_ERROR ("Unsupported format conversion from '%s' to '%s'!",
+        gst_video_format_to_string (s_obj->format),
+        gst_video_format_to_string (d_obj->format));
+      return FALSE;
   }
 
   return TRUE;
@@ -1521,10 +1601,14 @@ gst_fcv_video_converter_color_transform (GstFcvVideoConverter * convert,
     success = gst_fcv_video_converter_yuv_to_yuv (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_YUV) && (d_obj->flags & GST_FCV_FLAG_RGB))
     success = gst_fcv_video_converter_yuv_to_rgb (convert, s_obj, d_obj);
+  else if ((s_obj->flags & GST_FCV_FLAG_YUV) && (d_obj->flags & GST_FCV_FLAG_GRAY))
+    success = gst_fcv_video_converter_yuv_to_gray (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_YUV))
     success = gst_fcv_video_converter_rgb_to_yuv (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_RGB))
     success = gst_fcv_video_converter_rgb_to_rgb (convert, s_obj, d_obj);
+  else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_GRAY))
+    success = gst_fcv_video_converter_rgb_to_gray (convert, s_obj, d_obj);
   else
     GST_ERROR ("Unsupported color conversion families!");
 
@@ -2003,6 +2087,11 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
           GST_ROUND_UP_2 (GST_VIDEO_FRAME_HEIGHT (frame)) / 2,
           GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1), cbcr10bit, NULL, 0);
         break;
+    case GST_VIDEO_FORMAT_GRAY8:
+      convert->SetElementsu8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
+          GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), luma, NULL, 0);
+        break;
     default:
       GST_ERROR ("Unsupported format %s!",
           gst_video_format_to_string (GST_VIDEO_FRAME_FORMAT (frame)));
@@ -2193,25 +2282,41 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
 {
   GstFcvObject objects[GST_FCV_MAX_DRAW_OBJECTS] = { 0, };
   guint32 idx = 0, num = 0, n_objects = 0, area = 0;
-  gboolean success = FALSE;
+  GArray *inframes = NULL;
+  GstVideoFrame outframe = {0,};
+  GstVideoComposition *composition = NULL;
+
 
   // TODO: Implement async operations via threads.
   if (fence != NULL)
     GST_WARNING ("Asynchronous composition operations are not supported!");
 
   for (idx = 0; idx < n_compositions; idx++) {
-    GstVideoComposition *composition = &compositions[idx];
-    GstVideoFrame *outframe = composition->frame;
+    composition = &(compositions[idx]);
+
+    inframes = g_array_sized_new(FALSE, FALSE, sizeof(GstVideoFrame),
+        composition->n_blits);
+    g_array_set_size (inframes, composition->n_blits);
+
     GstVideoBlit *blits = composition->blits;
     guint n_blits = composition->n_blits;
+    gboolean success = FALSE;
 
-    // Sanity checks, output frame and blit entries must not be NULL.
-    g_return_val_if_fail (outframe != NULL, FALSE);
+    // Sanity checks, blit entries must not be NULL.
+    g_return_val_if_fail (composition->buffer != NULL, FALSE);
     g_return_val_if_fail ((blits != NULL) && (n_blits != 0), FALSE);
+
+    success = gst_video_frame_map (&outframe, composition->info,
+        composition->buffer, GST_MAP_READWRITE | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+    if (!success) {
+      GST_ERROR ("Failed to map output buffer!");
+      return FALSE;
+    }
 
     // Total area of the output frame that is to be used in later calculations
     // to determine whether there are unoccupied background pixels to be filled.
-    area = GST_VIDEO_FRAME_WIDTH (outframe) * GST_VIDEO_FRAME_HEIGHT (outframe);
+    area = GST_VIDEO_FRAME_WIDTH (&outframe) * GST_VIDEO_FRAME_HEIGHT (&outframe);
 
     // Iterate over the input blit entries and update each FCV object.
     for (num = 0; num < n_blits; num++) {
@@ -2219,6 +2324,15 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
       GstFcvObject *object = NULL;
       GstVideoRectangle rectangle = {0, 0, 0, 0};
       guint flip = 0, rotate = 0;
+      GstVideoFrame *inframe = &g_array_index(inframes, GstVideoFrame, num);
+
+      success = gst_video_frame_map (inframe, blit->info, blit->buffer,
+          GST_MAP_READ | GST_VIDEO_FRAME_MAP_FLAG_NO_REF);
+
+      if (!success) {
+        GST_ERROR ("Failed to map input buffer!");
+        return FALSE;
+      }
 
       if (n_objects >= GST_FCV_MAX_DRAW_OBJECTS) {
         GST_ERROR ("Number of objects exceeds %d!", GST_FCV_MAX_DRAW_OBJECTS);
@@ -2255,11 +2369,11 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
         rectangle.h = blit->source.d.y - blit->source.a.y;
       } else {
         rectangle.x = rectangle.y = 0;
-        rectangle.w = GST_VIDEO_FRAME_WIDTH (blit->frame);
-        rectangle.h = GST_VIDEO_FRAME_HEIGHT (blit->frame);
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (inframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (inframe);
       }
 
-      gst_fcv_update_object (object, "Source", blit->frame, &rectangle,
+      gst_fcv_update_object (object, "Source", inframe, &rectangle,
           flip, rotate, 0);
 
       // Intialization of the destination FCV object.
@@ -2270,33 +2384,42 @@ gst_fcv_video_converter_compose (GstFcvVideoConverter * convert,
         rectangle = blit->destination;
       } else {
         rectangle.x = rectangle.y = 0;
-        rectangle.w = GST_VIDEO_FRAME_WIDTH (outframe);
-        rectangle.h = GST_VIDEO_FRAME_HEIGHT (outframe);
+        rectangle.w = GST_VIDEO_FRAME_WIDTH (&outframe);
+        rectangle.h = GST_VIDEO_FRAME_HEIGHT (&outframe);
       }
 
-      gst_fcv_update_object (object, "Destination", outframe, &rectangle,
+      gst_fcv_update_object (object, "Destination", &outframe, &rectangle,
           0, 0, composition->datatype);
 
       // Subtract blit area from total area.
       if (area != 0)
-        area -= gst_fcv_composition_blit_area (outframe, blits, num);
+        area -= gst_fcv_composition_blit_area (&outframe, blits, num);
 
       // Increment the objects counter by 2 for for Source/Destination pair.
       n_objects += 2;
     }
 
-    if (composition->bgfill && (area > 0)) {
-      gst_fcv_video_converter_fill_background (convert, outframe,
+    if (composition->bgfill && (area > 0))
+      gst_fcv_video_converter_fill_background (convert, &outframe,
           composition->bgcolor, composition->datatype);
-    }
 
     if (!gst_fcv_video_converter_process (convert, objects, n_objects)) {
       GST_ERROR ("Failed to process frames for composition %u!", idx);
       return FALSE;
     }
 
-    success = gst_video_frame_normalize_ip (composition->frame,
+    success = gst_video_frame_normalize_ip (&outframe,
         composition->datatype, composition->offsets, composition->scales);
+
+    for (num = 0; num < inframes->len; num++) {
+      GstVideoFrame *inframe = &g_array_index (inframes, GstVideoFrame, num);
+
+      gst_video_frame_unmap (inframe);
+    }
+
+    g_array_free (inframes, TRUE);
+
+    gst_video_frame_unmap (&outframe);
 
     if (!success) {
       GST_ERROR ("Failed to normalize output frame for composition %u!", idx);
@@ -2348,6 +2471,7 @@ gst_fcv_video_converter_new (GstStructure * settings)
   success &= LOAD_FCV_SYMBOL (convert, SetOperationMode);
   success &= LOAD_FCV_SYMBOL (convert, CleanUp);
 
+  success &= LOAD_FCV_SYMBOL (convert, SetElementsu8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc3u8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc4u8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementss32);
@@ -2415,6 +2539,8 @@ gst_fcv_video_converter_new (GstStructure * settings)
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToRGB888u8);
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToBGR565u8);
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToBGR888u8);
+
+  success &= LOAD_FCV_SYMBOL (convert, ColorRGB888ToGrayu8);
 
   success &= LOAD_FCV_SYMBOL (convert, Addu8);
   success &= LOAD_FCV_SYMBOL (convert, Adds16_v2);

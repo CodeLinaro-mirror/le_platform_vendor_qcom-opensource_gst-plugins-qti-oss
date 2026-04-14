@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_CAMERA_IMAGE_REPROCESS
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -24,8 +21,9 @@ pkg_check_modules(GST_QCOM_VIDEO
   REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
 pkg_check_modules(GST_QCOM_ALLOC
   REQUIRED gstreamer-qcom-oss-allocators-1.0>=1.0.0)
+pkg_check_modules(QMMF_CAMERA_METADATA qmmf_camera_metadata)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -50,6 +48,7 @@ target_include_directories(${CAMERA_IMAGE_REPROCESS} PUBLIC
   ${GST_QCOM_UTILS_INCLUDE_DIRS}
   ${GST_QCOM_VIDEO_INCLUDE_DIRS}
   ${GST_QCOM_ALLOC_INCLUDE_DIRS}
+  $<$<BOOL:${QMMF_CAMERA_METADATA_FOUND}>:${QMMF_CAMERA_METADATA_INCLUDE_DIRS}>
 )
 
 target_link_libraries(${CAMERA_IMAGE_REPROCESS} PRIVATE

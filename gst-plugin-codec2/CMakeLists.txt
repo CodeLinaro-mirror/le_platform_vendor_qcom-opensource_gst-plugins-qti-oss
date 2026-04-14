@@ -8,9 +8,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -31,7 +28,7 @@ pkg_check_modules(GST_QCOM_UTILS
 include(CheckIncludeFileCXX)
 check_include_file_cxx("display/media/mmm_color_fmt.h" HAVE_MMM_COLOR_FMT_H)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

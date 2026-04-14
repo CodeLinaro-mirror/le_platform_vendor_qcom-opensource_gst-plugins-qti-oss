@@ -6,12 +6,7 @@ project(GST_PLUGIN_QTI_OSS_ML_POST_PROCESS
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
-
-set(ENV{PKG_CONFIG_PATH} "$ENV{PKG_CONFIG_PATH}:${SYSROOT_LIBDIR}/pkgconfig")
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
@@ -34,7 +29,7 @@ pkg_check_modules(GST_QCOM_ML
 pkg_check_modules(GST_QCOM_MEM
   REQUIRED gstreamer-qcom-oss-memory-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -57,7 +52,7 @@ add_library(${GST_QTI_ML_POST_PROCESS} SHARED
 )
 
 target_compile_definitions(${GST_QTI_ML_POST_PROCESS} PRIVATE
-  GST_ML_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/ml/modules"
+  GST_ML_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtimlpostprocess/modules"
   $<$<BOOL:${HAVE_LINUX_DMA_BUF_H}>:HAVE_LINUX_DMA_BUF_H>
 )
 

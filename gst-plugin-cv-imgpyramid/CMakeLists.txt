@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_CV_IMGPYRAMID
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -30,7 +27,7 @@ check_include_file_cxx("cvp/v2.0/cvpPyramid.h" HAVE_CVP_IMGPYRAMID_H)
 # Check whether EVA pyramid header is present.
 check_include_file_cxx("evaPyramid.h" HAVE_EVA_IMGPYRAMID_H)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 

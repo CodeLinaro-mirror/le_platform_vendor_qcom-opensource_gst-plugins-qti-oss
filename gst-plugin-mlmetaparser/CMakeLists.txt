@@ -8,9 +8,6 @@ include_directories(
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -27,7 +24,7 @@ pkg_check_modules(GST_QCOM_UTILS
 pkg_check_modules(GST_QCOM_VIDEO
   REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
 
-# Generate configuration header file.
+# Generate configuration header file with plugin describing definitions
 configure_file(config.h.in config.h @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -55,7 +52,7 @@ target_include_directories(${GST_QTI_ML_META_PARSER} PUBLIC
 )
 
 target_compile_definitions(${GST_QTI_ML_META_PARSER} PRIVATE
-  GST_PARSER_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/mlmetaparser/modules"
+  GST_PARSER_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtimlmetaparser/modules"
 )
 
 target_link_libraries(${GST_QTI_ML_META_PARSER} PRIVATE
