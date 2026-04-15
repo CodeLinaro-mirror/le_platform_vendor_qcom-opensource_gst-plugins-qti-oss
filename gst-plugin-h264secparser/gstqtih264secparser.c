@@ -15,7 +15,10 @@ GST_DEBUG_CATEGORY_STATIC (gst_qtih264secparser_debug_category);
 #define GST_CAT_DEFAULT gst_qtih264secparser_debug_category
 #define parent_class gst_qtih264secparser_parent_class
 /* Calculated based on sizeimage provided by driver for 1080p"*/
+
+#ifndef LIB_H264SEC_PARSER_PATH
 #define LIB_H264SEC_PARSER_PATH "libsec_h264parser.so"
+#endif
 
 #define MAX_POOL_BUFFER_SIZE 4000000
 #define DEFAULT_MIN_BUFFERS 4

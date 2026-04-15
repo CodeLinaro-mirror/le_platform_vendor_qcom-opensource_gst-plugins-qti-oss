@@ -15,8 +15,13 @@ GST_DEBUG_CATEGORY_STATIC (gst_qtidummydrm_debug_category);
 #define GST_CAT_DEFAULT gst_qtidummydrm_debug_category
 #define parent_class gst_qtidummydrm_parent_class
 /* Calculated based on sizeimage provided by driver for 1080p"*/
+
 #define MAX_POOL_BUFFER_SIZE 4000000
+
+#ifndef LIB_CONTENT_COPY_PATH
 #define LIB_CONTENT_COPY_PATH "/usr/lib/libcontentcopy.so"
+#endif
+
 /* prototypes */
 
 static void gst_qtidummydrm_set_property (GObject * object,
