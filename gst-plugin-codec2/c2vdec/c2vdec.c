@@ -266,6 +266,27 @@ gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
   // Get the frame index from the buffer offset field.
   index = GST_BUFFER_OFFSET (buffer);
 
+  GstVideoMeta *vmeta = gst_buffer_get_video_meta (buffer);
+
+  if (vmeta != NULL) {
+    guint visible_width = c2vdec->outstate->info.width;
+    guint visible_height = c2vdec->outstate->info.height;
+    gboolean padded_width = gst_c2_vdec_is_aligned_padding_dimension (
+    visible_width, vmeta->width);
+    gboolean padded_height = gst_c2_vdec_is_aligned_padding_dimension (
+    visible_height, vmeta->height);
+
+    if (padded_width || padded_height) {
+      GST_INFO_OBJECT (c2vdec,
+      "Ignoring aligned output padding %ux%u; keeping visible size %ux%u",
+      vmeta->width, vmeta->height, visible_width, visible_height);
+      if (padded_width)
+        vmeta->width = visible_width;
+      if (padded_height)
+        vmeta->height = visible_height;
+    }
+  }
+
   if (g_atomic_int_get (&c2vdec->flushing) ||
       !gst_pad_is_active (GST_VIDEO_DECODER_SRC_PAD (c2vdec))) {
     gst_buffer_unref (buffer);
