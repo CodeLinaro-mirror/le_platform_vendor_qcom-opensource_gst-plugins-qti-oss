@@ -613,6 +613,7 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
       }
     }
 #else
+#ifdef ION_FLAG_ION_LEND_BUF
     if (LEND_DMABUF == vesdeliver->secure) {
       if (vesdeliver->allocator) {
         int ret = -1;
@@ -630,6 +631,7 @@ gst_vesdeliver_transform (GstBaseTransform * trans, GstBuffer * inbuf,
         GST_ERROR_OBJECT(vesdeliver, "There is no allocator to do buffer lending.");
       }
     }
+#endif
 #endif
   }
 

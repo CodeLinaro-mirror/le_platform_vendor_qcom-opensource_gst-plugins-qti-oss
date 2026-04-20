@@ -72,16 +72,32 @@ gst_vesdeliver_allocator_init (GstVesDeliverAllocator * alloc)
     return;
   }
 #else
+  int ion_dlsym_fail = 0;
   alloc->ion_open = dlsym (alloc->lib_handle, "ion_open");
   alloc->ion_close = dlsym (alloc->lib_handle, "ion_close");
   alloc->ion_alloc_fd = dlsym (alloc->lib_handle, "ion_alloc_fd");
+#ifdef ION_FLAG_ION_LEND_BUF
   alloc->ion_lend_buf = dlsym (alloc->lib_handle, "ion_lend_buf");
   alloc->ion_reclaim_buf = dlsym (alloc->lib_handle, "ion_reclaim_buf");
 
   if (!alloc->ion_open || !alloc->ion_close || !alloc->ion_alloc_fd || !alloc->ion_lend_buf || !alloc->ion_reclaim_buf) {
+    ion_dlsym_fail = 1;
     GST_ERROR_OBJECT
-        (alloc, "dlsym failed with ion_open: %p, ion_close: %p, ion_alloc_fd: %p, ion_lend_buf:%p, ion_reclaim_buf:%p",
+        (alloc, "dlsym failed with ion_open: %p, ion_close: %p, ion_alloc_fd: %p, ion_lend_buf: %p, ion_reclaim_buf: %p",
         alloc->ion_open, alloc->ion_close, alloc->ion_alloc_fd, alloc->ion_lend_buf, alloc->ion_reclaim_buf);
+  }
+#else
+  alloc->ion_lend_buf = NULL;
+  alloc->ion_reclaim_buf = NULL;
+
+  if (!alloc->ion_open || !alloc->ion_close || !alloc->ion_alloc_fd) {
+    ion_dlsym_fail = 1;
+    GST_ERROR_OBJECT
+        (alloc, "dlsym failed with ion_open: %p, ion_close: %p, ion_alloc_fd: %p",
+        alloc->ion_open, alloc->ion_close, alloc->ion_alloc_fd);
+  }
+#endif
+  if (ion_dlsym_fail) {
     dlclose (alloc->lib_handle);
     alloc->lib_handle = NULL;
     return;
@@ -432,6 +448,7 @@ _recycle_buffer (GstAllocator * allocator, GstMemory * mem)
         }
       }
 #else
+#ifdef ION_FLAG_ION_LEND_BUF
       if (param->secure_mode == LEND_DMABUF && alloc->ion_reclaim_buf) {
         int ret = -1;
         ret = alloc->ion_reclaim_buf(alloc->ion_fd, buf->fd, ION_VMID_CP_BITSTREAM);
@@ -443,6 +460,7 @@ _recycle_buffer (GstAllocator * allocator, GstMemory * mem)
               buf->fd, ret);
         }
       }
+#endif
 #endif
       g_cond_signal (&alloc->buf_cond);
     }
