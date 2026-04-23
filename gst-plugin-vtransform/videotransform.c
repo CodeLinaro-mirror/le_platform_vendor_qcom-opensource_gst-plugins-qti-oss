@@ -397,7 +397,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
     return FALSE;
   }
 
-  if (gst_query_get_video_alignment (query, &ds_align)) {
+  if (gst_query_parse_video_alignment (query, &ds_align)) {
     GST_DEBUG_OBJECT (vtrans, "Downstream alignment: padding (top: %u bottom: "
         "%u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
         ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
@@ -405,7 +405,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
         ds_align.stride_align[2], ds_align.stride_align[3]);
 
     // Find the most the appropriate alignment between us and downstream.
-    align = gst_video_calculate_common_alignment (&align, &ds_align);
+    gst_video_alignment_update (&align, &ds_align);
 
     GST_DEBUG_OBJECT (vtrans, "Common alignment: padding (top: %u bottom: %u "
         "left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
@@ -553,7 +553,6 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
   GST_DEBUG_OBJECT (vtrans, "Filter caps %" GST_PTR_FORMAT, filter);
 
-
   result = gst_caps_new_empty ();
 
   // In case there is no memory:GBM caps structure prepend one.
@@ -576,9 +575,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure, features);
   }
@@ -606,9 +605,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure,
         gst_caps_features_copy (features));
@@ -631,9 +630,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure (result, structure);
   }
@@ -833,15 +832,6 @@ gst_video_transform_fixate_format (GstVideoTransform *vtrans,
       gst_structure_fixate_field_string (output, "chroma-site", string);
     else
       gst_structure_set (output, "chroma-site", G_TYPE_STRING, string, NULL);
-  }
-
-  if (gst_structure_has_field (input, "compression") && sametype) {
-    const gchar *string = gst_structure_get_string (input, "compression");
-
-    if (gst_structure_has_field (output, "compression"))
-      gst_structure_fixate_field_string (output, "compression", string);
-    else
-      gst_structure_set (output, "compression", G_TYPE_STRING, string, NULL);
   }
 }
 
@@ -1499,7 +1489,7 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * incaps, GstCaps * outcaps)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
-  GstStructure *input, *output;
+  GstStructure *input = NULL, *output = NULL;
 
   // Truncate and make the output caps writable.
   outcaps = gst_caps_truncate (outcaps);
@@ -1556,9 +1546,8 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     }
   }
 
-  // Remove compression field if caps do not contain memory:GBM feature.
-  if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
-    gst_structure_remove_field (output, "compression");
+  // Fixate any remaining fields to defalut values.
+  gst_structure_fixate (output);
 
   // Free the local copy of the input caps structure.
   gst_structure_free (input);
@@ -1610,7 +1599,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   blit.info = vtrans->ininfo;
 
   if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
-    gst_video_rectangle_to_quadrilateral (&(vtrans->crop), &(blit.source));
+    gst_video_quadrilateral_from_rectangle (&(blit.source), &(vtrans->crop));
     blit.mask |= GST_VCE_MASK_SOURCE;
   }
 
@@ -1688,19 +1677,23 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
       break;
     case PROP_BACKEND_PARAM:
     {
+      const gchar *string = g_value_get_string (value);
       GValue structure = G_VALUE_INIT;
 
       g_value_init (&structure, GST_TYPE_STRUCTURE);
 
-      if (!gst_parse_string_property_value (value, &structure)) {
-        GST_ERROR_OBJECT (vtrans, "Failed to parse backend paramters!");
+      if (g_file_test (string, G_FILE_TEST_IS_REGULAR) &&
+          !gst_value_deserialize_file (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize file!");
+        break;
+      } else if (!gst_value_deserialize (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize string!");
         break;
       }
 
-      if (vtrans->backendparam != NULL)
-        gst_structure_free (vtrans->backendparam);
-
+      g_clear_pointer (&vtrans->backendparam, gst_structure_free);
       vtrans->backendparam = GST_STRUCTURE (g_value_dup_boxed (&structure));
+
       g_value_unset (&structure);
       break;
     }

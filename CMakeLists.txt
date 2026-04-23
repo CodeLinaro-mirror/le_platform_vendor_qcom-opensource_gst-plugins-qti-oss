@@ -65,6 +65,7 @@ option(ENABLE_GST_PLUGIN_VTRANSFORM "Enable gst-plugin-vtransform" ${ENABLE_GST_
 option(ENABLE_GST_PLUGIN_BATCH "Enable gst-plugin-batch" ${ENABLE_GST_SOFTWARE_PLUGINS})
 option(ENABLE_GST_PLUGIN_RTSPBIN "Enable gst-plugin-rtspbin" ${ENABLE_GST_SOFTWARE_PLUGINS})
 option(ENABLE_GST_PLUGIN_SOCKET "Enable gst-plugin-socket" ${ENABLE_GST_SOFTWARE_PLUGINS})
+option(ENABLE_GST_PLUGIN_URIDECODEBIN "Enable gst-plugin-uridecodebin" ${ENABLE_GST_SOFTWARE_PLUGINS})
 option(ENABLE_GST_PLUGIN_VIDEOTEMPLATE "Enable gst-plugin-videotemplate" ${ENABLE_GST_SOFTWARE_PLUGINS})
 
 # Sample Apps and Test Framework
@@ -114,7 +115,7 @@ else()
     pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 
     # Define path to gst-plugins-base tree for header includes
-    set(QTI_PLUGINS_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gst-plugin-base)
+    set(QTI_PLUGINS_BASE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gst-plugin-base)
 
     # Define the path to the common pkg-config template file used by all base libraries
     set(BASE_COMMON_PC_IN ${CMAKE_CURRENT_SOURCE_DIR}/gst-plugin-base/gst/common.pc.in)
@@ -170,6 +171,7 @@ add_plugin_if(ENABLE_GST_PLUGIN_VTRANSFORM      gst-plugin-vtransform)
 add_plugin_if(ENABLE_GST_PLUGIN_BATCH           gst-plugin-batch)
 add_plugin_if(ENABLE_GST_PLUGIN_RTSPBIN         gst-plugin-rtspbin)
 add_plugin_if(ENABLE_GST_PLUGIN_SOCKET          gst-plugin-socket)
+add_plugin_if(ENABLE_GST_PLUGIN_URIDECODEBIN    gst-plugin-uridecodebin)
 add_plugin_if(ENABLE_GST_PLUGIN_VIDEOTEMPLATE   gst-plugin-videotemplate)
 
 # Software Plugins (prop)
