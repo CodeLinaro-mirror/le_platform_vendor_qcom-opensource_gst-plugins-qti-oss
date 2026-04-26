@@ -192,7 +192,13 @@ gst_vesdeliver_class_init (GstVesDeliverClass * klass)
       g_param_spec_boolean ("buf-contiguous", "Buffer Contiguous",
           "If enabled, will allocate physical contiguous DMA memory for bitstream buffer, "
           "only work in lend dmabuf mode",
+#ifdef ENABLE_DRM_OPTIMIZATION
+          // Use non-contiguous memory by default when DRM optimization is enabled
+          FALSE,
+#else
+          // Use physically contiguous memory by default
           TRUE,
+#endif
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -240,7 +246,13 @@ gst_vesdeliver_init (GstVesDeliver * vesdeliver)
 {
   vesdeliver->secure = SECURE_DISABLE;
   vesdeliver->buf_recycle = TRUE;
+#ifdef ENABLE_DRM_OPTIMIZATION
+  // Use non-contiguous memory by default when DRM optimization is enabled
+  vesdeliver->buf_contiguous = FALSE;
+#else
+  // Use physically contiguous memory by default
   vesdeliver->buf_contiguous = TRUE;
+#endif
   vesdeliver->allocator = NULL;
   vesdeliver->secure_handle = NULL;
   vesdeliver->transform_caps = TRANSFORM_DISABLE;

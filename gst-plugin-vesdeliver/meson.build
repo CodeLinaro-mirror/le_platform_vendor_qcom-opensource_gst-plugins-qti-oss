@@ -55,6 +55,10 @@ if disable_secure_copy
   gstvesdeliver_c_args += ['-DDISABLE_SECURE_COPY']
 endif
 
+if get_option('drm-optimization')
+  gstvesdeliver_c_args += ['-DENABLE_DRM_OPTIMIZATION']
+endif
+
 gstvesdeliver = library('gstvesdeliver',
   gstvesdeliver_sources,
   c_args : [gstvesdeliver_c_args, '-Wall'],

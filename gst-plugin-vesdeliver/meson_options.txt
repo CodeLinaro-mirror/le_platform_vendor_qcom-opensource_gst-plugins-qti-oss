@@ -5,3 +5,4 @@ option('contiguous_mem_option', type : 'combo',
 option('disable_secure_copy', type : 'boolean', value : 'false',
     description: 'Disable secure copy since it is not supported')
 option('ASAN', type: 'boolean', value: false, description: 'Enable address sanitizers tool')
+option('drm-optimization', type : 'boolean', value : false, description: 'Use non-contiguous memory by default if DRM optimization enabled')
