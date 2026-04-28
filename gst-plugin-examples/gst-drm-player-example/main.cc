@@ -897,20 +897,33 @@ toggle_play (GstAppContext * appctx)
 }
 
 static gboolean
-decide_mp4 (gchar * pipeline, gchar ** manifest_url, gboolean * mp4_content)
+decide_local_file (gchar * pipeline, gchar ** manifest_url, gboolean * local_file)
 {
   gchar *str = g_strdup (pipeline);
 
   if (!split_string (&str, "!", 2, 0))
     return FALSE;
 
-  if (g_str_has_suffix (str, "mp4")) {
-    *mp4_content = TRUE;
+  // Determine if the pipeline reads from a local file by checking the file
+  // extension of the source element (the part before the first '!').
+  // Supported local container formats: MP4/MOV, MPEG-TS, MKV/WebM, AVI.
+  // Use a lowercase copy for case-insensitive suffix matching.
+  gchar *str_lower = g_ascii_strdown (str, -1);
+  if (g_str_has_suffix (str_lower, ".mp4")  ||
+      g_str_has_suffix (str_lower, ".mov")  ||
+      g_str_has_suffix (str_lower, ".ts")   ||
+      g_str_has_suffix (str_lower, ".mkv")  ||
+      g_str_has_suffix (str_lower, ".webm") ||
+      g_str_has_suffix (str_lower, ".avi")) {
+    *local_file = TRUE;
+    g_free (str_lower);
     g_free (str);
     return TRUE;
   }
+  g_free (str_lower);
 
-  // Parse the string to get manifest url.
+  // Not a local file; treat the source element as a remote manifest URL
+  // (DASH or HLS) and extract the URL from the element property string.
   if (!split_string (&str, "=", 2, 1))
     return FALSE;
 
@@ -1129,19 +1142,19 @@ main (gint argc, gchar *argv[])
   GThread *mthread = NULL;
   GError *err = NULL;
   gchar **args = NULL;
-  gchar *mp4_pro_header = NULL, *mp4_wv_pssh = NULL, *header = NULL, *manifest_url = NULL;
+  gchar *pro_header_arg = NULL, *wv_pssh_arg = NULL, *header = NULL, *manifest_url = NULL;
   DrmLicense license = LICENSE_INVALID;
   guint bus_watch_id = 0, intrpt_watch_id = 0, stdin_watch_id = 0;
   gint status = -1;
-  gboolean mp4_content = FALSE;
+  gboolean local_file = FALSE;
 
   gst_init (&argc, &argv);
 
   GOptionEntry options[] = {
-      {"pro-header", 'p', 0, G_OPTION_ARG_STRING, &mp4_pro_header,
-          "MP4 content PlayReady PRO header (base64 encoded)", NULL},
-      {"widevine-pssh", 'w', 0, G_OPTION_ARG_STRING, &mp4_wv_pssh,
-          "MP4 content Widevine complete PSSH box (base64 encoded)", NULL},
+      {"pro-header", 'p', 0, G_OPTION_ARG_STRING, &pro_header_arg,
+          "Local file PlayReady PRO header (base64 encoded)", NULL},
+      {"widevine-pssh", 'w', 0, G_OPTION_ARG_STRING, &wv_pssh_arg,
+          "Local file Widevine complete PSSH box (base64 encoded)", NULL},
       {G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY, &args, NULL},
       {NULL}
   };
@@ -1173,43 +1186,44 @@ main (gint argc, gchar *argv[])
     goto exit;
   }
 
-  // Parse args to decide whether it's an MP4 content.
-  if (!decide_mp4 (*args, &manifest_url, &mp4_content)) {
+  // Determine whether the pipeline reads from a local file or streams from
+  // a remote manifest URL (DASH/HLS).
+  if (!decide_local_file (*args, &manifest_url, &local_file)) {
     g_print ("Erroneous pipeline!\n");
     goto exit;
   }
 
-  // If MP4 content is provided, either a PlayReady PRO header or a Widevine
-  // PSSH must be supplied.
-  if (mp4_content) {
-    if (mp4_pro_header != NULL && mp4_wv_pssh != NULL) {
+  // For local file playback, a DRM header must be supplied explicitly via
+  // command-line options, since the file itself is not parsed for DRM info.
+  if (local_file) {
+    if (pro_header_arg != NULL && wv_pssh_arg != NULL) {
       g_print ("Please provide only one of --pro-header or --widevine-pssh.\n");
       goto exit;
-    } else if (mp4_pro_header != NULL) {
+    } else if (pro_header_arg != NULL) {
       license = LICENSE_PLAYREADY;
-      header = g_strdup (mp4_pro_header);
-    } else if (mp4_wv_pssh != NULL) {
+      header = g_strdup (pro_header_arg);
+    } else if (wv_pssh_arg != NULL) {
 #ifdef ENABLE_WIDEVINE
       license = LICENSE_WIDEVINE;
-      header = g_strdup (mp4_wv_pssh);
+      header = g_strdup (wv_pssh_arg);
 #else
       g_print ("Widevine CDM libs not present, can't proceed!\n");
       goto exit;
 #endif
     } else {
-      g_print ("MP4 content requires either --pro-header (PlayReady) or "
+      g_print ("Local file content requires either --pro-header (PlayReady) or "
           "--widevine-pssh (Widevine).\n");
       g_print ("\nFor help: gst-drm-player-example [-h | --help]\n\n");
       goto exit;
     }
   }
 
-  // Download manifest from the given url using libcurl.
-  if (!mp4_content && fetch_manifest (manifest_url) != CURLE_OK)
+  // Download manifest from the given URL using libcurl.
+  if (!local_file && fetch_manifest (manifest_url) != CURLE_OK)
     goto exit;
 
-  // Parse manifest to detect license type and get license header.
-  if (!mp4_content &&
+  // Parse manifest to detect license type and extract the DRM header.
+  if (!local_file &&
       ((license = parse_manifest (&header)) == LICENSE_INVALID)) {
     g_printerr ("ERROR: Invalid license! Can't proceed...\n");
     goto exit;
@@ -1280,8 +1294,8 @@ main (gint argc, gchar *argv[])
 
 exit:
   gst_app_context_free (appctx);
-  g_free (mp4_pro_header);
-  g_free (mp4_wv_pssh);
+  g_free (pro_header_arg);
+  g_free (wv_pssh_arg);
   g_free (manifest_url);
 
   gst_deinit ();
