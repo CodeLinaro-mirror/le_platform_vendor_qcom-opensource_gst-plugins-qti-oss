@@ -125,6 +125,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2RealTimePriorityTuning::PARAM_TYPE },
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING,
       C2StreamColorAspectsTuning::output::PARAM_TYPE },
+  { GST_C2_PARAM_COLOR_ASPECTS_INFO,
+      C2StreamColorAspectsInfo::input::PARAM_TYPE },
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA,
       C2StreamHdrStaticInfo::output::PARAM_TYPE },
@@ -163,6 +165,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING"},
   { GST_C2_PARAM_PRIORITY, "PRIORITY"},
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
+  { GST_C2_PARAM_COLOR_ASPECTS_INFO, "COLOR_ASPECTS_INFO" },
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
@@ -723,6 +726,21 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
     case GST_C2_PARAM_COLOR_ASPECTS_TUNING: {
       C2StreamColorAspectsTuning::output coloraspects;
+      GstVideoColorimetry* color =
+          reinterpret_cast<GstVideoColorimetry*>(payload);
+      coloraspects.primaries =
+           static_cast<C2Color::primaries_t>(kColorPrimariesMap.at(color->primaries));
+      coloraspects.transfer =
+           static_cast<C2Color::transfer_t>(kColorTransferMap.at(color->transfer));
+      coloraspects.matrix =
+           static_cast<C2Color::matrix_t>(kColorMatrixMap.at(color->matrix));
+      coloraspects.range =
+           static_cast<C2Color::range_t>(kColorRangeMap.at(color->range));
+      c2param = C2Param::Copy (coloraspects);
+      break;
+    }
+    case GST_C2_PARAM_COLOR_ASPECTS_INFO: {
+      C2StreamColorAspectsInfo::input coloraspects;
       GstVideoColorimetry* color =
           reinterpret_cast<GstVideoColorimetry*>(payload);
       coloraspects.primaries =
