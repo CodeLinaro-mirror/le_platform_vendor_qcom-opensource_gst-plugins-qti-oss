@@ -336,6 +336,19 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
+    GST_DEBUG_OBJECT (c2venc,
+      "Color aspects (primaries %u, matrix %u, transfer %u, range %u)",
+      (guint) info->colorimetry.primaries, (guint) info->colorimetry.matrix,
+      (guint) info->colorimetry.transfer, (guint) info->colorimetry.range);
+
+  /* Set color aspects info for actual encoding */
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_COLOR_ASPECTS_INFO, GPOINTER_CAST (&info->colorimetry));
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to set Color Aspects Info parameter!");
+    return FALSE;
+  }
+
   if (c2venc->priority < DEFAULT_PROP_PRIORITY) {
     success = gst_c2_engine_set_parameter (c2venc->engine,
         GST_C2_PARAM_PRIORITY, GPOINTER_CAST (&(c2venc->priority)));
