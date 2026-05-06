@@ -8,9 +8,6 @@ include_directories(
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -55,7 +52,7 @@ target_include_directories(${GST_QTI_ML_META_PARSER} PUBLIC
 )
 
 target_compile_definitions(${GST_QTI_ML_META_PARSER} PRIVATE
-  GST_PARSER_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/gstreamer-1.0/mlmetaparser/modules"
+  GST_PARSER_MODULES_DIR="${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/imsdk/qtimlmetaparser/modules"
 )
 
 target_link_libraries(${GST_QTI_ML_META_PARSER} PRIVATE

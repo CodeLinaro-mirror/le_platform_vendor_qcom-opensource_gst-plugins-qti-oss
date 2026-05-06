@@ -138,7 +138,7 @@ gst_appsrc_need_data (GstElement *appsrc, guint size, gpointer userdata)
   GST_BUFFER_OFFSET (buffer) = -1;
   GST_BUFFER_OFFSET_END (buffer) = -1;
 
-  GST_DEBUG_OBJECT (sinkpad, "Push buffer timestamp - %ld",
+  GST_DEBUG_OBJECT (sinkpad, "Push buffer timestamp - %" G_GINT64_FORMAT,
       GST_BUFFER_PTS (buffer));
 
   g_signal_emit_by_name (sinkpad->appsrc, "push-buffer", buffer, &ret);
@@ -222,6 +222,7 @@ static void
 gst_rtsp_bin_deinit_server (GstRtspBin * rtspbin)
 {
   GstRTSPMountPoints *mounts;
+  GList *list = NULL;
 
   GST_INFO_OBJECT (rtspbin, "Disconnecting existing clients");
 
@@ -231,8 +232,10 @@ gst_rtsp_bin_deinit_server (GstRtspBin * rtspbin)
   g_object_unref (mounts);
 
   // Filter existing clients and remove them
-  gst_rtsp_server_client_filter (rtspbin->server,
+  list = gst_rtsp_server_client_filter (rtspbin->server,
       gst_rtsp_bin_client_filter, NULL);
+  if (list)
+    GST_WARNING_OBJECT (rtspbin, "Failed to shut down all clients");
 
   if (rtspbin->server) {
     g_clear_pointer (&(rtspbin->server), gst_object_unref);

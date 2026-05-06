@@ -6,9 +6,6 @@ project(GST_PLUGIN_QTI_OSS_FDTRANSFER
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -34,7 +31,7 @@ add_definitions(-DHAVE_CONFIG_H)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
 
 # GStreamer source plugin.
-set(GST_QTI_SOCKETSRC qtisocketsrc)
+set(GST_QTI_SOCKETSRC gstqtisocketsrc)
 
 add_library(${GST_QTI_SOCKETSRC} SHARED
   qtisocketsrc.c
@@ -45,10 +42,6 @@ target_include_directories(${GST_QTI_SOCKETSRC} PUBLIC
   ${GST_INCLUDE_DIRS}
   ${GST_QCOM_VIDEO_INCLUDE_DIRS}
   ${GST_QCOM_ML_INCLUDE_DIRS}
-)
-
-target_include_directories(${GST_QTI_SOCKETSRC} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include
 )
 
 target_link_libraries(${GST_QTI_SOCKETSRC} PRIVATE
@@ -68,7 +61,7 @@ install(
 )
 
 # GStreamer sink plugin.
-set(GST_QTI_SOCKETSINK qtisocketsink)
+set(GST_QTI_SOCKETSINK gstqtisocketsink)
 
 add_library(${GST_QTI_SOCKETSINK} SHARED
   qtisocketsink.c
@@ -78,10 +71,6 @@ add_library(${GST_QTI_SOCKETSINK} SHARED
 target_include_directories(${GST_QTI_SOCKETSINK} PUBLIC
   ${GST_INCLUDE_DIRS}
   ${GST_PLUGIN_BASE_DIR}
-)
-
-target_include_directories(${GST_QTI_SOCKETSINK} PRIVATE
-  ${KERNEL_BUILDDIR}/usr/include
 )
 
 target_link_libraries(${GST_QTI_SOCKETSINK} PRIVATE
