@@ -12,7 +12,7 @@
 #include "gstmempool.h"
 
 #define GST_CAT_DEFAULT decryptor_debug
-GST_DEBUG_CATEGORY_STATIC (decryptor_debug);
+GST_DEBUG_CATEGORY (decryptor_debug);
 
 #define gst_drm_decryptor_parent_class parent_class
 G_DEFINE_TYPE (GstDrmDecryptor, gst_drm_decryptor, GST_TYPE_ELEMENT);

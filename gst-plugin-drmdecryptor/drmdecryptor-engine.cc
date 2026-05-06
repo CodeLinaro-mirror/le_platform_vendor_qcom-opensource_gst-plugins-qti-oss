@@ -14,7 +14,8 @@
 
 #include <media/hardware/CryptoAPI.h>
 
-#define GST_CAT_DEFAULT           gst_drm_decryptor_engine_debug_category ()
+GST_DEBUG_CATEGORY_EXTERN (decryptor_debug);
+#define GST_CAT_DEFAULT decryptor_debug
 
 #define SUBSAMPLE_INFO_LEN        6
 #define CLEAR_BYTES_SIZE          2
@@ -29,18 +30,6 @@
     GST_ERROR (__VA_ARGS__); \
     return (value); \
   } \
-}
-
-static GstDebugCategory *
-gst_drm_decryptor_engine_debug_category (void) {
-  static gsize catonce = 0;
-
-  if (g_once_init_enter (&catonce)) {
-    gsize catdone = (gsize) _gst_debug_category_new ("qtidrmdecryptor",
-        0, "DRM Decryptor Engine");
-    g_once_init_leave (&catonce, catdone);
-  }
-  return (GstDebugCategory *)catonce;
 }
 
 struct GstDrmPREngine : GstDrmDecryptorEngine {
@@ -158,7 +147,7 @@ GstDrmPREngine::drm_plugin_init (void *session_id, void* instance)
   GST_RETURN_VAL_IF_FAIL (status == 0, FALSE,
       "DRM Create Crypto Plugin failed with error: %ld", status);
 
-  GST_INFO_OBJECT (this, "PlayReady DRM plugin initialized !");
+  GST_INFO ("PlayReady DRM plugin initialized !");
 
   return TRUE;
 }
@@ -206,7 +195,7 @@ GstDrmPREngine::decrypt (gboolean secure, GstMapInfo keyid_map_info,
   if (decrypt_size != inbuff_map_info.size)
     status = -1;
 
-  GST_INFO_OBJECT (this, "Decrypted buffer size= %zu bytes, input buffer "
+  GST_INFO ("Decrypted buffer size= %zu bytes, input buffer "
       "size= %zu bytes", decrypt_size, inbuff_map_info.size);
 
   g_free (subsample);
@@ -277,7 +266,7 @@ GstDrmWVEngine::drm_plugin_init (void *session_id, void* instance)
   GST_RETURN_VAL_IF_FAIL (drm_plugin != NULL, FALSE,
       "Widevine CDM instance is null");
 
-  GST_INFO_OBJECT (this, "Widevine DRM plugin initialized !");
+  GST_INFO ("Widevine DRM plugin initialized !");
 
   return TRUE;
 }
@@ -443,7 +432,7 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
     gst_structure_get_uint (pmeta->info, "subsample_count", &subsample_count);
 
     if (!is_encrypted) {
-      GST_DEBUG_OBJECT (engine, "GstProtectionMeta present but encrypted=false, "
+      GST_DEBUG ("GstProtectionMeta present but encrypted=false, "
           "treating as clear content");
       is_clear = TRUE;
       subsample_count = 1;
@@ -481,11 +470,11 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
         if (has_crypt && has_skip) {
           engine->encrypt_blocks = (guint32) crypt_byte_block;
           engine->skip_blocks = (guint32) skip_byte_block;
-          GST_DEBUG_OBJECT (engine, "CBCS pattern from metadata: "
+          GST_DEBUG ("CBCS pattern from metadata: "
               "encrypt_blocks=%u, skip_blocks=%u",
               engine->encrypt_blocks, engine->skip_blocks);
         } else {
-          GST_WARNING_OBJECT (engine, "CBCS pattern fields missing from "
+          GST_WARNING ("CBCS pattern fields missing from "
               "protection metadata (crypt_byte_block=%s, skip_byte_block=%s), "
               "using defaults: encrypt_blocks=%u, skip_blocks=%u",
               has_crypt ? "found" : "missing",
@@ -495,7 +484,7 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
       }
     }
   } else {
-    GST_WARNING_OBJECT (engine, "No protection metadata found! Passing data as "
+    GST_WARNING ("No protection metadata found! Passing data as "
         "clear content");
     is_clear = TRUE;
     subsample_count = 1;
@@ -514,7 +503,7 @@ gst_drm_decryptor_engine_execute (GstDrmDecryptorEngine* engine,
   gint status = engine->decrypt (secure, keyid_map_info, inbuff_map_info,
       subsample_map_info, subsample_count, iv_arr, nh, is_clear);
   if (status != 0)
-    GST_ERROR_OBJECT (engine, "Decryption failed with error: %d", status);
+    GST_ERROR ("Decryption failed with error: %d", status);
 
   gst_buffer_unmap (in_buffer, &inbuff_map_info);
   if (pmeta) {
