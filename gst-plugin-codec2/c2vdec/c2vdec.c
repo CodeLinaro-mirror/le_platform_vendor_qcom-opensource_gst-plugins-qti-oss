@@ -634,7 +634,6 @@ gst_c2_vdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     return GST_FLOW_ERROR;
   }
 
-  gst_video_codec_frame_unref (frame);
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
   GST_TRACE_OBJECT (c2vdec, "Queued %" GST_PTR_FORMAT, frame->input_buffer);
