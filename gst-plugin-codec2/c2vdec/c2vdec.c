@@ -244,6 +244,14 @@ gst_c2_vdec_event_handler (guint type, gpointer payload, gpointer userdata)
   } else if (type == GST_C2_EVENT_ERROR) {
     guint32 error = *((guint32*) payload);
     GST_ERROR_OBJECT (c2vdec, "Received engine ERROR: '%u'", error);
+    GST_ELEMENT_ERROR (c2vdec, STREAM, DECODE,
+        ("Hardware decoder error"), ("Codec2 error code: %u", error));
+  } else if (type == GST_C2_EVENT_DROP) {
+    guint64 index = *((guint64*) payload);
+    GstVideoCodecFrame *frame = gst_video_decoder_get_frame (
+        GST_VIDEO_DECODER (c2vdec), index);
+    if (frame)
+      gst_video_decoder_drop_frame (GST_VIDEO_DECODER (c2vdec), frame);
   }
 }
 
@@ -257,6 +265,12 @@ gst_c2_vdec_buffer_available (GstBuffer * buffer, gpointer userdata)
 
   // Get the frame index from the buffer offset field.
   index = GST_BUFFER_OFFSET (buffer);
+
+  if (g_atomic_int_get (&c2vdec->flushing) ||
+      !gst_pad_is_active (GST_VIDEO_DECODER_SRC_PAD (c2vdec))) {
+    gst_buffer_unref (buffer);
+    return;
+  }
 
   frame = gst_video_decoder_get_frame (GST_VIDEO_DECODER (c2vdec), index);
   if (frame == NULL) {
@@ -308,6 +322,8 @@ gst_c2_vdec_stop (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Stop engine");
 
+  g_atomic_int_set (&c2vdec->flushing, TRUE);
+
   // Properly clean up the output state
   if (c2vdec->outstate) {
     gst_video_codec_state_unref (c2vdec->outstate);
@@ -337,6 +353,8 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   GstC2VDecoder *c2vdec = GST_C2_VDEC (decoder);
   GST_DEBUG_OBJECT (c2vdec, "Flush engine");
 
+  g_atomic_int_set (&c2vdec->flushing, TRUE);
+
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
   if ((c2vdec->engine != NULL) && !gst_c2_engine_flush (c2vdec->engine)) {
@@ -345,6 +363,8 @@ gst_c2_vdec_flush (GstVideoDecoder * decoder)
   }
 
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+
+  g_atomic_int_set (&c2vdec->flushing, FALSE);
 
   GST_DEBUG_OBJECT (c2vdec, "Engine flushed");
   return TRUE;
@@ -361,17 +381,22 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   const gchar *string = NULL;
   gint width = 0, height = 0;
   GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
+  gboolean resolution_changed = FALSE;
+  gboolean format_changed = FALSE;
   gboolean success = FALSE;
+  gboolean previous_isubwc = c2vdec->isubwc;
 
   GST_DEBUG_OBJECT (c2vdec, "Setting new caps %" GST_PTR_FORMAT, state->caps);
 
   caps = gst_pad_get_allowed_caps (GST_VIDEO_DECODER_SRC_PAD (c2vdec));
 
-  structure = gst_caps_get_structure (caps, 0);
-  c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
+  if (caps != NULL) {
+    structure = gst_caps_get_structure (caps, 0);
+    c2vdec->isubwc = gst_caps_has_compression (caps, "ubwc");
 
-  if ((string = gst_structure_get_string (structure, "format")) != NULL)
-    format = gst_video_format_from_string (string);
+    if ((string = gst_structure_get_string (structure, "format")) != NULL)
+      format = gst_video_format_from_string (string);
+  }
 
   if ((caps != NULL) && !gst_caps_is_empty (caps) && gst_caps_is_fixed (caps)) {
     success = (format != GST_VIDEO_FORMAT_UNKNOWN) ? TRUE : FALSE;
@@ -394,36 +419,65 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     return FALSE;
   }
 
-  if (c2vdec->outstate &&
-      (width != c2vdec->outstate->info.width ||
-          height != c2vdec->outstate->info.height)) {
+  resolution_changed = c2vdec->outstate &&
+      (width != c2vdec->outstate->info.width || height != c2vdec->outstate->info.height);
+
+  format_changed = c2vdec->outstate &&
+      (format != c2vdec->outstate->info.finfo->format ||
+      c2vdec->isubwc != previous_isubwc);
+
+  /*
+   * Qualcomm's proprietary codec2 backend currently trips the VIDC state
+   * machine if we keep one decoder instance alive across in-stream
+   * resolution-only changes. Work around that by draining downstream and
+   * fully recreating the decoder component for the new dimensions instead of
+   * attempting a live in-place reconfigure.
+  */
+  if (resolution_changed && !format_changed) {
     GstQuery *query = gst_query_new_drain ();
-    gboolean success;
+    gboolean drain_success = FALSE;
 
-    GST_INFO_OBJECT (c2vdec, "Resolution changed from %dx%d to %dx%d",
-        c2vdec->outstate->info.width, c2vdec->outstate->info.height, width, height);
-
-    success = gst_pad_peer_query (decoder->srcpad, query);
+    drain_success = gst_pad_peer_query (decoder->srcpad, query);
     gst_query_unref (query);
 
-    if (!success) {
-      GST_ERROR_OBJECT (c2vdec, "Drain query failed !");
+    if (!drain_success) {
+      GST_ERROR_OBJECT (c2vdec, "Drain query failed during deferred resolution change!");
       return FALSE;
     }
+
+    GST_INFO_OBJECT (c2vdec,
+        "Restarting decoder for resolution change from %dx%d to %dx%d",
+        c2vdec->outstate->info.width, c2vdec->outstate->info.height,
+        width, height);
 
     // This mutex was locked in the base class before call to this function.
     // Needs to be unlocked when waiting for any pending buffers during drain.
+    // and decoder teardown.
     GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
 
-    if ((c2vdec->engine != NULL) && !gst_c2_engine_drain (c2vdec->engine, FALSE)) {
-      GST_ERROR_OBJECT (c2vdec, "Failed to Drain engine");
-      return FALSE;
-    }
+    if (c2vdec->engine != NULL) {
+      if (!gst_c2_engine_drain (c2vdec->engine, FALSE)) {
+        if (caps != NULL)
+          gst_caps_unref (caps);
+        GST_ERROR_OBJECT (c2vdec, "Failed to drain engine before decoder restart");
+        GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+        return FALSE;
+      }
 
+      if (!gst_c2_engine_stop (c2vdec->engine)) {
+        if (caps != NULL)
+          gst_caps_unref (caps);
+        GST_ERROR_OBJECT (c2vdec, "Failed to stop engine before decoder restart");
+        GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+        return FALSE;
+      }
+
+      g_clear_pointer (&(c2vdec->engine), gst_c2_engine_free);
+    }
     GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   }
 
-  if (c2vdec->outstate && (format != c2vdec->outstate->info.finfo->format)) {
+  if (format_changed) {
     GST_INFO_OBJECT (c2vdec, "Format changed from %s to %s",
         gst_video_format_to_string (c2vdec->outstate->info.finfo->format),
         gst_video_format_to_string (format));
@@ -432,6 +486,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
     if ((c2vdec->engine != NULL) && !gst_c2_engine_stop (c2vdec->engine)) {
       GST_ERROR_OBJECT (c2vdec, "Failed to stop engine");
+      GST_VIDEO_DECODER_STREAM_LOCK (decoder);
       return FALSE;
     }
 
@@ -540,6 +595,12 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     g_return_val_if_fail (c2vdec->engine != NULL, FALSE);
   }
 
+  // Free immediately after engine takes its own copy:
+  if (c2vdec->secure) {
+    g_free (name);
+    name = NULL;
+  }
+
   if (!gst_c2_vdec_setup_parameters (c2vdec, state, c2vdec->outstate)) {
     GST_ERROR_OBJECT (c2vdec, "Failed to setup parameters!");
     return FALSE;
@@ -549,9 +610,6 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     GST_ERROR_OBJECT (c2vdec, "Failed to start engine!");
     return FALSE;
   }
-
-  if (c2vdec->secure)
-    g_free (name);
 
   return TRUE;
 }
@@ -571,9 +629,12 @@ gst_c2_vdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   if (!gst_c2_engine_queue (c2vdec->engine, frame)) {
     GST_ERROR_OBJECT(c2vdec, "Failed to send input frame to be emptied!");
+    gst_video_decoder_release_frame (decoder, frame);
+    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
     return GST_FLOW_ERROR;
   }
 
+  gst_video_codec_frame_unref (frame);
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
   GST_TRACE_OBJECT (c2vdec, "Queued %" GST_PTR_FORMAT, frame->input_buffer);

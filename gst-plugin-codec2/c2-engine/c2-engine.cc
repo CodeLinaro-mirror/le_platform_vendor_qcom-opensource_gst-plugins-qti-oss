@@ -57,8 +57,12 @@ static G_DEFINE_QUARK (GstC2BufferQuark, gst_c2_buffer_qdata);
 #define GST_C2_ENGINE_DECREMENT_PENDING_WORK(engine) \
 { \
   g_mutex_lock (&engine->lock); \
-  engine->n_pending--; \
-  g_cond_broadcast (&engine->workdone); \
+  if (engine->n_pending > 0) { \
+    engine->n_pending--; \
+    g_cond_broadcast (&engine->workdone); \
+  } else { \
+    GST_WARNING ("Skipping pending-work decrement at zero"); \
+  } \
   g_mutex_unlock (&engine->lock); \
 }
 
@@ -70,14 +74,21 @@ static G_DEFINE_QUARK (GstC2BufferQuark, gst_c2_buffer_qdata);
   g_mutex_unlock (&engine->lock); \
 }
 
+#define GST_C2_ENGINE_DRAIN_TIMEOUT_US (2 * G_USEC_PER_SEC)
+
 #define GST_C2_ENGINE_CHECK_AND_WAIT_PENDING_WORK(engine, max) \
 { \
   g_mutex_lock (&engine->lock); \
   \
+  gint64 deadline = g_get_monotonic_time () + GST_C2_ENGINE_DRAIN_TIMEOUT_US; \
   while (engine->n_pending > max) { \
     GST_LOG ("Waiting until pending frames are equal of below %u, current " \
         "pending works: %u", max, engine->n_pending); \
-    g_cond_wait (&engine->workdone, &engine->lock); \
+    if (!g_cond_wait_until (&engine->workdone, &engine->lock, deadline)) { \
+      GST_WARNING ("Timed out waiting for pending work to complete " \
+          "(pending: %u, max: %u)", engine->n_pending, max); \
+      break; \
+    } \
   } \
   g_mutex_unlock (&engine->lock); \
 }
@@ -107,6 +118,8 @@ struct _GstC2Engine {
 
   GstC2Callbacks  *callbacks;
   gpointer        userdata;
+  /// Cached FD allocator for decoded frames.
+  GstAllocator    *fd_allocator;
 };
 
 static GstDebugCategory *
@@ -160,10 +173,16 @@ class GstC2Notifier : public IC2Notifier {
         GST_C2_ENGINE_ZERO_OUT_PENDING_WORK (engine_);
         type = GST_C2_EVENT_EOS;
         break;
+      case C2EventType::kDrop:
+        type = GST_C2_EVENT_DROP;
+        break;
       default:
         GST_WARNING ("Unknown event '%u'!", static_cast<uint32_t>(event));
         return;
     }
+
+    if (event == C2EventType::kDrop)
+      GST_C2_ENGINE_DECREMENT_PENDING_WORK (engine_);
 
     engine_->callbacks->event (type, payload, engine_->userdata);
   }
@@ -229,22 +248,16 @@ class GstC2Notifier : public IC2Notifier {
       return;
     }
 
-    if ((allocator = gst_fd_allocator_new ()) == NULL) {
-      GST_ERROR ("Failed to create FD allocator!");
-      gst_buffer_unref (buffer);
-      return;
-    }
+    allocator = engine_->fd_allocator;
 
     if ((memory = gst_fd_allocator_alloc (allocator, fd, size,
             GST_FD_MEMORY_FLAG_DONT_CLOSE)) == NULL) {
       GST_ERROR ("Failed to create memory block!");
       gst_buffer_unref (buffer);
-      gst_object_unref (allocator);
       return;
     }
 
     gst_buffer_append_memory (buffer, memory);
-    gst_object_unref (allocator);
 
     // Check whetehr this is a key/sync frame.
     std::shared_ptr<const C2Info> c2info =
@@ -327,6 +340,8 @@ gst_c2_engine_new (const gchar * name, GstC2Callbacks * callbacks,
 
   engine->n_pending = 0;
 
+  engine->fd_allocator = gst_fd_allocator_new ();
+
   GST_INFO ("Created C2 engine: %p", engine);
   return engine;
 }
@@ -335,6 +350,9 @@ void
 gst_c2_engine_free (GstC2Engine * engine)
 {
   GST_INFO ("Destroyed C2 engine: %p", engine);
+
+  if (engine->fd_allocator)
+    gst_object_unref (engine->fd_allocator);
 
   g_cond_clear (&engine->workdone);
   g_mutex_clear (&engine->lock);
@@ -538,12 +556,12 @@ gst_c2_engine_queue (GstC2Engine * engine, GstVideoCodecFrame * frame)
 
   try {
     c2module->Queue (c2buffer, settings, index, timestamp, flags);
+    GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);  // Only increment on success
     GST_DEBUG ("Queued buffer %p", buffer);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to queue frame, error: '%s'!", e.what());
     return FALSE;
   }
 
-  GST_C2_ENGINE_INCREMENT_PENDING_WORK (engine);
   return TRUE;
 }

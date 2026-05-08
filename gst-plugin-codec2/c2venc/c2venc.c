@@ -272,10 +272,19 @@ static gboolean
 gst_c2_venc_trigger_iframe (GstC2VEncoder * c2venc)
 {
   gboolean success = FALSE, enable = TRUE;
+  GstC2Engine* engine = c2venc->engine;
+
+  if (c2venc->engine == NULL) {
+    GST_WARNING_OBJECT (c2venc, "Engine not initialized, cannot trigger I-frame");
+    return FALSE;
+  }
 
   GST_DEBUG_OBJECT (c2venc, "Trigger I frame insertion");
 
-  success = gst_c2_engine_set_parameter (c2venc->engine,
+  if (!engine)
+    return FALSE;
+
+  success = gst_c2_engine_set_parameter (engine,
       GST_C2_PARAM_TRIGGER_SYNC_FRAME, GPOINTER_CAST (&enable));
   if (!success) {
     GST_ERROR_OBJECT (c2venc, "Failed to set sync frame parameter!");
@@ -623,8 +632,8 @@ gst_c2_venc_event_handler (guint type, gpointer payload, gpointer userdata)
   if (type == GST_C2_EVENT_EOS) {
     GST_DEBUG_OBJECT (c2venc, "Received engine EOS");
   } else if (type == GST_C2_EVENT_ERROR) {
-    gint32 error = *((gint32*) userdata);
-    GST_ERROR_OBJECT (c2venc, "Received engine ERROR: '%x'", error);
+    guint32 error = *((guint32*) payload);
+    GST_ERROR_OBJECT (c2venc, "Received engine ERROR: '%u'", error);
   }
 }
 
@@ -703,10 +712,9 @@ gst_c2_venc_buffer_available (GstBuffer * buffer, gpointer userdata)
     frame->output_buffer = buffer;
   }
 
-  gst_video_codec_frame_unref (frame);
-
   GST_TRACE_OBJECT (c2venc, "Encoded %" GST_PTR_FORMAT, buffer);
   ret = gst_video_encoder_finish_frame (GST_VIDEO_ENCODER (c2venc), frame);
+  gst_video_codec_frame_unref (frame);
 
   if (ret != GST_FLOW_OK) {
     GST_LOG_OBJECT (c2venc, "Failed to finish frame!");
@@ -995,6 +1003,7 @@ gst_c2_venc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   if (!gst_c2_engine_queue (c2venc->engine, frame)) {
     GST_ERROR_OBJECT(c2venc, "Failed to send input frame to be emptied!");
+    GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
     return GST_FLOW_ERROR;
   }
 
@@ -1017,6 +1026,7 @@ gst_c2_venc_finish (GstVideoEncoder * encoder)
 
   if (!gst_c2_engine_drain (c2venc->engine, TRUE)) {
     GST_ERROR_OBJECT (c2venc, "Failed to drain engine");
+    GST_VIDEO_ENCODER_STREAM_LOCK (encoder);
     return GST_FLOW_ERROR;
   }
 
@@ -1100,13 +1110,13 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_QUANT_P_FRAMES:
       c2venc->quant_init.p_frames = g_value_get_uint (value);
       c2venc->quant_init.p_frames_enable =
-          (c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_P_FRAMES) ?
+          (c2venc->quant_init.p_frames != DEFAULT_PROP_QUANT_P_FRAMES) ?
               TRUE : FALSE;
       break;
     case PROP_QUANT_B_FRAMES:
       c2venc->quant_init.b_frames = g_value_get_uint (value);
       c2venc->quant_init.b_frames_enable =
-          (c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_B_FRAMES) ?
+          (c2venc->quant_init.b_frames != DEFAULT_PROP_QUANT_B_FRAMES) ?
               TRUE : FALSE;
       break;
     case PROP_MIN_QP_I_FRAMES:

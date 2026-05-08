@@ -203,7 +203,7 @@ static const std::unordered_map<uint32_t, C2Config::level_t> kLevelMap = {
   { GST_C2_LEVEL_AVC_3_2,       C2Config::level_t::LEVEL_AVC_3_2 },
   { GST_C2_LEVEL_AVC_4,         C2Config::level_t::LEVEL_AVC_4 },
   { GST_C2_LEVEL_AVC_4_1,       C2Config::level_t::LEVEL_AVC_4_1 },
-  { GST_C2_LEVEL_AVC_4_1,       C2Config::level_t::LEVEL_AVC_4_2 },
+  { GST_C2_LEVEL_AVC_4_2,       C2Config::level_t::LEVEL_AVC_4_2 },
   { GST_C2_LEVEL_AVC_5,         C2Config::level_t::LEVEL_AVC_5 },
   { GST_C2_LEVEL_AVC_5_1,       C2Config::level_t::LEVEL_AVC_5_1 },
   { GST_C2_LEVEL_AVC_5_2,       C2Config::level_t::LEVEL_AVC_5_2 },
@@ -823,6 +823,10 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
 
       auto result = std::find_if(kRateCtrlMap.begin(), kRateCtrlMap.end(),
           [&](const auto& m) { return m.second == ratectrl->value; });
+      if (result == kRateCtrlMap.end()) {
+        GST_ERROR ("Unsupported C2 rate control value: %u", ratectrl->value);
+        return false;
+      }
 
       *(reinterpret_cast<GstC2RateControl*>(payload)) =
           static_cast<GstC2RateControl>(result->first);
@@ -853,6 +857,10 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
 
       auto result = std::find_if(kIntraRefreshMap.begin(), kIntraRefreshMap.end(),
           [&](const auto& m) { return m.second == irefresh->mode; });
+      if (result == kIntraRefreshMap.end()) {
+        GST_ERROR ("Unsupported C2 intra refresh mode: %u", irefresh->mode);
+        return false;
+      }
 
       reinterpret_cast<GstC2IntraRefresh*>(payload)->mode =
           static_cast<GstC2IRefreshMode>(result->first);

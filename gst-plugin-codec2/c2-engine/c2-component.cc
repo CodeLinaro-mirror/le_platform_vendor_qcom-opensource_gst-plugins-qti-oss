@@ -121,14 +121,14 @@ C2Module::C2Module (std::shared_ptr<C2Component>& component)
 C2Module::~C2Module () {
   c2_status_t status = component_->reset();
   if (status != C2_OK) {
-    throw Exception("Component[", interface_->getName().c_str(), "]: "
-        "reset failed, error ", status, "!");
+    fprintf(stderr, "C2Module::~C2Module: Component[%s]: reset failed, error %d\n",
+        interface_->getName().c_str(), status);
   }
 
   status = component_->release();
   if (status != C2_OK) {
-    throw Exception("Component[", interface_->getName().c_str(), "]: "
-        "release failed, error ", status, "!");
+    fprintf(stderr, "C2Module::~C2Module: Component[%s]: release failed, error %d\n",
+        interface_->getName().c_str(), status);
   }
 }
 
