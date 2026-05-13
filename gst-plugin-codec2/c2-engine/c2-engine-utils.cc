@@ -1260,6 +1260,10 @@ std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
 std::shared_ptr<C2Buffer> GstC2Utils::CreateBuffer(
     GstBuffer* buffer, std::shared_ptr<C2LinearBlock>& block) {
 
+  if (!block) {
+    GST_ERROR ("C2LinearBlock is NULL!");
+    return nullptr;
+  }
   C2WriteView view = block->map().get();
   if (view.error() != C2_OK) {
     GST_ERROR ("Failed to map C2 linear block, error %d !", view.error());
