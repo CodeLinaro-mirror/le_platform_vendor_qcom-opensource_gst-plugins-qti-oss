@@ -41,6 +41,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2StreamFrameRateInfo::input::PARAM_TYPE },
   { GST_C2_PARAM_OUT_FRAMERATE,
       C2StreamFrameRateInfo::output::PARAM_TYPE },
+  { GST_C2_PARAM_OPERATING_FRAMERATE,
+      C2OperatingRateTuning::PARAM_TYPE },
   { GST_C2_PARAM_RATE_CONTROL,
       C2StreamBitrateModeTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_PROFILE_LEVEL,
@@ -53,7 +55,7 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2StreamSyncFrameIntervalTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_INTRA_REFRESH_TUNING,
       C2StreamIntraRefreshTuning::output::PARAM_TYPE },
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_PARAM_INTRA_REFRESH_MODE,
       qc2::C2VideoIntraRefreshType::output::PARAM_TYPE },
 #endif // CODEC2_CONFIG_VERSION_MAJOR
@@ -85,6 +87,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::C2VideoPictureOrder::output::PARAM_TYPE },
   { GST_C2_PARAM_QP_INIT,
       qc2::C2VideoInitQPSetting::output::PARAM_TYPE },
+  { GST_C2_PARAM_CHROMA_QP_OFFSET,
+      qc2::C2VideoChromaQPOffset::output::PARAM_TYPE },
 #if (CODEC2_CONFIG_VERSION_MAJOR == 1)
   { GST_C2_PARAM_QP_RANGES,
       qc2::C2VideoQPRangeSetting::output::PARAM_TYPE },
@@ -94,6 +98,10 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
 #endif // CODEC2_CONFIG_VERSION_MAJOR
   { GST_C2_PARAM_ROI_ENCODE,
       qc2::QC2VideoROIRegionInfo::output::PARAM_TYPE },
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
+  { GST_C2_PARAM_ROI_MBMAP_INFO,
+      qc2::QC2VideoROIMbmapInfo::input::PARAM_TYPE },
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME,
       C2StreamRequestSyncFrameTuning::output::PARAM_TYPE },
   { GST_C2_PARAM_PRIORITY,
@@ -112,7 +120,7 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
 #if (CODEC2_CONFIG_VERSION_MINOR == 0)
   { GST_C2_PARAM_VUI_TIMING_INFO,
       qc2::QC2VideoVuiTimingInfo::output::PARAM_TYPE },
-#elif (CODEC2_CONFIG_VERSION_MINOR == 1)
+#elif (CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_PARAM_VUI_TIMING_INFO,
       qc2::C2VuiTimingInfo::output::PARAM_TYPE },
 #endif // CODEC2_CONFIG_VERSION_MINOR
@@ -145,10 +153,18 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       qc2::C2VideoMirrorTuning::input::PARAM_TYPE },
   { GST_C2_PARAM_VBV_DELAY,
       qc2::C2VBVDelayTuning::input::PARAM_TYPE },
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_PARAM_HDR_MODE,
       C2StreamHdrFormatInfo::output::PARAM_TYPE },
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
+  { GST_C2_PARAM_NAL_LENGTH_BITSTREAM,
+      qc2::C2VideoNalLengthBitStream::output::PARAM_TYPE },
+  { GST_C2_PARAM_BITRATE_BOOST_MARGIN,
+      qc2::C2VideoBitrateboostMargin::output::PARAM_TYPE },
+#if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
+  { GST_C2_PARAM_ENCODING_MODE,
+      qc2::C2VideoEncodingMode::output::PARAM_TYPE },
+#endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -159,6 +175,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_OUT_RESOLUTION, "OUT_RESOLUTION" },
   { GST_C2_PARAM_IN_FRAMERATE, "IN_FRAMERATE" },
   { GST_C2_PARAM_OUT_FRAMERATE, "OUT_FRAMERATE" },
+  { GST_C2_PARAM_OPERATING_FRAMERATE, "OPERATING_FRAMERATE" },
   { GST_C2_PARAM_RATE_CONTROL, "RATE_CONTROL" },
   { GST_C2_PARAM_PROFILE_LEVEL, "PROFILE_LEVEL" },
   { GST_C2_PARAM_BITRATE, "BITRATE" },
@@ -177,8 +194,10 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_PREPEND_HEADER_MODE, "PREPEND_HEADER_MODE" },
   { GST_C2_PARAM_ENABLE_PICTURE_ORDER, "ENABLE_PICTURE_ORDER" },
   { GST_C2_PARAM_QP_INIT, "QP_INIT" },
+  { GST_C2_PARAM_CHROMA_QP_OFFSET, "CHROMA_QP_OFFSET" },
   { GST_C2_PARAM_QP_RANGES, "QP_RANGES" },
   { GST_C2_PARAM_ROI_ENCODE, "ROI_ENCODE" },
+  { GST_C2_PARAM_ROI_MBMAP_INFO, "ROI_MBMAP_INFO" },
   { GST_C2_PARAM_TRIGGER_SYNC_FRAME, "TRIGGER_SYNC_FRAME" },
   { GST_C2_PARAM_NATIVE_RECORDING, "NATIVE_RECORDING" },
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING" },
@@ -204,9 +223,10 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_FLIP, "FLIP" },
   { GST_C2_PARAM_VBV_DELAY, "VBV_DELAY" },
   { GST_C2_PARAM_VUI_TIMING_INFO, "VUI_TIMING_INFO" },
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   { GST_C2_PARAM_HDR_MODE, "HDR_MODE" },
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+  { GST_C2_PARAM_BITRATE_BOOST_MARGIN, "BITRATE_BOOST_MARGIN" },
+  { GST_C2_PARAM_NAL_LENGTH_BITSTREAM, "NAL_LENGTH_BITSTREAM" },
+  { GST_C2_PARAM_ENCODING_MODE, "ENCODING_MODE"}
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -313,7 +333,7 @@ static const std::unordered_map<uint32_t, uint32_t> kRateCtrlMap = {
 // GST_C2_PARAM_INTRA_REFRESH_MODE parameter.
 static const std::unordered_map<uint32_t, uint32_t> kIntraRefreshMap = {
   { GST_C2_INTRA_REFRESH_DISABLED,  C2Config::INTRA_REFRESH_DISABLED },
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_INTRA_REFRESH_ARBITRARY, qc2::IntraRefreshMode::INTRA_REFRESH_RANDOM },
   { GST_C2_INTRA_REFRESH_CYCLIC,    qc2::IntraRefreshMode::INTRA_REFRESH_CYCLIC },
 #else
@@ -438,15 +458,25 @@ static const std::unordered_map<uint32_t, qc2::QCMirrorType> kFlipMap = {
   { GST_C2_FLIP_BOTH,       Qc2MirrorBoth },
 };
 
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
 // Map for the GST_C2_HDR_MODE parameter.
 static const std::unordered_map<uint32_t, uint32_t> kHdrMap = {
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
   { GST_C2_HDR_NONE,       C2Config::hdr_format_t::SDR },
   { GST_C2_HDR_HLG,        C2Config::hdr_format_t::HLG },
   { GST_C2_HDR_HDR10,      C2Config::hdr_format_t::HDR10 },
   { GST_C2_HDR_HDR10_PLUS, C2Config::hdr_format_t::HDR10_PLUS },
+#endif // CODEC2_CONFIG_VERSION_MAJOR
 };
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 2)
+// Map for the GstC2EncodingMode.
+static const std::unordered_map<uint32_t, qc2::QcEncodingMode> kEncodingModeMap = {
+  { GST_C2_ENCODING_MODE_DEFAULT,   QcDefault },
+  { GST_C2_ENCODING_MODE_PROSIGHT,  QcProsight },
+  { GST_C2_ENCODING_MODE_DEPTH,     QcDepth },
+  { GST_C2_ENCODING_MODE_LOOKAHEAD, QcLookahead },
+};
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 2)
 
 C2Param::Index GstC2Utils::ParamIndex(uint32_t type) {
 
@@ -609,6 +639,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_IN_RESOLUTION: {
       C2StreamPictureSizeInfo::input dimensions;
+
       dimensions.width = reinterpret_cast<GstC2Resolution*>(payload)->width;
       dimensions.height = reinterpret_cast<GstC2Resolution*>(payload)->height;
       c2param = C2Param::Copy(dimensions);
@@ -616,6 +647,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_OUT_RESOLUTION: {
       C2StreamPictureSizeInfo::output dimensions;
+
       dimensions.width = reinterpret_cast<GstC2Resolution*>(payload)->width;
       dimensions.height = reinterpret_cast<GstC2Resolution*>(payload)->height;
       c2param = C2Param::Copy(dimensions);
@@ -623,14 +655,23 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_IN_FRAMERATE: {
       C2StreamFrameRateInfo::input framerate;
+
       framerate.value = *(reinterpret_cast<gdouble*>(payload));
       c2param = C2Param::Copy(framerate);
       break;
     }
     case GST_C2_PARAM_OUT_FRAMERATE: {
       C2StreamFrameRateInfo::output framerate;
+
       framerate.value = *(reinterpret_cast<gdouble*>(payload));
       c2param = C2Param::Copy(framerate);
+      break;
+    }
+    case GST_C2_PARAM_OPERATING_FRAMERATE: {
+      C2OperatingRateTuning operatingrate;
+
+      operatingrate.value = *(reinterpret_cast<gdouble*>(payload));
+      c2param = C2Param::Copy(operatingrate);
       break;
     }
     case GST_C2_PARAM_PROFILE_LEVEL: {
@@ -658,6 +699,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_BITRATE: {
       C2StreamBitrateInfo::output bitrate;
+
       bitrate.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(bitrate);
       break;
@@ -675,6 +717,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_KEY_FRAME_INTERVAL: {
       C2StreamSyncFrameIntervalTuning::output keyframe;
+
       keyframe.value = *(reinterpret_cast<int64_t*>(payload));
       c2param = C2Param::Copy(keyframe);
       break;
@@ -689,7 +732,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(irefresh);
       break;
     }
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_INTRA_REFRESH_MODE: {
       qc2::C2VideoIntraRefreshType::output ir_type;
       uint32_t mode = *(reinterpret_cast<guint32*>(payload));
@@ -703,6 +746,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 #if (CODEC2_CONFIG_VERSION_MAJOR == 1)
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       qc2::C2StreamAdaptiveBPreconditions::output bpreconditions;
+
       bpreconditions.value = *(reinterpret_cast<gboolean*>(payload));
       c2param = C2Param::Copy(bpreconditions);
       break;
@@ -710,6 +754,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 #endif // CODEC2_CONFIG_VERSION_MAJOR
     case GST_C2_PARAM_NATIVE_RECORDING: {
       qc2::C2VideoNativeRecording::input native_recording;
+
       native_recording.value = *(reinterpret_cast<gboolean*>(payload));
       c2param = C2Param::Copy(native_recording);
       break;
@@ -750,18 +795,21 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_SLICE_MB: {
       qc2::C2VideoSliceSizeMBCount::output slice;
+
       slice.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(slice);
       break;
     }
     case GST_C2_PARAM_SLICE_BYTES: {
       qc2::C2VideoSliceSizeBytes::output slice;
+
       slice.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(slice);
       break;
     }
     case GST_C2_PARAM_NUM_LTR_FRAMES: {
       qc2::C2VideoLTRCountSetting::input ltr_frames;
+
       ltr_frames.count = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(ltr_frames);
       break;
@@ -806,13 +854,23 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_QP_INIT: {
       qc2::C2VideoInitQPSetting::output qpinit;
+
       qpinit.qpI = reinterpret_cast<GstC2QuantInit*>(payload)->i_frames;
       qpinit.qpIEnable = reinterpret_cast<GstC2QuantInit*>(payload)->i_frames_enable;
       qpinit.qpP = reinterpret_cast<GstC2QuantInit*>(payload)->p_frames;
       qpinit.qpPEnable = reinterpret_cast<GstC2QuantInit*>(payload)->p_frames_enable;
       qpinit.qpB = reinterpret_cast<GstC2QuantInit*>(payload)->b_frames;
       qpinit.qpBEnable = reinterpret_cast<GstC2QuantInit*>(payload)->b_frames_enable;
+
       c2param = C2Param::Copy(qpinit);
+      break;
+    }
+    case GST_C2_PARAM_CHROMA_QP_OFFSET: {
+      qc2::C2VideoChromaQPOffset::output qpoffset;
+      int32_t offset = *(reinterpret_cast<int32_t*>(payload));
+
+      qpoffset.value = ((offset << 8) & 0xFF00) | (offset & 0xFF);
+      c2param = C2Param::Copy(qpoffset);
       break;
     }
     case GST_C2_PARAM_QP_RANGES: {
@@ -889,6 +947,37 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(region);
       break;
     }
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
+    case GST_C2_PARAM_ROI_MBMAP_INFO: {
+      GstC2QuantMbmapInfo *mb_map =
+          reinterpret_cast<GstC2QuantMbmapInfo*>(payload);
+      // Config only case, alloc qp_bias_map size as 1
+      const uint32_t total_mbs = std::max<uint32_t>(1u, mb_map->total_mbs);
+      auto c2_mb_map = qc2::QC2VideoROIMbmapInfo::input::AllocUnique(
+          static_cast<unsigned long>(total_mbs));
+
+      c2_mb_map->m.enable = mb_map->enable;
+
+      // Only fill qp bias map for valid mbs(none config only case)
+      if (mb_map->enable && mb_map->total_mbs > 0 &&
+          mb_map->qp_bias_map != NULL) {
+        uint8_t *pdata =
+            reinterpret_cast<uint8_t *>(&(c2_mb_map->m.qp_bias_map[0]));
+        c2_mb_map->m.mb_side_length =
+            static_cast<int32_t>(mb_map->mb_side_length);
+
+        for (uint32_t i = 0; i < total_mbs; i++) {
+          int32_t src_qp = static_cast<int32_t>(
+              g_array_index(mb_map->qp_bias_map, gint8, i));
+          pdata[i] = static_cast<uint8_t>(src_qp + static_cast<int32_t>(
+              qc2::C2VideoROIMbmapInfoStruct::QP_DELTA_OFFSET));
+        }
+      }
+
+      c2param = C2Param::Copy(*c2_mb_map);
+      break;
+    }
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_TRIGGER_SYNC_FRAME: {
       C2StreamRequestSyncFrameTuning::output syncframe;
       gboolean enable = *(reinterpret_cast<gboolean*>(payload));
@@ -899,6 +988,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_PRIORITY: {
       C2RealTimePriorityTuning priority;
+
       priority.value = *(reinterpret_cast<int32_t*>(payload));
       c2param = C2Param::Copy(priority);
       break;
@@ -931,6 +1021,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       C2StreamColorAspectsTuning::output coloraspects;
       GstVideoColorimetry* color =
           reinterpret_cast<GstVideoColorimetry*>(payload);
+
       coloraspects.primaries =
            static_cast<C2Color::primaries_t>(kColorPrimariesMap.at(color->primaries));
       coloraspects.transfer =
@@ -944,14 +1035,15 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_LTR_MARK: {
       qc2::C2VideoLTRMarkTuning::input ltr_mark;
-      ltr_mark.frameid = *(reinterpret_cast<guint32*>(payload));
 
+      ltr_mark.frameid = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(ltr_mark);
       break;
     }
 #if (CODEC2_CONFIG_VERSION_MAJOR == 2)
     case GST_C2_PARAM_REPORT_AVG_QP: {
       C2AndroidStreamAverageBlockQuantizationInfo::output avg_qp;
+
       avg_qp.value = *(reinterpret_cast<int32_t*>(payload));
       c2param = C2Param::Copy(avg_qp);
       break;
@@ -959,9 +1051,10 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     case GST_C2_PARAM_VUI_TIMING_INFO: {
 #if (CODEC2_CONFIG_VERSION_MINOR == 0)
       qc2::QC2VideoVuiTimingInfo::output timing;
-#elif (CODEC2_CONFIG_VERSION_MINOR == 1)
+#elif (CODEC2_CONFIG_VERSION_MINOR >= 1)
       qc2::C2VuiTimingInfo::output timing;
 #endif // CODEC2_CONFIG_VERSION_MINOR
+
       timing.value = *(reinterpret_cast<gboolean*>(payload));
       c2param = C2Param::Copy(timing);
       break;
@@ -969,24 +1062,28 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 #endif // CODEC2_CONFIG_VERSION_MAJOR
     case GST_C2_PARAM_IN_SAMPLE_RATE: {
       C2StreamSampleRateInfo::input samplerate;
+
       samplerate.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(samplerate);
       break;
     }
     case GST_C2_PARAM_OUT_SAMPLE_RATE: {
       C2StreamSampleRateInfo::output samplerate;
+
       samplerate.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(samplerate);
       break;
     }
     case GST_C2_PARAM_IN_CHANNELS_COUNT: {
       C2StreamChannelCountInfo::input channels;
+
       channels.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(channels);
       break;
     }
     case GST_C2_PARAM_OUT_CHANNELS_COUNT: {
       C2StreamChannelCountInfo::output channels;
+
       channels.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(channels);
       break;
@@ -1025,9 +1122,9 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_DOWN_SCALAR: {
       qc2::C2VideoDownScalarSetting::output scalar;
+
       scalar.width = reinterpret_cast<GstC2Resolution*>(payload)->width;
       scalar.height = reinterpret_cast<GstC2Resolution*>(payload)->height;
-
       c2param = C2Param::Copy(scalar);
       break;
     }
@@ -1047,8 +1144,8 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
     }
     case GST_C2_PARAM_LTR_USE: {
       qc2::C2VideoLTRUseTuning::input ltruse;
-      ltruse.frameid = *(reinterpret_cast<guint32*>(payload));
 
+      ltruse.frameid = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(ltruse);
       break;
     }
@@ -1067,7 +1164,7 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(delay);
       break;
     }
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_HDR_MODE: {
       C2StreamHdrFormatInfo::output hdrmode;
       uint32_t mode = *(reinterpret_cast<GstC2HdrMode*>(payload));
@@ -1076,8 +1173,31 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(hdrmode);
       break;
     }
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#endif // (CODEC2_CONFIG_VERSION_MAJOR)
+    case GST_C2_PARAM_NAL_LENGTH_BITSTREAM: {
+      qc2::C2VideoNalLengthBitStream::output nallen;
 
+      nallen.num_bytes = *(reinterpret_cast<guint32*>(payload));
+      c2param = C2Param::Copy(nallen);
+      break;
+    }
+    case GST_C2_PARAM_BITRATE_BOOST_MARGIN: {
+      qc2::C2VideoBitrateboostMargin::output margin;
+
+      margin.value = *(reinterpret_cast<gint32*>(payload));
+      c2param = C2Param::Copy(margin);
+      break;
+    }
+#if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
+    case GST_C2_PARAM_ENCODING_MODE: {
+      qc2::C2VideoEncodingMode::output encodingmode;
+      uint32_t mode = *(reinterpret_cast<GstC2EncodingMode*>(payload));
+
+      encodingmode.value = kEncodingModeMap.at(mode);
+      c2param = C2Param::Copy(encodingmode);
+      break;
+    }
+#endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -1133,13 +1253,22 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_IN_FRAMERATE: {
       auto framerate =
           reinterpret_cast<C2StreamFrameRateInfo::input*>(c2param.get());
+
       *(reinterpret_cast<float*>(payload)) = framerate->value;
       break;
     }
     case GST_C2_PARAM_OUT_FRAMERATE: {
       auto framerate =
           reinterpret_cast<C2StreamFrameRateInfo::output*>(c2param.get());
+
       *(reinterpret_cast<float*>(payload)) = framerate->value;
+      break;
+    }
+    case GST_C2_PARAM_OPERATING_FRAMERATE: {
+      auto operatingrate =
+          reinterpret_cast<C2OperatingRateTuning*>(c2param.get());
+
+      *(reinterpret_cast<float*>(payload)) = operatingrate->value;
       break;
     }
     case GST_C2_PARAM_PROFILE_LEVEL: {
@@ -1173,6 +1302,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_BITRATE: {
       auto bitrate =
           reinterpret_cast<C2StreamBitrateInfo::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = bitrate->value;
       break;
     }
@@ -1186,13 +1316,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_KEY_FRAME_INTERVAL: {
       auto keyframe =
           reinterpret_cast<C2StreamSyncFrameIntervalTuning::output*>(c2param.get());
+
       *(reinterpret_cast<int64_t*>(payload)) = keyframe->value;
       break;
     }
     case GST_C2_PARAM_INTRA_REFRESH_TUNING: {
       auto irefresh =
           reinterpret_cast<C2StreamIntraRefreshTuning::output*>(c2param.get());
-
       auto result = std::find_if(kIntraRefreshMap.begin(), kIntraRefreshMap.end(),
           [&](const auto& m) { return m.second == irefresh->mode; });
 
@@ -1201,7 +1331,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       reinterpret_cast<GstC2IntraRefresh*>(payload)->period = irefresh->period;
       break;
     }
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_INTRA_REFRESH_MODE: {
       auto ir_type =
           reinterpret_cast<qc2::C2VideoIntraRefreshType::output*>(c2param.get());
@@ -1217,6 +1347,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_ADAPTIVE_B_FRAMES: {
       auto bpreconditions =
           reinterpret_cast<qc2::C2StreamAdaptiveBPreconditions::output*>(c2param.get());
+
       *(reinterpret_cast<gboolean*>(payload)) = bpreconditions->value;
       break;
     }
@@ -1253,7 +1384,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_ENTROPY_MODE: {
       auto entropy =
           reinterpret_cast<qc2::C2VideoEntropyMode::output*>(c2param.get());
-
       auto result = std::find_if(kEntropyMap.begin(), kEntropyMap.end(),
           [&](const auto& m) { return m.second == entropy->value; });
 
@@ -1264,7 +1394,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_LOOP_FILTER_MODE: {
       auto filter =
           reinterpret_cast<qc2::C2VideoDeblockFilter::output*>(c2param.get());
-
       auto result = std::find_if(kLoopFilterMap.begin(), kLoopFilterMap.end(),
           [&](const auto& m) { return m.second == filter->value; });
 
@@ -1275,25 +1404,27 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_SLICE_MB: {
       auto slice =
           reinterpret_cast<qc2::C2VideoSliceSizeMBCount::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = slice->value;
       break;
     }
     case GST_C2_PARAM_SLICE_BYTES: {
       auto slice =
           reinterpret_cast<qc2::C2VideoSliceSizeBytes::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = slice->value;
       break;
     }
     case GST_C2_PARAM_NUM_LTR_FRAMES: {
       auto ltr_frames =
           reinterpret_cast<qc2::C2VideoLTRCountSetting::input*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = ltr_frames->count;
       break;
     }
     case GST_C2_PARAM_ROTATION: {
       auto rotation =
           reinterpret_cast<qc2::C2VideoRotation::input*>(c2param.get());
-
       auto result = std::find_if(kRotationMap.begin(), kRotationMap.end(),
           [&](const auto& m) { return m.second == rotation->angle; });
 
@@ -1314,7 +1445,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_PREPEND_HEADER_MODE: {
       auto csdmode =
           reinterpret_cast<C2PrependHeaderModeSetting*>(c2param.get());
-
       auto result = std::find_if(kPrependHeaderMap.begin(), kPrependHeaderMap.end(),
           [&](const auto& m) { return m.second == csdmode->value; });
 
@@ -1325,6 +1455,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_ENABLE_PICTURE_ORDER: {
       auto porder =
           reinterpret_cast<qc2::C2VideoPictureOrder::output*>(c2param.get());
+
       *(reinterpret_cast<gboolean*>(payload)) = porder->enable ? TRUE : FALSE;
       break;
     }
@@ -1338,6 +1469,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       reinterpret_cast<GstC2QuantInit*>(payload)->p_frames_enable = qpinit->qpPEnable;
       reinterpret_cast<GstC2QuantInit*>(payload)->b_frames = qpinit->qpB;
       reinterpret_cast<GstC2QuantInit*>(payload)->b_frames_enable = qpinit->qpBEnable;
+      break;
+    }
+    case GST_C2_PARAM_CHROMA_QP_OFFSET: {
+      auto qpoffset =
+          reinterpret_cast<qc2::C2VideoChromaQPOffset::output*>(c2param.get());
+
+      *(reinterpret_cast<gint32*>(payload)) = static_cast<int8_t>(qpoffset->value & 0xFF);
       break;
     }
     case GST_C2_PARAM_QP_RANGES: {
@@ -1370,15 +1508,23 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       /// TODO
       break;
     }
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
+    case GST_C2_PARAM_ROI_MBMAP_INFO: {
+      /// TODO
+      break;
+    }
+#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_TRIGGER_SYNC_FRAME: {
       auto syncframe =
           reinterpret_cast<C2StreamRequestSyncFrameTuning::output*>(c2param.get());
+
       *(reinterpret_cast<gboolean*>(payload)) = syncframe->value ? TRUE : FALSE;
       break;
     }
     case GST_C2_PARAM_PRIORITY: {
       auto priority =
           reinterpret_cast<C2RealTimePriorityTuning*>(c2param.get());
+
       *(reinterpret_cast<int32_t*>(payload)) = priority->value;
       break;
     }
@@ -1393,6 +1539,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_REPORT_AVG_QP: {
       auto avg_qp = reinterpret_cast<
           C2AndroidStreamAverageBlockQuantizationInfo::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = avg_qp->value;
       break;
     }
@@ -1400,10 +1547,11 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
 #if (CODEC2_CONFIG_VERSION_MINOR == 0)
       auto timing = reinterpret_cast<
           qc2::QC2VideoVuiTimingInfo::output*>(c2param.get());
-#elif (CODEC2_CONFIG_VERSION_MINOR == 1)
+#elif (CODEC2_CONFIG_VERSION_MINOR >= 1)
       auto timing = reinterpret_cast<
           qc2::C2VuiTimingInfo::output*>(c2param.get());
 #endif // CODEC2_CONFIG_VERSION_MINOR
+
       *(reinterpret_cast<gboolean*>(payload)) = timing->value;
       break;
     }
@@ -1411,31 +1559,34 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_IN_SAMPLE_RATE: {
       auto samplerate =
           reinterpret_cast<C2StreamSampleRateInfo::input*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = samplerate->value;
       break;
     }
     case GST_C2_PARAM_OUT_SAMPLE_RATE: {
       auto samplerate =
           reinterpret_cast<C2StreamSampleRateInfo::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = samplerate->value;
       break;
     }
     case GST_C2_PARAM_IN_CHANNELS_COUNT: {
       auto channels =
           reinterpret_cast<C2StreamChannelCountInfo::input*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = channels->value;
       break;
     }
     case GST_C2_PARAM_OUT_CHANNELS_COUNT: {
       auto channels =
           reinterpret_cast<C2StreamChannelCountInfo::output*>(c2param.get());
+
       *(reinterpret_cast<guint32*>(payload)) = channels->value;
       break;
     }
     case GST_C2_PARAM_IN_BITDEPTH: {
       auto bitdepth =
           reinterpret_cast<C2StreamPcmEncodingInfo::input*>(c2param.get());
-
       auto result = std::find_if(kBitdepthMap.begin(), kBitdepthMap.end(),
           [&](const auto& m) { return m.second == bitdepth->value; });
 
@@ -1446,7 +1597,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_OUT_BITDEPTH: {
       auto bitdepth =
           reinterpret_cast<C2StreamPcmEncodingInfo::output*>(c2param.get());
-
       auto result = std::find_if(kBitdepthMap.begin(), kBitdepthMap.end(),
           [&](const auto& m) { return m.second == bitdepth->value; });
 
@@ -1457,7 +1607,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_IN_AAC_FORMAT: {
       auto streamFormat =
           reinterpret_cast<C2StreamAacFormatInfo::input*>(c2param.get());
-
       auto result = std::find_if(kStreamFormatMap.begin(),
           kStreamFormatMap.end(),
           [&](const auto& m) { return m.second == streamFormat->value; });
@@ -1469,7 +1618,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_OUT_AAC_FORMAT: {
       auto streamFormat =
           reinterpret_cast<C2StreamAacFormatInfo::output*>(c2param.get());
-
       auto result = std::find_if(kStreamFormatMap.begin(),
           kStreamFormatMap.end(),
           [&](const auto& m) { return m.second == streamFormat->value; });
@@ -1510,7 +1658,6 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
     case GST_C2_PARAM_FLIP: {
       auto mirror =
           reinterpret_cast<qc2::C2VideoMirrorTuning::input*>(c2param.get());
-
       auto result = std::find_if(kFlipMap.begin(), kFlipMap.end(),
           [&](const auto& m) { return m.second == mirror->mirrorType; });
 
@@ -1525,7 +1672,7 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
       *(reinterpret_cast<gint32*>(payload)) = delay->value;
       break;
     }
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR >= 1)
     case GST_C2_PARAM_HDR_MODE: {
       auto hdrmode =
           reinterpret_cast<C2StreamHdrFormatInfo::output*>(c2param.get());
@@ -1537,7 +1684,39 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           static_cast<GstC2HdrMode>(result->first);
       break;
     }
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+#endif // (CODEC2_CONFIG_VERSION_MAJOR)
+    case GST_C2_PARAM_NAL_LENGTH_BITSTREAM: {
+      auto nallen =
+          reinterpret_cast<qc2::C2VideoNalLengthBitStream::output*>(c2param.get());
+
+      *(reinterpret_cast<guint32*>(payload)) = nallen->num_bytes;
+      break;
+    }
+    case GST_C2_PARAM_BITRATE_BOOST_MARGIN: {
+      auto margin =
+          reinterpret_cast<qc2::C2VideoBitrateboostMargin::output*>(c2param.get());
+
+      *(reinterpret_cast<gint32*>(payload)) = margin->value;
+      break;
+    }
+#if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
+    case GST_C2_PARAM_ENCODING_MODE: {
+      auto encodingmode =
+          reinterpret_cast<qc2::C2VideoEncodingMode::output*>(c2param.get());
+
+      auto result = std::find_if(kEncodingModeMap.begin(), kEncodingModeMap.end(),
+          [&](const auto& m) { return m.second == encodingmode->value; });
+
+      if (result != kEncodingModeMap.end()) {
+        *(reinterpret_cast<GstC2EncodingMode*>(payload)) =
+            static_cast<GstC2EncodingMode>(result->first);
+      } else {
+        GST_ERROR("Unsupported option for encoding mode!");
+        return FALSE;
+      }
+      break;
+    }
+#endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;

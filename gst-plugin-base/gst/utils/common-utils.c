@@ -148,6 +148,18 @@ gst_json_builder_structure_entry (GQuark field, const GValue * value,
   return gst_json_builder_set_value (builder, value);
 }
 
+void
+gst_class_label_reset (GstClassLabel * label)
+{
+  g_return_if_fail (label != NULL);
+
+  label->name = 0;
+  label->confidence = 0.0;
+  label->color = 0;
+
+  g_clear_pointer (&label->xtraparams, gst_structure_free);
+}
+
 const gchar *
 gst_mux_stream_name (guint index)
 {
@@ -193,65 +205,43 @@ gst_caps_has_feature (const GstCaps * caps, const gchar * feature)
 }
 
 gboolean
-gst_caps_has_compression (const GstCaps * caps, const gchar * compression)
+gst_value_deserialize_file (GValue * value, const gchar * filename)
 {
-  GstStructure *structure = NULL;
-  const gchar *string = NULL;
+  GError *error = NULL;
+  gchar *contents = NULL;
+  gboolean success = FALSE;
 
-  structure = gst_caps_get_structure (caps, 0);
-  string = gst_structure_has_field (structure, "compression") ?
-      gst_structure_get_string (structure, "compression") : NULL;
-
-  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
-}
-
-gboolean
-gst_parse_string_property_value (const GValue * value, GValue * output)
-{
-  const gchar *input = g_value_get_string (value);
-
-  if (g_file_test (input, G_FILE_TEST_IS_REGULAR)) {
-    GError *error = NULL;
-    gchar *contents = NULL;
-    gboolean success = FALSE;
-
-    if (!g_file_get_contents (input, &contents, NULL, &error)) {
-      GST_ERROR ("Failed to get file contents, error: '%s'!",
-          GST_STR_NULL (error->message));
-      g_clear_error (&error);
-      return FALSE;
-    }
-
-    // Remove trailing space and replace new lines with a comma delimiter.
-    contents = g_strstrip (contents);
-    contents = g_strdelimit (contents, "\n", ',');
-
-    // Add opening and closing brackets if output value is of type list.
-    if (G_VALUE_HOLDS (output, GST_TYPE_LIST)) {
-      GString *string = g_string_new (contents);
-
-      string = g_string_prepend (string, "{ ");
-      string = g_string_append (string, " }");
-
-      g_free (contents);
-
-      // Get the raw character data.
-      contents = g_string_free (string, FALSE);
-    }
-
-    success = gst_value_deserialize (output, contents);
-    g_free (contents);
-
-    if (!success) {
-      GST_ERROR ("Failed to deserialize file contents!");
-      return FALSE;
-    }
-  } else if (!gst_value_deserialize (output, input)) {
-    GST_ERROR ("Failed to deserialize string!");
+  if (!g_file_get_contents (filename, &contents, NULL, &error)) {
+    GST_ERROR ("Failed to get file contents, error: '%s'!",
+        GST_STR_NULL (error->message));
+    g_clear_error (&error);
     return FALSE;
   }
 
-  return TRUE;
+  // Remove trailing space and replace new lines with a comma delimiter.
+  contents = g_strstrip (contents);
+  contents = g_strdelimit (contents, "\n", ',');
+
+  // Add opening and closing brackets if output value is of type list.
+  if (G_VALUE_HOLDS (value, GST_TYPE_LIST)) {
+    GString *string = g_string_new (contents);
+
+    string = g_string_prepend (string, "{ ");
+    string = g_string_append (string, " }");
+
+    g_free (contents);
+
+    // Get the raw character data.
+    contents = g_string_free (string, FALSE);
+  }
+
+  success = gst_value_deserialize (value, contents);
+  g_free (contents);
+
+  if (!success)
+    GST_ERROR ("Failed to deserialize file contents!");
+
+  return success;
 }
 
 GstStructure *
@@ -368,7 +358,7 @@ gst_buffer_copy_protection_meta (GstBuffer * destination, GstBuffer * source)
 GArray *
 g_array_copy (GArray * array)
 {
-  GArray *newarray = NULL:
+  GArray *newarray = NULL;
   guint size = 0;
 
   size = g_array_get_element_size (array);
@@ -380,3 +370,117 @@ g_array_copy (GArray * array)
   return newarray;
 }
 #endif // GLIB_MAJOR_VERSION < 2 || (GLIB_MAJOR_VERSION == 2 && GLIB_MINOR_VERSION < 62)
+
+GParamSpec *
+g_param_spec_copy (GParamSpec * param, const gchar * prefix)
+{
+  GParamSpec *new_param = NULL;
+  const gchar *name = NULL, *nick = NULL, *blurb = NULL;
+  gchar *new_name = NULL;
+  GParamFlags flags = param->flags;
+
+  // Remove flags as strings are not static and will not call property at register.
+  flags &= ~(G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
+
+  name = g_param_spec_get_name (param);
+  nick = g_param_spec_get_nick (param);
+  blurb = g_param_spec_get_blurb (param);
+
+  new_name = g_strconcat ((prefix != NULL) ? prefix : "", name, NULL);
+
+  switch (G_PARAM_SPEC_VALUE_TYPE (param)) {
+    case G_TYPE_UINT:
+    {
+      GParamSpecUInt *spec = G_PARAM_SPEC_UINT (param);
+
+      new_param = g_param_spec_uint (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_INT:
+    {
+      GParamSpecInt *spec = G_PARAM_SPEC_INT (param);
+
+      new_param = g_param_spec_int (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_UINT64:
+    {
+      GParamSpecUInt64 *spec = G_PARAM_SPEC_UINT64 (param);
+
+      new_param = g_param_spec_uint64 (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_INT64:
+    {
+      GParamSpecInt64 *spec = G_PARAM_SPEC_INT64 (param);
+
+      new_param = g_param_spec_int64 (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_FLOAT:
+    {
+      GParamSpecFloat *spec = G_PARAM_SPEC_FLOAT (param);
+
+      new_param = g_param_spec_float (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_DOUBLE:
+    {
+      GParamSpecDouble *spec = G_PARAM_SPEC_DOUBLE (param);
+
+      new_param = g_param_spec_double (new_name, nick, blurb, spec->minimum,
+          spec->maximum, spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_BOOLEAN:
+    {
+      GParamSpecBoolean *spec = G_PARAM_SPEC_BOOLEAN (param);
+
+      new_param = g_param_spec_boolean (new_name, nick, blurb,
+          spec->default_value, flags);
+
+      break;
+    }
+    case G_TYPE_STRING:
+    {
+      GParamSpecString *spec = G_PARAM_SPEC_STRING (param);
+
+      new_param = g_param_spec_string (new_name, nick, blurb,
+          spec->default_value, flags);
+
+      break;
+    }
+    default:
+      if (G_IS_PARAM_SPEC_ENUM (param)) {
+        GParamSpecEnum *spec = G_PARAM_SPEC_ENUM (param);
+
+        new_param = g_param_spec_enum (new_name, nick, blurb, param->value_type,
+            spec->default_value, flags);
+      } else if (param->value_type == GST_TYPE_ARRAY) {
+        GstParamSpecArray *parray = GST_PARAM_SPEC_ARRAY_LIST (param);
+
+        new_param = gst_param_spec_array (new_name, nick, blurb,
+            parray->element_spec, flags);
+      } else if (param->value_type == GST_TYPE_STRUCTURE) {
+        new_param = g_param_spec_boxed (new_name, nick, blurb, param->value_type,
+            flags);
+      }
+
+      break;
+    }
+
+  g_free (new_name);
+
+  return new_param;
+}
