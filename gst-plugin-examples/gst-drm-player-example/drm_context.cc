@@ -376,9 +376,20 @@ WidevineContext::InitSession ()
   widevine::Cdm::Status status = widevine::Cdm::kTypeError;
 
   // Initialize the CDM Library.
+#if CE_CDM_VERSION == CE_CDM_VERSION_16_4_2
+  widevine::Cdm::ClientInfo client_info;
+  client_info.product_name = kProductName;
+  client_info.company_name = kCompanyName;
+  client_info.model_name = kModelName;
+
+  if ((status = widevine::Cdm::initialize (widevine::Cdm::kOpaqueHandle,
+      client_info, storage_impl, clock_impl, timer_impl, widevine::Cdm::kErrors))
+      != widevine::Cdm::kSuccess) {
+#else
   if ((status = widevine::Cdm::initialize (widevine::Cdm::kOpaqueHandle,
       storage_impl, clock_impl, timer_impl, &stderr_logger, widevine::Cdm::kErrors))
       != widevine::Cdm::kSuccess) {
+#endif
     g_printerr ("ERROR: Couldn't initialize the CDM Library! \n");
     return status;
   }
@@ -392,7 +403,11 @@ WidevineContext::InitSession ()
   g_print ("Created new CDM instance.\n");
 
   // Provision the device if not provisioned.
+#if CE_CDM_VERSION == CE_CDM_VERSION_16_4_2
+  if (!cdm_->isProvisioned()) {
+#else
   if (widevine::Cdm::kProvisioned != cdm_->getProvisioningStatus()) {
+#endif
     g_print ("Device is not provisioned. Provisioning first...\n");
 
     if ((status = cdm_->getProvisioningRequest (&prov_request))

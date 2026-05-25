@@ -13,6 +13,10 @@ if (HAVE_CDM_H)
   add_definitions(-DENABLE_WIDEVINE)
 endif()
 
+if (CE_CDM_16_4_2)
+  add_definitions(-DCE_CDM_16_4_2)
+endif()
+
 target_include_directories(${GST_EXAMPLE_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
   ${SYSROOT_INCDIR}

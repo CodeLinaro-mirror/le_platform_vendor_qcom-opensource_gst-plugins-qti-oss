@@ -11,11 +11,35 @@
 #include <string>
 #include <vector>
 
+#include <media/drm/DrmAPI.h>
+
+enum
+{
+  CE_CDM_VERSION_NONE = 0,
+  CE_CDM_VERSION_16_4_2,
+  CE_CDM_VERSION_17_1_0,
+  CE_CDM_VERSION_18_5_0,
+  CE_CDM_VERSION_19_2_0,
+};
+
+#if defined (CE_CDM_16_4_2)
+#define CE_CDM_VERSION CE_CDM_VERSION_16_4_2
+#elif defined (CE_CDM_17_1_0)
+#define CE_CDM_VERSION CE_CDM_VERSION_17_1_0
+#elif defined (CE_CDM_18_5_0)
+#define CE_CDM_VERSION CE_CDM_VERSION_18_5_0
+#elif defined (CE_CDM_19_2_0)
+#define CE_CDM_VERSION CE_CDM_VERSION_19_2_0
+#else
+#define CE_CDM_VERSION CE_CDM_VERSION_NONE
+#endif
+
 #ifdef ENABLE_WIDEVINE
 #include <cdm.h>
+#if CE_CDM_VERSION != CE_CDM_VERSION_16_4_2
 #include "stderr_logger.h"
 #endif
-#include <media/drm/DrmAPI.h>
+#endif
 
 class DrmContext {
   public:
@@ -156,9 +180,15 @@ class WidevineContext : public DrmContext, public widevine::Cdm::IEventListener 
     ~WidevineContext();
 
     // widevine::Cdm::IEventListener
+#if CE_CDM_VERSION == CE_CDM_VERSION_16_4_2
+    void onMessage(const std::string& session_id,
+                    widevine::Cdm::MessageType message_type,
+                    const std::string& message) override {
+#else
     void onMessage(const std::string& session_id,
                     widevine::Cdm::MessageType message_type,
                     const std::string& message, const std::string& server_url) override {
+#endif
       if (session_id == session_id_ && message_type == widevine::Cdm::kLicenseRequest)
         on_message_.set_value (message);
       else
@@ -167,11 +197,14 @@ class WidevineContext : public DrmContext, public widevine::Cdm::IEventListener 
     void onKeyStatusesChange (const std::string& session_id,
         bool has_new_usable_key) override {}
     void onRemoveComplete(const std::string& session_id) override {}
+#if CE_CDM_VERSION != CE_CDM_VERSION_16_4_2
     void onExpirationChange(const std::string& session_id, int64_t new_expiry_time_seconds) override {}
-
+#endif
     WVStorageImpl *storage_impl;
     WVClockImpl   *clock_impl;
     WVTimerImpl   *timer_impl;
+#if CE_CDM_VERSION != CE_CDM_VERSION_16_4_2
     widevine::StderrLogger stderr_logger;
+#endif
 };
 #endif
