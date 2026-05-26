@@ -97,6 +97,9 @@ gst_app_context_free (GstAppContext * ctx)
 
   if (ctx->pipeline != NULL) {
     gst_element_set_state (ctx->pipeline, GST_STATE_NULL);
+    g_print("Waiting pipeline changing to NULL state. \n");
+    gst_element_get_state (ctx->pipeline, NULL, NULL, GST_CLOCK_TIME_NONE);
+    g_print ("Finished to switch pipeline state! \n");
     gst_object_unref (ctx->pipeline);
   }
 
