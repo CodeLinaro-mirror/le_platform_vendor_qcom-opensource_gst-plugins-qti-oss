@@ -1294,6 +1294,25 @@ main_exit:
   return main_rt;
 }
 
+static bool alloc_nonsecure_buffer(uint8_t **buf, size_t size)
+{
+  *buf = (uint8_t *)malloc(size);
+  if (NULL == *buf) {
+    perror(__func__);
+    return false;
+  }
+
+  return true;
+}
+
+static void free_nonsecure_buffer(uint8_t **buf)
+{
+  if (*buf) {
+    free(*buf);
+    *buf = NULL;
+  }
+}
+
 int run_tests(bool secure)
 {
   int cmd_error = 0;
@@ -1359,6 +1378,24 @@ int run_tests(bool secure)
     {
       pthread_mutex_unlock(&eos_lock);
       cmd_error = output_port_reconfig();
+
+      //reallocate output_nonsecure_buffer after reconfig output port
+      if (secure && takeYuvLog) {
+        size_t size = portFmt.nBufferSize;
+
+        /* In dynamic meta mode, portFmt.nBufferSize is not the actual size,
+        * just to use buffer size allocated by OMX IL client.*/
+        if (output_dynamic_meta_mode)
+          size = get_external_output_buffer_size();
+
+        DEBUG_PRINT("Nonsecure output buffer size %u, previous nonsecure output buffer %p",
+          size, output_nonsecure_buffer);
+        if (output_nonsecure_buffer)
+          free_nonsecure_buffer(&output_nonsecure_buffer);
+
+        if (!alloc_nonsecure_buffer(&output_nonsecure_buffer, size))
+          return -1;
+      }
       pthread_mutex_lock(&eos_lock);
     }
   }
@@ -1370,25 +1407,6 @@ int run_tests(bool secure)
     do_freeHandle_and_clean_up(currentStatus == ERROR_STATE);
   }
   return 0;
-}
-
-static bool alloc_nonsecure_buffer(uint8_t **buf, size_t size)
-{
-  *buf = (uint8_t *)malloc(size);
-  if (NULL == *buf) {
-    perror(__func__);
-    return false;
-  }
-
-  return true;
-}
-
-static void free_nonsecure_buffer(uint8_t **buf)
-{
-  if (*buf) {
-    free(*buf);
-    *buf = NULL;
-  }
 }
 
 static int fill_omx_input_buffer(OMX_BUFFERHEADERTYPE *omx_buf, bool secure)
@@ -1879,8 +1897,8 @@ int Play_Decoder(bool secure)
   // wait for event port settings changed event
   DEBUG_PRINT("wait_for_event: dyn reconfig");
   wait_for_event();
-  DEBUG_PRINT("wait_for_event: dyn reconfig rcvd, currentStatus %d",
-             currentStatus);
+  DEBUG_PRINT("wait_for_event: event rcvd, currentStatus %d, %s dyn reconfig event",
+    currentStatus, currentStatus == PORT_SETTING_CHANGE_STATE ? "is" : "is NOT");
   if (currentStatus == ERROR_STATE)
   {
     DEBUG_PRINT_ERROR("Error - ERROR_STATE");
@@ -1901,7 +1919,10 @@ int Play_Decoder(bool secure)
     if (output_dynamic_meta_mode)
       size = get_external_output_buffer_size();
 
-    DEBUG_PRINT("Nonsecure output buffer size %u", size);
+    DEBUG_PRINT("Nonsecure output buffer size %u, existing nonsecure output buffer %p", size, output_nonsecure_buffer);
+    if (output_nonsecure_buffer)
+      free_nonsecure_buffer(&output_nonsecure_buffer);
+
     if (!alloc_nonsecure_buffer(&output_nonsecure_buffer, size))
       return -1;
   }
