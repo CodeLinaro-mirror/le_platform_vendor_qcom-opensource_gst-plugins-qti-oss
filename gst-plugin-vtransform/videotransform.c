@@ -81,10 +81,10 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_SINK_VIDEO_FORMATS \
-  "{ NV12, NV21, YUY2, P010_10LE, NV12_10LE32, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
+  "{ NV12, NV21, I420, YV12, YUY2, UYVY, YVYU, P010_10LE, NV12_10LE32, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
 
 #define GST_SRC_VIDEO_FORMATS \
-  "{ NV12, NV21, YUY2, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, RGBP, BGRP, GRAY8, NV12_Q08C }"
+  "{ NV12, NV21, I420, YV12, YUY2, UYVY, YVYU, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, RGBP, BGRP, GRAY8, NV12_Q08C }"
 
 enum
 {
@@ -376,22 +376,15 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
   GstCaps *caps = NULL;
   GstBufferPool *pool = NULL;
   GstStructure *config = NULL;
-  GstAllocator *allocator = NULL;
-  guint size = 0, minbuffers = 0, maxbuffers = 0;
-  GstAllocationParams params = { 0, };
-  GstVideoInfo info;
+  GstVideoInfo info = {};
   GstVideoAlignment align = { 0, }, ds_align = { 0, };
+  GstAllocationParams params = { 0, };
+  guint size = 0, minbuffers = 0, maxbuffers = 0;
 
   gst_query_parse_allocation (query, &caps, NULL);
-  if (!caps) {
+  if (caps == NULL) {
     GST_ERROR_OBJECT (vtrans, "Failed to parse the decide_allocation caps!");
     return FALSE;
-  }
-
-  // Invalidate the cached pool if there is an allocation_query.
-  if (vtrans->outpool) {
-    gst_buffer_pool_set_active (vtrans->outpool, FALSE);
-    gst_clear_object (&vtrans->outpool);
   }
 
   if (!gst_video_info_from_caps (&info, caps)) {
@@ -404,7 +397,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
     return FALSE;
   }
 
-  if (gst_query_get_video_alignment (query, &ds_align)) {
+  if (gst_query_parse_video_alignment (query, &ds_align)) {
     GST_DEBUG_OBJECT (vtrans, "Downstream alignment: padding (top: %u bottom: "
         "%u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
         ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
@@ -412,7 +405,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
         ds_align.stride_align[2], ds_align.stride_align[3]);
 
     // Find the most the appropriate alignment between us and downstream.
-    align = gst_video_calculate_common_alignment (&align, &ds_align);
+    gst_video_alignment_update (&align, &ds_align);
 
     GST_DEBUG_OBJECT (vtrans, "Common alignment: padding (top: %u bottom: %u "
         "left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
@@ -426,27 +419,69 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
 
   // Create a new buffer pool.
   pool = gst_video_transform_create_pool (vtrans, caps, &align, &params);
+
+  if (pool == NULL)
+    return FALSE;
+
+  // Check whether the previous buffer pool can be reused.
+  if (vtrans->outpool != NULL) {
+    GstStructure *oldconfig = NULL, *newconfig = NULL;
+    GstCaps *oldcaps = NULL;
+    guint oldsize = 0, newsize = 0;
+
+    // Get the confuration of the new and old buffer pools for comparison.
+    newconfig = gst_buffer_pool_get_config (pool);
+    oldconfig = gst_buffer_pool_get_config (vtrans->outpool);
+
+    gst_buffer_pool_config_get_params (newconfig, &caps, &newsize, NULL, NULL);
+    gst_buffer_pool_config_get_params (oldconfig, &oldcaps, &oldsize, NULL, NULL);
+
+    GST_DEBUG_OBJECT (vtrans, "New buffer pool size %u and caps %"
+        GST_PTR_FORMAT ", old buffer pool size %u and caps %" GST_PTR_FORMAT,
+        newsize, caps, oldsize, oldcaps);
+
+    // If reconfiguration is not needed invalidate the new pool.
+    if (gst_caps_is_equal (oldcaps, caps) && (newsize == oldsize))
+      gst_clear_object (&pool);
+
+    g_clear_pointer (&oldconfig, gst_structure_free);
+    g_clear_pointer (&newconfig, gst_structure_free);
+
+    GST_DEBUG_OBJECT (vtrans, "%s previous output pool %p",
+        pool ? "Invalidate" : "Reuse", vtrans->outpool);
+  }
+
+  // If new pool was previously invalidated there is nothing further to do.
+  if (pool == NULL)
+    goto exit;
+
+  if (vtrans->converter != NULL)
+    gst_video_converter_engine_flush (vtrans->converter);
+
+  if (vtrans->outpool != NULL)
+    gst_buffer_pool_set_active (vtrans->outpool, FALSE);
+
+  gst_clear_object (&vtrans->outpool);
   vtrans->outpool = pool;
 
+exit:
   // Get the configured pool properties in order to set in query.
-  config = gst_buffer_pool_get_config (pool);
-  gst_buffer_pool_config_get_params (config, &caps, &size, &minbuffers,
-      &maxbuffers);
-
-  if (gst_buffer_pool_config_get_allocator (config, &allocator, &params))
-    gst_query_add_allocation_param (query, allocator, &params);
+  config = gst_buffer_pool_get_config (vtrans->outpool);
+  gst_buffer_pool_config_get_params (config, NULL, &size, &minbuffers, &maxbuffers);
 
   gst_structure_free (config);
   size = MAX (size, info.size);
 
+  if (gst_query_get_n_allocation_params (query) > 0)
+    gst_query_set_nth_allocation_param (query, 0, NULL, NULL);
+
   // Check whether the query has pool.
   if (gst_query_get_n_allocation_pools (query) > 0)
-    gst_query_set_nth_allocation_pool (query, 0, pool, size, minbuffers,
-        maxbuffers);
+    gst_query_set_nth_allocation_pool (query, 0, NULL, size, minbuffers, maxbuffers);
   else
-    gst_query_add_allocation_pool (query, pool, size, minbuffers,
-        maxbuffers);
+    gst_query_add_allocation_pool (query, NULL, size, minbuffers, maxbuffers);
 
+  GST_DEBUG_OBJECT (vtrans, "Output pool: %" GST_PTR_FORMAT, vtrans->outpool);
   return TRUE;
 }
 
@@ -518,7 +553,6 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
   GST_DEBUG_OBJECT (vtrans, "Filter caps %" GST_PTR_FORMAT, filter);
 
-
   result = gst_caps_new_empty ();
 
   // In case there is no memory:GBM caps structure prepend one.
@@ -541,9 +575,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure, features);
   }
@@ -571,9 +605,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure,
         gst_caps_features_copy (features));
@@ -596,9 +630,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure (result, structure);
   }
@@ -798,15 +832,6 @@ gst_video_transform_fixate_format (GstVideoTransform *vtrans,
       gst_structure_fixate_field_string (output, "chroma-site", string);
     else
       gst_structure_set (output, "chroma-site", G_TYPE_STRING, string, NULL);
-  }
-
-  if (gst_structure_has_field (input, "compression") && sametype) {
-    const gchar *string = gst_structure_get_string (input, "compression");
-
-    if (gst_structure_has_field (output, "compression"))
-      gst_structure_fixate_field_string (output, "compression", string);
-    else
-      gst_structure_set (output, "compression", G_TYPE_STRING, string, NULL);
   }
 }
 
@@ -1464,7 +1489,7 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * incaps, GstCaps * outcaps)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
-  GstStructure *input, *output;
+  GstStructure *input = NULL, *output = NULL;
 
   // Truncate and make the output caps writable.
   outcaps = gst_caps_truncate (outcaps);
@@ -1521,9 +1546,8 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     }
   }
 
-  // Remove compression field if caps do not contain memory:GBM feature.
-  if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
-    gst_structure_remove_field (output, "compression");
+  // Fixate any remaining fields to defalut values.
+  gst_structure_fixate (output);
 
   // Free the local copy of the input caps structure.
   gst_structure_free (input);
@@ -1575,7 +1599,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   blit.info = vtrans->ininfo;
 
   if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
-    gst_video_rectangle_to_quadrilateral (&(vtrans->crop), &(blit.source));
+    gst_video_quadrilateral_from_rectangle (&(blit.source), &(vtrans->crop));
     blit.mask |= GST_VCE_MASK_SOURCE;
   }
 
@@ -1653,19 +1677,23 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
       break;
     case PROP_BACKEND_PARAM:
     {
+      const gchar *string = g_value_get_string (value);
       GValue structure = G_VALUE_INIT;
 
       g_value_init (&structure, GST_TYPE_STRUCTURE);
 
-      if (!gst_parse_string_property_value (value, &structure)) {
-        GST_ERROR_OBJECT (vtrans, "Failed to parse backend paramters!");
+      if (g_file_test (string, G_FILE_TEST_IS_REGULAR) &&
+          !gst_value_deserialize_file (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize file!");
+        break;
+      } else if (!gst_value_deserialize (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize string!");
         break;
       }
 
-      if (vtrans->backendparam != NULL)
-        gst_structure_free (vtrans->backendparam);
-
+      g_clear_pointer (&vtrans->backendparam, gst_structure_free);
       vtrans->backendparam = GST_STRUCTURE (g_value_dup_boxed (&structure));
+
       g_value_unset (&structure);
       break;
     }

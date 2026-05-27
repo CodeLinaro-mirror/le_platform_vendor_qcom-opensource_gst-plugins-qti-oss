@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 
 #include <fastcv/fastcv.h>
+#include <gst/utils/common-utils.h>
 
 
 #define GST_CAT_DEFAULT gst_video_converter_engine_debug
@@ -26,6 +27,10 @@
     c->ColorYCbCr##in##PseudoPlanarTo##out##u8 (                       \
         s_luma->data, s_chroma->data, s_luma->width, s_luma->height,   \
         s_luma->stride, s_chroma->stride, d_rgb->data,  d_rgb->stride)
+#define GST_FCV_RGB_TO_GRAY(c, in, out, s_rgb, d_grayscale) \
+    c->Color##in##To##out##u8 (                        \
+        s_rgb->data, s_rgb->width, s_rgb->height,      \
+        s_rgb->stride, d_grayscale->data,  d_grayscale->stride)
 #define GST_FCV_RGB_TO_YUV(c, in, out, s_rgb, d_luma, d_chroma)         \
     c->Color##in##ToYCbCr##out##PseudoPlanaru8 (                        \
         s_rgb->data, s_rgb->width, s_rgb->height, s_rgb->stride,        \
@@ -289,6 +294,10 @@ struct _GstFcvVideoConverter
       const uint8_t *__restrict s_luma, const uint8_t *__restrict s_chroma,
       uint32_t s_width, uint32_t s_height, uint32_t s_luma_stride,
       uint32_t s_chroma_stride, uint8_t *__restrict destination, uint32_t d_stride);
+
+  FASTCV_API void (*ColorRGB888ToGrayu8) (
+      const uint8_t *__restrict s, uint32_t s_width, uint32_t s_height,
+      uint32_t s_stride, uint8_t *__restrict destination, uint32_t d_stride);
 
   FASTCV_API void (*ColorRGB565ToYCbCr444PseudoPlanaru8) (
       const uint8_t *__restrict source, uint32_t s_width, uint32_t s_height,
@@ -630,7 +639,7 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
 
   // Add the offset to the region of interest to the data pointer.
   object->planes[0].data =
-      (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 0) +
+      (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 0)) +
           (y * object->planes[0].stride) + x * bpp);
   object->planes[0].stgid = GST_FCV_INVALID_STAGE_ID;
 
@@ -642,7 +651,7 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
       object->planes[1].width = GST_ROUND_UP_2 (width) / 2;
       object->planes[1].height = GST_ROUND_UP_2 (height) / 2;
       object->planes[1].data =
-          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 1) +
+          (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 1)) +
               ((GST_ROUND_UP_2 (y) / 2) * object->planes[1].stride) +
                   GST_ROUND_UP_2 (x));
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
@@ -653,7 +662,7 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
       object->planes[1].width = GST_ROUND_UP_2 (width) / 2;
       object->planes[1].height = height;
       object->planes[1].data =
-          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 1) +
+          (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 1)) +
               (y * object->planes[1].stride) + GST_ROUND_UP_2 (x));
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
       break;
@@ -662,20 +671,20 @@ gst_fcv_update_object (GstFcvObject * object, const gchar * type,
       object->planes[1].width = width * 2;
       object->planes[1].height = height;
       object->planes[1].data =
-          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 1) +
+          (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 1)) +
               (y * object->planes[1].stride) + (x * 2));
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
       break;
     case GST_VIDEO_FORMAT_P010_10LE:
       // Update plane 0 offset.
       object->planes[0].data =
-          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 0) +
+          (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 0)) +
               (y * object->planes[0].stride) + x * 2);
       object->planes[1].stride = GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1);
       object->planes[1].width = GST_ROUND_UP_2 (width);
       object->planes[1].height = GST_ROUND_UP_2 (height) / 2;
       object->planes[1].data =
-          (gpointer) ((guint8 *) GST_VIDEO_FRAME_PLANE_DATA (frame, 1) +
+          (GST_UINT8_PTR_CAST (GST_VIDEO_FRAME_PLANE_DATA (frame, 1)) +
               ((GST_ROUND_UP_2 (y) / 2) * object->planes[1].stride) + (x * 2));
       object->planes[1].stgid = GST_FCV_INVALID_STAGE_ID;
       break;
@@ -1272,6 +1281,37 @@ gst_fcv_video_converter_yuv_to_rgb (GstFcvVideoConverter * convert,
 }
 
 static inline gboolean
+gst_fcv_video_converter_rgb_to_gray (GstFcvVideoConverter * convert,
+    GstFcvObject * s_obj, GstFcvObject * d_obj)
+{
+  GstFcvPlane *s_rgb = NULL, *d_grayscale = NULL;
+
+  // Convenient local pointers to the source and destination planes.
+  s_rgb = &(s_obj->planes[0]);
+  d_grayscale = &(d_obj->planes[0]);
+
+  GST_LOG ("Source %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (s_obj->format), GST_FCV_PLANE_ARGS (s_rgb));
+
+  GST_LOG ("Destination %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_grayscale));
+
+  // Form a unique ID based on the formats for the conversion lookup cases.
+  switch (s_obj->format + (d_obj->format << 16)) {
+    case GST_VIDEO_FORMAT_RGB + (GST_VIDEO_FORMAT_GRAY8 << 16):
+      GST_FCV_RGB_TO_GRAY (convert, RGB888, Gray, s_rgb, d_grayscale);
+      break;
+    default:
+      GST_ERROR ("Unsupported format conversion from '%s' to '%s'!",
+          gst_video_format_to_string (s_obj->format),
+          gst_video_format_to_string (d_obj->format));
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static inline gboolean
 gst_fcv_video_converter_rgb_to_yuv (GstFcvVideoConverter * convert,
     GstFcvObject * s_obj, GstFcvObject * d_obj)
 {
@@ -1391,6 +1431,50 @@ gst_fcv_video_converter_rgb_to_yuv (GstFcvVideoConverter * convert,
 
     // Free the intermediary local chroma plane.
     gst_fcv_video_converter_release_stage_buffer (convert, l_chroma.stgid);
+  }
+
+  return TRUE;
+}
+
+static inline gboolean
+gst_fcv_video_converter_yuv_to_gray (GstFcvVideoConverter * convert,
+    GstFcvObject * s_obj, GstFcvObject * d_obj)
+{
+  GstFcvPlane *s_luma = NULL, *d_grayscale = NULL;
+
+  // Convenient local pointers to the source and destination planes.
+  s_luma = &(s_obj->planes[0]);
+  d_grayscale = &(d_obj->planes[0]);
+
+  GST_LOG ("Source %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (s_obj->format), GST_FCV_PLANE_ARGS (s_luma));
+
+  GST_LOG ("Destination %s Plane 0: %" GST_FCV_PLANE_FORMAT,
+      gst_video_format_to_string (d_obj->format), GST_FCV_PLANE_ARGS (d_grayscale));
+
+  switch (s_obj->format + (d_obj->format << 16)) {
+    case GST_VIDEO_FORMAT_NV24 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV21 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV12 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV16 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    case GST_VIDEO_FORMAT_NV61 + (GST_VIDEO_FORMAT_GRAY8 << 16):
+    {
+      guint idx = 0;
+
+      for (idx = 0; idx < d_grayscale->height; idx++) {
+        d_grayscale->data = GST_UINT8_PTR_CAST (d_grayscale->data) +
+            (idx * d_grayscale->stride);
+        s_luma->data = GST_UINT8_PTR_CAST (s_luma->data) + (idx * s_luma->stride);
+
+        memcpy (d_grayscale->data, s_luma->data, d_grayscale->width);
+      }
+      break;
+    }
+    default:
+      GST_ERROR ("Unsupported format conversion from '%s' to '%s'!",
+        gst_video_format_to_string (s_obj->format),
+        gst_video_format_to_string (d_obj->format));
+      return FALSE;
   }
 
   return TRUE;
@@ -1521,10 +1605,14 @@ gst_fcv_video_converter_color_transform (GstFcvVideoConverter * convert,
     success = gst_fcv_video_converter_yuv_to_yuv (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_YUV) && (d_obj->flags & GST_FCV_FLAG_RGB))
     success = gst_fcv_video_converter_yuv_to_rgb (convert, s_obj, d_obj);
+  else if ((s_obj->flags & GST_FCV_FLAG_YUV) && (d_obj->flags & GST_FCV_FLAG_GRAY))
+    success = gst_fcv_video_converter_yuv_to_gray (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_YUV))
     success = gst_fcv_video_converter_rgb_to_yuv (convert, s_obj, d_obj);
   else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_RGB))
     success = gst_fcv_video_converter_rgb_to_rgb (convert, s_obj, d_obj);
+  else if ((s_obj->flags & GST_FCV_FLAG_RGB) && (d_obj->flags & GST_FCV_FLAG_GRAY))
+    success = gst_fcv_video_converter_rgb_to_gray (convert, s_obj, d_obj);
   else
     GST_ERROR ("Unsupported color conversion families!");
 
@@ -2003,6 +2091,11 @@ gst_fcv_video_converter_fill_background (GstFcvVideoConverter * convert,
           GST_ROUND_UP_2 (GST_VIDEO_FRAME_HEIGHT (frame)) / 2,
           GST_VIDEO_FRAME_PLANE_STRIDE (frame, 1), cbcr10bit, NULL, 0);
         break;
+    case GST_VIDEO_FORMAT_GRAY8:
+      convert->SetElementsu8 (GST_VIDEO_FRAME_PLANE_DATA (frame, 0),
+          GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
+          GST_VIDEO_FRAME_PLANE_STRIDE (frame, 0), luma, NULL, 0);
+        break;
     default:
       GST_ERROR ("Unsupported format %s!",
           gst_video_format_to_string (GST_VIDEO_FRAME_FORMAT (frame)));
@@ -2382,6 +2475,7 @@ gst_fcv_video_converter_new (GstStructure * settings)
   success &= LOAD_FCV_SYMBOL (convert, SetOperationMode);
   success &= LOAD_FCV_SYMBOL (convert, CleanUp);
 
+  success &= LOAD_FCV_SYMBOL (convert, SetElementsu8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc3u8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementsc4u8);
   success &= LOAD_FCV_SYMBOL (convert, SetElementss32);
@@ -2449,6 +2543,8 @@ gst_fcv_video_converter_new (GstStructure * settings)
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToRGB888u8);
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToBGR565u8);
   success &= LOAD_FCV_SYMBOL (convert, ColorRGBA8888ToBGR888u8);
+
+  success &= LOAD_FCV_SYMBOL (convert, ColorRGB888ToGrayu8);
 
   success &= LOAD_FCV_SYMBOL (convert, Addu8);
   success &= LOAD_FCV_SYMBOL (convert, Adds16_v2);

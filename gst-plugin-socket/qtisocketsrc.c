@@ -751,7 +751,7 @@ gst_socket_src_fill_buffer (GstFdSocketSrc * src, GstBuffer ** outbuf)
                 pl_info.class_meta_info, idx);
         GstVideoClassificationMeta *class_meta = NULL;
 
-        GArray *labels = g_array_sized_new (FALSE, FALSE,
+        GArray *labels = g_array_sized_new (FALSE, TRUE,
             sizeof (GstClassLabel), class_meta_pl->size);
         g_array_set_size (labels, class_meta_pl->size);
 
@@ -927,25 +927,25 @@ gst_socket_src_change_state (GstElement * element, GstStateChange transition)
   GstMessagePayload disc_msg = { .identity = MESSAGE_DISCONNECT};
   GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
 
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+  if (ret == GST_STATE_CHANGE_FAILURE) {
+    GST_ERROR_OBJECT (src, "Failure");
+    return ret;
+  }
+
   switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      gst_socket_src_flush_socket_queue (src);
-      gst_socket_src_socket_release (src);
-      break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
       msg_info.message = &disc_msg;
       if (send_socket_message (src->client_sock, &msg_info) < 0) {
         GST_INFO_OBJECT (src, "Unable to send disconnect message.");
       }
       break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      gst_socket_src_flush_socket_queue (src);
+      gst_socket_src_socket_release (src);
+      break;
     default:
       break;
-  }
-
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret == GST_STATE_CHANGE_FAILURE) {
-    GST_ERROR_OBJECT (src, "Failure");
-    return ret;
   }
 
   return ret;

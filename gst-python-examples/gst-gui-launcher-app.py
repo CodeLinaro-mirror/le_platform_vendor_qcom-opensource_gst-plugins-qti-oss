@@ -296,7 +296,7 @@ class DemoWindow(Gtk.Window):
         Checks for the existence of specific files and downloads them if they are missing.
         """
 
-        file_path = "/etc/media/download_artifacts.sh"
+        file_path = "/tmp/download_artifacts.sh"
         DEFAULT_TFLITE_OBJECT_DETECTION_MODEL = "/etc/models/yolox_quantized.tflite"
         DEFAULT_TFLITE_CLASSIFICATION_MODEL = "/etc/models/inception_v3_quantized.tflite"
         DEFAULT_TFLITE_POSE_DETECTION_MODEL = "/etc/models/hrnet_pose_quantized.tflite"
@@ -359,7 +359,7 @@ class DemoWindow(Gtk.Window):
                 self.wifi_popup.show_all()
 
                 # Close the new popup window after a specified timeout (3 seconds)
-                GLib.timeout_add_seconds(3, self.close_popup)
+                GLib.timeout_add_seconds(3, lf.close_popup)
 
                 # Set the flag to indicate that artifacts are not downloaded
                 self.download_artifacts = False
@@ -373,6 +373,10 @@ class DemoWindow(Gtk.Window):
 
                     if not os.path.exists("/etc/media"):
                         os.makedirs("/etc/media", exist_ok=True)
+
+
+                    if not os.path.exists("/tmp"):
+                        os.makedirs("/tmp", exist_ok=True)
 
                     # Download the file from the URL to the specified file path
                     urllib.request.urlretrieve(url, file_path)
@@ -569,7 +573,7 @@ class DemoWindow(Gtk.Window):
                     qtimlvconverter name=stage_02_preproc mode=roi-batch-cumulative image-disposition=centre  \
                     qtimltflite name=stage_02_inference {TFLITE_DELEGATE} model=/etc/models/hrnet_pose_quantized.tflite \
                     qtimlpostprocess name=stage_02_postproc settings=/etc/labels/hrnet_pose_settings.json results=1 module=hrnet labels=/etc/labels/hrnet_pose.json \
-                    " + in_src + " ! queue ! tee name=t_split_1 \
+                    " + in_src + " ! queu/i/e ! tee name=t_split_1 \
                     t_split_1. ! queue ! metamux_1. \
                     t_split_1. ! queue ! stage_01_preproc. stage_01_preproc. ! queue ! stage_01_inference. stage_01_inference. ! queue ! stage_01_postproc. stage_01_postproc. ! text/x-raw ! queue ! metamux_1. \
                     qtimetamux name=metamux_1 ! queue ! tee name=t_split_2 \

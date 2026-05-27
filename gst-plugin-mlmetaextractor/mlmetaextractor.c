@@ -113,6 +113,25 @@ gst_mlmeta_extractor_set_caps (GstBaseTransform * base, GstCaps * incaps,
   return TRUE;
 }
 
+static gboolean
+gst_mlmeta_extractor_propose_allocation (GstBaseTransform * base,
+    GstQuery * decide_query, GstQuery * query)
+{
+  GstMLMetaExtractor *extractor = GST_MLMETA_EXTRACTOR (base);
+
+  if (!GST_BASE_TRANSFORM_CLASS (parent_class)->propose_allocation (base,
+          decide_query, query))
+    return FALSE;
+
+  GST_DEBUG_OBJECT (extractor, "Proposing allocation with video meta support");
+
+  // Advertise GstVideoMeta support to enable upstream elements to send
+  // DMA-buf backed buffers, avoiding software buffer allocation and copies.
+  gst_query_add_allocation_meta (query, GST_VIDEO_META_API_TYPE, NULL);
+
+  return TRUE;
+}
+
 static GstFlowReturn
 gst_mlmeta_extractor_prepare_output_buffer (GstBaseTransform * base,
     GstBuffer * inbuffer, GstBuffer ** outbuffer)
@@ -222,7 +241,7 @@ g_hash_table_free_glists (gpointer key, gpointer data, gpointer userdata)
 static guint
 gst_mlmeta_extractor_add_class_structs_to_list (GstMLMetaExtractor * extractor,
     GList * cmeta_list, gint parent_id, guint current_idx, guint n_entries,
-    guint timestamp, GValue * output_list)
+    GstClockTime timestamp, GValue * output_list)
 {
   GstStructure *structure = NULL;
   GList *list = NULL;
@@ -304,7 +323,7 @@ gst_mlmeta_extractor_add_class_structs_to_list (GstMLMetaExtractor * extractor,
 static guint
 gst_mlmeta_extractor_add_pose_structs_to_list (GstMLMetaExtractor * extractor,
     GList * pmeta_list, gint parent_id, guint current_idx, guint n_entries,
-    guint timestamp, GValue * output_list)
+    GstClockTime timestamp, GValue * output_list)
 {
   GstVideoRegionOfInterestMeta * parent_meta = NULL;
   GstStructure *structure = NULL;
@@ -455,7 +474,7 @@ gst_mlmeta_extractor_add_pose_structs_to_list (GstMLMetaExtractor * extractor,
 static guint
 gst_mlmeta_extractor_add_detection_structs_to_list (GstMLMetaExtractor *extractor,
     GList * roimeta_list, gint parent_id, guint current_idx, guint n_entries,
-    guint timestamp, GValue * output_list)
+    GstClockTime timestamp, GValue * output_list)
 {
   GstVideoRegionOfInterestMeta *parent_meta = NULL;
   GstStructure *structure = NULL;
@@ -655,7 +674,7 @@ gst_mlmeta_extractor_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   gchar *output_string = NULL;
   gint string_len = 0;
   gint n_entries = 0, seq_index = 1;
-  guint timestamp = GST_BUFFER_PTS (inbuffer);
+  GstClockTime timestamp = GST_BUFFER_PTS (inbuffer);
 
   GST_TRACE_OBJECT (extractor, "Received %" GST_PTR_FORMAT, inbuffer);
 
@@ -765,6 +784,8 @@ gst_mlmeta_extractor_class_init (GstMLMetaExtractorClass * klass)
 
   base->transform_caps = GST_DEBUG_FUNCPTR (gst_mlmeta_extractor_transform_caps);
   base->set_caps = GST_DEBUG_FUNCPTR (gst_mlmeta_extractor_set_caps);
+  base->propose_allocation =
+      GST_DEBUG_FUNCPTR (gst_mlmeta_extractor_propose_allocation);
 
   base->transform = GST_DEBUG_FUNCPTR (gst_mlmeta_extractor_transform);
 }

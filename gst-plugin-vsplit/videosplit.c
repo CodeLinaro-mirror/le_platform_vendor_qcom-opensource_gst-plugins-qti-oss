@@ -260,7 +260,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       rmeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, rmeta);
-      gst_video_region_of_interest_coordinates_correction (rmeta, &source,
+      gst_video_region_of_interest_meta_transform_coordinates (rmeta, &source,
           destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoRegionOfInterest' meta "
@@ -287,7 +287,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
-      gst_video_landmarks_coordinates_correction (lmkmeta, &source, destination);
+      gst_video_landmarks_meta_transform_coordinates (lmkmeta, &source, destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoLandmarks' meta "
           "with ID[0x%X] and parent ID[0x%X] to buffer %p", lmkmeta->id,
@@ -320,7 +320,7 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
     source.h = GST_VIDEO_INFO_HEIGHT (vblit->info);
   }
 
-  gst_video_rectangle_to_quadrilateral (&source, &(vblit->source));
+  gst_video_quadrilateral_from_rectangle (&(vblit->source), &source);
   vblit->mask |= GST_VCE_MASK_SOURCE;
 
   destination = &(vblit->destination);
@@ -357,6 +357,9 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
 
     if (structure != NULL) {
       structure = gst_structure_copy (structure);
+      gst_structure_set (structure,
+          "label", G_TYPE_STRING, g_quark_to_string (roimeta->roi_type), NULL);
+
       gst_video_region_of_interest_meta_add_param (rmeta, structure);
     }
   }
@@ -847,6 +850,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 {
   GList *list = NULL;
   GstVideoInfo info = { 0, };
+  gboolean reconfigure = FALSE;
 
   GST_DEBUG_OBJECT (vsplit, "Setting caps %" GST_PTR_FORMAT, caps);
 
@@ -865,6 +869,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 
   for (list = vsplit->srcpads; list != NULL; list = g_list_next (list)) {
     GstVideoSplitSrcPad *srcpad = GST_VIDEO_SPLIT_SRCPAD (list->data);
+    GstBufferPool *pool = srcpad->pool;
 
     if (!gst_video_split_srcpad_setcaps (srcpad, caps)) {
       GST_ELEMENT_ERROR (GST_ELEMENT (vsplit), CORE, NEGOTIATION, (NULL),
@@ -873,7 +878,14 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
       GST_VIDEO_SPLIT_UNLOCK (vsplit);
       return FALSE;
     }
+
+    // Check whether the output pool was invalidated for this pad.
+    reconfigure |= (pool == srcpad->pool) ? FALSE : TRUE;
   }
+
+  // Flush video converter if at least one output pool was invalidated.
+  if (reconfigure)
+    gst_video_converter_engine_flush (vsplit->converter);
 
   GST_VIDEO_SPLIT_UNLOCK (vsplit);
 
