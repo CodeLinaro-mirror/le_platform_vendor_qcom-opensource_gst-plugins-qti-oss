@@ -376,7 +376,7 @@ WidevineContext::InitSession ()
   widevine::Cdm::Status status = widevine::Cdm::kTypeError;
 
   // Initialize the CDM Library.
-#if CE_CDM_VERSION == CE_CDM_VERSION_16_4_2
+#if CE_CDM_VERSION == CONST_CE_CDM_VERSION_16_4_2
   widevine::Cdm::ClientInfo client_info;
   client_info.product_name = kProductName;
   client_info.company_name = kCompanyName;
@@ -403,7 +403,7 @@ WidevineContext::InitSession ()
   g_print ("Created new CDM instance.\n");
 
   // Provision the device if not provisioned.
-#if CE_CDM_VERSION == CE_CDM_VERSION_16_4_2
+#if CE_CDM_VERSION == CONST_CE_CDM_VERSION_16_4_2
   if (!cdm_->isProvisioned()) {
 #else
   if (widevine::Cdm::kProvisioned != cdm_->getProvisioningStatus()) {
