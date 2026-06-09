@@ -36,7 +36,7 @@
 #include "config.h"
 #endif
 
-#include "qmmf_source_context.h"
+#include "camera_source_context.h"
 #include <gst/allocators/allocators.h>
 #include <qmmf-sdk/qmmf_recorder.h>
 #include <qmmf-sdk/qmmf_recorder_extra_param_tags.h>
@@ -44,9 +44,9 @@
 #include <qmmf-sdk/qmmf_vendor_tag_descriptor.h>
 #include <qmmf-sdk/qmmf_camera_metadata.h>
 
-#include "qmmf_source_utils.h"
-#include "qmmf_source_image_pad.h"
-#include "qmmf_source_video_pad.h"
+#include "camera_source_utils.h"
+#include "camera_source_image_pad.h"
+#include "camera_source_video_pad.h"
 #include <gst/camera/gstcamerameta.h>
 #include <set>
 
@@ -125,6 +125,10 @@ struct _GstQmmfContext {
 
   /// Video and image pads timestamp base.
   GstClockTime      tsbase;
+
+  /// Set of currently running track IDs.
+  /// tsbase is only reset when this set becomes empty.
+  std::unique_ptr<std::unordered_set<uint32_t>> running_tracks;
 
   /// Camera Slave mode.
   gboolean          slave;
@@ -1661,6 +1665,7 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->eventcb = eventcb;
   context->metacb = metacb;
   context->userdata = userdata;
+  context->tsbase = GST_CLOCK_TIME_NONE;
 
   g_mutex_init (&context->metadata_lock);
   context->metadata_refcount_map =
@@ -1668,6 +1673,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   context->pending_buffers =
       std::make_unique<std::map<guint64, std::vector<PendingBuffer>>> ();
   context->metadata_enabled_pads = std::make_unique<std::set<GstPad*>> ();
+  context->running_tracks =
+      std::make_unique<std::unordered_set<uint32_t>> ();
 
   // Register a events function which will call the EOS callback if necessary.
   cbs.event_cb =
@@ -2534,8 +2541,6 @@ gst_qmmf_context_start_video_streams (GstQmmfContext * context, GArray * ids)
   guint idx = 0;
   gint status = 0;
 
-  context->tsbase = GST_CLOCK_TIME_NONE;
-
   if (!context->slave) {
     gboolean success = initialize_camera_param(context);
     QMMFSRC_RETURN_VAL_IF_FAIL (NULL, success, FALSE,
@@ -2550,6 +2555,9 @@ gst_qmmf_context_start_video_streams (GstQmmfContext * context, GArray * ids)
   status = recorder->StartVideoTracks (track_ids);
   QMMFSRC_RETURN_VAL_IF_FAIL (NULL, status == 0, FALSE,
       "QMMF Recorder StartVideoTracks Failed!");
+
+  for (idx = 0; idx < ids->len; idx++)
+    context->running_tracks->insert (g_array_index (ids, guint, idx));
 
   context->state = GST_STATE_PLAYING;
 
@@ -2580,7 +2588,12 @@ gst_qmmf_context_stop_video_streams (GstQmmfContext * context, GArray * ids)
   GST_TRACE ("QMMF context track stopped");
 
   context->state = GST_STATE_PAUSED;
-  context->tsbase = GST_CLOCK_TIME_NONE;
+
+  for (idx = 0; idx < ids->len; idx++)
+    context->running_tracks->erase (g_array_index (ids, guint, idx));
+
+  if (context->running_tracks->empty ())
+    context->tsbase = GST_CLOCK_TIME_NONE;
 
   return TRUE;
 }

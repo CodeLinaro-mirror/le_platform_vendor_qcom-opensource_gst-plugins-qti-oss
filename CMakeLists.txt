@@ -118,9 +118,6 @@ else()
     # Define path to gst-plugins-base tree for header includes
     set(QTI_PLUGINS_BASE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gst-plugin-base)
 
-    # Define the path to the common pkg-config template file used by all base libraries
-    set(BASE_COMMON_PC_IN ${CMAKE_CURRENT_SOURCE_DIR}/gst-plugin-base/gst/common.pc.in)
-
     add_subdirectory(gst-plugin-base/gst/camera)
   endif()
 endif()
@@ -181,9 +178,10 @@ add_plugin_if(ENABLE_GST_PLUGIN_SMARTVENCBIN    gst-plugin-smartvencbin)
 # Sample Apps and Test Framework
 add_plugin_if(ENABLE_GST_PLUGIN_EXAMPLES        gst-plugin-examples)
 add_plugin_if(ENABLE_GST_PYTHON_EXAMPLES        gst-python-examples)
-add_plugin_if(ENABLE_GST_SAMPLE_APPS            gst-sample-apps)
+if(ENABLE_GST_SAMPLE_APPS OR ENABLE_GST_SAMPLE_APPS_CAMERA)
+  add_subdirectory(gst-sample-apps)
+endif()
 add_plugin_if(ENABLE_GST_SAMPLE_APPS            gst-sample-apps/gst-sample-apps-utils)
-add_plugin_if(ENABLE_GST_SAMPLE_APPS_CAMERA     gst-sample-apps)
 add_plugin_if(ENABLE_GST_PLUGIN_TOOLS           gst-plugin-tools)
 add_plugin_if(ENABLE_GST_TEST_FRAMEWORK         gst-test-framework)
 add_plugin_if(ENABLE_GST_UMD_DAEMON             gst-umd-daemon)
