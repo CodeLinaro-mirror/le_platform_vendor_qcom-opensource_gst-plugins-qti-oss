@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 #include <dlfcn.h>
+#include <stdlib.h>
 
 #include <vector>
 
@@ -95,6 +96,10 @@ Environment::~Environment() {
 std::string Environment::Initialize() {
 
   std::lock_guard<std::mutex> lk(mutex_);
+
+  if (getenv("XDG_RUNTIME_DIR") == nullptr) {
+    return std::string("Environment variable 'XDG_RUNTIME_DIR' is not defined!");
+  }
 
   if (refcnt_ == 0) {
     egl_lib_ = new EglLib();
