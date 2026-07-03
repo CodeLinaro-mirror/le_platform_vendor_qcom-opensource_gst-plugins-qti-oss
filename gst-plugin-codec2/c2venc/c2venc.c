@@ -56,6 +56,7 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_VBV_DELAY            (0x7fffffff)
 #define DEFAULT_PROP_HDR_MODE             (GST_C2_HDR_NONE)
 #define DEFAULT_PROP_BITRATE_BOOST_MARGIN (0x7fffffff)
+#define DEFAULT_PROP_TIME_DELTA_BASED_RC  (TRUE)
 
 #define GST_VIDEO_FORMATS "{ NV12, P010_10LE, NV12_Q08C, NV12_Q10LE32C }"
 
@@ -94,6 +95,7 @@ enum
   PROP_HDR_MODE,
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   PROP_BITRATE_BOOST_MARGIN,
+  PROP_TIME_DELTA_BASED_RC,
 };
 
 static GstStaticPadTemplate gst_c2_venc_sink_pad_template =
@@ -836,6 +838,14 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
       GST_ERROR_OBJECT (c2venc, "Failed to set bitrate boost margin!");
       return FALSE;
     }
+  }
+
+  success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_TIME_DELTA_BASED_RC,
+      GPOINTER_CAST (&c2venc->time_delta_based_rc));
+  if (!success) {
+    GST_ERROR_OBJECT (c2venc, "Failed to set time delta based RC!");
+    return FALSE;
   }
 
   return TRUE;
@@ -1805,6 +1815,9 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_BITRATE_BOOST_MARGIN:
       c2venc->bitrate_boost_margin = g_value_get_int (value);
       break;
+    case PROP_TIME_DELTA_BASED_RC:
+      c2venc->time_delta_based_rc = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1971,6 +1984,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
     case PROP_BITRATE_BOOST_MARGIN:
       g_value_set_int (value, c2venc->bitrate_boost_margin);
+      break;
+    case PROP_TIME_DELTA_BASED_RC:
+      g_value_set_boolean (value, c2venc->time_delta_based_rc);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -2203,6 +2219,13 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           "(0x7fffffff=component default, value range could be 0 to 100)",
           0, G_MAXINT, DEFAULT_PROP_BITRATE_BOOST_MARGIN,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject, PROP_TIME_DELTA_BASED_RC,
+      g_param_spec_boolean ("time-delta-based-rc", "Time Delta Based Rate Control",
+          "Enable/Disable encoder rate control adapting frame rate from input "
+          "timestamp deltas. Disable for fixed-fps RC under hyperlapse or "
+          "irregular timestamp scenarios so the bitrate honors the target setting.",
+          DEFAULT_PROP_TIME_DELTA_BASED_RC,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_trigger_iframe),
@@ -2303,6 +2326,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
   c2venc->hdr_mode = DEFAULT_PROP_HDR_MODE;
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   c2venc->bitrate_boost_margin = DEFAULT_PROP_BITRATE_BOOST_MARGIN;
+  c2venc->time_delta_based_rc = DEFAULT_PROP_TIME_DELTA_BASED_RC;
 
   GST_DEBUG_CATEGORY_INIT (c2_venc_debug, "qtic2venc", 0,
       "QTI c2venc encoder");
