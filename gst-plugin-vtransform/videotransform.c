@@ -42,6 +42,7 @@
 #include <gst/video/video-utils.h>
 #include <gst/video/gstimagepool.h>
 #include <gst/utils/common-utils.h>
+#include <gst/video/gstvideooriginmeta.h>
 
 #ifdef HAVE_LINUX_DMA_BUF_H
 #include <sys/ioctl.h>
@@ -81,10 +82,10 @@ G_DEFINE_TYPE (GstVideoTransform, gst_video_transform, GST_TYPE_BASE_TRANSFORM);
 #define GST_VIDEO_FPS_RANGE "(fraction) [ 0, 255 ]"
 
 #define GST_SINK_VIDEO_FORMATS \
-  "{ NV12, NV21, YUY2, P010_10LE, NV12_10LE32, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
+  "{ NV12, NV21, I420, YV12, YUY2, UYVY, YVYU, P010_10LE, NV12_10LE32, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, GRAY8, NV12_Q08C }"
 
 #define GST_SRC_VIDEO_FORMATS \
-  "{ NV12, NV21, YUY2, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, RGBP, BGRP, GRAY8, NV12_Q08C }"
+  "{ NV12, NV21, I420, YV12, YUY2, UYVY, YVYU, P010_10LE, RGBA, BGRA, ARGB, ABGR, RGBx, BGRx, xRGB, xBGR, RGB, BGR, RGBP, BGRP, GRAY8, NV12_Q08C }"
 
 enum
 {
@@ -397,7 +398,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
     return FALSE;
   }
 
-  if (gst_query_get_video_alignment (query, &ds_align)) {
+  if (gst_query_parse_video_alignment (query, &ds_align)) {
     GST_DEBUG_OBJECT (vtrans, "Downstream alignment: padding (top: %u bottom: "
         "%u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
         ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
@@ -405,7 +406,7 @@ gst_video_transform_decide_allocation (GstBaseTransform * base,
         ds_align.stride_align[2], ds_align.stride_align[3]);
 
     // Find the most the appropriate alignment between us and downstream.
-    align = gst_video_calculate_common_alignment (&align, &ds_align);
+    gst_video_alignment_update (&align, &ds_align);
 
     GST_DEBUG_OBJECT (vtrans, "Common alignment: padding (top: %u bottom: %u "
         "left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
@@ -492,6 +493,7 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
   GstBufferPool *pool = vtrans->outpool;
   gboolean passthrough = FALSE, writable = TRUE, success = FALSE;
+  GstVideoOriginMeta *origin_meta;
 
   // Check whether passthrough should be true/false based on parameters.
   gst_video_transform_determine_passthrough (vtrans);
@@ -536,6 +538,39 @@ gst_video_transform_prepare_output_buffer (GstBaseTransform * base,
         ("could not copy metadata"), (NULL));
   }
 
+  // Check ininfo validity before adding origin meta
+  if (vtrans->ininfo == NULL) {
+    GST_ERROR_OBJECT (vtrans, "ininfo is NULL, cannot add origin meta");
+    gst_buffer_unref (*outbuffer);
+    *outbuffer = NULL;
+    return GST_FLOW_ERROR;
+  }
+
+  // Validate that ininfo contains valid dimensions
+  if (vtrans->ininfo->width == 0 || vtrans->ininfo->height == 0) {
+    GST_ERROR_OBJECT (vtrans,
+        "ininfo has invalid dimensions (%dx%d), cannot add origin meta",
+        vtrans->ininfo->width, vtrans->ininfo->height);
+    gst_buffer_unref (*outbuffer);
+    *outbuffer = NULL;
+    return GST_FLOW_ERROR;
+  }
+
+  origin_meta = gst_buffer_add_video_origin_meta (*outbuffer,
+      vtrans->ininfo->width, vtrans->ininfo->height);
+  if (origin_meta == NULL) {
+    GST_ERROR_OBJECT (vtrans, "failed to add video frame origin meta");
+    gst_buffer_unref (*outbuffer);
+    *outbuffer = NULL;
+    return GST_FLOW_ERROR;
+  }
+
+  origin_meta->crop = vtrans->crop;
+
+  GST_TRACE_OBJECT (vtrans, "Origin Meta: Width: %d, Height: %d, Crop: [%d, %d, "
+      "%d, %d]" , origin_meta->width, origin_meta->height, origin_meta->crop.x,
+      origin_meta->crop.y, origin_meta->crop.w, origin_meta->crop.h);
+
   return GST_FLOW_OK;
 }
 
@@ -552,7 +587,6 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
   GST_DEBUG_OBJECT (vtrans, "Transforming caps %" GST_PTR_FORMAT
       " in direction %s", caps, (direction == GST_PAD_SINK) ? "sink" : "src");
   GST_DEBUG_OBJECT (vtrans, "Filter caps %" GST_PTR_FORMAT, filter);
-
 
   result = gst_caps_new_empty ();
 
@@ -576,9 +610,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure, features);
   }
@@ -606,9 +640,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure,
         gst_caps_features_copy (features));
@@ -631,9 +665,9 @@ gst_video_transform_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure (result, structure);
   }
@@ -833,15 +867,6 @@ gst_video_transform_fixate_format (GstVideoTransform *vtrans,
       gst_structure_fixate_field_string (output, "chroma-site", string);
     else
       gst_structure_set (output, "chroma-site", G_TYPE_STRING, string, NULL);
-  }
-
-  if (gst_structure_has_field (input, "compression") && sametype) {
-    const gchar *string = gst_structure_get_string (input, "compression");
-
-    if (gst_structure_has_field (output, "compression"))
-      gst_structure_fixate_field_string (output, "compression", string);
-    else
-      gst_structure_set (output, "compression", G_TYPE_STRING, string, NULL);
   }
 }
 
@@ -1499,7 +1524,7 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * incaps, GstCaps * outcaps)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
-  GstStructure *input, *output;
+  GstStructure *input = NULL, *output = NULL;
 
   // Truncate and make the output caps writable.
   outcaps = gst_caps_truncate (outcaps);
@@ -1556,9 +1581,8 @@ gst_video_transform_fixate_caps (GstBaseTransform * base,
     }
   }
 
-  // Remove compression field if caps do not contain memory:GBM feature.
-  if (!gst_caps_has_feature (outcaps, GST_CAPS_FEATURE_MEMORY_GBM))
-    gst_structure_remove_field (output, "compression");
+  // Fixate any remaining fields to defalut values.
+  gst_structure_fixate (output);
 
   // Free the local copy of the input caps structure.
   gst_structure_free (input);
@@ -1578,6 +1602,43 @@ gst_video_transform_flush_converter (GstVideoTransform * vtrans)
   return TRUE;
 }
 
+static gboolean
+gst_video_transform_stop (GstBaseTransform *base)
+{
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
+
+  gst_video_converter_engine_flush (vtrans->converter);
+  GST_DEBUG_OBJECT (vtrans, "Flush video converter");
+
+  return TRUE;
+}
+
+static gboolean
+gst_video_transform_sink_event (GstBaseTransform *base, GstEvent *event)
+{
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
+
+  GST_DEBUG_OBJECT (vtrans, "Got event: %" GST_PTR_FORMAT, event);
+
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_FLUSH_START:
+      GST_DEBUG_OBJECT (vtrans, "Flush start for video converter");
+
+      GST_PAD_SET_FLUSHING (GST_BASE_TRANSFORM_SINK_PAD (base));
+      gst_video_converter_engine_flush (vtrans->converter);
+      break;
+    case GST_EVENT_FLUSH_STOP:
+      GST_PAD_UNSET_FLUSHING (GST_BASE_TRANSFORM_SINK_PAD (base));
+
+      GST_DEBUG_OBJECT (vtrans, "Flush stop for video converter");
+      break;
+    default:
+      break;
+  }
+
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->sink_event (base, event);
+}
+
 static GstFlowReturn
 gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
@@ -1588,6 +1649,8 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GstClockTime time = GST_CLOCK_TIME_NONE;
   const GstVideoMeta *meta = NULL;
   gboolean success = FALSE;
+
+  GST_TRACE_OBJECT (vtrans, "Input %" GST_PTR_FORMAT, inbuffer);
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
   if (gst_buffer_get_size (outbuffer) == 0 &&
@@ -1610,7 +1673,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   blit.info = vtrans->ininfo;
 
   if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
-    gst_video_rectangle_to_quadrilateral (&(vtrans->crop), &(blit.source));
+    gst_video_quadrilateral_from_rectangle (&(blit.source), &(vtrans->crop));
     blit.mask |= GST_VCE_MASK_SOURCE;
   }
 
@@ -1658,6 +1721,8 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
       G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
       (GST_TIME_AS_USECONDS (time) % 1000));
 
+  GST_TRACE_OBJECT (vtrans, "Output %" GST_PTR_FORMAT, outbuffer);
+
   if (!success) {
     GST_ERROR_OBJECT (vtrans, "Failed to process composition!");
     return GST_FLOW_ERROR;
@@ -1688,19 +1753,23 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
       break;
     case PROP_BACKEND_PARAM:
     {
+      const gchar *string = g_value_get_string (value);
       GValue structure = G_VALUE_INIT;
 
       g_value_init (&structure, GST_TYPE_STRUCTURE);
 
-      if (!gst_parse_string_property_value (value, &structure)) {
-        GST_ERROR_OBJECT (vtrans, "Failed to parse backend paramters!");
+      if (g_file_test (string, G_FILE_TEST_IS_REGULAR) &&
+          !gst_value_deserialize_file (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize file!");
+        break;
+      } else if (!gst_value_deserialize (&structure, string)) {
+        GST_ERROR_OBJECT (vtrans, "Failed to deserialize string!");
         break;
       }
 
-      if (vtrans->backendparam != NULL)
-        gst_structure_free (vtrans->backendparam);
-
+      g_clear_pointer (&vtrans->backendparam, gst_structure_free);
       vtrans->backendparam = GST_STRUCTURE (g_value_dup_boxed (&structure));
+
       g_value_unset (&structure);
       break;
     }
@@ -1958,6 +2027,8 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
       GST_DEBUG_FUNCPTR (gst_video_transform_transform_caps);
   base->fixate_caps = GST_DEBUG_FUNCPTR (gst_video_transform_fixate_caps);
   base->set_caps = GST_DEBUG_FUNCPTR (gst_video_transform_set_caps);
+  base->stop = GST_DEBUG_FUNCPTR (gst_video_transform_stop);
+  base->sink_event = GST_DEBUG_FUNCPTR (gst_video_transform_sink_event);
   base->transform = GST_DEBUG_FUNCPTR (gst_video_transform_transform);
 }
 

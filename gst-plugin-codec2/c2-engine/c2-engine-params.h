@@ -32,6 +32,7 @@ typedef struct _GstC2QuantInit GstC2QuantInit;
 typedef struct _GstC2QuantRanges GstC2QuantRanges;
 typedef struct _GstC2QuantRectangle GstC2QuantRectangle;
 typedef struct _GstC2QuantRegions GstC2QuantRegions;
+typedef struct _GstC2QuantMbmapInfo GstC2QuantMbmapInfo;
 typedef struct _GstC2TemporalLayer GstC2TemporalLayer;
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
 typedef struct _GstC2HdrStaticMetadata GstC2HdrStaticMetadata;
@@ -65,6 +66,7 @@ enum {
   GST_C2_PARAM_QP_INIT,              // GstC2QuantInit
   GST_C2_PARAM_QP_RANGES,            // GstC2QuantRanges
   GST_C2_PARAM_ROI_ENCODE,           // GstC2QuantRegions
+  GST_C2_PARAM_ROI_MBMAP_INFO,       // GstC2QuantMbmapInfo
   GST_C2_PARAM_TRIGGER_SYNC_FRAME,   // gboolean
   GST_C2_PARAM_NATIVE_RECORDING,     // gboolean
   GST_C2_PARAM_TEMPORAL_LAYERING,    // GstC2TemporalLayer
@@ -90,9 +92,13 @@ enum {
   GST_C2_PARAM_FLIP,                 // GstC2VideoFlip
   GST_C2_PARAM_VBV_DELAY,            // gint32
   GST_C2_PARAM_VUI_TIMING_INFO,      // gboolean
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   GST_C2_PARAM_HDR_MODE,             // GstC2HdrMode
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+  GST_C2_PARAM_OPERATING_FRAMERATE,  // gdouble
+  GST_C2_PARAM_CHROMA_QP_OFFSET,     // gint32
+  GST_C2_PARAM_NAL_LENGTH_BITSTREAM, // GstC2NalPrefixMode
+  GST_C2_PARAM_BITRATE_BOOST_MARGIN, // gint32
+  GST_C2_PARAM_ENCODING_MODE,        // GstC2EncodingMode
+  GST_C2_PARAM_CAC,                  // GstC2ContentAdaptiveCoding
 };
 
 typedef enum {
@@ -291,14 +297,40 @@ typedef enum {
   GST_C2_FLIP_BOTH,
 } GstC2VideoFlip;
 
-#if (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
 typedef enum {
   GST_C2_HDR_NONE,
   GST_C2_HDR_HLG,
   GST_C2_HDR_HDR10,
   GST_C2_HDR_HDR10_PLUS,
 } GstC2HdrMode;
-#endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
+
+typedef enum {
+  GST_C2_NAL_PREFIX_START,
+  GST_C2_NAL_PREFIX_LENGTH = 4,
+} GstC2NalPrefixMode;
+
+typedef enum {
+  GST_C2_HEIC_NONE,
+  GST_C2_H264_BYTE,
+  GST_C2_H264_AVC3,
+  GST_C2_H265_BYTE,
+  GST_C2_H265_HEV1,
+} GstC2StreamFormat;
+
+typedef enum {
+  GST_C2_ENCODING_MODE_DEFAULT,
+  GST_C2_ENCODING_MODE_PROSIGHT,
+  GST_C2_ENCODING_MODE_DEPTH,
+  GST_C2_ENCODING_MODE_LOOKAHEAD,
+} GstC2EncodingMode;
+
+typedef enum {
+  GST_C2_CAC_DEFAULT,
+  GST_C2_CAC_DISABLE_ALL,
+  GST_C2_CAC_ENABLE_8BIT,
+  GST_C2_CAC_ENABLE_10BIT,
+  GST_C2_CAC_ENABLE_ALL,
+} GstC2Cac;
 
 struct _GstC2PixelInfo {
   GstVideoFormat format;
@@ -368,6 +400,17 @@ struct _GstC2QuantRegions {
   GstC2QuantRectangle rects[GST_C2_MAX_RECT_ROI_NUM];
   guint32             n_rects;
   guint64             timestamp;
+};
+
+struct _GstC2QuantMbmapInfo {
+  /// Flag to indicate whether enable mb map info to c2
+  gboolean enable;
+  /// Macroblock side length
+  guint8   mb_side_length;
+  /// Total number of macroblock
+  guint32  total_mbs;
+  /// Map indicating the region for QP bias
+  GArray   *qp_bias_map;
 };
 
 struct _GstC2TemporalLayer {

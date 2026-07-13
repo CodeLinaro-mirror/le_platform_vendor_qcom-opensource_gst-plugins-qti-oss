@@ -490,8 +490,8 @@ std::string Engine::RenderYuvTexture(std::vector<GraphicTuple>& graphics,
                        " frame buffer at color attachment 0 for YUV rendering");
 
     if (clean) {
-      GLfloat luma = EXTRACT_RED_COLOR(color), alpha = EXTRACT_ALPHA_COLOR(color);
-      GLfloat cr = EXTRACT_GREEN_COLOR(color), cb = EXTRACT_BLUE_COLOR(color);
+      GLfloat luma = GST_COLOR_RED(color), alpha = GST_COLOR_ALPHA(color);
+      GLfloat cr = GST_COLOR_GREEN(color), cb = GST_COLOR_BLUE(color);
 
       // Set/Clear the background of the texture attached to the frame buffer.
       if (format == ColorFormat::kGRAY8)
@@ -577,8 +577,8 @@ std::string Engine::RenderRgbTexture(std::vector<GraphicTuple>& graphics,
 
   if (clean) {
     // Set/Clear the background of the texture attached to the frame buffer.
-    env_->Gles()->ClearColor(EXTRACT_RED_COLOR(color), EXTRACT_GREEN_COLOR(color),
-                             EXTRACT_BLUE_COLOR(color), EXTRACT_ALPHA_COLOR(color));
+    env_->Gles()->ClearColor(GST_COLOR_RED(color), GST_COLOR_GREEN(color),
+                             GST_COLOR_BLUE(color), GST_COLOR_ALPHA(color));
     env_->Gles()->Clear(GL_COLOR_BUFFER_BIT);
     RETURN_IF_GL_ERROR(env_, "Failed to clear buffer color bit");
   }
@@ -637,8 +637,8 @@ std::string Engine::RenderStageTexture(GLuint texture, uint32_t color,
                      "frame buffer at color attachment 0 for stage rendering");
 
   // Set/Clear the background of the texture attached to the frame buffer.
-  env_->Gles()->ClearColor(EXTRACT_RED_COLOR(color), EXTRACT_GREEN_COLOR(color),
-                           EXTRACT_BLUE_COLOR(color), EXTRACT_ALPHA_COLOR(color));
+  env_->Gles()->ClearColor(GST_COLOR_RED(color), GST_COLOR_GREEN(color),
+                           GST_COLOR_BLUE(color), GST_COLOR_ALPHA(color));
   env_->Gles()->Clear(GL_COLOR_BUFFER_BIT);
   RETURN_IF_GL_ERROR(env_, "Failed to clear buffer color bit");
 
@@ -1144,6 +1144,10 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
       subsurface.planes[0].stride *= n_components;
     }
 
+    // Calculate the number of padding bytes in the original stride.
+    uint32_t padding = subsurface.planes[0].stride -
+        (subsurface.width * n_components * bitdepth / 8);
+
     // Overwrite formats to corresponding 4 channeled format if necessary.
     // This will make it compatible for creating EGL image and use in compute.
     if (n_components != 4) {
@@ -1178,21 +1182,18 @@ std::vector<Surface> Engine::GetImageSurfaces(const Surface& surface,
 
     subsurface.width = subsurface.planes[0].stride / bpp;
 
-    // Exact size needed for computation.
-    uint32_t size = surface.width * surface.height *
-        Format::NumComponents(surface.format) * bytedepth;
+    // Decrease the width with original stride padding equivalent in pixels.
+    // This is to account for stride when calculating pixel X and Y values.
+    subsurface.width -= padding / bpp;
 
-    // Calculate the aligned height value rounded up based on size.
+    // Calculate the aligned height value rounded up based on surface size.
+    uint32_t size = subsurface.size - subsurface.planes[0].offset;
+
     subsurface.height =
-        std::ceil(size / static_cast<float>(subsurface.width) / bpp);
+        std::ceil(size / static_cast<float>(subsurface.planes[0].stride));
 
-    // Round up to multiple of 4
-    subsurface.height = ((subsurface.height + 3) &  ~3);
-
-    // Sanity check for size of the allocated bufffer
-    if (size > subsurface.size - subsurface.planes[0].offset)
-      throw Exception("Allocated buffer size is not big enough! Actual: ",
-          subsurface.size, ", Expected: ", size);
+    // Round down to multiple of 4 due to freedreno limitations.
+    subsurface.height = subsurface.height & (~3);
 
     imgsurfaces.push_back(subsurface);
   } else {

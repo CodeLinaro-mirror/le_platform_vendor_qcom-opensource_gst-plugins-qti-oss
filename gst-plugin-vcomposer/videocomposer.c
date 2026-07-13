@@ -189,8 +189,8 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
           continue;
 
         roimeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, roimeta);
-        gst_video_region_of_interest_coordinates_correction (roimeta, &source,
-            &destination);
+        gst_video_region_of_interest_meta_transform_coordinates (roimeta,
+            &source, &destination);
 
         if (!gst_buffer_has_valid_parent_meta (inbuffer, roimeta->parent_id))
           roimeta->parent_id = -1;
@@ -215,7 +215,7 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
         GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (meta);
 
         lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
-        gst_video_landmarks_coordinates_correction (lmkmeta, &source, &destination);
+        gst_video_landmarks_meta_transform_coordinates (lmkmeta, &source, &destination);
 
         if (!gst_buffer_has_valid_parent_meta (inbuffer, lmkmeta->parent_id))
           lmkmeta->parent_id = -1;
@@ -251,6 +251,20 @@ gst_video_composer_zorder_compare (const GstVideoComposerSinkPad * lpad,
     const GstVideoComposerSinkPad * rpad)
 {
   return lpad->zorder - rpad->zorder;
+}
+
+static void
+gst_video_composer_sinkpad_zorder_notify_cb (GObject * object,
+    GParamSpec * pspec, gpointer userdata)
+{
+  GstElement *element = GST_ELEMENT_CAST (userdata);
+
+  GST_OBJECT_LOCK (element);
+
+  element->sinkpads = g_list_sort (element->sinkpads,
+      (GCompareFunc) gst_video_composer_zorder_compare);
+
+  GST_OBJECT_UNLOCK (element);
 }
 
 static gint
@@ -413,7 +427,7 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
     return FALSE;
   }
 
-  if (gst_query_get_video_alignment (query, &ds_align)) {
+  if (gst_query_parse_video_alignment (query, &ds_align)) {
     GST_DEBUG_OBJECT (vcomposer, "Downstream alignment: padding (top: %u bottom:"
         " %u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
         ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
@@ -421,7 +435,7 @@ gst_video_composer_decide_allocation (GstAggregator * aggregator,
         ds_align.stride_align[2], ds_align.stride_align[3]);
 
     // Find the most the appropriate alignment between us and downstream.
-    align = gst_video_calculate_common_alignment (&align, &ds_align);
+    gst_video_alignment_update (&align, &ds_align);
 
     GST_DEBUG_OBJECT (vcomposer, "Common alignment: padding (top: %u bottom: %u"
         " left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
@@ -829,7 +843,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     vblit->alpha = sinkpad->alpha * G_MAXUINT8;
 
     if ((sinkpad->crop.w != 0) && (sinkpad->crop.h != 0)) {
-      gst_video_rectangle_to_quadrilateral (&(sinkpad->crop), &(vblit->source));
+      gst_video_quadrilateral_from_rectangle (&(vblit->source), &(sinkpad->crop));
       vblit->mask |= GST_VCE_MASK_SOURCE;
     }
 
@@ -945,6 +959,10 @@ gst_video_composer_request_pad (GstElement * element, GstPadTemplate * templ,
 
   GST_OBJECT_UNLOCK (vcomposer);
 
+  // Re-sort sink pads when the zorder property is updated.
+  g_signal_connect (pad, "notify::zorder",
+      G_CALLBACK (gst_video_composer_sinkpad_zorder_notify_cb), element);
+
   GST_DEBUG_OBJECT (vcomposer, "Created pad: %s", GST_PAD_NAME (pad));
 
   gst_child_proxy_child_added (GST_CHILD_PROXY (element), G_OBJECT (pad),
@@ -973,6 +991,9 @@ gst_video_composer_release_pad (GstElement * element, GstPad * pad)
 
   gst_child_proxy_child_removed (GST_CHILD_PROXY (vcomposer), G_OBJECT (pad),
       GST_OBJECT_NAME (pad));
+
+  g_signal_handlers_disconnect_by_func (pad,
+      G_CALLBACK (gst_video_composer_sinkpad_zorder_notify_cb), element);
 
   GST_ELEMENT_CLASS (parent_class)->release_pad (GST_ELEMENT (vcomposer), pad);
 

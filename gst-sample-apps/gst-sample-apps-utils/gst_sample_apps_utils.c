@@ -9,6 +9,13 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <glob.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include <glib-unix.h>
 #include <gst/gst.h>
@@ -65,13 +72,19 @@ get_active_display_mode (gint * width, gint * height)
     return FALSE;
   }
 
-  fgets (line, 128, fp);
+  if (fgets (line, sizeof (line), fp) == NULL) {
+    fclose (fp);
+    return FALSE;
+  }
+
   fclose (fp);
+
   if (strlen (line) > 0) {
     if (2 == sscanf (line, "%dx%d", width, height)) {
       return TRUE;
     }
   }
+
   return FALSE;
 }
 
@@ -114,7 +127,7 @@ handle_interrupt_signal (gpointer userdata)
 void
 error_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
-  GMainLoop *mloop = (GMainLoop*) userdata;
+  GMainLoop *mloop = (GMainLoop *) userdata;
   GError *error = NULL;
   gchar *debug = NULL;
 
@@ -157,7 +170,7 @@ warning_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 void
 eos_cb (GstBus * bus, GstMessage * message, gpointer userdata)
 {
-  GMainLoop *mloop = (GMainLoop*) userdata;
+  GMainLoop *mloop = (GMainLoop *) userdata;
 
   g_print ("\nReceived End-of-Stream from '%s' ...\n",
       GST_MESSAGE_SRC_NAME (message));
@@ -177,7 +190,6 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
   GstElement *pipeline = GST_ELEMENT (userdata);
   GstState old, new_st, pending;
 
-  // Handle state changes only for the pipeline.
   if (GST_MESSAGE_SRC (message) != GST_OBJECT_CAST (pipeline))
     return;
 
@@ -191,7 +203,7 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
       (pending == GST_STATE_VOID_PENDING)) {
 
     if (gst_element_set_state (pipeline,
-        GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
       gst_printerr (
           "\nPipeline doesn't want to transition to PLAYING state!\n");
       return;
@@ -205,7 +217,6 @@ state_changed_cb (GstBus * bus, GstMessage * message, gpointer userdata)
  * @param element The GstElement on which to set the property.
  * @param propname The name of the property to set.
  * @param valname The value to set the property to.
- *
  */
 void
 gst_element_set_enum_property (GstElement * element, const gchar * propname,
@@ -214,7 +225,8 @@ gst_element_set_enum_property (GstElement * element, const gchar * propname,
   GValue value = G_VALUE_INIT;
   GParamSpec *propspecs = NULL;
 
-  propspecs = g_object_class_find_property (G_OBJECT_GET_CLASS (element), propname);
+  propspecs =
+      g_object_class_find_property (G_OBJECT_GET_CLASS (element), propname);
   g_value_init (&value, G_PARAM_SPEC_VALUE_TYPE (propspecs));
   gst_value_deserialize (&value, valname);
 
@@ -247,9 +259,8 @@ get_enum_value (GstElement * element, const gchar * prop_name,
     GType owner_type = param->owner_type;
     guint j = 0;
 
-    // We need only pad properties
     if (obj == NULL && (owner_type == G_TYPE_OBJECT
-        || owner_type == GST_TYPE_OBJECT || owner_type == GST_TYPE_PAD))
+            || owner_type == GST_TYPE_OBJECT || owner_type == GST_TYPE_PAD))
       continue;
 
     if (strcmp (prop_name, param->name)) {
@@ -282,31 +293,33 @@ get_enum_value (GstElement * element, const gchar * prop_name,
  * Unref all elements if any fails to create.
  */
 void
-unref_elements(void *first_elem, ...) {
+unref_elements (void *first_elem, ...)
+{
   va_list args;
 
-  va_start(args, first_elem);
+  va_start (args, first_elem);
 
   while (1) {
     if (first_elem) {
-      if (!strcmp((char *) first_elem, "NULL"))
+      if (!strcmp ((char *) first_elem, "NULL"))
         break;
       gst_object_unref (first_elem);
     }
 
-    first_elem = va_arg(args, void *);
+    first_elem = va_arg (args, void *);
   }
 
-  va_end(args);
+  va_end (args);
 }
 
-// Recieves a list of pointers to variable containing pointer to gst element
-// and unrefs the gst element if needed
+/* Receives a list of pointers to variable containing pointer to gst element
+ * and unrefs the gst element if needed
+ */
 void
-cleanup_gst (void * first_elem, ...)
+cleanup_gst (void *first_elem, ...)
 {
   va_list args;
-  void **p_gst_obj = (void **)first_elem;
+  void **p_gst_obj = (void **) first_elem;
 
   va_start (args, first_elem);
   while (p_gst_obj) {
@@ -320,30 +333,141 @@ cleanup_gst (void * first_elem, ...)
 gboolean
 is_camera_available ()
 {
-  gboolean is_qmmf_on = FALSE;
-
   GError *error = NULL;
 
   GOptionEntry entries[] = { { NULL } };
-  GOptionContext * ctx = g_option_context_new ("Dummy context");
+  GOptionContext *ctx = g_option_context_new ("Dummy context");
   g_option_context_add_main_entries (ctx, entries, NULL);
   g_option_context_add_group (ctx, gst_init_get_option_group ());
 
   g_option_context_parse (ctx, NULL, NULL, &error);
   g_option_context_free (ctx);
 
-  GstRegistry * gst_reg = gst_registry_get ();
+  GstRegistry *gst_reg = gst_registry_get ();
+  GstPlugin *gst_plugin = NULL;
 
-  GstPlugin * gst_plugin = NULL;
-
-  if (gst_reg)
-    gst_plugin = gst_registry_find_plugin (gst_reg, "qtiqmmfsrc");
-
-  if (gst_plugin) {
-    gst_object_unref (gst_plugin);
-
-    is_qmmf_on = TRUE;
+  if (!gst_reg)
+    return FALSE;
+  // Check presence of either camera plugin
+  gst_plugin = gst_registry_find_plugin(gst_reg, "qtiqmmfsrc");
+  if (!gst_plugin) {
+    gst_plugin = gst_registry_find_plugin(gst_reg, "qticamsrc");
   }
 
-  return is_qmmf_on;
+  if (gst_plugin) {
+    gst_object_unref(gst_plugin);
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+gboolean
+is_camx_present (void)
+{
+return access ("/run/cam_server/le_cam_socket", F_OK) == 0;
+}
+
+GstElement *
+create_camera_source_bin (const gchar * bin_name)
+{
+  GstElement *src_bin = NULL;
+  GstElement *src = NULL;
+  GstElement *qtivtransform = NULL;
+  GstPad *target_src_pad = NULL;
+  GstPad *ghost_src_pad = NULL;
+  gboolean camx_present = FALSE;
+
+  camx_present = is_camx_present ();
+
+  if (camx_present) {
+    src = gst_element_factory_make ("qtiqmmfsrc", "camera_src");
+    if (!src) {
+      g_printerr ("Failed to create qtiqmmfsrc\n");
+      return NULL;
+    }
+    g_print ("Camera Overlay enabled \n");
+    return src;
+  }
+
+  src_bin = gst_bin_new (bin_name ? bin_name : "camera_source_bin");
+
+  if (!src_bin) {
+    g_printerr ("Failed to create camera source bin\n");
+    return NULL;
+  }
+
+  src = gst_element_factory_make ("libcamerasrc", "camera_src");
+  qtivtransform = gst_element_factory_make ("qtivtransform", "camera_transform");
+
+  if (!src || !qtivtransform) {
+    g_printerr ("Failed to create libcamerasrc fallback source chain\n");
+    gst_object_unref (src_bin);
+    return NULL;
+  }
+
+  gst_bin_add_many (GST_BIN (src_bin), src, qtivtransform, NULL);
+
+  if (!gst_element_link_many (src, qtivtransform, NULL)) {
+    g_printerr ("Failed to link libcamerasrc -> qtivtransform\n");
+    gst_object_unref (src_bin);
+    return NULL;
+  }
+
+  target_src_pad = gst_element_get_static_pad (qtivtransform, "src");
+  if (!target_src_pad) {
+    g_printerr ("Failed to get qtivtransform src pad\n");
+    gst_object_unref (src_bin);
+    return NULL;
+  }
+
+  g_print ("Camera Overlay not enabled\n");
+  ghost_src_pad = gst_ghost_pad_new ("src", target_src_pad);
+  gst_object_unref (target_src_pad);
+
+  if (!ghost_src_pad) {
+    g_printerr ("Failed to create ghost src pad for camera source bin\n");
+    gst_object_unref (src_bin);
+    return NULL;
+  }
+
+  if (!gst_element_add_pad (src_bin, ghost_src_pad)) {
+    g_printerr ("Failed to add ghost src pad to camera source bin\n");
+    gst_object_unref (ghost_src_pad);
+    gst_object_unref (src_bin);
+    return NULL;
+  }
+
+  return src_bin;
+}
+
+SocId GetSocId() {
+    SocId id = kInvalid;
+
+    int soc_fd = -1;
+    char buf[CHIPSET_BUFFER_SIZE] = {0};
+
+    if (access (SOC_DEV_PATH_PRIMARY, F_OK) == 0) {
+        soc_fd = open (SOC_DEV_PATH_PRIMARY, O_RDONLY);
+    } else {
+        soc_fd = open (SOC_DEV_PATH_SECONDARY, O_RDONLY);
+    }
+
+    if (soc_fd >= 0) {
+        int ret = read (soc_fd, buf, sizeof (buf) - 1);
+        if (ret > 0) {
+            buf[ret] = '\0';
+            id = (SocId) atoi (buf);
+        }
+        close(soc_fd);
+    }
+
+    return id;
+}
+
+gboolean
+is_v66_arch ()
+{
+  SocId id = GetSocId();
+  return (id == kTALOS_QCS615 || id == kTALOS_QCS610 || id == kTALOS_QCS410);
 }

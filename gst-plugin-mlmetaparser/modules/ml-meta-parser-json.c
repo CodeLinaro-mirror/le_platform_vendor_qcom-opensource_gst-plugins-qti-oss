@@ -9,6 +9,7 @@
 
 #include <json-glib/json-glib.h>
 #include <gst/utils/common-utils.h>
+#include <gst/utils/gsttextmeta.h>
 #include <gst/video/video-utils.h>
 #include <gst/video/gstvideoclassificationmeta.h>
 #include <gst/video/gstvideolandmarksmeta.h>
@@ -38,6 +39,13 @@ struct _GstParserSubModule {
 
   // The type of the incoming buffers.
   GstDataType datatype;
+
+  // Image dimensions.
+  gint width;
+  gint height;
+
+  // Property from plugin
+  gboolean attach_frame;
 };
 
 static void
@@ -179,6 +187,37 @@ gst_parser_module_process_classification_structure (
     json_builder_end_object (submodule->builder);
     g_free (name);
   }
+}
+
+static void
+gst_parser_module_process_text_structure (GstParserSubModule * submodule,
+    GstStructure * structure)
+{
+  guint color = 0x000000FF;
+  gdouble confidence = 0.0;
+  const gchar *contents = NULL;
+
+  contents = gst_structure_get_string (structure, "contents");
+  gst_structure_get_double (structure, "confidence", &confidence);
+  gst_structure_get_uint (structure, "color", &color);
+
+  json_builder_begin_object (submodule->builder);
+
+  json_builder_set_member_name (submodule->builder, "contents");
+  json_builder_add_string_value (submodule->builder, contents);
+  json_builder_set_member_name (submodule->builder, "confidence");
+  json_builder_add_double_value (submodule->builder, confidence);
+  json_builder_set_member_name (submodule->builder, "color");
+  json_builder_add_int_value (submodule->builder, color);
+
+  if (gst_structure_has_field (structure, "xtraparams")) {
+    GstStructure *xtraparams = GST_STRUCTURE (
+        g_value_get_boxed (gst_structure_get_value (structure, "xtraparams")));
+
+    gst_parser_module_process_structure (submodule, "xtraparams", xtraparams);
+  }
+
+  json_builder_end_object (submodule->builder);
 }
 
 static void
@@ -455,6 +494,19 @@ gst_parser_module_process_detection_structure (GstParserSubModule * submodule,
 
     GST_JSON_END_META_ARRAY (submodule->builder, metalist);
 
+    // Parse derived class structs and add section if there are any available.
+    metalist = gst_value_list_get_meta_structs (valist,
+        g_quark_from_static_string ("Text"), id);
+
+    GST_JSON_BEGIN_META_ARRAY (submodule->builder, metalist, "text");
+
+    for (list = g_list_last (metalist); list != NULL; list = list->prev) {
+      structure = GST_STRUCTURE (list->data);
+      gst_parser_module_process_text_structure (submodule, structure);
+    }
+
+    GST_JSON_END_META_ARRAY (submodule->builder, metalist);
+
     json_builder_end_object (submodule->builder);
   }
 }
@@ -491,8 +543,31 @@ gst_parser_module_process_classification_meta (GstParserSubModule * submodule,
 }
 
 static void
+gst_parser_module_process_text_meta (GstParserSubModule * submodule,
+    GstTextMeta * textmeta)
+{
+  json_builder_begin_object (submodule->builder);
+
+  json_builder_set_member_name (submodule->builder, "contents");
+  json_builder_add_string_value (submodule->builder, textmeta->contents);
+
+  json_builder_set_member_name (submodule->builder, "confidence");
+  json_builder_add_double_value (submodule->builder, textmeta->confidence);
+
+  json_builder_set_member_name (submodule->builder, "color");
+  json_builder_add_int_value (submodule->builder, textmeta->color);
+
+  if (textmeta->xtraparams != NULL) {
+    gst_parser_module_process_structure (submodule, "xtraparams",
+        textmeta->xtraparams);
+  }
+
+  json_builder_end_object (submodule->builder);
+}
+
+static void
 gst_parser_module_process_landmarks_meta (GstParserSubModule * submodule,
-    GstVideoMeta * vmeta, GstVideoLandmarksMeta * lmkmeta)
+  GstVideoLandmarksMeta * lmkmeta)
 {
   GstVideoKeypoint *kp = NULL;
   GstVideoKeypointLink *link = NULL;
@@ -507,8 +582,8 @@ gst_parser_module_process_landmarks_meta (GstParserSubModule * submodule,
   for (idx = 0; idx < lmkmeta->keypoints->len ; idx++) {
     kp = &(g_array_index (lmkmeta->keypoints, GstVideoKeypoint, idx));
 
-    x = ((gdouble) kp->x) / vmeta->width;
-    y = ((gdouble) kp->y) / vmeta->height;
+    x = ((gdouble) kp->x) / submodule->width;
+    y = ((gdouble) kp->y) / submodule->height;
 
     json_builder_begin_object (submodule->builder);
 
@@ -564,7 +639,7 @@ gst_parser_module_process_landmarks_meta (GstParserSubModule * submodule,
 
 static void
 gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
-    GstBuffer * buffer, GstVideoMeta * vmeta, GstVideoRegionOfInterestMeta * roimeta)
+    GstBuffer * buffer, GstVideoRegionOfInterestMeta * roimeta)
 {
   GstStructure *objparam = NULL;
   GList *metalist = NULL, *list = NULL;
@@ -577,10 +652,10 @@ gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
   gst_structure_get_double (objparam, "confidence", &confidence);
   gst_structure_get_uint (objparam, "color", &color);
 
-  x = ((gdouble) roimeta->x) / vmeta->width;
-  y = ((gdouble) roimeta->y) / vmeta->height;
-  width = ((gdouble) roimeta->w) / vmeta->width;
-  height = ((gdouble) roimeta->h) / vmeta->height;
+  x = ((gdouble) roimeta->x) / submodule->width;
+  y = ((gdouble) roimeta->y) / submodule->height;
+  width = ((gdouble) roimeta->w) / submodule->width;
+  height = ((gdouble) roimeta->h) / submodule->height;
 
   json_builder_begin_object (submodule->builder);
 
@@ -627,8 +702,8 @@ gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
     for (idx = 0; idx < landmarks->len; idx++) {
       kp = &(g_array_index (landmarks, GstVideoKeypoint, idx));
 
-      x = ((gdouble) kp->x) / vmeta->width;
-      y = ((gdouble) kp->y) / vmeta->height;
+      x = ((gdouble) kp->x) / submodule->width;
+      y = ((gdouble) kp->y) / submodule->height;
 
       json_builder_set_member_name (submodule->builder,
           g_quark_to_string (kp->name));
@@ -659,7 +734,7 @@ gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
 
   for (list = g_list_last (metalist); list != NULL; list = list->prev) {
     GstVideoRegionOfInterestMeta *rmeta = GST_VIDEO_ROI_META_CAST (list->data);
-    gst_parser_module_process_roi_meta (submodule, buffer, vmeta, rmeta);
+    gst_parser_module_process_roi_meta (submodule, buffer, rmeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -670,7 +745,7 @@ gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
 
   for (list = g_list_last (metalist); list != NULL; list = list->prev) {
     GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (list->data);
-    gst_parser_module_process_landmarks_meta (submodule, vmeta, lmkmeta);
+    gst_parser_module_process_landmarks_meta (submodule, lmkmeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -684,6 +759,17 @@ gst_parser_module_process_roi_meta (GstParserSubModule * submodule,
         GST_VIDEO_CLASSIFICATION_META_CAST (list->data);
 
     gst_parser_module_process_classification_meta (submodule, classmeta);
+  }
+
+  GST_JSON_END_META_ARRAY (submodule->builder, metalist);
+
+  metalist = gst_buffer_get_text_metas_parent_id (buffer, roimeta->id);
+  GST_JSON_BEGIN_META_ARRAY (submodule->builder, metalist, "text");
+
+  for (list = g_list_last (metalist); list != NULL; list = list->prev) {
+    GstTextMeta *textmeta = GST_TEXT_META_CAST (list->data);
+
+    gst_parser_module_process_text_meta (submodule, textmeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -774,6 +860,19 @@ gst_parser_module_process_text_buffer (GstParserSubModule * submodule,
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
 
+  // Parse root class structs and add array section if there are any available.
+  metalist = gst_value_list_get_meta_structs (&valist,
+      g_quark_from_static_string ("Text"), -1);
+
+  GST_JSON_BEGIN_META_ARRAY (submodule->builder, metalist, "text");
+
+  for (list = g_list_last (metalist); list != NULL; list = list->prev) {
+    structure = GST_STRUCTURE (list->data);
+    gst_parser_module_process_text_structure (submodule, structure);
+  }
+
+  GST_JSON_END_META_ARRAY (submodule->builder, metalist);
+
 cleanup:
   g_value_unset (&valist);
   return success;
@@ -783,14 +882,7 @@ static gboolean
 gst_parser_module_process_video_buffer (GstParserSubModule * submodule,
     GstBuffer * buffer)
 {
-  GstVideoMeta *vmeta = NULL;
   GList *metalist = NULL, *list = NULL;
-
-  // Extract the video meta, used for conversion to relative coordinates.
-  if ((vmeta = gst_buffer_get_video_meta (buffer)) == NULL) {
-    GST_ERROR ("Failed to get video meta from %" GST_PTR_FORMAT "!", buffer);
-    return FALSE;
-  }
 
   // Parse root ROI metas and add array section if there are any available.
   metalist = gst_buffer_get_video_region_of_interest_metas_parent_id (buffer, -1);
@@ -798,7 +890,7 @@ gst_parser_module_process_video_buffer (GstParserSubModule * submodule,
 
   for (list = g_list_last (metalist); list != NULL; list = list->prev) {
     GstVideoRegionOfInterestMeta *roimeta = GST_VIDEO_ROI_META_CAST (list->data);
-    gst_parser_module_process_roi_meta (submodule, buffer, vmeta, roimeta);
+    gst_parser_module_process_roi_meta (submodule, buffer, roimeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -809,7 +901,7 @@ gst_parser_module_process_video_buffer (GstParserSubModule * submodule,
 
   for (list = g_list_last (metalist); list != NULL; list = list->prev) {
     GstVideoLandmarksMeta *lmkmeta = GST_VIDEO_LANDMARKS_META_CAST (list->data);
-    gst_parser_module_process_landmarks_meta (submodule, vmeta, lmkmeta);
+    gst_parser_module_process_landmarks_meta (submodule, lmkmeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -823,6 +915,18 @@ gst_parser_module_process_video_buffer (GstParserSubModule * submodule,
         GST_VIDEO_CLASSIFICATION_META_CAST (list->data);
 
     gst_parser_module_process_classification_meta (submodule, classmeta);
+  }
+
+  GST_JSON_END_META_ARRAY (submodule->builder, metalist);
+
+  // Parse root class metas and add array section if there are any available.
+  metalist = gst_buffer_get_text_metas_parent_id (buffer, -1);
+  GST_JSON_BEGIN_META_ARRAY (submodule->builder, metalist, "text");
+
+  for (list = g_list_last (metalist); list != NULL; list = list->prev) {
+    GstTextMeta *textmeta = GST_TEXT_META_CAST (list->data);
+
+    gst_parser_module_process_text_meta (submodule, textmeta);
   }
 
   GST_JSON_END_META_ARRAY (submodule->builder, metalist);
@@ -887,12 +991,36 @@ gboolean
 gst_parser_module_configure (gpointer instance, GstStructure * settings)
 {
   GstParserSubModule *submodule = GST_PARSER_SUB_MODULE_CAST (instance);
+  gboolean success = TRUE;
 
   g_return_val_if_fail (submodule != NULL, FALSE);
   g_return_val_if_fail (settings != NULL, FALSE);
 
-  return gst_structure_get (settings, GST_PARSER_MODULE_OPT_DATA_TYPE,
+  success = gst_structure_get (settings, GST_PARSER_MODULE_OPT_DATA_TYPE,
       G_TYPE_ENUM, &(submodule->datatype), NULL);
+
+  if (!success) {
+    GST_ERROR ("Failed to get data type!");
+    return success;
+  }
+
+  if (submodule->datatype == GST_DATA_TYPE_VIDEO ||
+      submodule->datatype == GST_DATA_TYPE_JPEG) {
+    success = gst_structure_get (settings,
+        "width", G_TYPE_INT, &(submodule->width),
+        "height", G_TYPE_INT, &(submodule->height), NULL);
+  }
+
+  if (gst_structure_has_field (settings, "attach-frame")) {
+    if (submodule->datatype == GST_DATA_TYPE_JPEG) {
+      gst_structure_get_boolean (settings, "attach-frame",
+          &(submodule->attach_frame));
+    } else {
+      GST_WARNING ("Property 'attach-frame' only compatible with JPEG data type!");
+    }
+  }
+
+  return success;
 }
 
 gboolean
@@ -900,6 +1028,7 @@ gst_parser_module_process (gpointer instance, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
   GstParserSubModule *submodule = GST_PARSER_SUB_MODULE_CAST (instance);
+  GstMapInfo map = { 0 };
   JsonNode *root = NULL;
   JsonGenerator *generator = NULL;
   gchar *string = NULL, *timestamp = NULL;
@@ -908,15 +1037,37 @@ gst_parser_module_process (gpointer instance, GstBuffer * inbuffer,
 
   json_builder_begin_object (submodule->builder);
 
-  if (submodule->datatype == GST_DATA_TYPE_VIDEO)
+  if (submodule->datatype == GST_DATA_TYPE_VIDEO ||
+      submodule->datatype == GST_DATA_TYPE_JPEG) {
     success = gst_parser_module_process_video_buffer (submodule, inbuffer);
-  else if (submodule->datatype == GST_DATA_TYPE_TEXT)
+  } else if (submodule->datatype == GST_DATA_TYPE_TEXT) {
     success = gst_parser_module_process_text_buffer (submodule, inbuffer);
-  else
+  } else {
     GST_ERROR ("Unsupported data type!");
+    return success;
+  }
+
+  if (submodule->attach_frame) {
+    if (gst_buffer_map (inbuffer, &map, GST_MAP_READ)) {
+      gchar *base64_encoded = g_base64_encode (map.data, map.size);
+
+      gst_buffer_unmap (inbuffer, &map);
+      if (base64_encoded != NULL) {
+        json_builder_set_member_name (submodule->builder, "buffer_base64");
+        json_builder_add_string_value (submodule->builder, base64_encoded);
+        g_free (base64_encoded);
+      } else {
+        GST_ERROR ("Failed to encode buffer image data!");
+        return FALSE;
+      }
+    } else {
+      GST_ERROR ("Failed to map %" GST_PTR_FORMAT "!", inbuffer);
+      return FALSE;
+    }
+  }
 
   // Add timestamp as string becuase JSON doesn't support 64 bit integer values.
-  timestamp = g_strdup_printf("%" G_GINT64_FORMAT, GST_BUFFER_PTS (inbuffer));
+  timestamp = g_strdup_printf ("%" G_GINT64_FORMAT, GST_BUFFER_PTS (inbuffer));
 
   json_builder_set_member_name (submodule->builder, "parameters");
   json_builder_begin_object (submodule->builder);
@@ -945,5 +1096,5 @@ gst_parser_module_process (gpointer instance, GstBuffer * inbuffer,
   json_node_free (root);
   json_builder_reset (submodule->builder);
 
-  return success ? TRUE : FALSE;
+  return success;
 }

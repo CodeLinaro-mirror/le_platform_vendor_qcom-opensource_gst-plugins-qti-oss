@@ -296,7 +296,7 @@ class DemoWindow(Gtk.Window):
         Checks for the existence of specific files and downloads them if they are missing.
         """
 
-        file_path = "/etc/media/download_artifacts.sh"
+        file_path = "/tmp/download_artifacts.sh"
         DEFAULT_TFLITE_OBJECT_DETECTION_MODEL = "/etc/models/yolox_quantized.tflite"
         DEFAULT_TFLITE_CLASSIFICATION_MODEL = "/etc/models/inception_v3_quantized.tflite"
         DEFAULT_TFLITE_POSE_DETECTION_MODEL = "/etc/models/hrnet_pose_quantized.tflite"
@@ -369,10 +369,13 @@ class DemoWindow(Gtk.Window):
                     self.popup.show_all()
 
                     # URL of the file to be downloaded
-                    url = "https://raw.githubusercontent.com/quic/sample-apps-for-qualcomm-linux/main/qualcomm-linux/scripts/download_artifacts.sh"
+                    url = "https://raw.githubusercontent.com/qualcomm/sample-apps-for-qualcomm-linux/main/qualcomm-linux/scripts/download_artifacts.sh"
 
                     if not os.path.exists("/etc/media"):
                         os.makedirs("/etc/media", exist_ok=True)
+
+                    if not os.path.exists("/tmp"):
+                        os.makedirs("/tmp", exist_ok=True)
 
                     # Download the file from the URL to the specified file path
                     urllib.request.urlretrieve(url, file_path)
