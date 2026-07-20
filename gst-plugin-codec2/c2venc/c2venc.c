@@ -1185,7 +1185,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
   if (c2venc->engine == NULL) {
     c2venc->engine = gst_c2_engine_new (c2venc->name, GST_C2_MODE_VIDEO_ENCODE,
-        &callbacks, c2venc);
+        &callbacks, GST_C2_POOL_TYPE_UNSPECIFIED, c2venc);
     g_return_val_if_fail (c2venc->engine != NULL, FALSE);
   }
 
