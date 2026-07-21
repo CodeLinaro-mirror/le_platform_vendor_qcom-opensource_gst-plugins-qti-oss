@@ -151,6 +151,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   { GST_C2_PARAM_BITRATE_BOOST_MARGIN,
       qc2::C2VideoBitrateboostMargin::output::PARAM_TYPE },
+  { GST_C2_PARAM_TIME_DELTA_BASED_RC,
+      qc2::C2VideoTimeDeltaBasedRCSetting::input::PARAM_TYPE },
 };
 
 // Convenient map for printing the engine parameter name in string form.
@@ -210,6 +212,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_HDR_MODE, "HDR_MODE" },
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   { GST_C2_PARAM_BITRATE_BOOST_MARGIN, "BITRATE_BOOST_MARGIN" },
+  { GST_C2_PARAM_TIME_DELTA_BASED_RC, "TIME_DELTA_BASED_RC"},
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -1087,6 +1090,13 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(margin);
       break;
     }
+    case GST_C2_PARAM_TIME_DELTA_BASED_RC: {
+      qc2::C2VideoTimeDeltaBasedRCSetting::input tdrc;
+
+      tdrc.enable = *(reinterpret_cast<gboolean*>(payload)) ? 1 : 0;
+      c2param = C2Param::Copy(tdrc);
+      break;
+    }
     default:
       GST_ERROR ("Unsupported parameter: %u!", type);
       return FALSE;
@@ -1552,6 +1562,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           reinterpret_cast<qc2::C2VideoBitrateboostMargin::output*>(c2param.get());
 
       *(reinterpret_cast<gint32*>(payload)) = margin->value;
+      break;
+    }
+    case GST_C2_PARAM_TIME_DELTA_BASED_RC: {
+      auto tdrc =
+          reinterpret_cast<qc2::C2VideoTimeDeltaBasedRCSetting::input*>(c2param.get());
+
+      *(reinterpret_cast<gboolean*>(payload)) = tdrc->enable ? TRUE : FALSE;
       break;
     }
     default:
