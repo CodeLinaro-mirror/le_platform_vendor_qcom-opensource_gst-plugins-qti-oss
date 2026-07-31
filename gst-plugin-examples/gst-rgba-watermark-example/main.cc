@@ -84,6 +84,7 @@ struct _GstAppContext {
 };
 
 /* Forward declarations. */
+static gboolean validate_watermark_files  (GList *watermarks);
 static gboolean create_watermark_pipeline (GstAppContext *appctx);
 static void     destroy_pipe              (GstAppContext *appctx);
 
@@ -96,6 +97,31 @@ watermark_entry_free (gpointer data)
     g_free (entry->path);
     g_free (entry);
   }
+}
+
+// Validate that all watermark RGBA files exist and are regular files.
+// Returns TRUE if all files are valid, FALSE otherwise.
+static gboolean
+validate_watermark_files (GList *watermarks)
+{
+  GList    *l         = NULL;
+  gboolean  all_valid = TRUE;
+
+  for (l = watermarks; l != NULL; l = l->next) {
+    WatermarkEntry *we = (WatermarkEntry *) l->data;
+
+    if (!g_file_test (we->path, G_FILE_TEST_EXISTS)) {
+      g_printerr ("ERROR: Watermark RGBA file does not exist: %s\n",
+          we->path);
+      all_valid = FALSE;
+    } else if (!g_file_test (we->path, G_FILE_TEST_IS_REGULAR)) {
+      g_printerr ("ERROR: Watermark RGBA path is not a regular file: %s\n",
+          we->path);
+      all_valid = FALSE;
+    }
+  }
+
+  return all_valid;
 }
 
 // Parse --image entry string into a WatermarkEntry.
@@ -483,7 +509,7 @@ main (gint argc, gchar *argv[])
       "Watermark entry (repeatable). "
       "Format: path=<file>,resolution=<w>x<h>,destination=<x>,<y>,<w>,<h>",
       "ENTRY" },
-    { "help-h", 'h', G_OPTION_FLAG_HIDDEN | G_OPTION_FLAG_NO_ARG,
+    { "help-h", 'h', G_OPTION_FLAG_HIDDEN,
       G_OPTION_ARG_NONE, &opt_show_help, NULL, NULL },
     { NULL }
   };
@@ -505,6 +531,16 @@ main (gint argc, gchar *argv[])
   if (!g_option_context_parse (ctx, &argc, &argv, &parse_error)) {
     g_printerr ("ERROR: %s\n", parse_error->message);
     g_error_free (parse_error);
+    g_option_context_free (ctx);
+    return 1;
+  }
+
+  // Reject unexpected positional arguments.
+  if (argc > 1) {
+    g_printerr ("ERROR: Unexpected argument: %s\n", argv[1]);
+    help_text = g_option_context_get_help (ctx, TRUE, NULL);
+    g_printerr ("%s", help_text);
+    g_free (help_text);
     g_option_context_free (ctx);
     return 1;
   }
@@ -551,6 +587,14 @@ main (gint argc, gchar *argv[])
   }
 
   g_strfreev (opt_images);
+
+  // Validate that all watermark RGBA files exist before creating pipeline.
+  if (!validate_watermark_files (appctx.watermarks)) {
+    g_printerr ("ERROR: One or more watermark files are missing. Exiting.\n");
+    g_list_free_full (appctx.watermarks, watermark_entry_free);
+    gst_deinit ();
+    return 1;
+  }
 
   // Set environment variables required by EGL/Wayland display stack.
   g_setenv ("XDG_RUNTIME_DIR", "/run/user/root", FALSE);

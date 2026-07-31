@@ -15,10 +15,21 @@ pkg_check_modules(GST_ALLOC
   REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO
   REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_QCOM_UTILS
-  REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
-pkg_check_modules(GST_QCOM_VIDEO
-  REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
+# Use in-tree CMake targets if built together, otherwise fall back to pkg-config
+if(TARGET gstqtiutilsbase)
+  set(GST_QCOM_UTILS_INCLUDE_DIRS "")
+  set(GST_QCOM_UTILS_LIBRARIES    gstqtiutilsbase)
+else()
+  pkg_check_modules(GST_QCOM_UTILS
+    REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
+endif()
+if(TARGET gstqtivideobase)
+  set(GST_QCOM_VIDEO_INCLUDE_DIRS "")
+  set(GST_QCOM_VIDEO_LIBRARIES    gstqtivideobase)
+else()
+  pkg_check_modules(GST_QCOM_VIDEO
+    REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
+endif()
 pkg_check_modules(QMMF_CAMERA_METADATA qmmf_camera_metadata)
 
 # Generate configuration header file with plugin describing definitions
@@ -91,10 +102,6 @@ add_library(${GST_CAMSRC_PLUGIN} SHARED
 
 # Add target specific precompiler defintions.
 target_compile_definitions(${GST_CAMSRC_PLUGIN} PRIVATE
-  $<$<BOOL:${EIS_MODES_ENABLE}>:EIS_MODES_ENABLE>
-  $<$<BOOL:${VHDR_MODES_ENABLE}>:VHDR_MODES_ENABLE>
-  $<$<BOOL:${FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH}>:FEATURE_LOGICAL_CAMERA_SENSOR_SWITCH>
-  $<$<BOOL:${FEATURE_OFFLINE_IFE_SUPPORT}>:FEATURE_OFFLINE_IFE_SUPPORT>
   $<$<BOOL:${HAS_ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION}>:HAS_ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION>
   $<$<BOOL:${HAS_ANDROID_REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR}>:HAS_ANDROID_REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR>
   $<$<BOOL:${HAS_ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION}>:HAS_ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION>
@@ -105,7 +112,6 @@ target_include_directories(${GST_CAMSRC_PLUGIN} PRIVATE
   ${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/camx-api/camx/service
   ${GST_QCOM_UTILS_INCLUDE_DIRS}
   ${GST_QCOM_VIDEO_INCLUDE_DIRS}
-  $<$<BOOL:${QMMF_CAMERA_METADATA_FOUND}>:${QMMF_CAMERA_METADATA_INCLUDE_DIRS}>
 )
 
 target_link_libraries(${GST_CAMSRC_PLUGIN} PRIVATE

@@ -1602,6 +1602,43 @@ gst_video_transform_flush_converter (GstVideoTransform * vtrans)
   return TRUE;
 }
 
+static gboolean
+gst_video_transform_stop (GstBaseTransform *base)
+{
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
+
+  gst_video_converter_engine_flush (vtrans->converter);
+  GST_DEBUG_OBJECT (vtrans, "Flush video converter");
+
+  return TRUE;
+}
+
+static gboolean
+gst_video_transform_sink_event (GstBaseTransform *base, GstEvent *event)
+{
+  GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM (base);
+
+  GST_DEBUG_OBJECT (vtrans, "Got event: %" GST_PTR_FORMAT, event);
+
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_FLUSH_START:
+      GST_DEBUG_OBJECT (vtrans, "Flush start for video converter");
+
+      GST_PAD_SET_FLUSHING (GST_BASE_TRANSFORM_SINK_PAD (base));
+      gst_video_converter_engine_flush (vtrans->converter);
+      break;
+    case GST_EVENT_FLUSH_STOP:
+      GST_PAD_UNSET_FLUSHING (GST_BASE_TRANSFORM_SINK_PAD (base));
+
+      GST_DEBUG_OBJECT (vtrans, "Flush stop for video converter");
+      break;
+    default:
+      break;
+  }
+
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->sink_event (base, event);
+}
+
 static GstFlowReturn
 gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
@@ -1612,6 +1649,8 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GstClockTime time = GST_CLOCK_TIME_NONE;
   const GstVideoMeta *meta = NULL;
   gboolean success = FALSE;
+
+  GST_TRACE_OBJECT (vtrans, "Input %" GST_PTR_FORMAT, inbuffer);
 
   // GAP buffer, nothing to do. Propagate output buffer downstream.
   if (gst_buffer_get_size (outbuffer) == 0 &&
@@ -1681,6 +1720,8 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GST_LOG_OBJECT (vtrans, "Conversion took %" G_GINT64_FORMAT ".%03"
       G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
       (GST_TIME_AS_USECONDS (time) % 1000));
+
+  GST_TRACE_OBJECT (vtrans, "Output %" GST_PTR_FORMAT, outbuffer);
 
   if (!success) {
     GST_ERROR_OBJECT (vtrans, "Failed to process composition!");
@@ -1986,6 +2027,8 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
       GST_DEBUG_FUNCPTR (gst_video_transform_transform_caps);
   base->fixate_caps = GST_DEBUG_FUNCPTR (gst_video_transform_fixate_caps);
   base->set_caps = GST_DEBUG_FUNCPTR (gst_video_transform_set_caps);
+  base->stop = GST_DEBUG_FUNCPTR (gst_video_transform_stop);
+  base->sink_event = GST_DEBUG_FUNCPTR (gst_video_transform_sink_event);
   base->transform = GST_DEBUG_FUNCPTR (gst_video_transform_transform);
 }
 
