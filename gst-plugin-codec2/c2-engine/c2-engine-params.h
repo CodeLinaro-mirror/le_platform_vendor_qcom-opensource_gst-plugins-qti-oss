@@ -94,6 +94,7 @@ enum {
   GST_C2_PARAM_HDR_MODE,             // GstC2HdrMode
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   GST_C2_PARAM_BITRATE_BOOST_MARGIN, // gint32
+  GST_C2_PARAM_TIME_DELTA_BASED_RC,  // gboolean
 };
 
 typedef enum {
