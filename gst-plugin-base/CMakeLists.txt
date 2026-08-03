@@ -6,17 +6,20 @@ project(gstreamer-qcom-oss-base-1.0
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-find_program(GIR_SCANNER "g-ir-scanner-wrapper")
-find_program(GIR_COMPILER "g-ir-compiler-wrapper")
+find_program(GIR_SCANNER NAMES "g-ir-scanner-wrapper" "g-ir-scanner")
+find_program(GIR_COMPILER NAMES "g-ir-compiler-wrapper" "g-ir-compiler")
 
 find_package(PkgConfig)
+find_package(Python3 3.12 COMPONENTS Interpreter Development)
 
 # Get the pkgconfigs exported by the automake tools
+pkg_check_modules(GLIB REQUIRED glib-2.0)
 pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_BASE REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_JSON REQUIRED json-glib-1.0)
+pkg_check_modules(PYGOBJECT pygobject-3.0)
 pkg_check_modules(FASTCV qcom-fastcv-binaries)
 pkg_check_modules(EGL egl)
 pkg_check_modules(GLES glesv2)
@@ -69,3 +72,4 @@ add_subdirectory(gst/memory)
 add_subdirectory(gst/ml)
 add_subdirectory(gst/cv)
 add_subdirectory(gst/camera)
+add_subdirectory(gi/overrides)

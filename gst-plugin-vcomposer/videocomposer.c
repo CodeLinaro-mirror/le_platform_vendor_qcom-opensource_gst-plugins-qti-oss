@@ -146,6 +146,24 @@ gst_video_composer_src_template (void)
       gst_video_composer_src_caps (), GST_TYPE_AGGREGATOR_PAD);
 }
 
+static GstVideoRegionOfInterestMeta*
+gst_buffer_get_image_region_meta (GstBuffer * buffer)
+{
+  GstMeta *meta = NULL;
+  GstVideoRegionOfInterestMeta *roimeta = NULL;
+  gpointer state = NULL;
+
+  while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
+              GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE)) != NULL) {
+    roimeta = GST_VIDEO_ROI_META_CAST (meta);
+
+    if (roimeta->roi_type == g_quark_from_static_string ("ImageRegion"))
+      break;
+  }
+
+  return roimeta;
+}
+
 static void
 gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
     GstVideoComposition * composition)
@@ -226,24 +244,6 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
       }
     }
   }
-}
-
-static inline GstVideoConvRotate
-gst_video_composer_translate_rotation (GstVideoComposerRotate rotation)
-{
-  switch (rotation) {
-    case GST_VIDEO_COMPOSER_ROTATE_90_CW:
-      return GST_VCE_ROTATE_90;
-    case GST_VIDEO_COMPOSER_ROTATE_90_CCW:
-      return GST_VCE_ROTATE_270;
-    case GST_VIDEO_COMPOSER_ROTATE_180:
-      return GST_VCE_ROTATE_180;
-    case GST_VIDEO_COMPOSER_ROTATE_NONE:
-      return GST_VCE_ROTATE_0;
-    default:
-      GST_WARNING ("Invalid rotation flag %d!", rotation);
-  }
-  return GST_VCE_ROTATE_0;
 }
 
 static gint
@@ -808,6 +808,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   for (list = GST_ELEMENT (vcomposer)->sinkpads; list != NULL; list = list->next) {
     GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (list->data);
+    GstVideoRegionOfInterestMeta *roimeta = NULL;
     GstBuffer *inbuffer = NULL;
     GstVideoBlit *vblit = NULL;
 
@@ -845,6 +846,14 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     if ((sinkpad->crop.w != 0) && (sinkpad->crop.h != 0)) {
       gst_video_quadrilateral_from_rectangle (&(vblit->source), &(sinkpad->crop));
       vblit->mask |= GST_VCE_MASK_SOURCE;
+    } else if ((roimeta = gst_buffer_get_image_region_meta (inbuffer)) != NULL) {
+      vblit->source.a = (GstVideoPoint){roimeta->x, roimeta->y};
+      vblit->source.b = (GstVideoPoint){roimeta->x, roimeta->y + roimeta->h};
+      vblit->source.c = (GstVideoPoint){roimeta->x + roimeta->w, roimeta->y};
+      vblit->source.d =
+          (GstVideoPoint){roimeta->x + roimeta->w, roimeta->y + roimeta->h};
+
+      vblit->mask |= GST_VCE_MASK_SOURCE;
     }
 
     if ((sinkpad->destination.w != 0) && (sinkpad->destination.h != 0)) {
@@ -858,10 +867,8 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     if (sinkpad->flip_v)
       vblit->mask |= GST_VCE_MASK_FLIP_VERTICAL;
 
-    if (sinkpad->rotation != GST_VIDEO_COMPOSER_ROTATE_NONE) {
-      vblit->rotate = gst_video_composer_translate_rotation (sinkpad->rotation);
-      vblit->mask |= GST_VCE_MASK_ROTATION;
-    }
+    vblit->rotate = sinkpad->rotation;
+    vblit->mask |= GST_VCE_MASK_ROTATION;
 
     GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
 
@@ -890,7 +897,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   composition.buffer = outbuffer;
   composition.bgfill = TRUE;
-  composition.datatype = 0;
+  composition.datatype = GST_VIDEO_DATA_TYPE_U8;
 
   meta = gst_buffer_get_video_meta (outbuffer);
 
@@ -917,9 +924,9 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
   // Get time difference between current time and start.
   time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
-  GST_LOG_OBJECT (vcomposer, "Composition took %" G_GINT64_FORMAT ".%03"
-      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
-      (GST_TIME_AS_USECONDS (time) % 1000));
+  GST_LOG_OBJECT (vcomposer, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms, HW utilization: %s", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000), vcomposer->hw_util);
 
 cleanup:
   if (composition.blits != NULL)
@@ -1011,6 +1018,11 @@ gst_video_composer_set_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_ENGINE_BACKEND:
       vcomposer->backend = g_value_get_enum (value);
+
+      if (vcomposer->backend == GST_VCE_BACKEND_GLES)
+        g_strlcpy (vcomposer->hw_util, "GPU", sizeof(vcomposer->hw_util));
+      else
+        g_strlcpy (vcomposer->hw_util, "CPU", sizeof(vcomposer->hw_util));
       break;
     case PROP_BACKGROUND:
       vcomposer->background = g_value_get_uint (value);
@@ -1135,6 +1147,11 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
 
   vcomposer->backend = DEFAULT_PROP_ENGINE_BACKEND;
   vcomposer->background = DEFAULT_PROP_BACKGROUND;
+
+  if (vcomposer->backend == GST_VCE_BACKEND_GLES)
+    g_strlcpy (vcomposer->hw_util, "GPU", sizeof(vcomposer->hw_util));
+  else
+    g_strlcpy (vcomposer->hw_util, "CPU", sizeof(vcomposer->hw_util));
 
   GST_AGGREGATOR_PAD (GST_AGGREGATOR (vcomposer)->srcpad)->segment.position =
       GST_CLOCK_TIME_NONE;

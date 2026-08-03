@@ -9,27 +9,14 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
-pkg_check_modules(GST
-  REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_ALLOC
-  REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_VIDEO
-  REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-# Use in-tree CMake targets if built together, otherwise fall back to pkg-config
-if(TARGET gstqtiutilsbase)
-  set(GST_QCOM_UTILS_INCLUDE_DIRS "")
-  set(GST_QCOM_UTILS_LIBRARIES    gstqtiutilsbase)
-else()
-  pkg_check_modules(GST_QCOM_UTILS
-    REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
-endif()
-if(TARGET gstqtivideobase)
-  set(GST_QCOM_VIDEO_INCLUDE_DIRS "")
-  set(GST_QCOM_VIDEO_LIBRARIES    gstqtivideobase)
-else()
-  pkg_check_modules(GST_QCOM_VIDEO
-    REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
-endif()
+set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH ON)
+set(CMAKE_PREFIX_PATH "${PKG_CONFIG_LOCAL_PATH}")
+
+pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_QCOM_UTILS REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_VIDEO REQUIRED gstreamer-qcom-oss-video-1.0>=1.0.0)
 pkg_check_modules(QMMF_CAMERA_METADATA qmmf_camera_metadata)
 
 # Generate configuration header file with plugin describing definitions
@@ -98,6 +85,7 @@ add_library(${GST_CAMSRC_PLUGIN} SHARED
   camera_source_image_pad.c
   camera_source_utils.cc
   camera_source_context.cc
+  camera_source_device.cc
 )
 
 # Add target specific precompiler defintions.

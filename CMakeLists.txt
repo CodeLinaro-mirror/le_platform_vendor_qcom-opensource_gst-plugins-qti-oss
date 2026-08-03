@@ -1,17 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 project(gst-plugins-qti-oss LANGUAGES C CXX)
-set(GST_VERSION_REQUIRED "1.16")
 
-# Required for SDK based compilation to resolve correct install directories
-# based on the target architecture set by the toolchain.
 include(GNUInstallDirs)
 
 # Common point for setting version of all libs of gst-plugins-qcom package
+set(GST_VERSION_REQUIRED "1.16")
 set(GST_PLUGINS_QTI_OSS_VERSION "1.0")
 
 set(GST_PLUGINS_QTI_OSS_INSTALL_BINDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}")
 set(GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
 set(GST_PLUGINS_QTI_OSS_INSTALL_INCDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}")
+set(GST_PLUGINS_QTI_OSS_INSTALL_DATADIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATAROOTDIR}")
 set(GST_PLUGINS_QTI_OSS_INSTALL_CONFIG "${CMAKE_INSTALL_SYSCONFDIR}/configs")
 set(GST_PLUGINS_QTI_OSS_INSTALL_MEDIA "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATAROOTDIR}/qdemo")
 
@@ -44,6 +43,7 @@ option(ENABLE_GST_PLUGIN_MSGBROKER "Enable gst-plugin-msgbroker" ${ENABLE_GST_ME
 option(ENABLE_GST_PLUGIN_METAMUX "Enable gst-plugin-metamux" ${ENABLE_GST_ML_PLUGINS})
 option(ENABLE_GST_PLUGIN_METATRANSFORM "Enable gst-plugin-metatransform" ${ENABLE_GST_ML_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLACONVERTER "Enable gst-plugin-mlaconverter" ${ENABLE_GST_ML_PLUGINS})
+option(ENABLE_GST_PLUGIN_MLBIN "Enable gst-plugin-mlbin" ${ENABLE_GST_ML_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLDEMUX "Enable gst-plugin-mldemux" ${ENABLE_GST_ML_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLMETAEXTRACTOR "Enable gst-plugin-mlmetaextractor" ${ENABLE_GST_ML_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLMETAPARSER "Enable gst-plugin-mlmetaparser" ${ENABLE_GST_ML_PLUGINS})
@@ -150,6 +150,7 @@ add_plugin_if(ENABLE_GST_PLUGIN_MSGBROKER       gst-plugin-msgbroker)
 add_plugin_if(ENABLE_GST_PLUGIN_METAMUX         gst-plugin-metamux)
 add_plugin_if(ENABLE_GST_PLUGIN_METATRANSFORM   gst-plugin-metatransform)
 add_plugin_if(ENABLE_GST_PLUGIN_MLACONVERTER    gst-plugin-mlaconverter)
+add_plugin_if(ENABLE_GST_PLUGIN_MLBIN           gst-plugin-mlbin)
 add_plugin_if(ENABLE_GST_PLUGIN_MLDEMUX         gst-plugin-mldemux)
 add_plugin_if(ENABLE_GST_PLUGIN_MLMETAEXTRACTOR gst-plugin-mlmetaextractor)
 add_plugin_if(ENABLE_GST_PLUGIN_MLMETAPARSER    gst-plugin-mlmetaparser)
