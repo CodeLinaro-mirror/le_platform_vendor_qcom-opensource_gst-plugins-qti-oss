@@ -1649,12 +1649,13 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
   ::qmmf::recorder::RecorderCb cbs;
   gint status = 0;
 
-  context = g_slice_new0 (GstQmmfContext);
+  context = new GstQmmfContext ();
   g_return_val_if_fail (context != NULL, NULL);
 
+  g_mutex_init (&context->lock);
   context->recorder = new ::qmmf::recorder::Recorder();
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, context->recorder != NULL,
-      g_slice_free (GstQmmfContext, context);,
+      g_mutex_clear (&context->lock); delete context;,
       NULL, "QMMF Recorder creation failed!");
 
   context->state = GST_STATE_NULL;
@@ -1676,7 +1677,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
 
   status = context->recorder->Connect (cbs);
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, status == 0,
-      delete context->recorder; g_slice_free (GstQmmfContext, context);,
+      g_mutex_clear (&context->metadata_lock); g_mutex_clear (&context->lock);
+      delete context->recorder; delete context;,
       NULL, "QMMF Recorder Connect failed!");
 
   context->defogtable = gst_structure_new_empty ("org.quic.camera.defog");
@@ -1698,7 +1700,8 @@ gst_qmmf_context_new (GstCameraEventCb eventcb, GstCameraMetaCb metacb,
 
   status = gst_qmmf_context_get_cam_static_info (context);
   QMMFSRC_RETURN_VAL_IF_FAIL_WITH_CLEAN (NULL, status == 0,
-      delete context->recorder; g_slice_free (GstQmmfContext, context);,
+      g_mutex_clear (&context->metadata_lock); g_mutex_clear (&context->lock);
+      delete context->recorder; delete context;,
       NULL, "Get Camera Static Info failed!");
 
   GST_INFO ("Created QMMF context: %p", context);
@@ -1767,9 +1770,10 @@ gst_qmmf_context_free (GstQmmfContext * context)
 
   g_mutex_unlock (&context->metadata_lock);
   g_mutex_clear (&context->metadata_lock);
+  g_mutex_clear (&context->lock);
 
   GST_INFO ("Destroyed QMMF context: %p", context);
-  g_slice_free (GstQmmfContext, context);
+  delete context;
 }
 
 void
@@ -2408,7 +2412,9 @@ gst_qmmf_context_create_image_stream (GstQmmfContext * context, GstPad * pad)
         imgparam.format = ::qmmf::recorder::ImageFormat::kNV12UBWC;
         break;
       case GST_VIDEO_FORMAT_P010_10LE:
-        imgparam.format = ::qmmf::recorder::ImageFormat::kP010;
+        imgparam.format = (ipad->subformat == GST_IMAGE_SUBFORMAT_HEIF) ?
+            ::qmmf::recorder::ImageFormat::kP010HEIF :
+            ::qmmf::recorder::ImageFormat::kP010;
         break;
       case GST_VIDEO_FORMAT_NV12_Q10LE32C:
         imgparam.format = ::qmmf::recorder::ImageFormat::kTP10UBWC;

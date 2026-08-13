@@ -30,6 +30,14 @@ enum
   GST_C2_MODE_AUDIO_DECODE,
 };
 
+typedef enum {
+  GST_C2_POOL_TYPE_UNSPECIFIED,
+  GST_C2_POOL_TYPE_DEFAULT_LINEAR,
+  GST_C2_POOL_TYPE_DEFAULT_GRAPHIC,
+  GST_C2_POOL_TYPE_LINEAR_NON_CONTIGUOUS,
+  GST_C2_POOL_TYPE_GRAPHIC_NON_CONTIGUOUS,
+} GstC2PoolType;
+
 struct _GstC2QueueItem {
   /// Input buffer to be queued
   GstBuffer *buffer;
@@ -51,6 +59,7 @@ struct _GstC2Callbacks {
  * @name: The Codec2 component name which will be created internally.
  * @callbacks: Engine callback functions which will be called when an event
  *             occurs or an encoded/decoded output buffer is produced.
+ * @type: Pool type for creating C0dec2BlockPool.
  * @userdata: Private user defined data which will be attached to the callbacks.
  *
  * Initialize instance of Codec2 engine.
@@ -59,7 +68,7 @@ struct _GstC2Callbacks {
  */
 GST_API GstC2Engine *
 gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
-                   gpointer userdata);
+                   GstC2PoolType type, gpointer userdata);
 
 /**
  * gst_c2_engine_free:
