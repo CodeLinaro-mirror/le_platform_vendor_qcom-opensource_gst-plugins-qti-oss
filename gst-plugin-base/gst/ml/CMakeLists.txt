@@ -13,6 +13,7 @@ add_library(${TARGET_NAME} SHARED
   gstmlmeta.c
   gstmlmodule.c
   gstmlpool.c
+  gstmlbundle.c
   ml-module-utils.c
   ml-module-classification.c
   ml-module-detection.c
@@ -35,6 +36,7 @@ set(TARGET_HEADERS
   gstmlmeta.h
   gstmlmodule.h
   gstmlpool.h
+  gstmlbundle.h
   ml-module-utils.h
   ml-module-classification.h
   ml-module-detection.h
@@ -101,7 +103,7 @@ install(
   DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/pkgconfig
 )
 
-if(GIR_SCANNER AND GIR_COMPILER AND PYTHON_SITEPACKAGES_DIR)
+if(GIR_SCANNER AND GIR_COMPILER AND NOT HAVE_GBM_PRIV_H)
   # Generate GIR and typelib files for Python
   set(GIR_TARGET_NAME "GstQtiML-1.0.gir")
 
@@ -135,6 +137,8 @@ if(GIR_SCANNER AND GIR_COMPILER AND PYTHON_SITEPACKAGES_DIR)
     ${CMAKE_CURRENT_SOURCE_DIR}/gstmlmeta.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gstmlpool.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gstmlpool.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstmlbundle.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstmlbundle.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ml-post-process-classification.h
     ${CMAKE_CURRENT_SOURCE_DIR}/ml-post-process-classification.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ml-post-process-keypoint.h

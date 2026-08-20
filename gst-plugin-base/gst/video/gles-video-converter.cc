@@ -13,6 +13,7 @@
 #include <gst/gfx/ib2c.h>
 
 
+GST_DEBUG_CATEGORY_EXTERN (gst_video_converter_engine_debug);
 #define GST_CAT_DEFAULT gst_video_converter_engine_debug
 
 #define GPOINTER_TO_GUINT64(p)   ((guint64) (p))
@@ -476,7 +477,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
       surface_id, object->alpha);
 
   // Setup the source quadrilateral.
-  if (vblit->mask & GST_VCE_MASK_SOURCE) {
+  if (vblit->mask & GST_VIDEO_CONVERTER_MASK_SOURCE) {
     object->source.a = ::ib2c::Point(vblit->source.a.x, vblit->source.a.y);
     object->source.b = ::ib2c::Point(vblit->source.b.x, vblit->source.b.y);
     object->source.c = ::ib2c::Point(vblit->source.c.x, vblit->source.c.y);
@@ -485,20 +486,20 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
     object->mask |= ::ib2c::ConfigMask::kSource;
   }
 
-  if (vblit->mask & GST_VCE_MASK_FLIP_VERTICAL) {
+  if (vblit->mask & GST_VIDEO_CONVERTER_MASK_FLIP_VERTICAL) {
     object->mask |= ::ib2c::ConfigMask::kVFlip;
     GST_TRACE ("Input surface 0x%016" G_GINT64_MODIFIER "x - Flip Vertically",
         surface_id);
   }
 
-  if (vblit->mask & GST_VCE_MASK_FLIP_HORIZONTAL) {
+  if (vblit->mask & GST_VIDEO_CONVERTER_MASK_FLIP_HORIZONTAL) {
     object->mask |= ::ib2c::ConfigMask::kHFlip;
     GST_TRACE ("Input surface 0x%016" G_GINT64_MODIFIER "x - Flip Horizontally",
         surface_id);
   }
 
   // Setup the target rectangle.
-  if (vblit->mask & GST_VCE_MASK_DESTINATION) {
+  if (vblit->mask & GST_VIDEO_CONVERTER_MASK_DESTINATION) {
     x = object->destination.x = vblit->destination.x;
     y = object->destination.y = vblit->destination.y;
     width = object->destination.w = vblit->destination.w;
@@ -510,7 +511,7 @@ gst_gles_update_object (::ib2c::Object * object, const guint64 surface_id,
     height = GST_VIDEO_INFO_HEIGHT (composition->info);
   }
 
-  if (vblit->mask & GST_VCE_MASK_ROTATION)
+  if (vblit->mask & GST_VIDEO_CONVERTER_MASK_ROTATION)
     rotate = vblit->rotate;
 
   // Setup rotation angle and adjustments.
@@ -605,7 +606,7 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
 {
   GArray *fds = NULL, *normalizations = NULL;
   GstNormalizeRequest *normrequest = NULL;
-  guint idx = 0, num = 0, n_blits = 0, n_normalizations = 0;
+  guint idx = 0, num = 0, n_blits = 0, n_normalizations = 0, fd = 0;
   guint64 surface_id = 0;
   gboolean success = TRUE, normalize = FALSE;
 
@@ -622,45 +623,39 @@ gst_gles_video_converter_compose (GstGlesVideoConverter * convert,
   for (idx = 0; idx < n_compositions; idx++) {
     GstVideoComposition *composition = &(compositions[idx]);
     GstBuffer *outbuffer = composition->buffer;
-    GstVideoBlit *blits = composition->blits;
-
-    n_blits = composition->n_blits;
 
     // Sanity checks, output frame and blit entries must not be NULL.
     g_return_val_if_fail (outbuffer != NULL, FALSE);
-    g_return_val_if_fail ((blits != NULL) && (n_blits != 0), FALSE);
+    g_return_val_if_fail (composition->blits != NULL, FALSE);
 
     std::vector<::ib2c::Object> objects;
+    n_blits = gst_video_blits_size (composition->blits);
 
     // Iterate over the input blit entries and update each IB2C object.
     for (num = 0; num < n_blits; num++) {
-      GstVideoBlit *blit = &(blits[num]);
+      GstVideoBlit *vblit = gst_video_blits_entry (composition->blits, num);
 
       GST_GLES_LOCK (convert);
 
       surface_id = gst_gles_retrieve_surface_id (convert, convert->insurfaces,
-          "Input", blit->buffer, blit->info, GST_VIDEO_DATA_TYPE_U8);
+          "Input", vblit->buffer, vblit->info, GST_VIDEO_DATA_TYPE_U8);
 
       GST_GLES_UNLOCK (convert);
 
       if (!(success = (surface_id != 0))) {
         GST_ERROR ("Failed to get surface ID for input buffer %p at index %u "
-            "in composition %u!", blit->buffer, num, idx);
+            "in composition %u!", vblit->buffer, num, idx);
         goto cleanup;
       }
 
-      if (blit->buffer->pool == NULL) {
-        GstMemory *memory = NULL;
-        guint fd = 0;
-
-        memory = gst_buffer_peek_memory (blit->buffer, 0);
-        fd = gst_fd_memory_get_fd (memory);
+      if (vblit->buffer->pool == NULL) {
+        fd = gst_fd_memory_get_fd (gst_buffer_peek_memory (vblit->buffer, 0));
         g_array_append_val (fds, fd);
       }
 
       ::ib2c::Object object;
 
-      gst_gles_update_object (&object, surface_id, blit, composition);
+      gst_gles_update_object (&object, surface_id, vblit, composition);
       objects.push_back(object);
     }
 

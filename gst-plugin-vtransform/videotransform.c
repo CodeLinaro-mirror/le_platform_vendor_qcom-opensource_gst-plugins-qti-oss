@@ -1598,8 +1598,8 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     GstBuffer * outbuffer)
 {
   GstVideoTransform *vtrans = GST_VIDEO_TRANSFORM_CAST (base);
-  GstVideoBlit blit = GST_VCE_BLIT_INIT;
-  GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
+  GstVideoBlit *vblit = NULL;
+  GstVideoComposition composition = GST_VIDEO_COMPOSITION_INIT;
   GstClockTime time = GST_CLOCK_TIME_NONE;
   const GstVideoMeta *meta = NULL;
   gboolean success = FALSE;
@@ -1613,47 +1613,48 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 
   time = gst_util_get_timestamp ();
 
-  GST_VIDEO_TRANSFORM_LOCK (vtrans);
-
   meta = gst_buffer_get_video_meta (inbuffer);
 
-  success = gst_video_info_modify_with_meta (vtrans->ininfo, meta);
-
-  if (!success)
-    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
-
-  blit.buffer = inbuffer;
-  blit.mask = 0;
-  blit.info = vtrans->ininfo;
-
-  if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
-    gst_video_quadrilateral_from_rectangle (&(blit.source), &(vtrans->crop));
-    blit.mask |= GST_VCE_MASK_SOURCE;
+  if (!gst_video_info_modify_with_meta (vtrans->ininfo, meta)) {
+    GST_ERROR_OBJECT (vtrans, "Failed to derive info from meta");
+    return GST_FLOW_ERROR;
   }
-
-  if ((vtrans->destination.w != 0) && (vtrans->destination.h != 0)) {
-    blit.destination = vtrans->destination;
-    blit.mask |= GST_VCE_MASK_DESTINATION;
-  }
-
-  if (vtrans->flip_h)
-    blit.mask |= GST_VCE_MASK_FLIP_HORIZONTAL;
-
-  if (vtrans->flip_v)
-    blit.mask |= GST_VCE_MASK_FLIP_VERTICAL;
-
-  blit.rotate = vtrans->rotation;
-  blit.mask |= GST_VCE_MASK_ROTATION;
 
   meta = gst_buffer_get_video_meta (outbuffer);
 
-  success = gst_video_info_modify_with_meta (vtrans->outinfo, meta);
+  if (!gst_video_info_modify_with_meta (vtrans->outinfo, meta)) {
+    GST_ERROR_OBJECT (vtrans, "Failed to derive info from meta");
+    return GST_FLOW_ERROR;
+  }
 
-  if (!success)
-    GST_WARNING_OBJECT (vtrans, "Failed to derive info from meta");
+  GST_VIDEO_TRANSFORM_LOCK (vtrans);
 
-  composition.blits = &blit;
-  composition.n_blits = 1;
+  composition.blits = gst_video_blits_new_sized (1);
+  vblit = gst_video_blits_entry (composition.blits, 0);
+
+  vblit->buffer = inbuffer;
+  vblit->mask = 0;
+  vblit->alpha = G_MAXUINT8;
+  vblit->info = vtrans->ininfo;
+
+  if ((vtrans->crop.w != 0) && (vtrans->crop.h != 0)) {
+    gst_video_quadrilateral_from_rectangle (&(vblit->source), &(vtrans->crop));
+    vblit->mask |= GST_VIDEO_CONVERTER_MASK_SOURCE;
+  }
+
+  if ((vtrans->destination.w != 0) && (vtrans->destination.h != 0)) {
+    vblit->destination = vtrans->destination;
+    vblit->mask |= GST_VIDEO_CONVERTER_MASK_DESTINATION;
+  }
+
+  if (vtrans->flip_h)
+    vblit->mask |= GST_VIDEO_CONVERTER_MASK_FLIP_HORIZONTAL;
+
+  if (vtrans->flip_v)
+    vblit->mask |= GST_VIDEO_CONVERTER_MASK_FLIP_VERTICAL;
+
+  vblit->rotate = vtrans->rotation;
+  vblit->mask |= GST_VIDEO_CONVERTER_MASK_ROTATION;
 
   composition.buffer = outbuffer;
   composition.info = vtrans->outinfo;
@@ -1664,6 +1665,7 @@ gst_video_transform_transform (GstBaseTransform * base, GstBuffer * inbuffer,
 
   success = gst_video_converter_engine_compose (vtrans->converter,
       &composition, 1, NULL);
+  gst_video_blits_unref (composition.blits);
 
   GST_VIDEO_TRANSFORM_UNLOCK (vtrans);
 
@@ -1701,7 +1703,7 @@ gst_video_transform_set_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       vtrans->backend = g_value_get_enum (value);
 
-      if (vtrans->backend == GST_VCE_BACKEND_GLES)
+      if (vtrans->backend == GST_VIDEO_CONVERTER_BACKEND_GLES)
         g_strlcpy (vtrans->hw_util, "GPU", sizeof(vtrans->hw_util));
       else
         g_strlcpy (vtrans->hw_util, "CPU", sizeof(vtrans->hw_util));
@@ -1912,7 +1914,7 @@ gst_video_transform_class_init (GstVideoTransformClass * klass)
   g_object_class_install_property (gobject, PROP_ENGINE_BACKEND,
       g_param_spec_enum ("engine", "Engine",
           "Engine backend used for the conversion operations",
-          GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
+          GST_TYPE_VIDEO_CONVERTER_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
           G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_BACKEND_PARAM,
       g_param_spec_string ("engine-param", "Engine Parameters",
@@ -2006,7 +2008,7 @@ gst_video_transform_init (GstVideoTransform * vtrans)
   vtrans->destination.w = DEFAULT_PROP_DESTINATION_WIDTH;
   vtrans->destination.h = DEFAULT_PROP_DESTINATION_HEIGHT;
 
-  if (vtrans->backend == GST_VCE_BACKEND_GLES)
+  if (vtrans->backend == GST_VIDEO_CONVERTER_BACKEND_GLES)
     g_strlcpy (vtrans->hw_util, "GPU", sizeof(vtrans->hw_util));
   else
     g_strlcpy (vtrans->hw_util, "CPU", sizeof(vtrans->hw_util));

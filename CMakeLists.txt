@@ -12,7 +12,6 @@ set(GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_
 set(GST_PLUGINS_QTI_OSS_INSTALL_INCDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}")
 set(GST_PLUGINS_QTI_OSS_INSTALL_DATADIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATAROOTDIR}")
 set(GST_PLUGINS_QTI_OSS_INSTALL_CONFIG "${CMAKE_INSTALL_SYSCONFDIR}/configs")
-set(GST_PLUGINS_QTI_OSS_INSTALL_MEDIA "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATAROOTDIR}/qdemo")
 
 option(ENABLE_GST_IMSDK_PLUGINS "Enable IMSDK Plugins" OFF)
 
@@ -56,6 +55,7 @@ option(ENABLE_GST_PLUGIN_OBJTRACKER "Enable gst-plugin-objtracker" ${ENABLE_GST_
 option(ENABLE_GST_PLUGIN_RESTRICTED_ZONE "Enable gst-plugin-restricted-zone" ${ENABLE_GST_ML_PLUGINS})
 
 # QAIRT Plugins
+option(ENABLE_GST_PLUGIN_MLQAIRT "Enable gst-plugin-mlqairt" ${ENABLE_GST_QAIRT_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLQNN "Enable gst-plugin-mlqnn" ${ENABLE_GST_QAIRT_PLUGINS})
 option(ENABLE_GST_PLUGIN_MLSNPE "Enable gst-plugin-mlsnpe" ${ENABLE_GST_QAIRT_PLUGINS})
 
@@ -71,6 +71,9 @@ option(ENABLE_GST_PLUGIN_RTSPBIN "Enable gst-plugin-rtspbin" ${ENABLE_GST_SOFTWA
 option(ENABLE_GST_PLUGIN_SOCKET "Enable gst-plugin-socket" ${ENABLE_GST_SOFTWARE_PLUGINS})
 option(ENABLE_GST_PLUGIN_URIDECODEBIN "Enable gst-plugin-uridecodebin" ${ENABLE_GST_SOFTWARE_PLUGINS})
 option(ENABLE_GST_PLUGIN_VIDEOTEMPLATE "Enable gst-plugin-videotemplate" ${ENABLE_GST_SOFTWARE_PLUGINS})
+
+# Python extension module
+option(ENABLE_GST_PYTHON "Enable gst-python libraries" OFF)
 
 # Sample Apps and Test Framework
 option(ENABLE_GST_PLUGIN_EXAMPLES "Enable gst-plugin-examples" OFF)
@@ -134,6 +137,9 @@ function(add_plugin_if option_var plugin_dir)
   endif()
 endfunction()
 
+# Python extension module
+add_plugin_if(ENABLE_GST_PYTHON                 gst-python)
+
 # Camera plugins
 add_plugin_if(ENABLE_GST_PLUGIN_CAMIMGREPROC    gst-plugin-camimgreproc)
 add_plugin_if(ENABLE_GST_PLUGIN_CAMREPROC       gst-plugin-camreproc)
@@ -155,6 +161,7 @@ add_plugin_if(ENABLE_GST_PLUGIN_MLDEMUX         gst-plugin-mldemux)
 add_plugin_if(ENABLE_GST_PLUGIN_MLMETAEXTRACTOR gst-plugin-mlmetaextractor)
 add_plugin_if(ENABLE_GST_PLUGIN_MLMETAPARSER    gst-plugin-mlmetaparser)
 add_plugin_if(ENABLE_GST_PLUGIN_MLPOSTPROCESS   gst-plugin-mlpostprocess)
+add_plugin_if(ENABLE_GST_PLUGIN_MLQAIRT         gst-plugin-mlqairt)
 add_plugin_if(ENABLE_GST_PLUGIN_MLQNN           gst-plugin-mlqnn)
 add_plugin_if(ENABLE_GST_PLUGIN_MLSNPE          gst-plugin-mlsnpe)
 add_plugin_if(ENABLE_GST_PLUGIN_MLTFLITE        gst-plugin-mltflite)

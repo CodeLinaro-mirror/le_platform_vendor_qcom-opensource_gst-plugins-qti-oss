@@ -10,7 +10,6 @@ find_program(GIR_SCANNER NAMES "g-ir-scanner-wrapper" "g-ir-scanner")
 find_program(GIR_COMPILER NAMES "g-ir-compiler-wrapper" "g-ir-compiler")
 
 find_package(PkgConfig)
-find_package(Python3 3.12 COMPONENTS Interpreter Development)
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GLIB REQUIRED glib-2.0)
@@ -19,7 +18,6 @@ pkg_check_modules(GST_BASE REQUIRED gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_JSON REQUIRED json-glib-1.0)
-pkg_check_modules(PYGOBJECT pygobject-3.0)
 pkg_check_modules(FASTCV qcom-fastcv-binaries)
 pkg_check_modules(EGL egl)
 pkg_check_modules(GLES glesv2)
@@ -45,6 +43,10 @@ check_include_file("fastcv/fastcv.h" HAVE_FASTCV_H)
 
 # Check whether GBM header is present.
 check_include_file("gbm_priv.h" HAVE_GBM_PRIV_H)
+
+# Check whether mem-buf header is present.
+set(CMAKE_REQUIRED_INCLUDES "${KERNEL_MSM_INCDIR}")
+check_include_file("linux/mem-buf.h" HAVE_LINUX_MEM_BUF_H)
 
 # Common compiler flags.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
@@ -72,4 +74,3 @@ add_subdirectory(gst/memory)
 add_subdirectory(gst/ml)
 add_subdirectory(gst/cv)
 add_subdirectory(gst/camera)
-add_subdirectory(gi/overrides)

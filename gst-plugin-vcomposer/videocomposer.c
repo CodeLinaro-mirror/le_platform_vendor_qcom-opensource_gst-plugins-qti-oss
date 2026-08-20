@@ -155,10 +155,12 @@ gst_buffer_get_image_region_meta (GstBuffer * buffer)
 
   while ((meta = gst_buffer_iterate_meta_filtered (buffer, &state,
               GST_VIDEO_REGION_OF_INTEREST_META_API_TYPE)) != NULL) {
-    roimeta = GST_VIDEO_ROI_META_CAST (meta);
+    GstVideoRegionOfInterestMeta *candidate = GST_VIDEO_ROI_META_CAST (meta);
 
-    if (roimeta->roi_type == g_quark_from_static_string ("ImageRegion"))
+    if (candidate->roi_type == g_quark_from_static_string ("ImageRegion")) {
+      roimeta = candidate;
       break;
+    }
   }
 
   return roimeta;
@@ -173,15 +175,16 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
   gpointer state = NULL;
   GstVideoBlit *vblit = NULL;
   GstVideoRectangle source = {0}, destination = {0};
-  guint idx = 0;
+  guint idx = 0, n_blits = 0;
 
   outbuffer = composition->buffer;
+  n_blits = gst_video_blits_size (composition->blits);
 
-  for (idx = 0; idx < composition->n_blits; idx++) {
-    vblit = &(composition->blits[idx]);
+  for (idx = 0; idx < n_blits; idx++) {
+    vblit = gst_video_blits_entry (composition->blits, idx);
     inbuffer = vblit->buffer;
 
-    if (vblit->mask & GST_VCE_MASK_SOURCE) {
+    if (vblit->mask & GST_VIDEO_CONVERTER_MASK_SOURCE) {
       gst_video_quadrilateral_to_rectangle (&(vblit->source), &source);
     } else {
       source.x = source.y = 0;
@@ -189,7 +192,7 @@ gst_video_composition_populate_output_metas (GstVideoComposer * vcomposer,
       source.h = GST_VIDEO_INFO_HEIGHT (vblit->info);
     }
 
-    if (vblit->mask & GST_VCE_MASK_DESTINATION) {
+    if (vblit->mask & GST_VIDEO_CONVERTER_MASK_DESTINATION) {
       destination = vblit->destination;
     } else {
       destination.x = destination.y = 0;
@@ -792,7 +795,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 {
   GstVideoComposer *vcomposer = GST_VIDEO_COMPOSER (vaggregator);
   GList *list = NULL;
-  GstVideoComposition composition = GST_VCE_COMPOSITION_INIT;
+  GstVideoComposition composition = GST_VIDEO_COMPOSITION_INIT;
   GstClockTime time = GST_CLOCK_TIME_NONE;
   gboolean success = TRUE;
   guint idx = 0, n_inputs = 0;
@@ -803,8 +806,8 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
   GST_OBJECT_LOCK (vaggregator);
 
-  composition.n_blits = GST_ELEMENT (vcomposer)->numsinkpads;
-  composition.blits = g_new0 (GstVideoBlit, composition.n_blits);
+  composition.blits =
+      gst_video_blits_new_sized (GST_ELEMENT (vcomposer)->numsinkpads);
 
   for (list = GST_ELEMENT (vcomposer)->sinkpads; list != NULL; list = list->next) {
     GstVideoComposerSinkPad *sinkpad = GST_VIDEO_COMPOSER_SINKPAD (list->data);
@@ -827,7 +830,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     // Index to the current blit object to be populated.
     idx = n_inputs;
 
-    vblit = &(composition.blits[idx]);
+    vblit = gst_video_blits_entry (composition.blits, idx);
     vblit->buffer = inbuffer;
 
     vblit->info = &GST_VIDEO_AGGREGATOR_PAD (sinkpad)->info;
@@ -845,7 +848,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
 
     if ((sinkpad->crop.w != 0) && (sinkpad->crop.h != 0)) {
       gst_video_quadrilateral_from_rectangle (&(vblit->source), &(sinkpad->crop));
-      vblit->mask |= GST_VCE_MASK_SOURCE;
+      vblit->mask |= GST_VIDEO_CONVERTER_MASK_SOURCE;
     } else if ((roimeta = gst_buffer_get_image_region_meta (inbuffer)) != NULL) {
       vblit->source.a = (GstVideoPoint){roimeta->x, roimeta->y};
       vblit->source.b = (GstVideoPoint){roimeta->x, roimeta->y + roimeta->h};
@@ -853,22 +856,22 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
       vblit->source.d =
           (GstVideoPoint){roimeta->x + roimeta->w, roimeta->y + roimeta->h};
 
-      vblit->mask |= GST_VCE_MASK_SOURCE;
+      vblit->mask |= GST_VIDEO_CONVERTER_MASK_SOURCE;
     }
 
     if ((sinkpad->destination.w != 0) && (sinkpad->destination.h != 0)) {
       vblit->destination = sinkpad->destination;
-      vblit->mask |= GST_VCE_MASK_DESTINATION;
+      vblit->mask |= GST_VIDEO_CONVERTER_MASK_DESTINATION;
     }
 
     if (sinkpad->flip_h)
-      vblit->mask |= GST_VCE_MASK_FLIP_HORIZONTAL;
+      vblit->mask |= GST_VIDEO_CONVERTER_MASK_FLIP_HORIZONTAL;
 
     if (sinkpad->flip_v)
-      vblit->mask |= GST_VCE_MASK_FLIP_VERTICAL;
+      vblit->mask |= GST_VIDEO_CONVERTER_MASK_FLIP_VERTICAL;
 
     vblit->rotate = sinkpad->rotation;
-    vblit->mask |= GST_VCE_MASK_ROTATION;
+    vblit->mask |= GST_VIDEO_CONVERTER_MASK_ROTATION;
 
     GST_VIDEO_COMPOSER_SINKPAD_UNLOCK (sinkpad);
 
@@ -889,11 +892,8 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
     goto cleanup;
   }
 
-  // Resize the blits array as actual number is less then the maximum.
-  if (n_inputs < composition.n_blits)
-    composition.blits = g_renew (GstVideoBlit, composition.blits, n_inputs);
-
-  composition.n_blits = n_inputs;
+  // Resize the blits array as actual number is may be less then the maximum.
+  gst_video_blits_resize (composition.blits, n_inputs);
 
   composition.buffer = outbuffer;
   composition.bgfill = TRUE;
@@ -929,9 +929,7 @@ gst_video_composer_aggregate_frames (GstVideoAggregator * vaggregator,
       (GST_TIME_AS_USECONDS (time) % 1000), vcomposer->hw_util);
 
 cleanup:
-  if (composition.blits != NULL)
-    g_free (composition.blits);
-
+  g_clear_pointer (&(composition.blits), gst_video_blits_unref);
   return success ? GST_FLOW_OK : GST_FLOW_ERROR;
 }
 
@@ -1019,7 +1017,7 @@ gst_video_composer_set_property (GObject * object, guint prop_id,
     case PROP_ENGINE_BACKEND:
       vcomposer->backend = g_value_get_enum (value);
 
-      if (vcomposer->backend == GST_VCE_BACKEND_GLES)
+      if (vcomposer->backend == GST_VIDEO_CONVERTER_BACKEND_GLES)
         g_strlcpy (vcomposer->hw_util, "GPU", sizeof(vcomposer->hw_util));
       else
         g_strlcpy (vcomposer->hw_util, "CPU", sizeof(vcomposer->hw_util));
@@ -1094,7 +1092,7 @@ gst_video_composer_class_init (GstVideoComposerClass * klass)
   g_object_class_install_property (gobject, PROP_ENGINE_BACKEND,
       g_param_spec_enum ("engine", "Engine",
           "Engine backend used for the conversion operations",
-          GST_TYPE_VCE_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
+          GST_TYPE_VIDEO_CONVERTER_BACKEND, DEFAULT_PROP_ENGINE_BACKEND,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject, PROP_BACKGROUND,
       g_param_spec_uint ("background", "Background",
@@ -1148,7 +1146,7 @@ gst_video_composer_init (GstVideoComposer * vcomposer)
   vcomposer->backend = DEFAULT_PROP_ENGINE_BACKEND;
   vcomposer->background = DEFAULT_PROP_BACKGROUND;
 
-  if (vcomposer->backend == GST_VCE_BACKEND_GLES)
+  if (vcomposer->backend == GST_VIDEO_CONVERTER_BACKEND_GLES)
     g_strlcpy (vcomposer->hw_util, "GPU", sizeof(vcomposer->hw_util));
   else
     g_strlcpy (vcomposer->hw_util, "CPU", sizeof(vcomposer->hw_util));
