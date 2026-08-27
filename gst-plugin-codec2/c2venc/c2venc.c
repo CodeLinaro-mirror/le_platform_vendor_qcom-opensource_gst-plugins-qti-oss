@@ -986,8 +986,7 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
   if (c2venc->mb_map_info.total_mbs != DEFAULT_PROP_MB_MAP_TOTAL_MBS) {
     GstC2QuantMbmapInfo roi_mb_map;
 
-    if (c2venc->mb_map_info.qp_bias_map->len > 0 &&
-        gst_c2_venc_check_roi_mb_map_info (c2venc, info))
+    if (c2venc->mb_map_info.qp_bias_map->len > 0)
       roi_mb_map.enable = TRUE;
     else if (c2venc->mb_map_info.qp_bias_map->len == 0)
       roi_mb_map.enable = FALSE;
@@ -2052,8 +2051,9 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->mb_map_info.total_mbs = 0;
 
       for (guint idx = 0; idx < gst_value_array_get_size (value); idx++) {
-        gint8 qp_bias =
-            g_value_get_schar (gst_value_array_get_value (value, idx));
+        // Each element inside roi mb map info would be limited in [-31, 30]
+        gint8 qp_bias = (gint8)
+            g_value_get_int (gst_value_array_get_value (value, idx));
         g_array_append_val (c2venc->mb_map_info.qp_bias_map, qp_bias);
       }
       break;
@@ -2278,8 +2278,8 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
     case PROP_ROI_MB_MAP_INFO:
       for (guint idx = 0; idx < c2venc->mb_map_info.qp_bias_map->len; idx++) {
         GValue element = G_VALUE_INIT;
-        g_value_init (&element, G_TYPE_CHAR);
-        g_value_set_schar (&element,
+        g_value_init (&element, G_TYPE_INT);
+        g_value_set_int (&element,
             g_array_index (c2venc->mb_map_info.qp_bias_map, gint8, idx));
 
         // Append the MB map QP value to the output GST array.
@@ -2521,9 +2521,9 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
       gst_param_spec_array ("roi-mb-map-info", "ROI MB Map Info",
           "Manually set Macroblock-level based ROI QP map info in Garray per "
           "frame. DeltaQP range: [-31, 30], MB size: 16 for AVC / 32 for HEVC",
-          g_param_spec_char ("value", "QP Value",
+          g_param_spec_int ("value", "QP Value",
                   "The QP value for each Macroblock within the frame",
-                  G_MININT8, G_MAXINT8, 0,
+                  -31, 30, 0,
                   G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS),
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_CHROMA_QP_OFFSET,
