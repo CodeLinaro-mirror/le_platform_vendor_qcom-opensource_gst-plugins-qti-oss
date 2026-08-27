@@ -13,13 +13,14 @@ Build-Depends:
  qcom-fastcv-binaries-dev,
  linux-libc-dev-qcom,
  libgstrtspserver-1.0-dev,
+ libgstreamer-plugins-bad1.0-dev,
  libcairo2-dev,
  libjson-glib-dev,
  librdkafka-dev,
  libmosquitto-dev,
  libhiredis-dev,
  qcom-video-ctrl-dev,
- libsoup2.4-dev,
+ libsoup-3.0-dev,
  libeigen3-dev,
  libopencv-dev,
  opencl-c-headers,
@@ -54,7 +55,7 @@ Depends:
  gstreamer1.0-plugins-qcom-mlqnn,
  gstreamer1.0-plugins-qcom-msgbroker,
  gstreamer1.0-plugins-qcom-objtracker,
- gstreamer1.0-plugins-qcom-qmmfsrc,
+ gstreamer1.0-plugins-qcom-camsrc,
  gstreamer1.0-plugins-qcom-redissink,
  gstreamer1.0-plugins-qcom-restricted-zone,
  gstreamer1.0-plugins-qcom-rtspbin,
@@ -232,14 +233,14 @@ Depends:
  ${misc:Depends},
 Description: GStreamer plugin for Qualcomm: objtracker.
 
-Package: gstreamer1.0-plugins-qcom-qmmfsrc
+Package: gstreamer1.0-plugins-qcom-camsrc
 Section: video
 Architecture: arm64
 Depends:
  ${shlibs:Depends},
  ${misc:Depends},
  qcom-camera-server,
-Description: GStreamer plugin for Qualcomm: qmmfsrc.
+Description: GStreamer plugin for Qualcomm: camsrc.
 
 Package: gstreamer1.0-plugins-qcom-redissink
 Section: libs

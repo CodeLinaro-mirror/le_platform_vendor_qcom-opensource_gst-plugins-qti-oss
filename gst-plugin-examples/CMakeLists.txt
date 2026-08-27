@@ -43,6 +43,7 @@ if (ENABLE_CAMERA)
   add_subdirectory(gst-appsink-raw-plus-yuv)
   add_subdirectory(gst-camera-standby-example)
   add_subdirectory(gst-camera-hotplug-example)
+  add_subdirectory(gst-camera-via-rtsp-example)
 endif() # ENABLE_CAMERA
 
 if (ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE)
@@ -53,6 +54,7 @@ endif () # ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA AND ENABLE_DISPLAY)
   add_subdirectory(gst-camera-capture-example)
+  add_subdirectory(gst-rgba-watermark-example)
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY
 
 if (ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE AND ENABLE_DISPLAY)
