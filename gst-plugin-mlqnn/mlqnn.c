@@ -39,6 +39,8 @@ G_DEFINE_TYPE (GstMLQnn, gst_ml_qnn, GST_TYPE_BASE_TRANSFORM);
     "neural-network/tensors, "                    \
     "type = (string) " GST_ML_QNN_TENSOR_TYPES
 
+#define RETRY_ON_FAILURE_CNT 3
+
 enum
 {
   PROP_0,
@@ -473,8 +475,7 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   GstMLQnn *mlqnn = GST_ML_QNN (base);
   GstMLFrame inframe, outframe;
   const GstMLInfo *info = NULL;
-  GstClockTime ts_begin = GST_CLOCK_TIME_NONE, ts_end = GST_CLOCK_TIME_NONE;
-  GstClockTimeDiff tsdelta = GST_CLOCK_STIME_NONE;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
   gboolean success = FALSE;
 
   GST_DEBUG_OBJECT (mlqnn, "Transform Inbuf %ld  Outbuf %ld",
@@ -484,6 +485,8 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
   if (gst_buffer_get_size (outbuffer) == 0 &&
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
+
+  time = gst_util_get_timestamp ();
 
   info = gst_ml_qnn_engine_get_input_info (mlqnn->engine);
 
@@ -502,11 +505,14 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     return GST_FLOW_ERROR;
   }
 
-  ts_begin = gst_util_get_timestamp ();
+  for (guint i = 0; i < RETRY_ON_FAILURE_CNT && success == FALSE; i++) {
+    success = gst_ml_qnn_engine_execute (mlqnn->engine, &inframe, &outframe);
 
-  success = gst_ml_qnn_engine_execute (mlqnn->engine, &inframe, &outframe);
-
-  ts_end = gst_util_get_timestamp ();
+    if (!success) {
+      GST_ERROR_OBJECT (mlqnn, "Failed to execute inference, retrying %d/%d!",
+        i + 1, RETRY_ON_FAILURE_CNT);
+    }
+  }
 
   gst_ml_frame_unmap (&outframe);
   gst_ml_frame_unmap (&inframe);
@@ -516,11 +522,11 @@ gst_ml_qnn_transform (GstBaseTransform * base, GstBuffer * inbuffer,
     return GST_FLOW_ERROR;
   }
 
-  tsdelta = GST_CLOCK_DIFF (ts_begin, ts_end);
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
-  GST_LOG_OBJECT (mlqnn, "Execute took %" G_GINT64_FORMAT ".%03" G_GINT64_FORMAT
-      " ms", GST_TIME_AS_MSECONDS (tsdelta),
-      (GST_TIME_AS_USECONDS (tsdelta) % 1000));
+  GST_LOG_OBJECT (mlqnn, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms, HW utilization: %s", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000), mlqnn->hw_util);
 
   return GST_FLOW_OK;
 }
@@ -535,6 +541,19 @@ gst_ml_qnn_set_property (GObject * object, guint property_id,
     case PROP_QNN_BACKEND:
       g_free (mlqnn->backend);
       mlqnn->backend = g_strdup (g_value_get_string (value));
+
+      if (g_strrstr (mlqnn->backend, "Cpu"))
+        g_strlcpy (mlqnn->hw_util, "CPU", sizeof (mlqnn->hw_util));
+      else if (g_strrstr (mlqnn->backend, "Gpu"))
+        g_strlcpy (mlqnn->hw_util, "GPU", sizeof (mlqnn->hw_util));
+      else if (g_strrstr (mlqnn->backend, "Dsp"))
+        g_strlcpy (mlqnn->hw_util, "DSP", sizeof (mlqnn->hw_util));
+      else if (g_strrstr (mlqnn->backend, "Htp"))
+        g_strlcpy (mlqnn->hw_util, "NPU", sizeof (mlqnn->hw_util));
+      else if (g_strrstr (mlqnn->backend, "Hta"))
+        g_strlcpy (mlqnn->hw_util, "NPU", sizeof (mlqnn->hw_util));
+      else
+        g_strlcpy (mlqnn->hw_util, "N/A", sizeof (mlqnn->hw_util));
       break;
     case PROP_QNN_MODEL:
       g_free (mlqnn->model);
@@ -699,6 +718,8 @@ gst_ml_qnn_init (GstMLQnn * mlqnn)
   mlqnn->backend = NULL;
   mlqnn->syslib = NULL;
   mlqnn->outputs = NULL;
+
+  g_strlcpy (mlqnn->hw_util, "N/A", sizeof (mlqnn->hw_util));
 
   GST_DEBUG_CATEGORY_INIT (gst_ml_qnn_debug, "qtimlqnn", 0,
       "QTI QNN ML plugin");

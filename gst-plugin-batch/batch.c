@@ -379,6 +379,7 @@ gst_batch_worker_task (gpointer userdata)
   GstBuffer *buffer = NULL;
   GstDataQueueItem *item = NULL;
   GList *list = NULL;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
   guint channels = 0;
   gboolean available = FALSE;
 
@@ -425,6 +426,8 @@ gst_batch_worker_task (gpointer userdata)
 
   // Add the output buffer duration to the end time for the next wait cycle.
   batch->endtime += batch->duration / 1000;
+
+  time = gst_util_get_timestamp ();
 
   // Create a new buffer wrapper to hold a reference to input buffer.
   buffer = gst_buffer_new ();
@@ -503,6 +506,12 @@ gst_batch_worker_task (gpointer userdata)
   g_cond_broadcast (&batch->wakeup);
 
   GST_BATCH_UNLOCK (batch);
+
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_LOG_OBJECT (batch, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT ", ms HW utilization: CPU", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000));
 
   return;
 }
@@ -729,6 +738,12 @@ gst_batch_sink_setcaps (GstBatch * batch, GstPad * pad, GstCaps * caps)
 
   // Take the intersected caps as base src caps for further manipulations.
   srccaps = g_steal_pointer (&intersect);
+
+  // Include the current pad's framerate in the framerate selection.
+  // The intersection above brings the current pad's framerate into srccaps;
+  // extract it here so it is compared alongside all other pads in the loop.
+  srccaps = gst_caps_make_writable (srccaps);
+  gst_caps_extract_video_framerate (srccaps, &framerate);
 
   GST_BATCH_LOCK (batch);
 

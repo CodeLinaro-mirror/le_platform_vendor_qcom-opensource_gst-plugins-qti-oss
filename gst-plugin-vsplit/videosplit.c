@@ -260,7 +260,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       rmeta = gst_buffer_copy_video_region_of_interest_meta (outbuffer, rmeta);
-      gst_video_region_of_interest_coordinates_correction (rmeta, &source,
+      gst_video_region_of_interest_meta_transform_coordinates (rmeta, &source,
           destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoRegionOfInterest' meta "
@@ -287,7 +287,7 @@ gst_video_split_composition_populate_metas (GstVideoSplitSrcPad * srcpad,
         continue;
 
       lmkmeta = gst_buffer_copy_video_landmarks_meta (outbuffer, lmkmeta);
-      gst_video_landmarks_coordinates_correction (lmkmeta, &source, destination);
+      gst_video_landmarks_meta_transform_coordinates (lmkmeta, &source, destination);
 
       GST_TRACE_OBJECT (srcpad, "Transferred 'VideoLandmarks' meta "
           "with ID[0x%X] and parent ID[0x%X] to buffer %p", lmkmeta->id,
@@ -320,7 +320,7 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
     source.h = GST_VIDEO_INFO_HEIGHT (vblit->info);
   }
 
-  gst_video_rectangle_to_quadrilateral (&source, &(vblit->source));
+  gst_video_quadrilateral_from_rectangle (&(vblit->source), &source);
   vblit->mask |= GST_VCE_MASK_SOURCE;
 
   destination = &(vblit->destination);
@@ -357,6 +357,9 @@ gst_video_split_composition_update_regions (GstVideoSplitSrcPad * srcpad,
 
     if (structure != NULL) {
       structure = gst_structure_copy (structure);
+      gst_structure_set (structure,
+          "label", G_TYPE_STRING, g_quark_to_string (roimeta->roi_type), NULL);
+
       gst_video_region_of_interest_meta_add_param (rmeta, structure);
     }
   }
@@ -733,7 +736,10 @@ gst_video_split_sinkpad_chain (GstPad * pad, GstObject * parent,
   GstVideoSplit *vsplit = GST_VIDEO_SPLIT (parent);
   GstVSplitRequest *request = NULL;
   GArray *compositions = NULL;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
   gboolean success = FALSE;
+
+  time = gst_util_get_timestamp ();
 
   GST_TRACE_OBJECT (pad, "Received %" GST_PTR_FORMAT, inbuffer);
 
@@ -767,9 +773,6 @@ gst_video_split_sinkpad_chain (GstPad * pad, GstObject * parent,
     goto cleanup;
   }
 
-  // Get start time for performance measurements.
-  request->time = gst_util_get_timestamp ();
-
   if (compositions->len != 0) {
     success = gst_video_converter_engine_compose (vsplit->converter,
         (GstVideoComposition*) compositions->data, compositions->len,
@@ -783,6 +786,12 @@ gst_video_split_sinkpad_chain (GstPad * pad, GstObject * parent,
 
   g_array_free (compositions, TRUE);
   gst_data_queue_push_object (sinkpad->requests, GST_MINI_OBJECT (request));
+
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_LOG_OBJECT (vsplit, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms, HW utilization: %s", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000), vsplit->hw_util);
 
   return GST_FLOW_OK;
 
@@ -847,6 +856,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 {
   GList *list = NULL;
   GstVideoInfo info = { 0, };
+  gboolean reconfigure = FALSE;
 
   GST_DEBUG_OBJECT (vsplit, "Setting caps %" GST_PTR_FORMAT, caps);
 
@@ -865,6 +875,7 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
 
   for (list = vsplit->srcpads; list != NULL; list = g_list_next (list)) {
     GstVideoSplitSrcPad *srcpad = GST_VIDEO_SPLIT_SRCPAD (list->data);
+    GstBufferPool *pool = srcpad->pool;
 
     if (!gst_video_split_srcpad_setcaps (srcpad, caps)) {
       GST_ELEMENT_ERROR (GST_ELEMENT (vsplit), CORE, NEGOTIATION, (NULL),
@@ -873,7 +884,14 @@ gst_video_split_sinkpad_setcaps (GstVideoSplit * vsplit, GstPad * pad,
       GST_VIDEO_SPLIT_UNLOCK (vsplit);
       return FALSE;
     }
+
+    // Check whether the output pool was invalidated for this pad.
+    reconfigure |= (pool == srcpad->pool) ? FALSE : TRUE;
   }
+
+  // Flush video converter if at least one output pool was invalidated.
+  if (reconfigure)
+    gst_video_converter_engine_flush (vsplit->converter);
 
   GST_VIDEO_SPLIT_UNLOCK (vsplit);
 
@@ -1302,6 +1320,11 @@ gst_video_split_set_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case PROP_ENGINE_BACKEND:
       vsplit->backend = g_value_get_enum (value);
+
+      if (vsplit->backend == GST_VCE_BACKEND_GLES)
+        g_strlcpy (vsplit->hw_util, "GPU", sizeof(vsplit->hw_util));
+      else
+        g_strlcpy (vsplit->hw_util, "CPU", sizeof(vsplit->hw_util));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1390,6 +1413,11 @@ gst_video_split_init (GstVideoSplit * vsplit)
   vsplit->worktask = NULL;
 
   vsplit->backend = DEFAULT_PROP_ENGINE_BACKEND;
+
+  if (vsplit->backend == GST_VCE_BACKEND_GLES)
+    g_strlcpy (vsplit->hw_util, "GPU", sizeof(vsplit->hw_util));
+  else
+    g_strlcpy (vsplit->hw_util, "CPU", sizeof(vsplit->hw_util));
 
   template = gst_video_split_sink_template ();
   vsplit->sinkpad = g_object_new (GST_TYPE_VIDEO_SPLIT_SINKPAD, "name", "sink",

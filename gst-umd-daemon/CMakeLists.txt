@@ -1,10 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(GST_UVC_CAMERA_DAEMON LANGUAGES C)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
+find_package(ALSA REQUIRED)
 
 # Get the pkgconfigs exported by the automake tools
 pkg_check_modules(GST
@@ -21,6 +19,7 @@ add_executable(${GST_DAEMON_BIN}
 
 target_include_directories(${GST_DAEMON_BIN} PRIVATE
   ${GST_INCLUDE_DIRS}
+  ${ALSA_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_DAEMON_BIN} PRIVATE
@@ -29,6 +28,7 @@ target_link_libraries(${GST_DAEMON_BIN} PRIVATE
   qtiumd
   dl
   cutils
+  ${ALSA_LIBRARIES}
 )
 
 install(

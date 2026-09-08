@@ -363,15 +363,13 @@ def create_pipeline(pipeline):
     settings = f'{{"confidence": {threshold:.1f}}}'
     elements["qtimlvdetection"].set_property("settings", settings)
     elements["qtimlvdetection"].set_property("module", "yolov8")
-    elements["qtimlvdetection"].set_property("results", 4)
+    elements["qtimlvdetection"].set_property("results", 2)
     elements["qtimlvdetection"].set_property("labels", args.yolo_labels)
 
     elements["qtimlvpose"].set_property("settings", args.pose_settings)
     elements["qtimlvpose"].set_property("module", "hrnet")
     elements["qtimlvpose"].set_property("results", 1)
     elements["qtimlvpose"].set_property("labels", args.pose_labels)
-
-    elements["qtivoverlay"].set_property("engine", "gles")
 
     # Set sync to False to override default value
     waylandsink.set_property("sync", True)
@@ -493,23 +491,8 @@ def create_pipeline(pipeline):
         "dimensions", "<240, 480>"
     )
 
-def is_linux():
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if "Linux" in line:
-                    return True
-    except FileNotFoundError:
-        return False
-    return False
-
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-
-    # Set the environment
-    if is_linux():
-        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     # Initialize GStreamer
     Gst.init(None)

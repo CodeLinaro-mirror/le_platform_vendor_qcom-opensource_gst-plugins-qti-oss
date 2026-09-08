@@ -6,22 +6,20 @@ project(GST_PLUGIN_QTI_OSS_ML_TFLITE
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
+set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH ON)
+set(CMAKE_PREFIX_PATH "${PKG_CONFIG_LOCAL_PATH}")
+
 pkg_check_modules(GST REQUIRED
   gstreamer-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_BASE REQUIRED
   gstreamer-base-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GST_ALLOC REQUIRED
   gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_QCOM_ML
-  REQUIRED gstreamer-qcom-oss-ml-1.0>=1.0.0)
-pkg_check_modules(GST_QCOM_UTILS
-  REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_ML REQUIRED gstreamer-qcom-oss-ml-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_UTILS REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
 
 # Prefer the prebuilt TFLite package.
 pkg_check_modules(TFLITE tensorflow-lite-prebuilt)
@@ -93,7 +91,7 @@ if(HAVE_EXTERNAL_DELEGATE_H AND (HAVE_CORE_SHIMS_C_API_H OR HAVE_CORE_C_API_H OR
   )
 
   list(APPEND TARGET_INCS
-    ${SYSROOT_INCDIR}/tensorflow
+    ${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/tensorflow
   )
 
   list(APPEND TARGET_LIBRARIES
@@ -112,8 +110,8 @@ else()
   endif()
 
   list(APPEND TARGET_INCS
-    $<$<VERSION_LESS_EQUAL:${TFLITE_VERSION},2.2.0>:${SYSROOT_INCDIR}/tflite>
-    $<$<VERSION_GREATER:${TFLITE_VERSION},2.2.0>:${SYSROOT_INCDIR}/tensorflow>
+    $<$<VERSION_LESS_EQUAL:${TFLITE_VERSION},2.2.0>:${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/tflite>
+    $<$<VERSION_GREATER:${TFLITE_VERSION},2.2.0>:${CMAKE_SYSROOT}/${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/tensorflow>
   )
 
   list(APPEND TARGET_LIBRARIES

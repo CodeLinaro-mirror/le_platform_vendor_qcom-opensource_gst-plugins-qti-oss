@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(GST_PLUGIN_EXAMPLES LANGUAGES C CXX)
 
-include_directories(${SYSROOT_INCDIR})
-link_directories(${SYSROOT_LIBDIR})
-
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
@@ -16,7 +13,7 @@ check_include_file_cxx("media/drm/DrmAPI.h" HAVE_DRM_API_H)
 
 # Check whether CDM libs are present.
 include(CheckIncludeFileCXX)
-check_include_file_cxx("ce_cdm/cdm.h" HAVE_CDM_H)
+check_include_file_cxx("cdm.h" HAVE_CDM_H)
 
 # Check whether Auto-framing libs are present.
 include(CheckIncludeFileCXX)
@@ -46,6 +43,7 @@ if (ENABLE_CAMERA)
   add_subdirectory(gst-appsink-raw-plus-yuv)
   add_subdirectory(gst-camera-standby-example)
   add_subdirectory(gst-camera-hotplug-example)
+  add_subdirectory(gst-camera-via-rtsp-example)
 endif() # ENABLE_CAMERA
 
 if (ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE)
@@ -56,6 +54,7 @@ endif () # ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE
 
 if (ENABLE_CAMERA AND ENABLE_DISPLAY)
   add_subdirectory(gst-camera-capture-example)
+  add_subdirectory(gst-rgba-watermark-example)
 endif () # ENABLE_CAMERA AND ENABLE_DISPLAY
 
 if (ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE AND ENABLE_DISPLAY)
@@ -66,6 +65,7 @@ endif () # ENABLE_CAMERA AND ENABLE_VIDEO_ENCODE AND ENABLE_DISPLAY
 if (ENABLE_CAMERA AND (ENABLE_VIDEO_ENCODE OR ENABLE_DISPLAY))
   add_subdirectory(gst-add-remove-streams-runtime)
   add_subdirectory(gst-camera-prebuffered-data-app)
+  add_subdirectory(gst-camera-360-prebuffered-data-app)
   add_subdirectory(gst-activate-deactivate-streams-runtime)
   add_subdirectory(gst-shdr-app)
   add_subdirectory(gst-camera-burst-intervalcapture-example)

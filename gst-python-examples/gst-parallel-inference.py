@@ -44,7 +44,7 @@ Default Segmentation model:        {DEFAULT_TFLITE_SEGMENTATION_MODEL}
 Default Segmentation Labels:       {DEFAULT_SEGMENTATION_LABELS}
 """
 
-GST_VIDEO_CLASSIFICATION_OPERATION_SOFTMAX = 1
+GST_ML_CLASSIFICATION_OPERATION_SOFTMAX = 1
 
 QUEUE_COUNT = 22
 GST_PIPELINE_CNT = 4
@@ -556,23 +556,8 @@ def create_pipeline(pipeline):
                 f"<{composer_coords[i][2]}, {composer_coords[i][3]}>"
             )
 
-def is_linux():
-    try:
-        with open("/etc/os-release") as f:
-            for line in f:
-                if "Linux" in line:
-                    return True
-    except FileNotFoundError:
-        return False
-    return False
-
 def main():
     """Main function to set up and run the GStreamer pipeline."""
-
-    # Set the environment
-    if is_linux():
-        os.environ["XDG_RUNTIME_DIR"] = "/dev/socket/weston"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-1"
 
     # Initialize GStreamer
     Gst.init(None)

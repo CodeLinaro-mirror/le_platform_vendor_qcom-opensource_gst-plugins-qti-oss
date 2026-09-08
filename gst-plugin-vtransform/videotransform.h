@@ -89,6 +89,9 @@ struct _GstVideoTransform {
   /// Video converter engine.
   GstVideoConvEngine      *converter;
 
+  /// The type of hardware being utilized.
+  gchar                   hw_util[10];
+
   /// Properties.
   GstVideoConvBackend     backend;
   GstStructure            *backendparam;

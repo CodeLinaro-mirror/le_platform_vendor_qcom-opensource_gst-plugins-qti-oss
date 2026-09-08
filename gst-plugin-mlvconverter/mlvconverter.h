@@ -74,6 +74,7 @@ typedef enum {
   GST_ML_VIDEO_DISPOSITION_TOP_LEFT,
   GST_ML_VIDEO_DISPOSITION_CENTRE,
   GST_ML_VIDEO_DISPOSITION_STRETCH,
+  GST_ML_VIDEO_DISPOSITION_CENTRE_CROP,
 } GstVideoDisposition;
 
 typedef enum {
@@ -132,6 +133,9 @@ struct _GstMLVideoConverter {
   /// Video converter engine.
   GstVideoConvEngine   *converter;
   GstVideoComposition  composition;
+
+  /// The type of hardware being utilized.
+  gchar                hw_util[10];
 
   /// Properties.
   GstConversionMode    mode;

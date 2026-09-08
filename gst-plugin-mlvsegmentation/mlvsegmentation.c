@@ -661,7 +661,7 @@ gst_ml_video_segmentation_transform (GstBaseTransform * base,
 #endif // HAVE_LINUX_DMA_BUF_H
 
   // Call the submodule process funtion.
-  success = gst_ml_module_video_segmentation_execute (segmentation->module,
+  success = gst_ml_module_segmentation_execute (segmentation->module,
       &mlframe, &vframe);
 
 #ifdef HAVE_LINUX_DMA_BUF_H
@@ -711,19 +711,23 @@ gst_ml_video_segmentation_set_property (GObject * object, guint prop_id,
       break;
     case PROP_CONSTANTS:
     {
+      const gchar *string = g_value_get_string (value);
       GValue structure = G_VALUE_INIT;
 
       g_value_init (&structure, GST_TYPE_STRUCTURE);
 
-      if (!gst_parse_string_property_value (value, &structure)) {
-        GST_ERROR_OBJECT (segmentation, "Failed to parse constants!");
+      if (g_file_test (string, G_FILE_TEST_IS_REGULAR) &&
+          !gst_value_deserialize_file (&structure, string)) {
+        GST_ERROR_OBJECT (segmentation, "Failed to deserialize file!");
+        break;
+      } else if (!gst_value_deserialize (&structure, string)) {
+        GST_ERROR_OBJECT (segmentation, "Failed to deserialize string!");
         break;
       }
 
-      if (segmentation->mlconstants != NULL)
-        gst_structure_free (segmentation->mlconstants);
-
+      g_clear_pointer (&segmentation->mlconstants, gst_structure_free);
       segmentation->mlconstants = GST_STRUCTURE (g_value_dup_boxed (&structure));
+
       g_value_unset (&structure);
       break;
     }

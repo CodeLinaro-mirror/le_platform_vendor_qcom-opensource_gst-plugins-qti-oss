@@ -5,13 +5,13 @@
 override_dh_auto_configure:
 	dh_auto_configure -- \
 		`# common flags` \
-		-DSYSROOT_INCDIR=/usr/include \
-		-DSYSROOT_LIBDIR=/usr/lib \
 		-DCMAKE_INSTALL_PREFIX=/usr \
-                -DCMAKE_INSTALL_INCLUDEDIR=include \
-                -DCMAKE_INSTALL_BINDIR=bin \
-                -DCMAKE_INSTALL_LIBDIR=lib/${DEB_HOST_MULTIARCH} \
-                -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+		-DCMAKE_INSTALL_INCLUDEDIR=include \
+		-DCMAKE_INSTALL_BINDIR=bin \
+		-DCMAKE_INSTALL_LIBDIR=lib/${DEB_HOST_MULTIARCH} \
+		-DCMAKE_INSTALL_SYSCONFDIR=/etc \
+		`# Directory for installing python modules` \
+		-DPYTHON_SITEPACKAGES_DIR=/usr/lib/python3/dist-packages \
 		`# qmmfsrc flags` \
 		-DVHDR_MODES_ENABLE=TRUE \
 		`# test framework flags` \
@@ -21,6 +21,9 @@ override_dh_auto_configure:
 		-DENABLE_VIDEO_ML=TRUE \
 		-DENABLE_VIDEO_AUDIO=TRUE \
 		`# Enable required plugins` \
+		-DENABLE_GST_PLUGIN_BASE=ON \
+		-DENABLE_GST_QAIRT_PLUGINS=ON \
+		-DENABLE_GST_PLUGIN_SMARTVENCBIN=ON \
 		-DENABLE_GST_PLUGIN_QMMFSRC=ON \
 		-DENABLE_GST_MESSAGING_PLUGINS=ON \
 		-DENABLE_GST_EXT_SOFTWARE_PLUGINS=ON \
@@ -35,6 +38,7 @@ override_dh_auto_configure:
 		-DENABLE_GST_PLUGIN_MLVPOSE=ON \
 		-DENABLE_GST_PLUGIN_MLVSEGMENTATION=ON \
 		-DENABLE_GST_SAMPLE_APPS=ON \
+		-DENABLE_GST_SAMPLE_APPS_CAMERA=ON \
 		-DENABLE_GST_PYTHON_EXAMPLES=ON \
 		-DENABLE_GST_TEST_FRAMEWORK=ON \
 		-DENABLE_GST_PLUGIN_TOOLS=ON

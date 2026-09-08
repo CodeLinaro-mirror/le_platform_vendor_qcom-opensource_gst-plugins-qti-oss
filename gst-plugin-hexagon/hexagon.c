@@ -317,7 +317,7 @@ gst_hexagon_decide_allocation (GstBaseTransform * base, GstQuery * query)
 
     gst_video_info_align (&info, &align);
 
-    if (gst_query_get_video_alignment (query, &ds_align)) {
+    if (gst_query_parse_video_alignment (query, &ds_align)) {
       GST_DEBUG_OBJECT (hexagon, "Downstream alignment: padding (top: %u bottom: "
           "%u left: %u right: %u) stride (%u, %u, %u, %u)", ds_align.padding_top,
           ds_align.padding_bottom, ds_align.padding_left, ds_align.padding_right,
@@ -325,7 +325,7 @@ gst_hexagon_decide_allocation (GstBaseTransform * base, GstQuery * query)
           ds_align.stride_align[2], ds_align.stride_align[3]);
 
       // Find the most the appropriate alignment between us and downstream.
-      align = gst_video_calculate_common_alignment (&align, &ds_align);
+      gst_video_alignment_update (&align, &ds_align);
 
       GST_DEBUG_OBJECT (hexagon, "Common alignment: padding (top: %u bottom: %u "
           "left: %u right: %u) stride (%u, %u, %u, %u)", align.padding_top,
@@ -413,9 +413,9 @@ gst_hexagon_transform_caps (GstBaseTransform * base,
       gst_structure_set (structure, "pixel-aspect-ratio",
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure_full (result, structure,
         gst_caps_features_copy (features));
@@ -439,9 +439,9 @@ gst_hexagon_transform_caps (GstBaseTransform * base,
           GST_TYPE_FRACTION_RANGE, 1, G_MAXINT, G_MAXINT, 1, NULL);
     }
 
-    // Remove the format/color/compression related fields.
+    // Remove the format/color related fields.
     gst_structure_remove_fields (structure, "format", "colorimetry",
-        "chroma-site", "compression", NULL);
+        "chroma-site", NULL);
 
     gst_caps_append_structure (result, structure);
   }

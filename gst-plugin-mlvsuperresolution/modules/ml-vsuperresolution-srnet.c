@@ -35,7 +35,7 @@
 #include <gst/utils/common-utils.h>
 #include <gst/utils/batch-utils.h>
 #include <gst/ml/ml-module-utils.h>
-#include <gst/ml/ml-module-video-super-resolution.h>
+#include <gst/ml/ml-module-super-resolution.h>
 
 
 // Set the default debug category.
@@ -166,7 +166,7 @@ gst_ml_module_process (gpointer instance, GstMLFrame * mlframe, gpointer output)
 
   stride = GST_VIDEO_FRAME_PLANE_STRIDE (vframe, 0);
 
-  indata = GFLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
+  indata = GST_FLOAT_PTR_CAST (GST_ML_FRAME_BLOCK_DATA (mlframe, 0));
   outdata = GST_VIDEO_FRAME_PLANE_DATA (vframe, 0);
 
   // TODO: Right now this won't work with any output resolution.

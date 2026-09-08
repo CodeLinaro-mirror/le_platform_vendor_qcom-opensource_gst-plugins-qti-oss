@@ -9,6 +9,7 @@
 #include <gst/ml/ml-info.h>
 #include <gst/ml/ml-frame.h>
 #include <gst/ml/gstmlmeta.h>
+#include <gst/ml/ml-module-utils.h>
 
 G_BEGIN_DECLS
 
@@ -84,7 +85,7 @@ typedef struct _GstMLLabel GstMLLabel;
  * Post-processing module must implement function called 'gst_ml_module_open'
  * with the same arguments and return types.
  *
- * return: Pointer to private module instance on success or NULL on failure
+ * Returns: Pointer to private module instance on success or NULL on failure
  */
 typedef gpointer  (*GstMLModuleOpen)      (void);
 
@@ -96,8 +97,6 @@ typedef gpointer  (*GstMLModuleOpen)      (void);
  *
  * Post-processing module must implement function called 'gst_ml_module_close'
  * with the same arguments.
- *
- * return: NONE
  */
 typedef void      (*GstMLModuleClose)     (gpointer submodule);
 
@@ -109,7 +108,7 @@ typedef void      (*GstMLModuleClose)     (gpointer submodule);
  * Post-processing module must implement function called 'gst_ml_module_caps'
  * with the same arguments.
  *
- * return: Pointer to GStreamer caps on success or NULL on failure
+ * Returns: Pointer to GStreamer caps on success or NULL on failure
  */
 typedef GstCaps * (*GstMLModuleCaps)      (void);
 
@@ -123,7 +122,7 @@ typedef GstCaps * (*GstMLModuleCaps)      (void);
  * Post-processing module must implement function called 'gst_ml_module_configure'
  * with the same arguments.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 typedef gboolean  (*GstMLModuleConfigure) (gpointer submodule,
                                            GstStructure * settings);
@@ -143,7 +142,7 @@ typedef gboolean  (*GstMLModuleConfigure) (gpointer submodule,
  * The the type the 'output' argument is plugin specific. Refer to the plugin
  * module header for detailed information.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 typedef gboolean  (*GstMLModuleProcess)   (gpointer submodule,
                                            GstMLFrame * mlframe,
@@ -169,7 +168,7 @@ struct _GstMLLabel {
  * Allocate an instance of ML post-processing module.
  * Usable only at plugin level.
  *
- * return: Pointer to ML post-processing module on success or NULL on failure
+ * Returns: Pointer to ML post-processing module on success or NULL on failure
  */
 GST_API GstMLModule *
 gst_ml_module_new      (const gchar * type, const gchar * name);
@@ -180,8 +179,6 @@ gst_ml_module_new      (const gchar * type, const gchar * name);
  *
  * De-initialize and free the memory associated with the module.
  * Usable only at plugin level.
- *
- * return: NONE
  */
 GST_API void
 gst_ml_module_free     (GstMLModule * module);
@@ -193,7 +190,7 @@ gst_ml_module_free     (GstMLModule * module);
  * Convenient wrapper function used on plugin level to call the submodule
  * 'gst_ml_module_open' API.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 GST_API gboolean
 gst_ml_module_init     (GstMLModule * module);
@@ -205,7 +202,7 @@ gst_ml_module_init     (GstMLModule * module);
  * Convenient wrapper function used on plugin level to call the submodule
  * 'gst_ml_module_caps' API to get its capabilities.
  *
- * return: Pointer to GstCaps on success or NULL on failure
+ * Returns: Pointer to GstCaps on success or NULL on failure
  */
 GST_API GstCaps *
 gst_ml_module_get_caps (GstMLModule * module);
@@ -218,7 +215,7 @@ gst_ml_module_get_caps (GstMLModule * module);
  * Convenient wrapper function used on plugin level to call the submodule
  * 'gst_ml_module_configure' API to set various options.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 GST_API gboolean
 gst_ml_module_set_opts (GstMLModule * module, GstStructure * options);
@@ -233,7 +230,7 @@ gst_ml_module_set_opts (GstMLModule * module, GstStructure * options);
  * 'gst_ml_module_process' API in order to process input tensors and produce
  * a plugin specific output.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 GST_API gboolean
 gst_ml_module_execute  (GstMLModule * module, GstMLFrame * mlframe,
@@ -245,7 +242,7 @@ gst_ml_module_execute  (GstMLModule * module, GstMLFrame * mlframe,
  *
  * Allocate and initialize instance of ML label.
  *
- * return: Pointer to ML label on success or NULL on failure
+ * Returns: Pointer to ML label on success or NULL on failure
  */
 GST_API GstMLLabel *
 gst_ml_label_new (void);
@@ -255,8 +252,6 @@ gst_ml_label_new (void);
  * @label: Pointer to ML label instance
  *
  * Deinitialize and free the label instance.
- *
- * return: NONE
  */
 GST_API void
 gst_ml_label_free (GstMLLabel * label);
@@ -269,7 +264,7 @@ gst_ml_label_free (GstMLLabel * label);
  * Helper function to parse either a file containing labels in GValue format
  * or a directly raw GValue formated string.
  *
- * return: TRUE on success or FALSE on failure
+ * Returns: TRUE on success or FALSE on failure
  */
 gboolean
 gst_ml_parse_labels (const gchar * input, GValue * list);
@@ -281,7 +276,7 @@ gst_ml_parse_labels (const gchar * input, GValue * list);
  * Helper function to load labels information from GValue list into hash table
  * comprised from GstMLLabel.
  *
- * return: Pointer to hash table of GstMLLabel on success or NULL on failure
+ * Returns: Pointer to hash table of GstMLLabel on success or NULL on failure
  */
 GHashTable *
 gst_ml_load_labels (GValue * list);
@@ -293,7 +288,7 @@ gst_ml_load_labels (GValue * list);
  * Helper function to find all modules of the given type and create an array
  * of GEnumValue from them that will be used for registering an enum GType.
  *
- * return: Pointer to Array of GEnumValue on success or NULL on failure
+ * Returns: Pointer to Array of GEnumValue on success or NULL on failure
  */
 GEnumValue *
 gst_ml_enumarate_modules (const gchar * type);
