@@ -23,7 +23,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Check whether CDM libs are present.
 include(CheckIncludeFileCXX)
-check_include_file_cxx("ce_cdm/cdm.h" HAVE_CDM_H)
+check_include_file_cxx("cdm.h" HAVE_CDM_H)
 
 # Precompiler definitions.
 add_definitions(-DHAVE_CONFIG_H)
@@ -41,6 +41,7 @@ set(GST_QTI_DRM_DECRYPTOR gstqtidrmdecryptor)
 
 add_library(${GST_QTI_DRM_DECRYPTOR} SHARED
   drmdecryptor.cc
+  drmdecryptor-engine.cc
 )
 
 target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
@@ -50,8 +51,8 @@ target_include_directories(${GST_QTI_DRM_DECRYPTOR} PUBLIC
 target_link_libraries(${GST_QTI_DRM_DECRYPTOR} PRIVATE
   ${GST_LIBRARIES}
   ${GST_ALLOC_LIBRARIES}
+  cutils
   gstqtimemorybase
-  vmmem
   $<$<BOOL:${HAVE_CDM_H}>:widevine_ce_cdm_shared>
   $<$<BOOL:${HAVE_CDM_H}>:oemcrypto>
 )

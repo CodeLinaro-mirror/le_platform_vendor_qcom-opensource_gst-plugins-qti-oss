@@ -16,7 +16,7 @@ check_include_file_cxx("media/drm/DrmAPI.h" HAVE_DRM_API_H)
 
 # Check whether CDM libs are present.
 include(CheckIncludeFileCXX)
-check_include_file_cxx("ce_cdm/cdm.h" HAVE_CDM_H)
+check_include_file_cxx("cdm.h" HAVE_CDM_H)
 
 # Check whether Auto-framing libs are present.
 include(CheckIncludeFileCXX)
@@ -30,9 +30,9 @@ if (ENABLE_VIDEO_DECODE)
   add_subdirectory(gst-video-playback-example)
 endif () # ENABLE_VIDEO_DECODE
 
-if (ENABLE_VIDEO_DECODE AND HAVE_DRM_API_H)
+if (ENABLE_VIDEO_DECODE AND HAVE_DRM_API_H AND HAVE_CDM_H)
   add_subdirectory(gst-drm-player-example)
-endif () # ENABLE_VIDEO_DECODE AND HAVE_DRM_API_H
+endif () # ENABLE_VIDEO_DECODE AND HAVE_DRM_API_H AND HAVE_CDM_H
 
 if (ENABLE_DISPLAY)
   add_subdirectory(gst-weston-composition)

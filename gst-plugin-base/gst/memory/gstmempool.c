@@ -67,6 +67,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 
 #if defined(HAVE_LINUX_DMA_HEAP_H)
 #include <linux/dma-heap.h>
@@ -74,6 +75,10 @@
 #include <linux/ion.h>
 #include <linux/msm_ion.h>
 #endif // HAVE_LINUX_DMA_HEAP_H
+
+#ifdef HAVE_LINUX_MEM_BUF_H
+#include <linux/mem-buf.h>
+#endif //HAVE_LINUX_MEM_BUF_H
 
 
 GST_DEBUG_CATEGORY_STATIC (gst_mem_pool_debug);
@@ -103,6 +108,11 @@ struct _GstMemBufferPoolPrivate
   // Map of data FDs and ION handles on case ION memory is used OR
   GHashTable          *datamap;
 #endif // TARGET_ION_ABI_VERSION
+
+#ifdef HAVE_LINUX_MEM_BUF_H
+  gint                mem_buf_fd;
+  gint                vmid_fd;
+#endif //HAVE_LINUX_MEM_BUF_H
 };
 
 #define gst_mem_buffer_pool_parent_class parent_class
@@ -113,13 +123,52 @@ static gboolean
 open_ion_device (GstMemBufferPool * mempool, gboolean secure)
 {
   GstMemBufferPoolPrivate *priv = mempool->priv;
+  gboolean open_system_heap = TRUE;
 
   if (secure) {
+#ifdef HAVE_LINUX_MEM_BUF_H
+    GST_INFO_OBJECT (mempool, "Open /dev/membuf");
+    priv->mem_buf_fd = open("/dev/membuf", O_RDONLY | O_CLOEXEC);
+
+    if (priv->mem_buf_fd < 0) {
+      GST_ERROR_OBJECT (mempool, "Failed to open /dev/membuf, "
+          "error: %s!", g_strerror (errno));
+      return FALSE;
+    }
+
+    GST_INFO_OBJECT (mempool, "Open /dev/mem_buf_vm/qcom,cp_bitstream");
+    priv->vmid_fd = open("/dev/mem_buf_vm/qcom,cp_bitstream", O_RDONLY | O_CLOEXEC);
+
+    if (priv->vmid_fd < 0) {
+      GST_ERROR_OBJECT (mempool, "Failed to open /dev/mem_buf_vm/qcom,cp_bitstream, "
+          "error: %s!", g_strerror (errno));
+      return FALSE;
+    }
+#else
     GST_INFO_OBJECT (mempool, "Open /dev/dma_heap/system-secure");
     priv->devfd = open ("/dev/dma_heap/system-secure", O_RDONLY | O_CLOEXEC);
-  } else {
+
+    if (priv->devfd < 0) {
+      GST_ERROR_OBJECT (mempool, "Failed to open /dev/dma_heap/system-secure, "
+          "error: %s!", g_strerror (errno));
+      return FALSE;
+    }
+
+    // Legacy secure path already holds the system-secure FD in devfd; do not
+    // overwrite it with the qcom,system heap below.
+    open_system_heap = FALSE;
+#endif // HAVE_LINUX_MEM_BUF_H
+  }
+
+  if (open_system_heap) {
     GST_INFO_OBJECT (mempool, "Open /dev/dma_heap/qcom,system");
     priv->devfd = open ("/dev/dma_heap/qcom,system", O_RDONLY | O_CLOEXEC);
+
+    if (priv->devfd < 0) {
+      GST_WARNING_OBJECT (mempool, "Failed to open /dev/dma_heap/qcom,system, "
+          "error: %s! Falling back to /dev/dma_heap/system", g_strerror (errno));
+      priv->devfd = open ("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
+    }
   }
 
   if (priv->devfd < 0) {
@@ -149,6 +198,19 @@ close_ion_device (GstMemBufferPool * mempool)
     GST_INFO_OBJECT (mempool, "Closing ION device FD %d", priv->devfd);
     close (priv->devfd);
   }
+
+#ifdef HAVE_LINUX_MEM_BUF_H
+  if (GST_IS_SECURE_MEMORY_TYPE (priv->memtype)) {
+    if (priv->mem_buf_fd >= 0) {
+      GST_INFO_OBJECT (mempool, "Closing mem_buf FD %d", priv->mem_buf_fd);
+      close (priv->mem_buf_fd);
+    }
+    if (priv->vmid_fd >= 0) {
+      GST_INFO_OBJECT (mempool, "Closing vmid FD %d", priv->vmid_fd);
+      close (priv->vmid_fd);
+    }
+  }
+#endif //HAVE_LINUX_MEM_BUF_H
 
 #if !defined(HAVE_LINUX_DMA_HEAP_H) && !defined(TARGET_ION_ABI_VERSION)
   g_hash_table_destroy (priv->datamap);
@@ -214,6 +276,26 @@ ion_device_alloc (GstMemBufferPool * mempool, gint size)
 #else
   fd = alloc_data.fd;
 #endif
+
+#ifdef HAVE_LINUX_MEM_BUF_H
+  if (GST_IS_SECURE_MEMORY_TYPE (priv->memtype)) {
+    struct mem_buf_lend_ioctl_arg buflend = {};
+    struct acl_entry acl[1] = {};
+
+    acl[0].vmid = priv->vmid_fd;
+    acl[0].perms = MEM_BUF_PERM_FLAG_READ | MEM_BUF_PERM_FLAG_WRITE;
+
+    buflend.dma_buf_fd = fd;
+    buflend.nr_acl_entries = 1;
+    buflend.acl_list = (__u64)&acl;
+
+    result = ioctl (priv->mem_buf_fd, MEM_BUF_IOC_LEND, &buflend);
+    if (result != 0) {
+      GST_ERROR_OBJECT (mempool, "ioctl MEM_BUF_IOC_LEND Failed to allocate memory!");
+      return NULL;
+    }
+  }
+#endif // HAVE_LINUX_MEM_BUF_H
 
   GST_DEBUG_OBJECT (mempool, "Allocated ION memory FD %d", fd);
 
@@ -436,6 +518,10 @@ gst_mem_buffer_pool_init (GstMemBufferPool * mempool)
   mempool->priv = gst_mem_buffer_pool_get_instance_private (mempool);
   mempool->priv->devfd = -1;
   mempool->priv->memsizes = NULL;
+#ifdef HAVE_LINUX_MEM_BUF_H
+  mempool->priv->mem_buf_fd = -1;
+  mempool->priv->vmid_fd = -1;
+#endif //HAVE_LINUX_MEM_BUF_H
 }
 
 
