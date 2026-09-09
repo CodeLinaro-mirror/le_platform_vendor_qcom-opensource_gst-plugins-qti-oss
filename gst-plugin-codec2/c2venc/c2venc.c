@@ -914,6 +914,16 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     }
   }
 
+  if (gst_structure_has_field (gst_caps_get_structure (instate->caps, 0),
+      "colorimetry")) {
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_COLOR_ASPECTS_INFO, GST_PTR_CAST (&info->colorimetry));
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set Color Aspects Info parameter!");
+      return FALSE;
+    }
+  }
+
   success = gst_c2_engine_set_parameter (c2venc->engine,
       GST_C2_PARAM_COLOR_ASPECTS_TUNING,
       GST_PTR_CAST (&info->colorimetry));
@@ -2276,6 +2286,7 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
         gst_value_array_append_value (value, &element);
         g_value_unset (&element);
       }
+      break;
     case PROP_CHROMA_QP_OFFSET:
       g_value_set_int (value, c2venc->chroma_qp_offset);
       break;
