@@ -409,6 +409,40 @@ gst_ml_audio_converter_transform_caps (GstBaseTransform * base,
   return result;
 }
 
+// othercaps may lack the peer's constraints when negotiation started
+// from already-fixed caps, so query the peer directly here
+static void
+gst_ml_audio_converter_fixate_field (GstBaseTransform * base,
+    GstCaps * othercaps, GstStructure * caps_struct,
+    GstStructure * mlcaps_struct, const gchar * field)
+{
+  const GValue *value = gst_structure_get_value (caps_struct, field);
+  GstCaps *peercaps;
+
+  if (value != NULL && gst_value_is_fixed (value))
+    return;
+
+  peercaps = gst_pad_peer_query_caps (
+      GST_BASE_TRANSFORM_SRC_PAD (base), othercaps);
+
+  if (peercaps != NULL) {
+    if (!gst_caps_is_empty (peercaps)) {
+      value = gst_structure_get_value (
+          gst_caps_get_structure (peercaps, 0), field);
+
+      if (value != NULL && gst_value_is_fixed (value)) {
+        gst_caps_set_value (othercaps, field, value);
+        gst_caps_unref (peercaps);
+        return;
+      }
+    }
+    gst_caps_unref (peercaps);
+  }
+
+  value = gst_structure_get_value (mlcaps_struct, field);
+  gst_caps_set_value (othercaps, field, value);
+}
+
 static GstCaps *
 gst_ml_audio_converter_fixate_caps (GstBaseTransform * base,
     GstPadDirection direction, GstCaps * caps, GstCaps * othercaps)
@@ -439,27 +473,18 @@ gst_ml_audio_converter_fixate_caps (GstBaseTransform * base,
           G_TYPE_INT, mlconverter->sample_rate, NULL);
 
   } else if (direction == GST_PAD_SINK) {
+    GstStructure *mlcaps_struct = NULL;
     mlcaps = gst_ml_audio_converter_translate_audio_caps (mlconverter, caps);
+    mlcaps_struct = gst_caps_get_structure (mlcaps, 0);
     caps_struct = gst_caps_get_structure (othercaps, 0);
 
     value = gst_structure_get_value (caps_struct, "dimensions");
 
-    // Only impose the converter computed dimensions when downstream did not
-    // already provide fixed dimensions. This preserves a downstream supplied
-    // multi-dimensional tensor shape (e.g. <<1,1,96,64>>) during negotiation.
-    if (NULL == value || !gst_value_is_fixed (value)) {
-      value = gst_structure_get_value (
-        gst_caps_get_structure (mlcaps, 0), "dimensions");
-      gst_caps_set_value (othercaps, "dimensions", value);
-    }
-
-    value = gst_structure_get_value (caps_struct, "type");
-
-    if (NULL == value || !gst_value_is_fixed (value)) {
-      value = gst_structure_get_value (
-          gst_caps_get_structure (mlcaps, 0), "type");
-      gst_caps_set_value (othercaps, "type", value);
-    }
+    // Preserve downstream fixed dimensions/type instead of overriding it.
+    gst_ml_audio_converter_fixate_field (base, othercaps, caps_struct,
+        mlcaps_struct, "dimensions");
+    gst_ml_audio_converter_fixate_field (base, othercaps, caps_struct,
+        mlcaps_struct, "type");
 
     gst_caps_unref (mlcaps);
   }
@@ -595,6 +620,8 @@ gst_ml_audio_converter_transform (GstBaseTransform * base,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
+  time = gst_util_get_timestamp ();
+
   if (!gst_audio_buffer_map (&inframe, mlconverter->audio_info,
         inbuffer, GST_MAP_READ)) {
     GST_ERROR ("audio frame map failure");
@@ -623,11 +650,7 @@ gst_ml_audio_converter_transform (GstBaseTransform * base,
     goto unmap_audio;
   }
 
-  time = gst_util_get_timestamp ();
-
   success = gst_mlaconverter_engine_process (mlconverter->engine, &inframe, &outframe);
-
-  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
 #ifdef HAVE_LINUX_DMA_BUF_H
   if (gst_is_fd_memory (gst_buffer_peek_memory (outbuffer, 0))) {
@@ -650,16 +673,18 @@ gst_ml_audio_converter_transform (GstBaseTransform * base,
     goto unmap_ml;
   }
 
-  GST_LOG ("Execute took %" G_GINT64_FORMAT ".%03"
-      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
-      (GST_TIME_AS_USECONDS (time) % 1000));
-
   ret = GST_FLOW_OK;
 
 unmap_ml:
   gst_ml_frame_unmap (&outframe);
 unmap_audio:
   gst_audio_buffer_unmap (&inframe);
+
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_LOG_OBJECT (mlconverter, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms, HW utilization: CPU", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000));
 
   return ret;
 }

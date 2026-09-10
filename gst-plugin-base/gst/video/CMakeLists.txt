@@ -11,7 +11,10 @@ add_library(${TARGET_NAME} SHARED
   gstvideooriginmeta.c
   gstvideoclassificationmeta.c
   gstvideolandmarksmeta.c
+  gstvideosegmentationmeta.c
+  gstvideodepthmeta.c
   video-converter-engine.c
+  video-converter-engine-param.c
   video-utils.c
   $<$<BOOL:${HAVE_ADRENO_C2D2_H}>:c2d-video-converter.c>
   $<$<BOOL:${GLES_FOUND}>:gles-video-converter.cc>
@@ -24,7 +27,10 @@ set(TARGET_HEADERS
   gstvideooriginmeta.h
   gstvideoclassificationmeta.h
   gstvideolandmarksmeta.h
+  gstvideosegmentationmeta.h
+  gstvideodepthmeta.h
   video-converter-engine.h
+  video-converter-engine-param.h
   video-utils.h
 )
 
@@ -80,21 +86,22 @@ install(
   PUBLIC_HEADER DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_INCDIR}/gstreamer-1.0/gst/video/
 )
 
-# Add destination of compiletime pkg-config file to PKG_CONFIG_PATH
-set(ENV{PKG_CONFIG_PATH} "${CMAKE_CURRENT_BINARY_DIR}:$ENV{PKG_CONFIG_PATH}")
+# Add destination of compile time pkg-config file to PKG_CONFIG_LOCAL_PATH
+list(APPEND PKG_CONFIG_LOCAL_PATH "${CMAKE_CURRENT_BINARY_DIR}")
+set(PKG_CONFIG_LOCAL_PATH "${PKG_CONFIG_LOCAL_PATH}" CACHE STRING "" FORCE)
 
 configure_file(
   ${QTI_PLUGINS_BASE_SOURCE_DIR}/common.pc.in
-  ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
+  ${CMAKE_CURRENT_BINARY_DIR}/lib/pkgconfig/${PROJECT_NAME}.pc
   @ONLY
 )
 
 install(
-  FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc
+  FILES ${CMAKE_CURRENT_BINARY_DIR}/lib/pkgconfig/${PROJECT_NAME}.pc
   DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/pkgconfig
 )
 
-if(GIR_SCANNER AND GIR_COMPILER AND PYTHON_SITEPACKAGES_DIR)
+if(GIR_SCANNER AND GIR_COMPILER AND NOT HAVE_GBM_PRIV_H)
   # Generate GIR and typelib files for Python
   set(GIR_TARGET_NAME "GstQtiVideo-1.0.gir")
 
@@ -124,10 +131,16 @@ if(GIR_SCANNER AND GIR_COMPILER AND PYTHON_SITEPACKAGES_DIR)
     ${CMAKE_CURRENT_SOURCE_DIR}/video-utils.c
     ${CMAKE_CURRENT_SOURCE_DIR}/video-converter-engine.h
     ${CMAKE_CURRENT_SOURCE_DIR}/video-converter-engine.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/video-converter-engine-param.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/video-converter-engine-param.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gstvideoclassificationmeta.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gstvideoclassificationmeta.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gstvideolandmarksmeta.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gstvideolandmarksmeta.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstvideosegmentationmeta.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstvideosegmentationmeta.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstvideodepthmeta.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/gstvideodepthmeta.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gstimagepool.h
     ${CMAKE_CURRENT_SOURCE_DIR}/gstimagepool.c
     DEPENDS ${TARGET_NAME}

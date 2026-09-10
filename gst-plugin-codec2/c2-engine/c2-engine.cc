@@ -273,7 +273,7 @@ class GstC2Notifier : public IC2Notifier {
 
 GstC2Engine *
 gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
-    gpointer userdata)
+    GstC2PoolType type, gpointer userdata)
 {
   GstC2Engine *engine = NULL;
 
@@ -317,11 +317,32 @@ gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
     return NULL;
   }
 
+  C2Module::PoolType pool_type = C2Module::PoolType::kUnspecified;
+  switch (type) {
+    case GST_C2_POOL_TYPE_UNSPECIFIED:
+      pool_type = C2Module::PoolType::kUnspecified;
+      break;
+    case GST_C2_POOL_TYPE_DEFAULT_LINEAR:
+      pool_type = C2Module::PoolType::kDefaultLinear;
+      break;
+    case GST_C2_POOL_TYPE_DEFAULT_GRAPHIC:
+      pool_type = C2Module::PoolType::kDefaultGraphic;
+      break;
+    case GST_C2_POOL_TYPE_LINEAR_NON_CONTIGUOUS:
+      pool_type = C2Module::PoolType::kLinearNonContiguous;
+      break;
+    case GST_C2_POOL_TYPE_GRAPHIC_NON_CONTIGUOUS:
+      pool_type = C2Module::PoolType::kGraphicNonContiguous;
+      break;
+    default:
+      break;
+  }
+
   try {
     std::shared_ptr<IC2Notifier> notifier =
         std::make_shared<GstC2Notifier>(engine);
 
-    engine->c2module->Initialize (notifier);
+    engine->c2module->Initialize (notifier, pool_type);
   } catch (std::exception& e) {
     GST_ERROR ("Failed to initialize, error: '%s'!", e.what());
     gst_c2_engine_free (engine);
@@ -453,7 +474,7 @@ gst_c2_engine_drain (GstC2Engine * engine, gboolean eos)
   std::shared_ptr<C2Buffer> c2buffer;
   std::list<std::unique_ptr<C2Param>> settings;
 
-  uint64_t index = 0;
+  uint64_t index = 0xFFFFFFFDULL;
   uint64_t timestamp = 0;
   uint32_t flags = C2FrameData::FLAG_END_OF_STREAM;
 
