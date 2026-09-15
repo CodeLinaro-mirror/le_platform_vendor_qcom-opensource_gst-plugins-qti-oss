@@ -9,28 +9,15 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 find_package(PkgConfig)
 
 # Get the pkgconfigs exported by the automake tools
-pkg_check_modules(GST
-  REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_ALLOC
-  REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(GST_VIDEO
-  REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
+set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH ON)
+set(CMAKE_PREFIX_PATH "${PKG_CONFIG_LOCAL_PATH}")
+
+pkg_check_modules(GST REQUIRED gstreamer-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_ALLOC REQUIRED gstreamer-allocators-1.0>=${GST_VERSION_REQUIRED})
+pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
 pkg_check_modules(GBM REQUIRED gbm)
-# Use in-tree CMake targets if built together, otherwise fall back to pkg-config
-if(TARGET gstqtiutilsbase)
-  set(GST_QCOM_UTILS_INCLUDE_DIRS "")
-  set(GST_QCOM_UTILS_LIBRARIES    gstqtiutilsbase)
-else()
-  pkg_check_modules(GST_QCOM_UTILS
-    REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
-endif()
-if(TARGET gstqtimemorybase)
-  set(GST_QCOM_MEM_INCLUDE_DIRS "")
-  set(GST_QCOM_MEM_LIBRARIES    gstqtimemorybase)
-else()
-  pkg_check_modules(GST_QCOM_MEM
-    REQUIRED gstreamer-qcom-oss-memory-1.0>=1.0.0)
-endif()
+pkg_check_modules(GST_QCOM_UTILS REQUIRED gstreamer-qcom-oss-utils-1.0>=1.0.0)
+pkg_check_modules(GST_QCOM_MEM REQUIRED gstreamer-qcom-oss-memory-1.0>=1.0.0)
 
 include(CheckIncludeFileCXX)
 # Check whether CVP OpticalFlow header is present.
@@ -66,7 +53,9 @@ target_include_directories(${GST_CV_OPTCLFLOW} PUBLIC
 
 target_compile_definitions(${GST_CV_OPTCLFLOW} PRIVATE
   $<$<BOOL:${HAVE_CVP_OPTICALFLOW_H}>:HAVE_CVP_OPTICALFLOW_H>
+  $<$<BOOL:${HAVE_CVP_OPTICALFLOW_H}>:HW_UTILIZATION="CVP">
   $<$<BOOL:${HAVE_EVA_OPTICALFLOW_H}>:HAVE_EVA_OPTICALFLOW_H>
+  $<$<BOOL:${HAVE_EVA_OPTICALFLOW_H}>:HW_UTILIZATION="EVA">
 )
 
 target_link_libraries(${GST_CV_OPTCLFLOW} PRIVATE

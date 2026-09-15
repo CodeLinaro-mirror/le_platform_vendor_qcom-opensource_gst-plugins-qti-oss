@@ -1923,8 +1923,20 @@ gst_ml_video_converter_query (GstBaseTransform * base,
           !gst_structure_has_name (structure, "ml-preprocess-information"))
         break;
 
+      // Add Stage ID and tensor resolution for result decryption downstream.
       gst_structure_set (structure, "stage-id", G_TYPE_UINT,
           mlconverter->stage_id, NULL);
+
+      if (mlconverter->mlinfo != NULL) {
+        guint width = 0, height = 0;
+
+        width = GST_ML_INFO_TENSOR_DIM_W (mlconverter->tensorlayout,
+            mlconverter->mlinfo);
+        height = GST_ML_INFO_TENSOR_DIM_H (mlconverter->tensorlayout,
+            mlconverter->mlinfo);
+
+        gst_ml_structure_set_source_dimensions (structure, width, height);
+      }
 
       GST_DEBUG_OBJECT (mlconverter, "Stage ID %u", mlconverter->stage_id);
       return TRUE;
@@ -2277,7 +2289,7 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
     blit->mask = 0;
 
     blit->alpha = G_MAXUINT8;
-    blit->rotate = GST_VCE_ROTATE_0;
+    blit->rotate = GST_VIDEO_ROTATE_0;
   }
 
   mlconverter->composition.datatype = 0;
@@ -2286,25 +2298,25 @@ gst_ml_video_converter_set_caps (GstBaseTransform * base, GstCaps * incaps,
   mlconverter->composition.bgfill = TRUE;
 
   if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_INT64)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_I64;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_I64;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_UINT64)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_U64;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_U64;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_INT32)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_I32;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_I32;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_UINT32)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_U32;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_U32;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_INT16)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_I16;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_I16;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_UINT16)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_U16;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_U16;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_FLOAT16)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_F16;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_F16;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_FLOAT32)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_F32;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_F32;
   else if (GST_ML_INFO_TYPE (&mlinfo) == GST_ML_TYPE_INT8)
-    mlconverter->composition.datatype |= GST_VCE_DATA_TYPE_I8;
+    mlconverter->composition.datatype |= GST_VIDEO_DATA_TYPE_I8;
 
-  for (idx = 0; idx < GST_VCE_MAX_CHANNELS; idx++) {
+  for (idx = 0; idx < GST_VIDEO_MAX_COMPONENTS; idx++) {
     mlconverter->composition.offsets[idx] = (idx < mlconverter->mean->len) ?
         g_array_index (mlconverter->mean, gdouble, idx) : DEFAULT_PROP_MEAN;
     mlconverter->composition.scales[idx] = (idx < mlconverter->sigma->len) ?
@@ -2458,12 +2470,13 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
       GST_BUFFER_FLAG_IS_SET (outbuffer, GST_BUFFER_FLAG_GAP))
     return GST_FLOW_OK;
 
+  time = gst_util_get_timestamp ();
+
   if (!gst_ml_video_converter_prepare_buffer_queues (mlconverter, inbuffer)) {
     GST_TRACE_OBJECT (mlconverter, "Internal buffer queues not yet ready");
     return GST_BASE_TRANSFORM_FLOW_DROPPED;
   }
 
-  time = gst_util_get_timestamp ();
   success = gst_ml_video_converter_setup_composition (mlconverter, outbuffer);
 
   if (!success) {
@@ -2489,16 +2502,17 @@ gst_ml_video_converter_transform (GstBaseTransform * base,
   }
 
   gst_ml_video_converter_cleanup_composition (mlconverter);
-  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
 
   if (!success) {
     GST_ERROR_OBJECT (mlconverter, "Failed to process buffers!");
     return GST_FLOW_ERROR;
   }
 
-  GST_LOG_OBJECT (mlconverter, "Conversion took %" G_GINT64_FORMAT ".%03"
-      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
-      (GST_TIME_AS_USECONDS (time) % 1000));
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_LOG_OBJECT (mlconverter, "Performance time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms, HW utilization: %s", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000), mlconverter->hw_util);
 
   return GST_FLOW_OK;
 }
@@ -2515,6 +2529,11 @@ gst_ml_video_converter_set_property (GObject * object, guint prop_id,
       break;
     case PROP_ENGINE_BACKEND:
       mlconverter->backend = g_value_get_enum (value);
+
+      if (mlconverter->backend == GST_VCE_BACKEND_GLES)
+        g_strlcpy (mlconverter->hw_util, "GPU", sizeof(mlconverter->hw_util));
+      else
+        g_strlcpy (mlconverter->hw_util, "CPU", sizeof(mlconverter->hw_util));
       break;
     case PROP_IMAGE_DISPOSITION:
       mlconverter->disposition = g_value_get_enum (value);
@@ -2754,6 +2773,11 @@ gst_ml_video_converter_init (GstMLVideoConverter * mlconverter)
   mlconverter->pixlayout = DEFAULT_PROP_SUBPIXEL_LAYOUT;
   mlconverter->mean = g_array_new (FALSE, FALSE, sizeof (gdouble));
   mlconverter->sigma = g_array_new (FALSE, FALSE, sizeof (gdouble));
+
+  if (mlconverter->backend == GST_VCE_BACKEND_GLES)
+    g_strlcpy (mlconverter->hw_util, "GPU", sizeof(mlconverter->hw_util));
+  else
+    g_strlcpy (mlconverter->hw_util, "CPU", sizeof(mlconverter->hw_util));
 
   // Handle buffers with GAP flag internally.
   gst_base_transform_set_gap_aware (GST_BASE_TRANSFORM (mlconverter), TRUE);

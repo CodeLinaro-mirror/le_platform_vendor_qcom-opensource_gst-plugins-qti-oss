@@ -62,9 +62,9 @@
     ((flip == GST_OCV_FLIP_BOTH) ? (-1) : 0)))
 
 #define GST_OCV_GET_ROTATE(rotate) \
-    ((rotate == GST_VCE_ROTATE_90) ? cv::ROTATE_90_CLOCKWISE : \
-    ((rotate == GST_VCE_ROTATE_180) ? cv::ROTATE_180 : \
-    ((rotate == GST_VCE_ROTATE_270) ? cv::ROTATE_90_COUNTERCLOCKWISE : 0)))
+    ((rotate == GST_VIDEO_ROTATE_90_CW) ? cv::ROTATE_90_CLOCKWISE : \
+    ((rotate == GST_VIDEO_ROTATE_180) ? cv::ROTATE_180 : \
+    ((rotate == GST_VIDEO_ROTATE_90_CCW) ? cv::ROTATE_90_COUNTERCLOCKWISE : 0)))
 
 typedef struct _GstOcvPlane GstOcvPlane;
 typedef struct _GstOcvObject GstOcvObject;
@@ -179,15 +179,15 @@ struct _GstOcvPlane
  */
 struct _GstOcvObject
 {
-  GstVideoFormat     format;
-  guint32            flags;
+  GstVideoFormat format;
+  guint32        flags;
 
-  GstOpenCVFlip      flip;
-  GstVideoConvRotate rotate;
-  gboolean           resize;
+  GstOpenCVFlip  flip;
+  GstVideoRotate rotate;
+  gboolean       resize;
 
-  GstOcvPlane        planes[GST_VIDEO_MAX_PLANES];
-  guint8             n_planes;
+  GstOcvPlane    planes[GST_VIDEO_MAX_PLANES];
+  guint8         n_planes;
 };
 
 /**
@@ -301,8 +301,7 @@ gst_ocv_copy_object (GstOcvObject * l_object, GstOcvObject * r_object)
 static inline void
 gst_ocv_update_object (GstOcvObject * object, const gchar * type,
     const GstVideoFrame * frame, const GstVideoRectangle * region,
-    const GstOpenCVFlip flip, const GstVideoConvRotate rotate,
-    const guint64 datatype)
+    GstOpenCVFlip flip, GstVideoRotate rotate, GstVideoDataType datatype)
 {
   const gchar *mode = NULL;
   gint x = 0, y = 0, width = 0, height = 0, bpp = 0;
@@ -316,26 +315,7 @@ gst_ocv_update_object (GstOcvObject * object, const gchar * type,
   width = GST_ROUND_DOWN_2 (MIN (((region->x + region->w) - x), (width - x)));
   height = GST_ROUND_DOWN_2 (MIN (((region->y + region->h) - y), (height - y)));
 
-  if (datatype == GST_VCE_DATA_TYPE_I8)
-    mode = " INT8";
-  else if (datatype == GST_VCE_DATA_TYPE_U16)
-    mode = " UINT16";
-  else if (datatype == GST_VCE_DATA_TYPE_I16)
-    mode = " INT16";
-  else if (datatype == GST_VCE_DATA_TYPE_U32)
-    mode = " UINT32";
-  else if (datatype == GST_VCE_DATA_TYPE_I32)
-    mode = " INT32";
-  else if (datatype == GST_VCE_DATA_TYPE_U64)
-    mode = " UINT64";
-  else if (datatype == GST_VCE_DATA_TYPE_I64)
-    mode = " INT64";
-  else if (datatype == GST_VCE_DATA_TYPE_F16)
-    mode = " FLOAT16";
-  else if (datatype == GST_VCE_DATA_TYPE_F32)
-    mode = " FLOAT32";
-  else
-    mode = " UINT8";
+  mode = gst_video_data_type_to_string (datatype);
 
   GST_TRACE ("%s Buffer %p - %ux%u %s%s", type, frame->buffer,
       GST_VIDEO_FRAME_WIDTH (frame), GST_VIDEO_FRAME_HEIGHT (frame),
@@ -370,14 +350,7 @@ gst_ocv_update_object (GstOcvObject * object, const gchar * type,
 
   // Reduce object stride to equivalent UINT8 as engine cannot operate otherwise.
   // Normalization to end pixel type will be done after all other operations.
-  if (datatype == GST_VCE_DATA_TYPE_U16 || datatype == GST_VCE_DATA_TYPE_I16 ||
-      datatype == GST_VCE_DATA_TYPE_F16)
-    object->planes[0].stride /= 2;
-  else if (datatype == GST_VCE_DATA_TYPE_U32 || datatype == GST_VCE_DATA_TYPE_I32 ||
-      datatype == GST_VCE_DATA_TYPE_F32)
-    object->planes[0].stride /= 4;
-  else if (datatype == GST_VCE_DATA_TYPE_U64 || datatype == GST_VCE_DATA_TYPE_I64)
-    object->planes[0].stride /= 8;
+  object->planes[0].stride /= gst_video_data_type_get_size (datatype);
 
   object->planes[0].width = width;
   object->planes[0].height = height;
@@ -679,7 +652,7 @@ gst_ocv_video_converter_stage_object_init (GstOcvVideoConverter * convert,
   obj->flags |= GST_OCV_FLAG_STAGED;
 
   obj->flip = GST_OCV_FLIP_NONE;
-  obj->rotate = GST_VCE_ROTATE_0;
+  obj->rotate = GST_VIDEO_ROTATE_0;
 
   // Fetch stage buffer for each plane and set the data pointer and index.
   for (idx = 0; idx < obj->n_planes; idx++) {
@@ -1095,7 +1068,7 @@ gst_ocv_video_converter_rotate (GstOcvVideoConverter * convert,
     GstOcvObject * s_obj, GstOcvObject * d_obj)
 {
   GstOcvObject l_obj = {};
-  GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
+  GstVideoRotate rotate = GST_VIDEO_ROTATE_0;
   GstOpenCVFlip flip = GST_OCV_FLIP_NONE;
   guint8 idx = 0;
   gboolean resize = FALSE;
@@ -1116,7 +1089,7 @@ gst_ocv_video_converter_rotate (GstOcvVideoConverter * convert,
     height = s_obj->planes[0].height;
 
     // Dimensions are swapped if 90/270 degree rotation is required.
-    if (rotate == GST_VCE_ROTATE_90 || rotate == GST_VCE_ROTATE_270) {
+    if (rotate == GST_VIDEO_ROTATE_90_CW || rotate == GST_VIDEO_ROTATE_90_CCW) {
       width = s_obj->planes[0].height;
       height = s_obj->planes[0].width;
     }
@@ -1164,7 +1137,7 @@ gst_ocv_video_converter_rotate (GstOcvVideoConverter * convert,
 
   // Transfer any pending resize, flip and color convert and reset rotate
   s_obj->flip = flip;
-  s_obj->rotate = GST_VCE_ROTATE_0;
+  s_obj->rotate = GST_VIDEO_ROTATE_0;
   s_obj->resize = resize;
 
   // Restore the original destination object in case a stage was used.
@@ -1179,7 +1152,7 @@ gst_ocv_video_converter_flip (GstOcvVideoConverter * convert,
     GstOcvObject * s_obj, GstOcvObject * d_obj)
 {
   GstOcvObject l_obj = {};
-  GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
+  GstVideoRotate rotate = GST_VIDEO_ROTATE_0;
   GstOpenCVFlip flip = GST_OCV_FLIP_NONE;
   guint8 idx = 0;
   gboolean resize = FALSE;
@@ -1192,7 +1165,7 @@ gst_ocv_video_converter_flip (GstOcvVideoConverter * convert,
   resize = s_obj->resize;
 
   // Use stage object if other operations are pending
-  if (resize || (rotate != GST_VCE_ROTATE_0) || (s_obj->format != d_obj->format)) {
+  if (resize || (rotate != GST_VIDEO_ROTATE_0) || (s_obj->format != d_obj->format)) {
     guint width = 0, height = 0;
     gboolean success = FALSE;
 
@@ -1200,8 +1173,8 @@ gst_ocv_video_converter_flip (GstOcvVideoConverter * convert,
     height = s_obj->planes[0].height;
 
     // Dimensions are swapped if 90/270 degree rotation is required with resize.
-    if (resize && (rotate == GST_VCE_ROTATE_90 ||
-        rotate == GST_VCE_ROTATE_270)) {
+    if (resize && (rotate == GST_VIDEO_ROTATE_90_CW ||
+            rotate == GST_VIDEO_ROTATE_90_CCW)) {
       width = s_obj->planes[0].height;
       height = s_obj->planes[0].width;
     }
@@ -1265,7 +1238,7 @@ gst_ocv_video_converter_resize (GstOcvVideoConverter * convert,
 {
   GstOcvObject l_obj = {};
   GstOpenCVFlip flip = GST_OCV_FLIP_NONE;
-  GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
+  GstVideoRotate rotate = GST_VIDEO_ROTATE_0;
   guint8 idx = 0;
 
   GST_TRACE ("Performing resize");
@@ -1275,7 +1248,7 @@ gst_ocv_video_converter_resize (GstOcvVideoConverter * convert,
   rotate = s_obj->rotate;
 
   // Use stage object if other operations are pending
-  if ((flip != GST_OCV_FLIP_NONE) || (rotate != GST_VCE_ROTATE_0) ||
+  if ((flip != GST_OCV_FLIP_NONE) || (rotate != GST_VIDEO_ROTATE_0) ||
       (s_obj->format != d_obj->format)) {
     guint width = 0, height = 0;
     gboolean success = FALSE;
@@ -1284,7 +1257,7 @@ gst_ocv_video_converter_resize (GstOcvVideoConverter * convert,
     height = d_obj->planes[0].height;
 
     // Dimensions are swapped if 90/270 degree rotation is required.
-    if (rotate == GST_VCE_ROTATE_90 || rotate == GST_VCE_ROTATE_270) {
+    if (rotate == GST_VIDEO_ROTATE_90_CW || rotate == GST_VIDEO_ROTATE_90_CCW) {
       width = d_obj->planes[0].height;
       height = d_obj->planes[0].width;
     }
@@ -2139,7 +2112,7 @@ gst_ocv_video_converter_prepare_frame (GstOcvVideoConverter * convert,
     GstOcvObject * s_obj, GstOcvObject * d_obj)
 {
   GstOcvObject l_obj = {};
-  GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
+  GstVideoRotate rotate = GST_VIDEO_ROTATE_0;
   GstOpenCVFlip flip = GST_OCV_FLIP_NONE;
   gboolean resize = FALSE;
 
@@ -2150,7 +2123,7 @@ gst_ocv_video_converter_prepare_frame (GstOcvVideoConverter * convert,
 
   // Use stage object if other operations are pending
   if (d_obj->format != GST_OCV_FALLBACK_FORMAT || resize ||
-      (rotate != GST_VCE_ROTATE_0) || (flip != GST_OCV_FLIP_NONE)) {
+      (rotate != GST_VIDEO_ROTATE_0) || (flip != GST_OCV_FLIP_NONE)) {
     gboolean success = FALSE;
 
     // Temporary store the destination object data into local intermediary.
@@ -2379,7 +2352,7 @@ gst_ocv_video_converter_process (GstOcvVideoConverter * convert,
     rotate = s_obj->rotate;
 
     // Calculte the width and height scale ratios.
-    if ((rotate == GST_VCE_ROTATE_0) || (rotate == GST_VCE_ROTATE_180)) {
+    if ((rotate == GST_VIDEO_ROTATE_0) || (rotate == GST_VIDEO_ROTATE_180)) {
       w_scale = ((gfloat) d_obj->planes[0].width) / s_obj->planes[0].width;
       h_scale = ((gfloat) d_obj->planes[0].height) / s_obj->planes[0].height;
     } else {
@@ -2497,7 +2470,7 @@ gst_ocv_video_converter_compose (GstOcvVideoConverter * convert,
       GstOcvObject *object = NULL;
       GstVideoRectangle rectangle = {0, 0, 0, 0};
       GstOpenCVFlip flip = GST_OCV_FLIP_NONE;
-      GstVideoConvRotate rotate = GST_VCE_ROTATE_0;
+      GstVideoRotate rotate = GST_VIDEO_ROTATE_0;
       GstVideoFrame *inframe = &g_array_index (inframes, GstVideoFrame, num);
 
       success = gst_video_frame_map (inframe, blit->info, blit->buffer,
@@ -2548,7 +2521,7 @@ gst_ocv_video_converter_compose (GstOcvVideoConverter * convert,
       }
 
       gst_ocv_update_object (object, "Source", inframe, &rectangle,
-          flip, rotate, 0);
+          flip, rotate, GST_VIDEO_DATA_TYPE_U8);
 
       // Intialization of the destination OCV object.
       object = &(objects[n_objects + 1]);
@@ -2563,7 +2536,7 @@ gst_ocv_video_converter_compose (GstOcvVideoConverter * convert,
       }
 
       gst_ocv_update_object (object, "Destination", &outframe, &rectangle,
-          GST_OCV_FLIP_NONE, GST_VCE_ROTATE_0, composition->datatype);
+          GST_OCV_FLIP_NONE, GST_VIDEO_ROTATE_0, composition->datatype);
 
       // Subtract blit area from total area.
       if (area != 0)

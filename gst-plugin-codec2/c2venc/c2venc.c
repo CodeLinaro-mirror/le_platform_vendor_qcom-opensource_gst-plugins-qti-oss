@@ -38,14 +38,14 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_INTRA_REFRESH_MODE   (0xffffffff)
 #define DEFAULT_PROP_INTRA_REFRESH_PERIOD (0)
 #define DEFAULT_PROP_B_FRAMES             (0xffffffff)
-#define DEFAULT_PROP_QUANT_I_FRAMES       (0xffffffff)
-#define DEFAULT_PROP_QUANT_P_FRAMES       (0xffffffff)
-#define DEFAULT_PROP_QUANT_B_FRAMES       (0xffffffff)
-#define DEFAULT_PROP_MIN_QP_I_FRAMES      (10)
+#define DEFAULT_PROP_QUANT_I_FRAMES       (0x7fffffff)
+#define DEFAULT_PROP_QUANT_P_FRAMES       (0x7fffffff)
+#define DEFAULT_PROP_QUANT_B_FRAMES       (0x7fffffff)
+#define DEFAULT_PROP_MIN_QP_I_FRAMES      (0)
 #define DEFAULT_PROP_MAX_QP_I_FRAMES      (51)
-#define DEFAULT_PROP_MIN_QP_P_FRAMES      (10)
+#define DEFAULT_PROP_MIN_QP_P_FRAMES      (0)
 #define DEFAULT_PROP_MAX_QP_P_FRAMES      (51)
-#define DEFAULT_PROP_MIN_QP_B_FRAMES      (10)
+#define DEFAULT_PROP_MIN_QP_B_FRAMES      (0)
 #define DEFAULT_PROP_MAX_QP_B_FRAMES      (51)
 #define DEFAULT_PROP_ROI_QUANT_MODE       (FALSE)
 #define DEFAULT_PROP_ROI_QP_DELTA         (-15)
@@ -1434,6 +1434,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   const gchar *name = NULL, *string = NULL;
   GstC2Profile profile = GST_C2_PROFILE_INVALID;
   GstC2Level level = GST_C2_LEVEL_INVALID;
+  GstC2PoolType pool_type = GST_C2_POOL_TYPE_UNSPECIFIED;
   guint32 param = 0;
   gint32 outwidth = 0, outheight = 0;
   gboolean success = FALSE;
@@ -1505,6 +1506,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
   } else if (gst_structure_has_name (structure, "image/heic")) {
     name = "c2.qti.heic.encoder";
     c2venc->stream_format = GST_C2_HEIC_NONE;
+    pool_type = GST_C2_POOL_TYPE_DEFAULT_LINEAR;
   }
 
   if (name == NULL) {
@@ -1523,7 +1525,7 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
   if (c2venc->engine == NULL) {
     c2venc->engine = gst_c2_engine_new (c2venc->name, GST_C2_MODE_VIDEO_ENCODE,
-        &callbacks, c2venc);
+        &callbacks, pool_type, c2venc);
     g_return_val_if_fail (c2venc->engine != NULL, FALSE);
   }
 
@@ -1533,6 +1535,8 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
       profile = gst_c2_utils_h264_profile_from_string (string);
     else if (gst_structure_has_name (structure, "video/x-h265"))
       profile = gst_c2_utils_h265_profile_from_string (string);
+    else if (gst_structure_has_name (structure, "image/heic"))
+      profile = gst_c2_utils_heic_profile_from_string (string);
 
     if (profile == GST_C2_PROFILE_INVALID) {
       GST_ERROR_OBJECT (c2venc, "Unsupported profile '%s'!", string);
@@ -1608,6 +1612,11 @@ gst_c2_venc_set_format (GstVideoEncoder * encoder, GstVideoCodecState * state)
 
     if (level >= GST_C2_LEVEL_HEVC_HIGH_4 && level <= GST_C2_LEVEL_HEVC_HIGH_6_2)
       gst_structure_set (structure, "tier", G_TYPE_STRING, "high", NULL);
+  } else if (gst_structure_has_name (structure, "image/heic")) {
+    if (profile != GST_C2_PROFILE_INVALID) {
+      string = gst_c2_utils_heic_profile_to_string (profile);
+      gst_structure_set (structure, "profile", G_TYPE_STRING, string, NULL);
+    }
   }
   c2venc->profile = profile;
 
@@ -1928,40 +1937,40 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
       c2venc->bframes = g_value_get_uint (value);
       break;
     case PROP_QUANT_I_FRAMES:
-      c2venc->quant_init.i_frames = g_value_get_uint (value);
+      c2venc->quant_init.i_frames = g_value_get_int (value);
       c2venc->quant_init.i_frames_enable =
           (c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_I_FRAMES) ?
               TRUE : FALSE;
       break;
     case PROP_QUANT_P_FRAMES:
-      c2venc->quant_init.p_frames = g_value_get_uint (value);
+      c2venc->quant_init.p_frames = g_value_get_int (value);
       c2venc->quant_init.p_frames_enable =
           (c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_P_FRAMES) ?
               TRUE : FALSE;
       break;
     case PROP_QUANT_B_FRAMES:
-      c2venc->quant_init.b_frames = g_value_get_uint (value);
+      c2venc->quant_init.b_frames = g_value_get_int (value);
       c2venc->quant_init.b_frames_enable =
           (c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_B_FRAMES) ?
               TRUE : FALSE;
       break;
     case PROP_MIN_QP_I_FRAMES:
-      c2venc->quant_ranges.min_i_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.min_i_qp = g_value_get_int (value);
       break;
     case PROP_MAX_QP_I_FRAMES:
-      c2venc->quant_ranges.max_i_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.max_i_qp = g_value_get_int (value);
       break;
     case PROP_MIN_QP_B_FRAMES:
-      c2venc->quant_ranges.min_b_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.min_b_qp = g_value_get_int (value);
       break;
     case PROP_MAX_QP_B_FRAMES:
-      c2venc->quant_ranges.max_b_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.max_b_qp = g_value_get_int (value);
       break;
     case PROP_MIN_QP_P_FRAMES:
-      c2venc->quant_ranges.min_p_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.min_p_qp = g_value_get_int (value);
       break;
     case PROP_MAX_QP_P_FRAMES:
-      c2venc->quant_ranges.max_p_qp = g_value_get_uint (value);
+      c2venc->quant_ranges.max_p_qp = g_value_get_int (value);
       break;
     case PROP_ROI_QUANT_MODE:
       c2venc->roi_quant_mode = g_value_get_boolean (value);
@@ -2149,31 +2158,31 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       g_value_set_uint (value, c2venc->bframes);
       break;
     case PROP_QUANT_I_FRAMES:
-      g_value_set_uint (value, c2venc->quant_init.i_frames);
+      g_value_set_int (value, c2venc->quant_init.i_frames);
       break;
     case PROP_QUANT_P_FRAMES:
-      g_value_set_uint (value, c2venc->quant_init.p_frames);
+      g_value_set_int (value, c2venc->quant_init.p_frames);
       break;
     case PROP_QUANT_B_FRAMES:
-      g_value_set_uint (value, c2venc->quant_init.b_frames);
+      g_value_set_int (value, c2venc->quant_init.b_frames);
       break;
     case PROP_MIN_QP_I_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.min_i_qp);
+      g_value_set_int (value, c2venc->quant_ranges.min_i_qp);
       break;
     case PROP_MAX_QP_I_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.max_i_qp);
+      g_value_set_int (value, c2venc->quant_ranges.max_i_qp);
       break;
     case PROP_MIN_QP_P_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.min_p_qp);
+      g_value_set_int (value, c2venc->quant_ranges.min_p_qp);
       break;
     case PROP_MAX_QP_P_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.max_p_qp);
+      g_value_set_int (value, c2venc->quant_ranges.max_p_qp);
       break;
     case PROP_MIN_QP_B_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.min_b_qp);
+      g_value_set_int (value, c2venc->quant_ranges.min_b_qp);
       break;
     case PROP_MAX_QP_B_FRAMES:
-      g_value_set_uint (value, c2venc->quant_ranges.max_b_qp);
+      g_value_set_int (value, c2venc->quant_ranges.max_b_qp);
       break;
     case PROP_ROI_QUANT_MODE:
       g_value_set_boolean (value, c2venc->roi_quant_mode);
@@ -2385,49 +2394,52 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           0, G_MAXUINT, DEFAULT_PROP_B_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_QUANT_I_FRAMES,
-      g_param_spec_uint ("quant-i-frames", "I-Frame Quantization",
+      g_param_spec_int ("quant-i-frames", "I-Frame Quantization",
           "Quantization parameter for I-frames (0xffffffff=component default)",
-          0, G_MAXUINT, DEFAULT_PROP_QUANT_I_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_QUANT_I_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_QUANT_P_FRAMES,
-      g_param_spec_uint ("quant-p-frames", "P-Frame Quantization",
+      g_param_spec_int ("quant-p-frames", "P-Frame Quantization",
           "Quantization parameter for P-frames (0xffffffff=component default)",
-          0, G_MAXUINT, DEFAULT_PROP_QUANT_P_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_QUANT_P_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_QUANT_B_FRAMES,
-      g_param_spec_uint ("quant-b-frames", "B-Frame Quantization",
+      g_param_spec_int ("quant-b-frames", "B-Frame Quantization",
           "Quantization parameter for B-frames (0xffffffff=component default)",
-          0, G_MAXUINT, DEFAULT_PROP_QUANT_B_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_QUANT_B_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MIN_QP_I_FRAMES,
-      g_param_spec_uint ("min-quant-i-frames", "Min quant I frames",
-          "Minimum quantization parameter allowed for I-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MIN_QP_I_FRAMES,
+      g_param_spec_int ("min-quant-i-frames", "Min quant I frames",
+          "Minimum quantization parameter allowed for I-frames, "
+          "8bit starts from 0 and 10bit starts from -12",
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MIN_QP_I_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MAX_QP_I_FRAMES,
-      g_param_spec_uint ("max-quant-i-frames", "Max quant I frames",
+      g_param_spec_int ("max-quant-i-frames", "Max quant I frames",
           "Maximum quantization parameter allowed for I-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MAX_QP_I_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MAX_QP_I_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MIN_QP_P_FRAMES,
-      g_param_spec_uint ("min-quant-p-frames", "Min quant P frames",
-          "Minimum quantization parameter allowed for P-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MIN_QP_P_FRAMES,
+      g_param_spec_int ("min-quant-p-frames", "Min quant P frames",
+          "Minimum quantization parameter allowed for P-frames, "
+          "8bit starts from 0 and 10bit starts from -12",
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MIN_QP_P_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MAX_QP_P_FRAMES,
-      g_param_spec_uint ("max-quant-p-frames", "Max quant P frames",
+      g_param_spec_int ("max-quant-p-frames", "Max quant P frames",
           "Maximum quantization parameter allowed for P-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MAX_QP_P_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MAX_QP_P_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MIN_QP_B_FRAMES,
-      g_param_spec_uint ("min-quant-b-frames", "Min quant B frames",
-          "Minimum quantization parameter allowed for B-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MIN_QP_B_FRAMES,
+      g_param_spec_int ("min-quant-b-frames", "Min quant B frames",
+          "Minimum quantization parameter allowed for B-frames, "
+          "8bit starts from 0 and 10bit starts from -12",
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MIN_QP_B_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_MAX_QP_B_FRAMES,
-      g_param_spec_uint ("max-quant-b-frames", "Max quant B frames",
+      g_param_spec_int ("max-quant-b-frames", "Max quant B frames",
           "Maximum quantization parameter allowed for B-frames",
-          0, G_MAXUINT, DEFAULT_PROP_MAX_QP_B_FRAMES,
+          G_MININT32, G_MAXINT32, DEFAULT_PROP_MAX_QP_B_FRAMES,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_ROI_QUANT_MODE,
       g_param_spec_boolean ("roi-quant-mode", "ROI Quantization Mode",
