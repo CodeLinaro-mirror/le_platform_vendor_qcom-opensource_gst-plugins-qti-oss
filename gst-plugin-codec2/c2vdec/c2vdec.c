@@ -23,7 +23,8 @@ G_DEFINE_TYPE (GstC2VDecoder, gst_c2_vdec, GST_TYPE_VIDEO_DECODER);
 enum
 {
   PROP_0,
-  PROP_SECURE
+  PROP_SECURE,
+  PROP_XTRAPARAMS
 };
 
 static GstStaticPadTemplate gst_c2_vdec_sink_pad_template =
@@ -188,6 +189,14 @@ gst_c2_vdec_setup_parameters (GstC2VDecoder * c2vdec,
     return FALSE;
   }
 #endif // CODEC2_CONFIG_VERSION_1_0
+
+  if (c2vdec->xtraparams != NULL) {
+    if (!gst_c2_engine_set_parameter (c2vdec->engine,
+        GST_C2_PARAM_XTRAPARAMS, GPOINTER_CAST (c2vdec->xtraparams))) {
+      GST_ERROR_OBJECT (c2vdec, "Some extra parameters could not be set!");
+      return FALSE;
+    }
+  }
 
   return TRUE;
 }
@@ -605,6 +614,11 @@ gst_c2_vdec_set_property (GObject * object, guint prop_id, const GValue * value,
     case PROP_SECURE:
       c2vdec->secure = g_value_get_boolean (value);
       break;
+    case PROP_XTRAPARAMS:
+      if (c2vdec->xtraparams)
+        gst_structure_free (c2vdec->xtraparams);
+      c2vdec->xtraparams = GST_STRUCTURE_CAST (g_value_dup_boxed (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -620,6 +634,9 @@ gst_c2_vdec_get_property (GObject * object, guint prop_id, GValue * value,
   switch (prop_id) {
     case PROP_SECURE:
       g_value_set_boolean (value, c2vdec->secure);
+      break;
+    case PROP_XTRAPARAMS:
+      g_value_set_boxed (value, c2vdec->xtraparams);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -639,6 +656,9 @@ gst_c2_vdec_finalize (GObject * object)
     gst_c2_engine_free (c2vdec->engine);
 
   g_free (c2vdec->name);
+
+  if (c2vdec->xtraparams)
+    gst_structure_free (c2vdec->xtraparams);
 
   gst_buffer_list_unref (c2vdec->incomplete_buffers);
 
@@ -672,6 +692,14 @@ gst_c2_vdec_class_init (GstC2VDecoderClass * klass)
         "If property is enabled it will select the codec2 secure component",
         FALSE, G_PARAM_READWRITE));
 
+  g_object_class_install_property (gobject, PROP_XTRAPARAMS,
+      g_param_spec_boxed ("extra-params", "Extra Parameters",
+          "Set arbitrary Codec2 parameters by name, as a GstStructure whose "
+          "fields are named 'parameter.field' and hold the value to set. The available "
+          "names can be discovered from the component's supported parameters.",
+          GST_TYPE_STRUCTURE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+
   vdec_class->start = GST_DEBUG_FUNCPTR (gst_c2_vdec_start);
   vdec_class->stop = GST_DEBUG_FUNCPTR (gst_c2_vdec_stop);
   vdec_class->flush = GST_DEBUG_FUNCPTR (gst_c2_vdec_flush);
@@ -687,6 +715,8 @@ gst_c2_vdec_init (GstC2VDecoder *c2vdec)
   c2vdec->engine = NULL;
 
   c2vdec->outstate = NULL;
+
+  c2vdec->xtraparams = NULL;
 
   c2vdec->incomplete_buffers = gst_buffer_list_new ();
 

@@ -43,6 +43,7 @@ struct _GstC2VDecoder {
 
   /// Properties
   gboolean           secure;
+  GstStructure       *xtraparams;
 };
 
 struct _GstC2VDecoderClass {

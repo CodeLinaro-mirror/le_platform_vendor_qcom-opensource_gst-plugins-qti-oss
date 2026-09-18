@@ -87,6 +87,8 @@ struct _GstC2VEncoder {
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   gint32               bitrate_boost_margin;
   gboolean             time_delta_based_rc;
+  /// Extra Codec2 parameters set by name.
+  GstStructure         *xtraparams;
 };
 
 struct _GstC2VEncoderClass {

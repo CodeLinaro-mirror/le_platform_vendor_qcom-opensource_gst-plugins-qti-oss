@@ -1585,6 +1585,66 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
   return TRUE;
 }
 
+std::any
+GstC2Utils::GValueToAny (const GValue* gvalue)
+{
+  if (GST_VALUE_HOLDS_BUFFER (gvalue)) {
+    GstBuffer *buffer = gst_value_get_buffer (gvalue);
+    GstMapInfo map;
+
+    if ((buffer == NULL) || !gst_buffer_map (buffer, &map, GST_MAP_READ)) {
+      GST_WARNING ("Failed to map buffer value");
+      return {};
+    }
+
+    std::vector<uint8_t> bytes (map.data, map.data + map.size);
+    gst_buffer_unmap (buffer, &map);
+
+    return bytes;
+  }
+
+  if (G_VALUE_HOLDS_INT (gvalue))
+    return g_value_get_int (gvalue);
+  if (G_VALUE_HOLDS_UINT (gvalue))
+    return g_value_get_uint (gvalue);
+  if (G_VALUE_HOLDS_INT64 (gvalue))
+    return g_value_get_int64 (gvalue);
+  if (G_VALUE_HOLDS_UINT64 (gvalue))
+    return g_value_get_uint64 (gvalue);
+  if (G_VALUE_HOLDS_FLOAT (gvalue))
+    return g_value_get_float (gvalue);
+  if (G_VALUE_HOLDS_STRING (gvalue)) {
+    const gchar *string = g_value_get_string (gvalue);
+    return std::string (string != NULL ? string : "");
+  }
+
+  GST_WARNING ("Cannot represent GValue of type '%s' as std::any",
+      G_VALUE_TYPE_NAME (gvalue));
+
+  return {};
+}
+
+std::vector<std::pair<std::string, std::any>>
+GstC2Utils::StructureToPairs (const GstStructure* structure)
+{
+  std::vector<std::pair<std::string, std::any>> fields;
+
+  if (structure == nullptr)
+    return fields;
+
+  gint n_fields = gst_structure_n_fields (structure);
+  fields.reserve (n_fields);
+
+  for (gint idx = 0; idx < n_fields; idx++) {
+    const gchar *name = gst_structure_nth_field_name (structure, idx);
+    const GValue *value = gst_structure_get_value (structure, name);
+
+    fields.emplace_back (std::string (name), GValueToAny (value));
+  }
+
+  return fields;
+}
+
 bool GstC2Utils::ImportHandleInfo(GstBuffer* buffer,
                                   ::android::C2HandleGBM* handle,
                                   uint32_t n_subframes) {

@@ -11,7 +11,8 @@
 #include <vector>
 #include <sstream>
 #include <cstring>
-
+#include <any>
+#include <utility>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/allocators/allocators.h>
@@ -95,6 +96,27 @@ class GstC2Utils {
    **/
   static bool PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
                           void* payload);
+  /** GValueToAny
+   * @gvalue: GValue to convert.
+   *
+   * Converts a GValue into its native C++ representation held by a std::any
+   * object.
+   *
+   * return: The converted value, or an empty std::any if conversion fails or
+   *         the value type is unsupported.
+   **/
+  static std::any GValueToAny(const GValue* gvalue);
+
+  /** StructureToPairs
+   * @structure: Structure whose fields will be converted.
+   *
+   * Converts every field of a GstStructure into a name/value pair, decoding
+   * each GValue into its native C++ representation held by a std::any object.
+   *
+   * return: The field name/value pairs, in the structure's original order.
+   **/
+  static std::vector<std::pair<std::string, std::any>> StructureToPairs(
+      const GstStructure* structure);
 
   /** ImportHandleInfo
    * @buffer: Pointer to GStreamer buffer.

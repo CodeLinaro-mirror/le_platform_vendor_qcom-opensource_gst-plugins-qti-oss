@@ -390,8 +390,24 @@ gst_c2_engine_set_parameter (GstC2Engine * engine, guint type, gpointer payload)
   C2Module *c2module = engine->c2module;
 
   try {
+    if (type == GST_C2_PARAM_XTRAPARAMS) {
+      std::vector<std::pair<std::string, std::any>> fields =
+          GstC2Utils::StructureToPairs (
+              reinterpret_cast<const GstStructure *>(payload));
+
+      if (c2module->SetExtraParams (fields) != C2_OK) {
+        GST_ERROR ("Failed to set extra parameters!");
+        return FALSE;
+      }
+
+      return TRUE;
+    }
+
     std::unique_ptr<C2Param> c2param;
-    GstC2Utils::UnpackPayload(type, payload, c2param);
+
+    if (!GstC2Utils::UnpackPayload(type, payload, c2param)) {
+      return FALSE;
+    }
 
     c2module->SetParam (c2param);
     GST_DEBUG ("Set parameter '%s' was successful", GstC2Utils::ParamName(type));

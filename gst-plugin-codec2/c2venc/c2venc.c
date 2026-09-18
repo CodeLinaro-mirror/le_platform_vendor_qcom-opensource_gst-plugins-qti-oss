@@ -96,6 +96,7 @@ enum
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   PROP_BITRATE_BOOST_MARGIN,
   PROP_TIME_DELTA_BASED_RC,
+  PROP_XTRAPARAMS,
 };
 
 static GstStaticPadTemplate gst_c2_venc_sink_pad_template =
@@ -848,6 +849,16 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
   if (!success) {
     GST_ERROR_OBJECT (c2venc, "Failed to set time delta based RC!");
     return FALSE;
+  }
+
+  // Apply the parameters set by name last, so that they take precedence over
+  // the values derived from the properties and negotiated caps.
+  if (c2venc->xtraparams != NULL) {
+    if (!gst_c2_engine_set_parameter (c2venc->engine,
+        GST_C2_PARAM_XTRAPARAMS, GPOINTER_CAST (c2venc->xtraparams))) {
+      GST_ERROR_OBJECT (c2venc, "Some extra parameters could not be set!");
+      return FALSE;
+    }
   }
 
   return TRUE;
@@ -1830,6 +1841,11 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_TIME_DELTA_BASED_RC:
       c2venc->time_delta_based_rc = g_value_get_boolean (value);
       break;
+    case PROP_XTRAPARAMS:
+      if (c2venc->xtraparams)
+        gst_structure_free (c2venc->xtraparams);
+      c2venc->xtraparams = GST_STRUCTURE_CAST (g_value_dup_boxed (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2000,6 +2016,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
     case PROP_TIME_DELTA_BASED_RC:
       g_value_set_boolean (value, c2venc->time_delta_based_rc);
       break;
+    case PROP_XTRAPARAMS:
+      g_value_set_boxed (value, c2venc->xtraparams);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2025,6 +2044,9 @@ gst_c2_venc_finalize (GObject * object)
     gst_c2_engine_free (c2venc->engine);
 
   g_free (c2venc->name);
+
+  if (c2venc->xtraparams)
+    gst_structure_free (c2venc->xtraparams);
 
   gst_buffer_list_unref (c2venc->incomplete_buffers);
 
@@ -2238,6 +2260,13 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           "irregular timestamp scenarios so the bitrate honors the target setting.",
           DEFAULT_PROP_TIME_DELTA_BASED_RC,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject, PROP_XTRAPARAMS,
+      g_param_spec_boxed ("extra-params", "Extra Parameters",
+          "Set arbitrary Codec2 parameters by name, as a GstStructure whose "
+          "fields are named 'parameter.field' and hold the value to set. The available "
+          "names can be discovered from the component's supported parameters.",
+          GST_TYPE_STRUCTURE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
 
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_trigger_iframe),
@@ -2339,6 +2368,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
 #endif // (CODEC2_CONFIG_VERSION_MAJOR == 2 && CODEC2_CONFIG_VERSION_MINOR == 1)
   c2venc->bitrate_boost_margin = DEFAULT_PROP_BITRATE_BOOST_MARGIN;
   c2venc->time_delta_based_rc = DEFAULT_PROP_TIME_DELTA_BASED_RC;
+  c2venc->xtraparams = NULL;
 
   GST_DEBUG_CATEGORY_INIT (c2_venc_debug, "qtic2venc", 0,
       "QTI c2venc encoder");
