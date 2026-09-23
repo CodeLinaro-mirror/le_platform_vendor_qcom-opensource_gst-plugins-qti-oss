@@ -353,6 +353,9 @@ gst_c2_engine_new (const gchar * name, guint32 mode, GstC2Callbacks * callbacks,
     case GST_C2_POOL_TYPE_GRAPHIC_NON_CONTIGUOUS:
       pool_type = C2Module::PoolType::kGraphicNonContiguous;
       break;
+    case GST_C2_POOL_TYPE_SKIP:
+      pool_type = C2Module::PoolType::kSkip;
+      break;
     default:
       break;
   }

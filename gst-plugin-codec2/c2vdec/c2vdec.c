@@ -541,7 +541,7 @@ gst_c2_vdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
 
   if (c2vdec->secure) {
     name = g_strconcat(name, ".secure", NULL);
-    pool_type = GST_C2_POOL_TYPE_DEFAULT_GRAPHIC;
+    pool_type = GST_C2_POOL_TYPE_SKIP;
   }
 
   if ((c2vdec->name != NULL) && !g_str_equal (c2vdec->name, name)) {
