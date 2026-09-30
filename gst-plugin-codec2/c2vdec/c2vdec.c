@@ -37,10 +37,10 @@ GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-h264, "
         "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au };"
+        "alignment = (string) { au, nal };"
         "video/x-h265,"
         "stream-format = (string) { byte-stream },"
-        "alignment = (string) { au };"
+        "alignment = (string) { au, nal };"
         "video/mpeg,"
         "mpegversion = (int)2;"
         "video/x-vp8;"
@@ -613,6 +613,18 @@ gst_c2_vdec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   item.buffer = frame->input_buffer;
   item.index = frame->system_frame_number;
+
+  if (c2vdec->slice == TRUE) {
+    gboolean end_of_picture =
+        GST_BUFFER_FLAG_IS_SET (frame->input_buffer, GST_BUFFER_FLAG_MARKER) &&
+        !GST_BUFFER_FLAG_IS_SET (frame->input_buffer, GST_BUFFER_FLAG_HEADER);
+
+    if (end_of_picture) {
+      gst_video_codec_frame_set_user_data (frame, GINT_TO_POINTER (1), NULL);
+      item.userdatatype = GST_C2_USERDATA_TYPE_END_OF_PICTURE;
+    }
+  }
+
   item.userdata = gst_video_codec_frame_get_user_data (frame);
 
   // This mutex was locked in the base class before call this function

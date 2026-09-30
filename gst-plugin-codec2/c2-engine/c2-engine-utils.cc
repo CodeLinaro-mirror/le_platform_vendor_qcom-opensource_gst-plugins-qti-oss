@@ -175,6 +175,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2GlobalLowLatencyModeTuning::PARAM_TYPE },
   { GST_C2_PARAM_DECODE_SLICE_MODE,
       qc2::C2VideoDecodeSliceMode::PARAM_TYPE },
+  { GST_C2_PARAM_END_OF_PICTURE_MARKER,
+      qc2::C2VideoEndOfPictureMarker::input::PARAM_TYPE },
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
 
 #if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR == 2))
@@ -252,6 +254,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_DECODE_SLICE_MODE, "DECODE_SLICE_MODE" },
   { GST_C2_PARAM_VIDEO_FENCE, "VIDEO_FENCE" },
   { GST_C2_PARAM_VIDEO_FENCE_TYPE_INFO, "VIDEO_FENCE_TYPE_INFO" },
+  { GST_C2_PARAM_END_OF_PICTURE_MARKER, "END_OF_PICTURE_MARKER" },
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -1296,6 +1299,13 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy(mode);
       break;
     }
+    case GST_C2_PARAM_END_OF_PICTURE_MARKER: {
+      qc2::C2VideoEndOfPictureMarker::input marker;
+
+      marker.value = *(reinterpret_cast<gboolean*>(payload)) ? C2_TRUE : C2_FALSE;
+      c2param = C2Param::Copy(marker);
+      break;
+    }
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
 
 #if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR == 2))
@@ -1871,6 +1881,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           reinterpret_cast<qc2::C2VideoDecodeSliceMode*>(c2param.get());
 
       *(reinterpret_cast<guint32*>(payload)) = mode->value;
+      break;
+    }
+    case GST_C2_PARAM_END_OF_PICTURE_MARKER: {
+      auto marker =
+          reinterpret_cast<qc2::C2VideoEndOfPictureMarker::input*>(c2param.get());
+
+      *(reinterpret_cast<gboolean*>(payload)) = marker->value ? TRUE : FALSE;
       break;
     }
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
