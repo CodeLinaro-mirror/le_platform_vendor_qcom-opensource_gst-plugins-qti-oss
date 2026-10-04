@@ -3740,7 +3740,25 @@ gst_qmmf_context_set_camera_param (GstQmmfContext * context, guint param_id,
               GST_INFO ("physical camera switch tag update success");
             }
           } else {
-            GST_ERROR ("physical camera switch tag not found ");
+            //old tag can't found, check new tag name
+            GST_TRACE ("com.qti.chi.multicameraswitchControl tag not found");
+
+            tag_id = get_vendor_tag_by_name (
+                "com.qualcomm.qti.multiCameraSwitchControl", "activeCameraIndex");
+            if (tag_id != 0) {
+              gint32 val = (gint32)output;
+              gint32 ret;
+
+              ret = meta.update (tag_id, &val, 1);
+              if (ret != 0) {
+                GST_ERROR ("physical camera switch tag update error");
+              } else {
+                GST_INFO ("physical camera switch tag update success");
+              }
+            } else {
+              GST_ERROR ("both multicameraswitchControl tags not found, "
+                  "physical camera switch not supported");
+            }
           }
         }
       } else {
@@ -4015,30 +4033,36 @@ gst_qmmf_context_get_camera_param (GstQmmfContext * context, guint param_id,
     }
     case PARAM_CAMERA_VIDEO_METADATA:
     {
-      ::camera::CameraMetadata *meta = new ::camera::CameraMetadata();
+      ::camera::CameraMetadata *meta = NULL;
 
-      if (context->state >= GST_STATE_READY)
+      if (context->state >= GST_STATE_READY) {
+        meta = new ::camera::CameraMetadata ();
         recorder->GetCameraParam (context->camera_id, *meta);
+      }
 
       g_value_set_pointer (value, meta);
       break;
     }
     case PARAM_CAMERA_IMAGE_METADATA:
     {
-      ::camera::CameraMetadata *meta = new ::camera::CameraMetadata();
+      ::camera::CameraMetadata *meta = NULL;
 
-      if (context->state >= GST_STATE_READY)
+      if (context->state >= GST_STATE_READY) {
+        meta = new ::camera::CameraMetadata ();
         recorder->GetDefaultCaptureParam (context->camera_id, *meta);
+      }
 
       g_value_set_pointer (value, meta);
       break;
     }
     case PARAM_CAMERA_STATIC_METADATA:
     {
-      ::camera::CameraMetadata *meta = new ::camera::CameraMetadata();
+      ::camera::CameraMetadata *meta = NULL;
 
-      if (context->state >= GST_STATE_READY)
+      if (context->state >= GST_STATE_READY) {
+        meta = new ::camera::CameraMetadata ();
         recorder->GetCameraCharacteristics (context->camera_id, *meta);
+      }
 
       g_value_set_pointer (value, meta);
       break;

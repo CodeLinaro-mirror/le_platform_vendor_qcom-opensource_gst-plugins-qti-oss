@@ -16,11 +16,18 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-
+#include <glib/gstdio.h>
 #include <glib-unix.h>
 #include <gst/gst.h>
 
 #include "gst_sample_apps_utils.h"
+
+#define DEFAULT_MEDIA_DIR \
+  (g_build_filename (g_get_home_dir (), \
+                     "Downloads", \
+                     "qimsdk_samples", \
+                     "media", \
+                     NULL))
 
 /*
  * Check if File Exists
@@ -468,6 +475,101 @@ SocId GetSocId() {
 gboolean
 is_v66_arch ()
 {
-  SocId id = GetSocId();
-  return (id == kTALOS_QCS615 || id == kTALOS_QCS610 || id == kTALOS_QCS410);
+  SocId id = GetSocId ();
+
+  switch (id) {
+    case kTALOS_QCS615:
+    case kTALOS_QCS610:
+    case kTALOS_QCS410:
+    case CQ2390M:
+    case CQ2390S:
+    case IQ2390S:
+        return TRUE;
+    default:
+        return FALSE;
+  }
+}
+
+gboolean
+create_default_media_dir (void)
+{
+  gchar *media_dir = DEFAULT_MEDIA_DIR;
+  gboolean ret = FALSE;
+
+  if (media_dir == NULL) {
+    g_printerr ("\nUnable to build default media directory path.\n");
+    return FALSE;
+  }
+
+  if (g_mkdir_with_parents (media_dir, 0755) != 0) {
+    g_printerr ("\nUnable to create media directory: %s\n", media_dir);
+  } else {
+    ret = TRUE;
+  }
+
+  g_free (media_dir);
+  return ret;
+}
+
+gchar *
+check_config_path (const gchar *base_dir,
+                 const gchar *config_filename)
+{
+  gchar *config_path;
+
+  g_return_val_if_fail (base_dir != NULL && *base_dir != '\0', NULL);
+  g_return_val_if_fail (
+      config_filename != NULL && *config_filename != '\0',
+      NULL);
+
+  config_path = g_build_filename (
+      base_dir,
+      "qimsdk_samples",
+      config_filename,
+      NULL);
+
+  if (g_file_test (config_path, G_FILE_TEST_IS_REGULAR)) {
+    return config_path;
+  }
+
+  g_free (config_path);
+
+  return NULL;
+}
+
+gchar *
+resolve_config_file (const gchar *default_config_file) {
+  const gchar *xdg_config_home = NULL;
+  const gchar *home_dir = NULL;
+  gchar *config_file = NULL;
+  gchar *home_config_dir = NULL;
+
+  if (default_config_file == NULL || default_config_file[0] == '\0')
+    return NULL;
+
+  // Check $XDG_CONFIG_HOME/qimsdk_samples/<config_filename> first
+  xdg_config_home = g_getenv ("XDG_CONFIG_HOME");
+  if (xdg_config_home != NULL && xdg_config_home[0] != '\0') {
+    config_file = check_config_path (xdg_config_home, default_config_file);
+  }
+
+   // Fall back to $HOME/.config/qimsdk_samples/<config_filename>
+  if (config_file == NULL) {
+    home_dir = g_getenv("HOME");
+    if (home_dir != NULL && home_dir[0] != '\0') {
+      home_config_dir = g_build_filename (home_dir, ".config", NULL);
+      config_file = check_config_path (home_config_dir, default_config_file);
+      g_free (home_config_dir);
+    }
+  }
+
+  // Fall back to the system-wide default config file
+  if (config_file == NULL) {
+    g_print ("Config file not found in user paths, "
+      "falling back to default: %s\n", default_config_file);
+    config_file = g_build_filename("/etc", "configs", default_config_file, NULL);
+  }
+
+  g_print ("Using config file: %s\n", config_file);
+  return config_file;
 }

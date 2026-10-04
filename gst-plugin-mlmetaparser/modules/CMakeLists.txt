@@ -1,8 +1,4 @@
-
-pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0>=${GST_VERSION_REQUIRED})
-pkg_check_modules(JSON REQUIRED json-glib-1.0)
-
-# GStreamer ML meta parser plugin modules.
+# GStreamer ML meta parser JSON module.
 set(GST_QTI_PARSER_MODULE ml-meta-parser-json)
 
 add_library(${GST_QTI_PARSER_MODULE} SHARED
@@ -14,6 +10,7 @@ target_include_directories(${GST_QTI_PARSER_MODULE} PUBLIC
   ${JSON_INCLUDE_DIRS}
   ${GST_QCOM_UTILS_INCLUDE_DIRS}
   ${GST_QCOM_VIDEO_INCLUDE_DIRS}
+  ${GST_QCOM_ML_INCLUDE_DIRS}
 )
 
 target_link_libraries(${GST_QTI_PARSER_MODULE} PRIVATE
@@ -22,6 +19,7 @@ target_link_libraries(${GST_QTI_PARSER_MODULE} PRIVATE
   ${JSON_LIBRARIES}
   ${GST_QCOM_UTILS_LIBRARIES}
   ${GST_QCOM_VIDEO_LIBRARIES}
+  ${GST_QCOM_ML_LIBRARIES}
 )
 
 install(

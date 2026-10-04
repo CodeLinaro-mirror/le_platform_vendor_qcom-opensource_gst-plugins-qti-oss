@@ -20,6 +20,10 @@ target_include_directories(${TARGET_NAME} PUBLIC
   ${GST_INCLUDE_DIRS}
 )
 
+target_include_directories(${TARGET_NAME} PRIVATE
+  ${KERNEL_MSM_INCDIR}
+)
+
 target_include_directories(${TARGET_NAME} INTERFACE
   $<BUILD_INTERFACE:${QTI_PLUGINS_BASE_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include/gstreamer-1.0>
@@ -27,6 +31,7 @@ target_include_directories(${TARGET_NAME} INTERFACE
 
 target_compile_definitions(${TARGET_NAME} PRIVATE
   $<$<BOOL:${HAVE_LINUX_DMA_HEAP_H}>:HAVE_LINUX_DMA_HEAP_H>
+  $<$<BOOL:${HAVE_LINUX_MEM_BUF_H}>:HAVE_LINUX_MEM_BUF_H>
 )
 
 target_link_libraries(${TARGET_NAME} PRIVATE
@@ -58,7 +63,7 @@ install(
   DESTINATION ${GST_PLUGINS_QTI_OSS_INSTALL_LIBDIR}/pkgconfig
 )
 
-if(GIR_SCANNER AND GIR_COMPILER AND PYTHON_SITEPACKAGES_DIR)
+if(GIR_SCANNER AND GIR_COMPILER AND NOT HAVE_GBM_PRIV_H)
   # Generate GIR and typelib files for Python
   set(GIR_TARGET_NAME "GstQtiMemory-1.0.gir")
 

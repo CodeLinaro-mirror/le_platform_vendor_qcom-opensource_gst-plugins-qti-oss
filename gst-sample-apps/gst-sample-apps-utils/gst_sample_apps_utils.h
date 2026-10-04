@@ -425,20 +425,23 @@ typedef enum {
 };
 
 typedef enum {
-  kInvalid = 0,
-  kTALOS_QCS610 = 401,
-  kTALOS_QCS410 = 406,
-  kQCM6490_IOT = 497,
-  kQCS6490 = 498,
-  kQCS5430_LITE = 575,
-  kQCM5430_LITE = 576,
-  kLEMANS_QRB = 656,
-  kQCS9100_IOT = 667,
-  kQCS8300 = 674,
-  kQCS8275 = 675,
-  kQCS9075 = 676,
-  kTALOS_QCS615 = 680,
-  kMONACO_FLEX = 695,
+  kInvalid       = 0,
+  kTALOS_QCS610  = 401,
+  kTALOS_QCS410  = 406,
+  kQCM6490_IOT   = 497,
+  kQCS6490       = 498,
+  kQCS5430_LITE  = 575,
+  kQCM5430_LITE  = 576,
+  kLEMANS_QRB    = 656,
+  kQCS9100_IOT   = 667,
+  kQCS8300       = 674,
+  kQCS8275       = 675,
+  kQCS9075       = 676,
+  kTALOS_QCS615  = 680,
+  kMONACO_FLEX   = 695,
+  CQ2390M        = 756,
+  CQ2390S        = 758,
+  IQ2390S        = 759,
 } SocId;
 
 /*
@@ -578,6 +581,30 @@ GetSocId();
 // @return TRUE if the SoC supports v66 architecture or else FALSE
 gboolean
 is_v66_arch ();
+
+gboolean
+create_default_media_dir (void);
+
+/**
+ * Builds and checks the qimsdk configuration file path.
+ *
+ * @param base_dir base directory path
+ * @param config_filename Configuration file name.
+ */
+gchar *
+check_config_path (const gchar *base_dir, const gchar *config_filename);
+
+/**
+ * Resolves the configuration file using:
+ *
+ * 1. $XDG_CONFIG_HOME/qimsdk_samples/<config_filename>
+ * 2. $HOME/.config/qimsdk_samples/<config_filename>
+ * 3. DEFAULT_CONFIG_FILE
+ *
+ * @param config_filename Configuration file name.
+ */
+gchar *
+resolve_config_file (const gchar *default_config_file);
 
 G_END_DECLS
 
