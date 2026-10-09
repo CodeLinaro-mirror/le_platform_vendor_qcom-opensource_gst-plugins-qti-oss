@@ -663,6 +663,11 @@ gst_c2_engine_queue (GstC2Engine * engine, GstC2QueueItem * item)
   if (GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_DROPPABLE))
     flags |= C2FrameData::FLAG_DROP_FRAME;
 
+  // distinguish between VCL and non-VCL(SPS, PPS .etc) NAL input
+  if (GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_HEADER) &&
+      GST_BUFFER_FLAG_IS_SET (buffer, GST_BUFFER_FLAG_DELTA_UNIT))
+    flags |= C2FrameData::FLAG_CODEC_CONFIG;
+
   if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_DTS (buffer)))
     timestamp = GST_TIME_AS_USECONDS (GST_BUFFER_DTS (buffer));
   else if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_PTS (buffer)))
@@ -684,6 +689,13 @@ gst_c2_engine_queue (GstC2Engine * engine, GstC2QueueItem * item)
             reinterpret_cast<GstC2QuantMbmapInfo*>(item->userdata);
         GstC2Utils::UnpackPayload(GST_C2_PARAM_ROI_MBMAP_INFO,
             mbmapinfo, c2param);
+        break;
+      }
+      case GST_C2_USERDATA_TYPE_END_OF_PICTURE: {
+        gboolean end_of_picture = GPOINTER_TO_INT (item->userdata) ? TRUE : FALSE;
+
+        GstC2Utils::UnpackPayload (GST_C2_PARAM_END_OF_PICTURE_MARKER,
+            &end_of_picture, c2param);
         break;
       }
       default:

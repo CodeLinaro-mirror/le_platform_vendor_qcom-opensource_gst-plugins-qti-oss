@@ -109,6 +109,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2RealTimePriorityTuning::PARAM_TYPE },
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING,
       C2StreamColorAspectsTuning::output::PARAM_TYPE },
+  { GST_C2_PARAM_COLOR_ASPECTS_INFO,
+      C2StreamColorAspectsInfo::input::PARAM_TYPE },
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA,
       C2StreamHdrStaticInfo::output::PARAM_TYPE },
@@ -173,6 +175,8 @@ static const std::unordered_map<uint32_t, C2Param::Index> kParamIndexMap = {
       C2GlobalLowLatencyModeTuning::PARAM_TYPE },
   { GST_C2_PARAM_DECODE_SLICE_MODE,
       qc2::C2VideoDecodeSliceMode::PARAM_TYPE },
+  { GST_C2_PARAM_END_OF_PICTURE_MARKER,
+      qc2::C2VideoEndOfPictureMarker::input::PARAM_TYPE },
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
 
 #if ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR == 2))
@@ -219,6 +223,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_TEMPORAL_LAYERING, "TEMPORAL_LAYERING" },
   { GST_C2_PARAM_PRIORITY, "PRIORITY" },
   { GST_C2_PARAM_COLOR_ASPECTS_TUNING, "COLOR_ASPECTS" },
+  { GST_C2_PARAM_COLOR_ASPECTS_INFO, "COLOR_ASPECTS_INFO"},
 #if (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
   { GST_C2_PARAM_HDR_STATIC_METADATA, "HDR_STATIC_METADATA" },
 #endif // (GST_VERSION_MAJOR >= 1) && (GST_VERSION_MINOR >= 18)
@@ -249,6 +254,7 @@ static const std::unordered_map<uint32_t, const char*> kParamNameMap = {
   { GST_C2_PARAM_DECODE_SLICE_MODE, "DECODE_SLICE_MODE" },
   { GST_C2_PARAM_VIDEO_FENCE, "VIDEO_FENCE" },
   { GST_C2_PARAM_VIDEO_FENCE_TYPE_INFO, "VIDEO_FENCE_TYPE_INFO" },
+  { GST_C2_PARAM_END_OF_PICTURE_MARKER, "END_OF_PICTURE_MARKER" },
 };
 
 // Map for the GST_C2_PARAM_PROFILE_LEVEL parameter.
@@ -1084,6 +1090,22 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
       c2param = C2Param::Copy (coloraspects);
       break;
     }
+    case GST_C2_PARAM_COLOR_ASPECTS_INFO: {
+      C2StreamColorAspectsInfo::input coloraspects;
+      GstVideoColorimetry* color =
+          reinterpret_cast<GstVideoColorimetry*>(payload);
+
+      coloraspects.primaries =
+           static_cast<C2Color::primaries_t>(kColorPrimariesMap.at(color->primaries));
+      coloraspects.transfer =
+           static_cast<C2Color::transfer_t>(kColorTransferMap.at(color->transfer));
+      coloraspects.matrix =
+           static_cast<C2Color::matrix_t>(kColorMatrixMap.at(color->matrix));
+      coloraspects.range =
+           static_cast<C2Color::range_t>(kColorRangeMap.at(color->range));
+      c2param = C2Param::Copy (coloraspects);
+      break;
+    }
     case GST_C2_PARAM_LTR_MARK: {
       qc2::C2VideoLTRMarkTuning::input ltr_mark;
 
@@ -1275,6 +1297,13 @@ bool GstC2Utils::UnpackPayload(uint32_t type, void* payload,
 
       mode.value = *(reinterpret_cast<guint32*>(payload));
       c2param = C2Param::Copy(mode);
+      break;
+    }
+    case GST_C2_PARAM_END_OF_PICTURE_MARKER: {
+      qc2::C2VideoEndOfPictureMarker::input marker;
+
+      marker.value = *(reinterpret_cast<gboolean*>(payload)) ? C2_TRUE : C2_FALSE;
+      c2param = C2Param::Copy(marker);
       break;
     }
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
@@ -1852,6 +1881,13 @@ bool GstC2Utils::PackPayload(uint32_t type, std::unique_ptr<C2Param>& c2param,
           reinterpret_cast<qc2::C2VideoDecodeSliceMode*>(c2param.get());
 
       *(reinterpret_cast<guint32*>(payload)) = mode->value;
+      break;
+    }
+    case GST_C2_PARAM_END_OF_PICTURE_MARKER: {
+      auto marker =
+          reinterpret_cast<qc2::C2VideoEndOfPictureMarker::input*>(c2param.get());
+
+      *(reinterpret_cast<gboolean*>(payload)) = marker->value ? TRUE : FALSE;
       break;
     }
 #endif // ((CODEC2_CONFIG_VERSION_MAJOR == 2) && (CODEC2_CONFIG_VERSION_MINOR >= 2))
