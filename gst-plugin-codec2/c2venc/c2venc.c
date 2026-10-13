@@ -2590,7 +2590,7 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           "(0x7fffffff=component default, limited below 100 milliseconds, "
           "i.e 1/10 of the target bitrate)",
           0, G_MAXINT, DEFAULT_PROP_VBV_DELAY,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY));
   g_object_class_install_property (gobject, PROP_QUALITY,
       g_param_spec_uint ("quality", "Quality",
           "Frame quality used when rate control is constant quality (CQ), "
@@ -2629,7 +2629,7 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
 
   g_signal_new_class_handler ("trigger-iframe", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_trigger_iframe),
-      NULL, NULL, g_cclosure_marshal_VOID__VOID, G_TYPE_BOOLEAN, 0);
+      NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
 
   g_signal_new_class_handler ("ltr-mark", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK (gst_c2_venc_ltr_mark),
