@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <map>
 #include <numeric>
@@ -15,8 +18,10 @@
 #include <gst/ml/gstmlmeta.h>
 
 #include <QnnInterface.h>
+#include <HTP/QnnHtpDevice.h>
 #include <System/QnnSystemInterface.h>
 #include <System/QnnSystemContext.h>
+#include <System/QnnSystemDlc.h>
 
 #include "ml-qnn-engine.h"
 
@@ -50,6 +55,8 @@
     (((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) || \
         ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2)|| \
         ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_3))
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_REQUESTED \
+    QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_3
 
 #elif defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V2_INIT)
 
@@ -58,6 +65,8 @@
 #define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED(graphInfo) \
     (((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) || \
         ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2))
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_REQUESTED \
+    QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2
 
 #elif defined(QNN_SYSTEM_CONTEXT_GRAPH_INFO_V1_INIT)
 
@@ -65,6 +74,8 @@
     ((graphInfo)->graphInfoV1)
 #define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED(graphInfo) \
     ((graphInfo)->version == QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1)
+#define QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_REQUESTED \
+    QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1
 
 #else
 
@@ -146,6 +157,13 @@ typedef Qnn_ErrorHandle_t (*ComposeGraphsFn)(Qnn_BackendHandle_t,
 
 typedef Qnn_ErrorHandle_t (*FreeGraphFn) (GraphInfo_t ***, uint32_t);
 
+typedef enum {
+  GST_ML_QNN_MODEL_TYPE_UNKNOWN = 0,
+  GST_ML_QNN_MODEL_TYPE_LIBRARY,
+  GST_ML_QNN_MODEL_TYPE_CONTEXT_BINARY,
+  GST_ML_QNN_MODEL_TYPE_DLC,
+} GstMLQnnModelType;
+
 struct _GstMLQnnEngine
 {
   GstMLInfo                      *ininfo;
@@ -163,6 +181,8 @@ struct _GstMLQnnEngine
 
   // QNN versioned interface.
   QNN_INTERFACE_VER_TYPE         interface;
+  // QNN interface provider, owned by the backend library.
+  const QnnInterface_t           *provider;
   // QNN versioned system interface.
   QNN_SYSTEM_INTERFACE_VER_TYPE  sysinterface;
   // QNN log handle.
@@ -176,17 +196,26 @@ struct _GstMLQnnEngine
   // QNN graph systemcontext handle.
   QnnSystemContext_Handle_t      sysctx_handle;
   Qnn_BackendHandle_t            backend;
+  // QNN DLC handle.
+  QnnSystemDlc_Handle_t          dlc_handle;
+  // DLC graph info, owned by the client.
+  QnnSystemContext_GraphInfo_t   *dlc_graphs;
 
   // QNN model graphs.
   GraphInfo_t                    **graph_infos;
-  uint32_t                       n_graphs;
-  gboolean                       iscached;
+  guint32                        n_graphs;
+  // QNN model container type.
+  GstMLQnnModelType              modeltype;
 
   // QNNF library APIs
   FreeGraphFn                    FreeGraph;
 
   // Device Platform Information.
   const QnnDevice_PlatformInfo_t *device_platform;
+
+  // QNN HTP power configuration id, used to set the DCVS performance mode.
+  uint32_t                       power_config_id;
+  gboolean                       has_power_config_id;
 };
 
 static GstDebugCategory *
@@ -215,6 +244,85 @@ gst_ml_qnn_sdk_debug_category (void)
   return (GstDebugCategory *) catonce;
 }
 
+// HTP DCVS performance modes, as defined in the QNN HTP backend documentation,
+// set through the "perf-mode" field of a "htp" backend-options structure.
+enum {
+  GST_ML_QNN_HTP_PERF_MODE_DEFAULT = 0,
+  GST_ML_QNN_HTP_PERF_MODE_EXTREME_POWER_SAVER,
+  GST_ML_QNN_HTP_PERF_MODE_LOW_POWER_SAVER,
+  GST_ML_QNN_HTP_PERF_MODE_POWER_SAVER,
+  GST_ML_QNN_HTP_PERF_MODE_HIGH_POWER_SAVER,
+  GST_ML_QNN_HTP_PERF_MODE_LOW_BALANCED,
+  GST_ML_QNN_HTP_PERF_MODE_BALANCED,
+  GST_ML_QNN_HTP_PERF_MODE_HIGH_PERFORMANCE,
+  GST_ML_QNN_HTP_PERF_MODE_SUSTAINED_HIGH_PERFORMANCE,
+  GST_ML_QNN_HTP_PERF_MODE_BURST,
+};
+
+typedef struct {
+  const gchar *name;
+  gint mode;
+} GstMLQnnHtpPerfModeName;
+
+static const GstMLQnnHtpPerfModeName htp_perf_mode_names[] = {
+  { "default", GST_ML_QNN_HTP_PERF_MODE_DEFAULT },
+  { "extreme-power-saver", GST_ML_QNN_HTP_PERF_MODE_EXTREME_POWER_SAVER },
+  { "low-power-saver", GST_ML_QNN_HTP_PERF_MODE_LOW_POWER_SAVER },
+  { "power-saver", GST_ML_QNN_HTP_PERF_MODE_POWER_SAVER },
+  { "high-power-saver", GST_ML_QNN_HTP_PERF_MODE_HIGH_POWER_SAVER },
+  { "low-balanced", GST_ML_QNN_HTP_PERF_MODE_LOW_BALANCED },
+  { "balanced", GST_ML_QNN_HTP_PERF_MODE_BALANCED },
+  { "high-performance", GST_ML_QNN_HTP_PERF_MODE_HIGH_PERFORMANCE },
+  { "sustained-high-performance",
+      GST_ML_QNN_HTP_PERF_MODE_SUSTAINED_HIGH_PERFORMANCE },
+  { "burst", GST_ML_QNN_HTP_PERF_MODE_BURST },
+};
+
+static gboolean
+gst_ml_qnn_parse_htp_perf_mode (const GstStructure *backend_options,
+    gint *mode)
+{
+  const GValue *value = nullptr;
+
+  *mode = GST_ML_QNN_HTP_PERF_MODE_DEFAULT;
+
+  if ((nullptr == backend_options) ||
+      !gst_structure_has_name (backend_options, "htp") ||
+      !gst_structure_has_field (backend_options, "perf-mode"))
+    return TRUE;
+
+  value = gst_structure_get_value (backend_options, "perf-mode");
+
+  if (G_VALUE_HOLDS_STRING (value)) {
+    const gchar *name = g_value_get_string (value);
+
+    for (guint idx = 0; idx < G_N_ELEMENTS (htp_perf_mode_names); idx++) {
+      if (g_strcmp0 (name, htp_perf_mode_names[idx].name) == 0) {
+        *mode = htp_perf_mode_names[idx].mode;
+        return TRUE;
+      }
+    }
+
+    GST_ERROR ("Unknown HTP perf-mode name '%s'!", name);
+    return FALSE;
+  } else if (G_VALUE_HOLDS_INT (value) || G_VALUE_HOLDS_UINT (value)) {
+    gint numeric = G_VALUE_HOLDS_UINT (value) ?
+        (gint) g_value_get_uint (value) : g_value_get_int (value);
+
+    if ((numeric < GST_ML_QNN_HTP_PERF_MODE_DEFAULT) ||
+        (numeric > GST_ML_QNN_HTP_PERF_MODE_BURST)) {
+      GST_ERROR ("HTP perf-mode value %d out of range!", numeric);
+      return FALSE;
+    }
+
+    *mode = numeric;
+    return TRUE;
+  }
+
+  GST_ERROR ("HTP perf-mode must be a string name or an integer value!");
+  return FALSE;
+}
+
 static gboolean
 load_symbol (gpointer* method, gpointer handle, const gchar* name)
 {
@@ -224,6 +332,41 @@ load_symbol (gpointer* method, gpointer handle, const gchar* name)
     return FALSE;
   }
   return TRUE;
+}
+
+static GstMLQnnModelType
+gst_ml_qnn_model_type_from_file (const gchar * filename)
+{
+  if (NULL == filename) {
+    GST_ERROR ("No model file name!");
+    return GST_ML_QNN_MODEL_TYPE_UNKNOWN;
+  }
+
+  std::filesystem::path modelpath (filename);
+  std::string extension = modelpath.extension().string();
+
+  std::transform (extension.begin(), extension.end(), extension.begin(),
+      [](unsigned char c) { return std::tolower (c); });
+
+  if (extension == ".bin")
+    return GST_ML_QNN_MODEL_TYPE_CONTEXT_BINARY;
+
+  if (extension == ".dlc")
+    return GST_ML_QNN_MODEL_TYPE_DLC;
+
+  if (extension == ".so")
+    return GST_ML_QNN_MODEL_TYPE_LIBRARY;
+
+  GST_ERROR ("Unrecognized model file extension '%s'!", extension.c_str());
+
+  return GST_ML_QNN_MODEL_TYPE_UNKNOWN;
+}
+
+static gboolean
+gst_ml_qnn_model_needs_system_library (GstMLQnnModelType modeltype)
+{
+  return (modeltype == GST_ML_QNN_MODEL_TYPE_CONTEXT_BINARY) ||
+      (modeltype == GST_ML_QNN_MODEL_TYPE_DLC);
 }
 
 static GstMLType
@@ -409,34 +552,27 @@ gst_ml_qnn_log_callback (const char* format, QnnLog_Level_t loglvl,
 }
 
 static gboolean
-gst_ml_qnn_graph_info_from_binary_info (
-    const QnnSystemContext_BinaryInfo_t* binary_info,
-    GraphInfo_t**& graph_infos, uint32_t& n_graphs)
+gst_ml_qnn_graph_info_from_graphs (QnnSystemContext_GraphInfo_t * graphs,
+    guint32 n_graphs, GraphInfo_t**& graph_infos)
 {
-  if (nullptr == binary_info) {
-    GST_ERROR ("binary_info is nullptr.");
+  if ((nullptr == graphs) || (0 == n_graphs)) {
+    GST_ERROR ("No graph information available!");
     return FALSE;
   }
 
-  if (!QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED (binary_info)) {
-    GST_ERROR ("Not supprted QNN system context binary info version !");
-    return FALSE;
-  }
-
-  n_graphs = QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).numGraphs;
-  QnnSystemContext_GraphInfo_t *graphs =
-      QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).graphs;
-
-  graph_infos = g_new0 (GraphInfo_t*, n_graphs);
+  GraphInfo_t** infos = g_new0 (GraphInfo_t*, n_graphs);
   GraphInfo_t* graph_info_arr = g_new0 (GraphInfo_t, n_graphs);
 
-  for (size_t idx = 0; idx < n_graphs; idx++) {
-    GST_INFO ("Extracting graph_infos for graph Idx: %lu", idx);
-
-    GST_INFO ("Info is V%d Idx: %lu", graphs[idx].version, idx);
+  for (guint32 idx = 0; idx < n_graphs; idx++) {
+    GST_INFO ("Extracting graph info V%d for graph Idx: %u",
+        graphs[idx].version, idx);
 
     if (!QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_SUPPORTED (&graphs[idx])) {
       GST_ERROR ("Not supprted QNN system context graph info version !");
+
+      g_clear_pointer (&graph_info_arr, g_free);
+      g_clear_pointer (&infos, g_free);
+
       return FALSE;
     }
 
@@ -451,8 +587,38 @@ gst_ml_qnn_graph_info_from_binary_info (
     graph_info_arr[idx].outputTensors =
         QNN_GET_SYSTEM_CONTEXT_GRAPH_INFO (&graphs[idx]).graphOutputs;
 
-    graph_infos[idx] = graph_info_arr + idx;
+    infos[idx] = graph_info_arr + idx;
   }
+
+  graph_infos = infos;
+
+  return TRUE;
+}
+
+static gboolean
+gst_ml_qnn_graph_info_from_binary_info (
+    const QnnSystemContext_BinaryInfo_t* binary_info,
+    GraphInfo_t**& graph_infos, guint32& n_graphs)
+{
+  if (nullptr == binary_info) {
+    GST_ERROR ("binary_info is nullptr.");
+    return FALSE;
+  }
+
+  if (!QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_SUPPORTED (binary_info)) {
+    GST_ERROR ("Not supprted QNN system context binary info version !");
+    return FALSE;
+  }
+
+  guint32 numgraphs = QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).numGraphs;
+  QnnSystemContext_GraphInfo_t *graphs =
+      QNN_GET_SYSTEM_CONTEXT_BINARY_INFO (binary_info).graphs;
+
+  if (!gst_ml_qnn_graph_info_from_graphs (graphs, numgraphs, graph_infos))
+    return FALSE;
+
+  n_graphs = numgraphs;
+
   return TRUE;
 }
 
@@ -518,6 +684,205 @@ gst_ml_qnn_create_device_config (GstMLQnnEngine *engine,
 }
 
 static gboolean
+gst_ml_qnn_get_htp_perf_profile_config (gint mode,
+    QnnHtpPerfInfrastructure_SleepLatency_t *sleep_latency,
+    QnnHtpPerfInfrastructure_VoltageCorner_t *voltage_corner,
+    QnnHtpPerfInfrastructure_PowerMode_t *power_mode,
+    gboolean *rpc_polling_on)
+{
+  switch (mode) {
+    case GST_ML_QNN_HTP_PERF_MODE_BURST:
+      *sleep_latency = 40;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_MAX_VOLTAGE_CORNER;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_PERFORMANCE_MODE;
+      *rpc_polling_on = TRUE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_SUSTAINED_HIGH_PERFORMANCE:
+    case GST_ML_QNN_HTP_PERF_MODE_HIGH_PERFORMANCE:
+      *sleep_latency = 100;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_TURBO;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_PERFORMANCE_MODE;
+      *rpc_polling_on = TRUE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_BALANCED:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_NOM_PLUS;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_ADJUST_UP_DOWN;
+      *rpc_polling_on = FALSE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_LOW_BALANCED:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_NOM;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_ADJUST_UP_DOWN;
+      *rpc_polling_on = FALSE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_HIGH_POWER_SAVER:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_SVS_PLUS;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_POWER_SAVER_MODE;
+      *rpc_polling_on = FALSE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_POWER_SAVER:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_SVS;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_POWER_SAVER_MODE;
+      *rpc_polling_on = FALSE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_LOW_POWER_SAVER:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_VCORNER_SVS2;
+      *power_mode = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_POWER_SAVER_MODE;
+      *rpc_polling_on = FALSE;
+      break;
+    case GST_ML_QNN_HTP_PERF_MODE_EXTREME_POWER_SAVER:
+      *sleep_latency = 1000;
+      *voltage_corner = DCVS_VOLTAGE_CORNER_DISABLE;
+      *power_mode =
+          QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_POWER_SAVER_AGGRESSIVE_MODE;
+      *rpc_polling_on = FALSE;
+      break;
+    default:
+      return FALSE;
+  }
+  return TRUE;
+}
+
+static gboolean
+gst_ml_qnn_get_htp_perf_infrastructure (GstMLQnnEngine *engine,
+    QnnHtpDevice_PerfInfrastructure_t *perf_infra)
+{
+  QnnDevice_Infrastructure_t device_infra = nullptr;
+  QnnHtpDevice_Infrastructure_t *htp_infra = nullptr;
+  Qnn_ErrorHandle_t error = QNN_SUCCESS;
+
+  if (nullptr == engine->interface.deviceGetInfrastructure) {
+    GST_WARNING ("Device infrastructure API not supported by backend!");
+    return FALSE;
+  }
+
+  error = engine->interface.deviceGetInfrastructure (&device_infra);
+
+  if ((QNN_SUCCESS != error) || (nullptr == device_infra)) {
+    GST_WARNING ("Failed to get device infrastructure, error: %ld!",
+        QNN_GET_ERROR_CODE (error));
+    return FALSE;
+  }
+
+  htp_infra = static_cast<QnnHtpDevice_Infrastructure_t *> (device_infra);
+
+  if (QNN_HTP_DEVICE_INFRASTRUCTURE_TYPE_PERF != htp_infra->infraType) {
+    GST_WARNING ("HTP device infrastructure doesn't expose perf interface!");
+    return FALSE;
+  }
+
+  *perf_infra = htp_infra->perfInfra;
+
+  return TRUE;
+}
+
+static gboolean
+gst_ml_qnn_engine_set_htp_performance_mode (GstMLQnnEngine *engine)
+{
+  QnnHtpDevice_PerfInfrastructure_t perf_infra =
+      QNN_HTP_DEVICE_PERF_INFRASTRUCTURE_INIT;
+  QnnHtpPerfInfrastructure_SleepLatency_t sleep_latency = 0;
+  QnnHtpPerfInfrastructure_VoltageCorner_t voltage_corner =
+      DCVS_VOLTAGE_CORNER_DISABLE;
+  QnnHtpPerfInfrastructure_PowerMode_t power_mode =
+      QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_ADJUST_UP_DOWN;
+  gboolean rpc_polling_on = FALSE;
+  guint backend_device_id = 0;
+  GstStructure *backend_options = nullptr;
+  gint mode = GST_ML_QNN_HTP_PERF_MODE_DEFAULT;
+  Qnn_ErrorHandle_t error = QNN_SUCCESS;
+
+  gst_structure_get (engine->settings, GST_ML_QNN_ENGINE_OPT_BACKEND_OPTIONS,
+      GST_TYPE_STRUCTURE, &backend_options, NULL);
+
+  if (!gst_ml_qnn_parse_htp_perf_mode (backend_options, &mode)) {
+    GST_ERROR ("Failed to parse HTP perf-mode from backend-options!");
+    g_clear_pointer (&backend_options, gst_structure_free);
+    return FALSE;
+  }
+
+  g_clear_pointer (&backend_options, gst_structure_free);
+
+  if (GST_ML_QNN_HTP_PERF_MODE_DEFAULT == mode)
+    return TRUE;
+
+  if (!gst_ml_qnn_get_htp_perf_profile_config (
+      mode, &sleep_latency, &voltage_corner, &power_mode, &rpc_polling_on)) {
+    GST_ERROR ("Unknown HTP performance mode %d!", mode);
+    return FALSE;
+  }
+
+  // Device infrastructure or perf interface not exposed by this backend,
+  // silently skip instead of failing engine creation.
+  if (!gst_ml_qnn_get_htp_perf_infrastructure (engine, &perf_infra))
+    return TRUE;
+
+  if ((nullptr == perf_infra.createPowerConfigId) ||
+      (nullptr == perf_infra.setPowerConfig)) {
+    GST_WARNING ("HTP perf infrastructure functions not populated, ignoring "
+        "HTP performance mode request!");
+    return TRUE;
+  }
+
+  gst_structure_get_uint (engine->settings,
+      GST_ML_QNN_ENGINE_OPT_BACKEND_DEVICE_ID, &backend_device_id);
+
+  error = perf_infra.createPowerConfigId (backend_device_id, 0,
+      &(engine->power_config_id));
+
+  if (QNN_SUCCESS != error) {
+    GST_ERROR ("Failed to create HTP power config id, error: %ld!",
+        QNN_GET_ERROR_CODE (error));
+    return FALSE;
+  }
+
+  engine->has_power_config_id = TRUE;
+
+  QnnHtpPerfInfrastructure_PowerConfig_t dcvs_config = {};
+  dcvs_config.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_DCVS_V3;
+  dcvs_config.dcvsV3Config.contextId = engine->power_config_id;
+  dcvs_config.dcvsV3Config.setDcvsEnable = 1;
+  dcvs_config.dcvsV3Config.dcvsEnable = 0;
+  dcvs_config.dcvsV3Config.powerMode = power_mode;
+  dcvs_config.dcvsV3Config.setSleepLatency = 1;
+  dcvs_config.dcvsV3Config.sleepLatency = sleep_latency;
+  dcvs_config.dcvsV3Config.setBusParams = 1;
+  dcvs_config.dcvsV3Config.busVoltageCornerMin = voltage_corner;
+  dcvs_config.dcvsV3Config.busVoltageCornerTarget = voltage_corner;
+  dcvs_config.dcvsV3Config.busVoltageCornerMax = voltage_corner;
+  dcvs_config.dcvsV3Config.setCoreParams = 1;
+  dcvs_config.dcvsV3Config.coreVoltageCornerMin = voltage_corner;
+  dcvs_config.dcvsV3Config.coreVoltageCornerTarget = voltage_corner;
+  dcvs_config.dcvsV3Config.coreVoltageCornerMax = voltage_corner;
+
+  QnnHtpPerfInfrastructure_PowerConfig_t rpc_polling_config = {};
+  rpc_polling_config.option =
+      QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_POLLING_TIME;
+  rpc_polling_config.rpcPollingTimeConfig = rpc_polling_on ?
+      QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIG_MAX_RPC_POLLING_TIME : 0;
+
+  const QnnHtpPerfInfrastructure_PowerConfig_t *power_configs[] = {
+    &dcvs_config, &rpc_polling_config, nullptr
+  };
+
+  error = perf_infra.setPowerConfig (engine->power_config_id, power_configs);
+
+  if (QNN_SUCCESS != error) {
+    GST_ERROR ("Failed to set HTP power config, error: %ld!",
+        QNN_GET_ERROR_CODE (error));
+    return FALSE;
+  }
+
+  GST_INFO ("HTP performance mode set to %d", mode);
+
+  return TRUE;
+}
+
+static gboolean
 gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
 {
   gboolean success = TRUE;
@@ -559,6 +924,8 @@ gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
   }
 
   engine->interface = providers[0]->QNN_INTERFACE_VER_NAME;
+  // The DLC compose graphs API expects the complete provider interface.
+  engine->provider = providers[0];
 
   GST_DEBUG ("Interface Provider core api version : %d.%d.%d",
       providers[0]->apiVersion.coreApiVersion.major,
@@ -630,7 +997,12 @@ gst_ml_qnn_engine_setup_backend (GstMLQnnEngine *engine)
     return FALSE;
   }
 
-  if (engine->iscached) {
+  if (!gst_ml_qnn_engine_set_htp_performance_mode (engine)) {
+    GST_ERROR ("Failed to set HTP performance mode!");
+    return FALSE;
+  }
+
+  if (gst_ml_qnn_model_needs_system_library (engine->modeltype)) {
     if ((filename = GET_OPT_SYSLIB (engine->settings)) == NULL) {
       GST_ERROR ("No system library file name!");
       return FALSE;
@@ -800,6 +1172,108 @@ gst_ml_qnn_engine_setup_cached_graphs (GstMLQnnEngine *engine)
 }
 
 static gboolean
+gst_ml_qnn_engine_setup_dlc_graphs (GstMLQnnEngine *engine)
+{
+  const gchar *filename = NULL;
+  guint32 n_composed = 0;
+
+  if ((filename = GET_OPT_MODEL (engine->settings)) == NULL) {
+    GST_ERROR ("No DLC file name!");
+    return FALSE;
+  }
+
+  if (nullptr == engine->sysinterface.systemDlcCreateFromFile ||
+      nullptr == engine->sysinterface.systemDlcComposeGraphs ||
+      nullptr == engine->sysinterface.systemDlcFree) {
+    GST_ERROR ("QNN System DLC function pointers are not populated. The QNN "
+        "system library does not support DLC models!");
+    return FALSE;
+  }
+
+  if (nullptr == engine->interface.contextCreate ||
+      nullptr == engine->interface.graphRetrieve ||
+      nullptr == engine->interface.graphFinalize) {
+    GST_ERROR ("QNN backend function pointers are not populated.");
+    return FALSE;
+  }
+
+  if (!g_file_test (filename, G_FILE_TEST_IS_REGULAR)) {
+    GST_ERROR ("File %s does not exist", filename);
+    return FALSE;
+  }
+
+  auto status = engine->sysinterface.systemDlcCreateFromFile (engine->logger,
+      filename, &(engine->dlc_handle));
+
+  if (QNN_SUCCESS != status) {
+    GST_ERROR ("Failed to open DLC '%s'! Error %ld", filename,
+        QNN_GET_ERROR_CODE (status));
+    return FALSE;
+  }
+
+  // Set up any context configs that are necessary.
+  const QnnContext_Config_t **ctx_configs = nullptr;
+
+  status = engine->interface.contextCreate (engine->backend, engine->device,
+      ctx_configs, &(engine->context));
+
+  if (QNN_SUCCESS != status) {
+    GST_ERROR ("Could not create context!");
+    return FALSE;
+  }
+
+  status = engine->sysinterface.systemDlcComposeGraphs (engine->dlc_handle,
+      nullptr, 0, engine->backend, engine->context, *(engine->provider),
+      QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_REQUESTED, &(engine->dlc_graphs),
+      &n_composed);
+
+  if (QNN_SUCCESS != status) {
+    GST_ERROR ("Failed to compose graphs from the DLC! Error %ld",
+        QNN_GET_ERROR_CODE (status));
+    return FALSE;
+  }
+
+  if (!gst_ml_qnn_graph_info_from_graphs (engine->dlc_graphs, n_composed,
+          engine->graph_infos)) {
+    GST_ERROR ("Failed to populate Graph Info.");
+    return FALSE;
+  }
+
+  engine->n_graphs = n_composed;
+
+  // The DLC graph info carries no graph handles, retrieve them by name. Unlike
+  // the ones from a context binary the composed graphs are not finalized.
+  for (guint32 idx = 0; idx < engine->n_graphs; idx++) {
+    status = engine->interface.graphRetrieve (engine->context,
+        (*(engine->graph_infos))[idx].graphName,
+        &((*(engine->graph_infos))[idx].graph));
+
+    if (QNN_SUCCESS != status) {
+      GST_ERROR ("Unable to retrieve graph handle for graph Idx: %u! Error %ld",
+          idx, QNN_GET_ERROR_CODE (status));
+      return FALSE;
+    }
+
+    status = engine->interface.graphFinalize (
+        (*(engine->graph_infos))[idx].graph, engine->profiler, nullptr);
+
+    if (QNN_GRAPH_ERROR_GRAPH_FINALIZED == QNN_GET_ERROR_CODE (status)) {
+      GST_DEBUG ("Graph %u is already finalized", idx);
+      continue;
+    }
+
+    if (QNN_SUCCESS != status) {
+      GST_ERROR ("Finalize for graph %u failed! Error %ld", idx,
+          QNN_GET_ERROR_CODE (status));
+      return FALSE;
+    }
+  }
+
+  GST_INFO ("Setup graph using DLC exit.");
+  return TRUE;
+}
+
+static gboolean
 gst_ml_qnn_engine_setup_uncached_graphs (GstMLQnnEngine *engine)
 {
   gboolean success = TRUE;
@@ -883,7 +1357,7 @@ gst_ml_qnn_engine_new (GstStructure *settings)
   const GraphInfo_t *graph_info = NULL;
   Qnn_Tensor_t *input_tensor = NULL, *output_tensor = NULL;
   GList * output_list = NULL;
-  gboolean success = TRUE;
+  gboolean success = FALSE;
   guint idx = 0;
 
   GST_DEBUG ("Creating engine");
@@ -897,9 +1371,13 @@ gst_ml_qnn_engine_new (GstStructure *settings)
   engine->settings = gst_structure_copy (settings);
   gst_structure_free (settings);
 
-  std::filesystem::path modelpath (GET_OPT_MODEL (engine->settings));
+  engine->modeltype =
+      gst_ml_qnn_model_type_from_file (GET_OPT_MODEL (engine->settings));
 
-  engine->iscached = (modelpath.extension() == ".bin") ? TRUE : FALSE;
+  if (engine->modeltype == GST_ML_QNN_MODEL_TYPE_UNKNOWN) {
+    GST_ERROR ("Unsupported model type!");
+    goto cleanup;
+  }
 
   // Initialize backend.
   if (!gst_ml_qnn_engine_setup_backend (engine)) {
@@ -908,10 +1386,19 @@ gst_ml_qnn_engine_new (GstStructure *settings)
   }
 
   // Initialize model graphs.
-  if (engine->iscached) {
-    success = gst_ml_qnn_engine_setup_cached_graphs (engine);
-  } else {
-    success = gst_ml_qnn_engine_setup_uncached_graphs (engine);
+  switch (engine->modeltype) {
+    case GST_ML_QNN_MODEL_TYPE_CONTEXT_BINARY:
+      success = gst_ml_qnn_engine_setup_cached_graphs (engine);
+      break;
+    case GST_ML_QNN_MODEL_TYPE_DLC:
+      success = gst_ml_qnn_engine_setup_dlc_graphs (engine);
+      break;
+    case GST_ML_QNN_MODEL_TYPE_LIBRARY:
+      success = gst_ml_qnn_engine_setup_uncached_graphs (engine);
+      break;
+    default:
+      GST_ERROR ("Unhandled model type %u!", engine->modeltype);
+      break;
   }
 
   if (!success) {
@@ -1056,6 +1543,10 @@ gst_ml_qnn_engine_free (GstMLQnnEngine * engine)
     const GraphInfo_t *graph_info = engine->graph_infos[0];
     Qnn_Tensor_t *tensor;
 
+    // Clear the client buffer pointers set during execute(), some of the
+    // graph info below may alias memory owned by the QNN system context or
+    // model library, which must not be walked with stale buffer pointers
+    // when it gets freed.
     for (guint idx = 0; idx < graph_info->numInputTensors; idx++) {
       tensor = &(graph_info->inputTensors[idx]);
       QNN_TENSOR_CLIENTBUF (tensor).data = NULL;
@@ -1068,22 +1559,44 @@ gst_ml_qnn_engine_free (GstMLQnnEngine * engine)
       QNN_TENSOR_CLIENTBUF (tensor).dataSize = 0;
     }
 
-    if (engine->iscached) {
-      if (engine->sysinterface.systemContextFree && engine->sysctx_handle) {
-        engine->sysinterface.systemContextFree (engine->sysctx_handle);
-        engine->sysctx_handle = nullptr;
-      }
-      g_free (*(engine->graph_infos));
-      g_free (engine->graph_infos);
-    } else {
+    // A model library owns its graph info and frees it through its own API.
+    if (engine->FreeGraph != NULL) {
       engine->FreeGraph (&(engine->graph_infos), engine->n_graphs);
+      engine->graph_infos = NULL;
+    } else {
+      g_free (*(engine->graph_infos));
+      g_clear_pointer (&(engine->graph_infos), g_free);
     }
-    engine->graph_infos = NULL;
+
     engine->n_graphs = 0;
+  }
+
+  if (engine->sysinterface.systemContextFree && engine->sysctx_handle) {
+    engine->sysinterface.systemContextFree (engine->sysctx_handle);
+    engine->sysctx_handle = nullptr;
+  }
+
+  // The DLC graph info array is owned by the client, release it with free().
+  g_clear_pointer (&(engine->dlc_graphs), free);
+
+  if (engine->sysinterface.systemDlcFree && engine->dlc_handle) {
+    engine->sysinterface.systemDlcFree (engine->dlc_handle);
+    engine->dlc_handle = nullptr;
   }
 
   if (engine->interface.deviceFreePlatformInfo && engine->device_platform)
     engine->interface.deviceFreePlatformInfo (nullptr, engine->device_platform);
+
+  if (engine->has_power_config_id) {
+    QnnHtpDevice_PerfInfrastructure_t perf_infra =
+        QNN_HTP_DEVICE_PERF_INFRASTRUCTURE_INIT;
+
+    if (gst_ml_qnn_get_htp_perf_infrastructure (engine, &perf_infra) &&
+        perf_infra.destroyPowerConfigId)
+      perf_infra.destroyPowerConfigId (engine->power_config_id);
+
+    engine->has_power_config_id = FALSE;
+  }
 
   if (engine->interface.contextFree && engine->context)
     engine->interface.contextFree (engine->context, nullptr);
@@ -1133,6 +1646,7 @@ gst_ml_qnn_engine_execute (GstMLQnnEngine *engine, GstMLFrame *inframe,
     GstMLFrame *outframe)
 {
   GstMLTensorMeta *mlmeta = NULL;
+  GstClockTime time = GST_CLOCK_TIME_NONE;
   const GraphInfo_t *graph_info = engine->graph_infos[0];
   guint idx = 0, num = 0, size = 0;
 
@@ -1169,11 +1683,19 @@ gst_ml_qnn_engine_execute (GstMLQnnEngine *engine, GstMLFrame *inframe,
     QNN_TENSOR_CLIENTBUF (tensor).dataSize = size;
   }
 
+  time = gst_util_get_timestamp ();
+
   // Execute Graph
   auto status = engine->interface.graphExecute(graph_info->graph,
       graph_info->inputTensors, graph_info->numInputTensors,
       graph_info->outputTensors, graph_info->numOutputTensors, engine->profiler,
       nullptr);
+
+  time = GST_CLOCK_DIFF (time, gst_util_get_timestamp ());
+
+  GST_DEBUG ("Graph Execute time %" G_GINT64_FORMAT ".%03"
+      G_GINT64_FORMAT " ms", GST_TIME_AS_MSECONDS (time),
+      (GST_TIME_AS_USECONDS (time) % 1000));
 
   if (QNN_GRAPH_NO_ERROR != status) {
     GST_ERROR ("Graph execution failed!");

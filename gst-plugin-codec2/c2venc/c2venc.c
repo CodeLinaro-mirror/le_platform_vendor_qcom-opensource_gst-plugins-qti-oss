@@ -58,6 +58,7 @@ G_DEFINE_TYPE (GstC2VEncoder, gst_c2_venc, GST_TYPE_VIDEO_ENCODER);
 #define DEFAULT_PROP_TEMPORAL_LAYER_NUM   (0xffffffff)
 #define DEFAULT_PROP_FLIP                 (GST_C2_FLIP_NONE)
 #define DEFAULT_PROP_VBV_DELAY            (0x7fffffff)
+#define DEFAULT_PROP_QUALITY              (0xffffffff)
 #define DEFAULT_PROP_HDR_MODE             (GST_C2_HDR_NONE)
 #define DEFAULT_PROP_MB_MAP_TOTAL_MBS     (0xffffffff)
 #define DEFAULT_PROP_CHROMA_QP_OFFSET     (0x7fffffff)
@@ -99,6 +100,7 @@ enum
   PROP_TEMPORAL_LAYER,
   PROP_FLIP,
   PROP_VBV_DELAY,
+  PROP_QUALITY,
   PROP_HDR_MODE,
   PROP_BITRATE_BOOST_MARGIN,
   PROP_CHROMA_QP_OFFSET,
@@ -626,30 +628,32 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
 #endif // CODEC2_CONFIG_VERSION_MAJOR
   }
 
-  success = gst_c2_engine_get_parameter (c2venc->engine,
+ if (g_str_has_suffix (c2venc->name, "heic.encoder") == FALSE){
+    success = gst_c2_engine_get_parameter (c2venc->engine,
       GST_C2_PARAM_GOP_CONFIG, GST_PTR_CAST (&gop));
-  if (success) {
-    if (c2venc->idr_interval != DEFAULT_PROP_IDR_INTERVAL)
-      gop.n_pframes = (guint32)c2venc->idr_interval;
 
-    if (c2venc->bframes != DEFAULT_PROP_B_FRAMES)
-      gop.n_bframes = c2venc->bframes;
+    if (success) {
+      if (c2venc->idr_interval != DEFAULT_PROP_IDR_INTERVAL)
+        gop.n_pframes = (guint32)c2venc->idr_interval;
 
-    // Overwrite B-Frames if IDR is set to 0 (key frames only)
-    if (c2venc->idr_interval == 0)
-      gop.n_bframes = 0;
+      if (c2venc->bframes != DEFAULT_PROP_B_FRAMES)
+        gop.n_bframes = c2venc->bframes;
 
-    success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_GOP_CONFIG, GST_PTR_CAST (&gop));
-    if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set GOP parameter!");
-      return FALSE;
+      // Overwrite B-Frames if IDR is set to 0 (key frames only)
+      if (c2venc->idr_interval == 0)
+        gop.n_bframes = 0;
+
+      success = gst_c2_engine_set_parameter (c2venc->engine,
+          GST_C2_PARAM_GOP_CONFIG, GST_PTR_CAST (&gop));
+      if (!success) {
+        GST_ERROR_OBJECT (c2venc, "Failed to set GOP parameter!");
+        return FALSE;
+      }
+    } else {
+      GST_WARNING_OBJECT (c2venc, "GOP is not supported!");
+      success = TRUE;
     }
-  } else {
-    GST_WARNING_OBJECT (c2venc, "GOP is not supported!");
-    success = TRUE;
   }
-
   if (c2venc->bframes != DEFAULT_PROP_B_FRAMES) {
     gboolean enable = TRUE;
 
@@ -861,20 +865,21 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
     return FALSE;
   }
 
-  success = gst_c2_engine_get_parameter (c2venc->engine,
-      GST_C2_PARAM_QP_RANGES, GST_PTR_CAST (&qp_ranges));
-  if (success) {
-    success = gst_c2_engine_set_parameter (c2venc->engine,
-        GST_C2_PARAM_QP_RANGES, GST_PTR_CAST (&(c2venc->quant_ranges)));
-    if (!success) {
-      GST_ERROR_OBJECT (c2venc, "Failed to set QP ranges parameter!");
-      return FALSE;
+  if(g_str_has_suffix (c2venc->name, "heic.encoder") == FALSE){
+    success = gst_c2_engine_get_parameter (c2venc->engine,
+        GST_C2_PARAM_QP_RANGES, GST_PTR_CAST (&qp_ranges));
+    if (success) {
+      success = gst_c2_engine_set_parameter (c2venc->engine,
+          GST_C2_PARAM_QP_RANGES, GST_PTR_CAST (&(c2venc->quant_ranges)));
+      if (!success) {
+        GST_ERROR_OBJECT (c2venc, "Failed to set QP ranges parameter!");
+        return FALSE;
+      }
+    } else {
+      GST_WARNING_OBJECT (c2venc, "QP ranges not supported!");
+      success = TRUE;
     }
-  } else {
-    GST_WARNING_OBJECT (c2venc, "QP ranges not supported!");
-    success = TRUE;
   }
-
   if ((c2venc->quant_init.i_frames != DEFAULT_PROP_QUANT_I_FRAMES) ||
       (c2venc->quant_init.p_frames != DEFAULT_PROP_QUANT_P_FRAMES) ||
       (c2venc->quant_init.b_frames != DEFAULT_PROP_QUANT_B_FRAMES)) {
@@ -931,6 +936,20 @@ gst_c2_venc_setup_parameters (GstC2VEncoder * c2venc,
         GST_C2_PARAM_VBV_DELAY, GST_PTR_CAST (&c2venc->vbv_delay));
     if (!success) {
       GST_ERROR_OBJECT (c2venc, "Failed to set vbv delay!");
+      return FALSE;
+    }
+  }
+
+  if (c2venc->quality != DEFAULT_PROP_QUALITY) {
+    if (c2venc->control_rate != GST_C2_RATE_CTRL_CQ) {
+      GST_WARNING_OBJECT (c2venc, "Quality is only applied when rate control "
+        "is set to constant quality (CQ)!");
+      return FALSE;
+     }
+    success = gst_c2_engine_set_parameter (c2venc->engine,
+      GST_C2_PARAM_QUALITY, GST_PTR_CAST (&(c2venc->quality)));
+    if (!success) {
+      GST_ERROR_OBJECT (c2venc, "Failed to set quality parameter!");
       return FALSE;
     }
   }
@@ -2107,6 +2126,24 @@ gst_c2_venc_set_property (GObject * object, guint prop_id,
     case PROP_VBV_DELAY:
       c2venc->vbv_delay = g_value_get_int (value);
       break;
+    case PROP_QUALITY:
+    {
+      c2venc->quality = g_value_get_uint (value);
+
+      if ((c2venc->engine != NULL) &&
+          (c2venc->quality != DEFAULT_PROP_QUALITY)) {
+        if(c2venc->control_rate != GST_C2_RATE_CTRL_CQ) {
+          GST_WARNING_OBJECT (c2venc, "Quality is only applied when rate control "
+            "is set to constant quality (CQ)!");
+          break;
+        }
+        gboolean success = gst_c2_engine_set_parameter (c2venc->engine,
+          GST_C2_PARAM_QUALITY, GST_PTR_CAST (&(c2venc->quality)));
+        if (!success)
+          GST_ERROR_OBJECT (c2venc, "Failed to set quality parameter!");
+      }
+      break;
+    }
     case PROP_HDR_MODE:
       c2venc->hdr_mode = g_value_get_enum (value);
       break;
@@ -2291,6 +2328,9 @@ gst_c2_venc_get_property (GObject * object, guint prop_id,
       break;
     case PROP_VBV_DELAY:
       g_value_set_int (value, c2venc->vbv_delay);
+      break;
+    case PROP_QUALITY:
+      g_value_set_uint (value, c2venc->quality);
       break;
     case PROP_HDR_MODE:
       g_value_set_enum (value, c2venc->hdr_mode);
@@ -2540,6 +2580,14 @@ gst_c2_venc_class_init (GstC2VEncoderClass * klass)
           "i.e 1/10 of the target bitrate)",
           0, G_MAXINT, DEFAULT_PROP_VBV_DELAY,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
+  g_object_class_install_property (gobject, PROP_QUALITY,
+      g_param_spec_uint ("quality", "Quality",
+          "Frame quality used when rate control is constant quality (CQ), "
+          "the higher the better the output quality at the expense of less "
+          "compression efficiency. Valid range is 1 (worst quality) to "
+          "100 (best quality). (0xffffffff=component default)",
+          0, G_MAXUINT, DEFAULT_PROP_QUALITY,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING));
   g_object_class_install_property (gobject, PROP_HDR_MODE,
       g_param_spec_enum ("hdr-mode", "HDR Modes for Encoder",
           "When using colorspace BT2100HLG or BT2100PQ, set HDR mode for "
@@ -2672,6 +2720,7 @@ gst_c2_venc_init (GstC2VEncoder * c2venc)
       g_array_new (FALSE, FALSE, sizeof (gfloat));
   c2venc->n_subframes = 0;
   c2venc->vbv_delay = DEFAULT_PROP_VBV_DELAY;
+  c2venc->quality = DEFAULT_PROP_QUALITY;
   c2venc->bitrate_boost_margin = DEFAULT_PROP_BITRATE_BOOST_MARGIN;
   c2venc->hdr_mode = DEFAULT_PROP_HDR_MODE;
   c2venc->encoding_mode = DEFAULT_PROP_ENCODING_MODE;
